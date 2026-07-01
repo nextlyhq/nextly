@@ -32,8 +32,6 @@ const SUPPORTED_TYPES = new Set([
   "number",
   "date",
   "checkbox",
-  "toggle",
-  "boolean",
   "json",
   "chips",
 ]);
@@ -146,11 +144,7 @@ function renderEditor({
     );
   }
 
-  if (
-    field.type === "checkbox" ||
-    field.type === "toggle" ||
-    field.type === "boolean"
-  ) {
+  if (field.type === "checkbox") {
     // Why: tri-state semantics (Q8 + brainstorm 2026-05-04 Option B).
     // The user explicitly chooses True / False / Unset. "Unset" maps
     // to onChange(null) so the parent strips the defaultValue key

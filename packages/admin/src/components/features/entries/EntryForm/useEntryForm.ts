@@ -289,11 +289,9 @@ function getDefaultValues(
     }
 
     // Generate default value based on field type
-    // Cast to string to allow legacy "string" type which isn't in the FieldConfig union
     const fieldType = field.type as string;
     switch (fieldType) {
       case "text":
-      case "string": // Legacy alias - some collections store 'string' instead of 'text'
       case "textarea":
       case "email":
       case "password":
@@ -308,7 +306,6 @@ function getDefaultValues(
         break;
 
       case "checkbox":
-      case "boolean": // Schema Builder alias for "checkbox"
         defaults[fieldName] =
           (field as { defaultValue?: boolean }).defaultValue ?? false;
         break;

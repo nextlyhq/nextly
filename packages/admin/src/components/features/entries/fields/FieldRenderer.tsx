@@ -43,14 +43,12 @@ import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 import { FieldWrapper } from "./FieldWrapper";
 import { UploadInput } from "./media/UploadInput";
 import { NumberInput } from "./number/NumberInput";
-import { JoinField } from "./relational/JoinField";
 import { RelationshipInput } from "./relational/RelationshipInput";
 import { CheckboxInput } from "./selection/CheckboxInput";
 import { ChipsInput } from "./selection/ChipsInput";
 import { DateInput } from "./selection/DateInput";
 import { RadioInput } from "./selection/RadioInput";
 import { SelectInput } from "./selection/SelectInput";
-import { ToggleInput } from "./selection/ToggleInput";
 import { ComponentInput } from "./structured/ComponentInput";
 import { GroupInput } from "./structured/GroupInput";
 import { JsonInput } from "./structured/JsonInput";
@@ -293,19 +291,6 @@ export function FieldRenderer({
   }
 
   // =========================================
-  // Virtual Fields (Computed at read time, no data storage)
-  // =========================================
-  // Join fields display related entries and don't store data.
-  // They have a label but no form input/error state.
-  if (field.type === "join") {
-    return (
-      <FieldWrapper field={field} error={undefined}>
-        <JoinField field={field} />
-      </FieldWrapper>
-    );
-  }
-
-  // =========================================
   // Data Fields (With FieldWrapper)
   // =========================================
   // Compute full field path for nested fields
@@ -337,7 +322,7 @@ export function FieldRenderer({
     );
   }
 
-  // Determine if horizontal layout should be used (for checkboxes only, not toggles)
+  // Determine if horizontal layout should be used
   // Removed horizontal layout override for checkboxes based on user feedback
   // to match the vertical layout of radio buttons.
   const useHorizontalLayout = false;
@@ -376,7 +361,6 @@ export function FieldRenderer({
       // Text Types
       // =========================================
       case "text":
-      case "string": // Legacy alias - some collections store 'string' instead of 'text'
         return <TextInput {...commonProps} field={field as TextFieldConfig} />;
 
       case "textarea":
@@ -413,7 +397,6 @@ export function FieldRenderer({
       // Number Types
       // =========================================
       case "number":
-      case "decimal": // Legacy alias
         return (
           <NumberInput {...commonProps} field={field as NumberFieldConfig} />
         );
@@ -422,17 +405,11 @@ export function FieldRenderer({
       // Selection Types
       // =========================================
       case "checkbox":
-      case "boolean": // Legacy alias
         return (
           <CheckboxInput
             {...commonProps}
             field={field as CheckboxFieldConfig}
           />
-        );
-
-      case "toggle":
-        return (
-          <ToggleInput {...commonProps} field={field as CheckboxFieldConfig} />
         );
 
       case "select":
@@ -465,7 +442,6 @@ export function FieldRenderer({
       // Relational Types
       // =========================================
       case "relationship":
-      case "relation": // Legacy alias
         return (
           <RelationshipInput
             {...commonProps}
@@ -511,7 +487,6 @@ export function FieldRenderer({
       // Special Types
       // =========================================
       case "richText":
-      case "richtext": // Legacy alias
         return (
           <ClientOnly>
             <Suspense fallback={<EditorSkeleton />}>

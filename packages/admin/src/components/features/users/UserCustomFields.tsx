@@ -277,7 +277,6 @@ function UserFieldInput({
 
     switch (fieldType) {
       case "text":
-      case "string":
         return (
           <TextInput {...commonProps} field={fieldConfig as TextFieldConfig} />
         );
@@ -323,7 +322,6 @@ function UserFieldInput({
         );
 
       case "checkbox":
-      case "boolean":
         return (
           <CheckboxInput
             {...commonProps}

@@ -44,8 +44,6 @@ const FIELD_SHAPE_KEYS: ReadonlyArray<keyof BuilderField> = [
   "component",
   "components",
   "repeatable",
-  // Blocks (nested fields handled separately to support recursion)
-  "blocks",
 ];
 
 /**
