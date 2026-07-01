@@ -48,7 +48,7 @@ export function useAuthUi(): AuthUiMeta {
     return () => {
       active = false;
     };
-  }, [api]);
+  }, [api.public]);
   return ui;
 }
 
