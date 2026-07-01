@@ -4,7 +4,6 @@ export {
   toKebabName,
   findFieldById,
   findParentContainerId,
-  addFieldToBlockType,
   addFieldToArray,
   addFieldToGroup,
   updateFieldById,
