@@ -47,7 +47,6 @@ export type DynamicFieldType =
   | "code"
   | "number"
   | "checkbox"
-  | "toggle"
   | "date"
   | "select"
   | "radio"
@@ -55,16 +54,9 @@ export type DynamicFieldType =
   | "relationship"
   | "repeater"
   | "group"
-  | "blocks"
   | "json"
   | "component"
-  | "chips"
-  // Layout types (presentational only, no data storage)
-  | "tabs"
-  | "collapsible"
-  | "row"
-  | "point"
-  | "slug";
+  | "chips";
 
 export type FieldDefinition = {
   name: string;

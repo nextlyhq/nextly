@@ -229,7 +229,7 @@ export function RelationFieldEditor({
   const handleSubmit = form.handleSubmit((data: RelationFieldFormValues) => {
     const fieldConfig: Omit<RelationFieldConfig, "id"> = {
       ...data,
-      type: FieldType.RELATION,
+      type: FieldType.RELATIONSHIP,
     };
     onSubmit(fieldConfig);
   });

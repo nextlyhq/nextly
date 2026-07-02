@@ -120,12 +120,18 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
     case "json":
     case "repeater":
     case "group":
+    case "chips":
+    case "component":
       columnType =
         dialect === "postgresql"
           ? "JSONB"
           : dialect === "mysql"
             ? "JSON"
             : "TEXT";
+      break;
+
+    case "password":
+      columnType = "TEXT";
       break;
 
     default:

@@ -35,6 +35,7 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
+  isChipsField,
   isComponentField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -676,6 +677,10 @@ export class TypeGenerator {
     // JSON fields
     else if (isJSONField(field)) {
       tsType = "unknown";
+    }
+    // Chips fields (array of strings)
+    else if (isChipsField(field)) {
+      tsType = "string[]";
     }
     // Component fields
     else if (isComponentField(field)) {

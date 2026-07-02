@@ -188,9 +188,9 @@ export interface BuilderFieldValidation {
   min?: number;
   /** Maximum value (number fields) */
   max?: number;
-  /** Minimum rows/items (array/hasMany fields) */
+  /** Minimum rows/items (repeater/hasMany fields) */
   minRows?: number;
-  /** Maximum rows/items (array/hasMany fields) */
+  /** Maximum rows/items (repeater/hasMany fields) */
   maxRows?: number;
   /** Minimum chips (chips fields) */
   minChips?: number;
@@ -305,7 +305,7 @@ export interface RepeaterFieldLabels {
 
 /**
  * Builder field with unique ID for drag-and-drop
- * Supports nested fields for array, group, and blocks types
+ * Supports nested fields for repeater and group types
  */
 export interface BuilderField extends FieldConfig {
   id: string;
@@ -432,17 +432,6 @@ export interface BuilderField extends FieldConfig {
    * @default false
    */
   repeatable?: boolean;
-  // ============================================================
-  // Blocks Field Properties
-  // ============================================================
-  /**
-   * Block types for blocks field
-   */
-  blocks?: Array<{
-    slug: string;
-    label?: string;
-    fields: BuilderField[];
-  }>;
 }
 
 /**

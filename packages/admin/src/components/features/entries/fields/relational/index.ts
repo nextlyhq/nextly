@@ -44,6 +44,3 @@ export {
   RelationshipQuickEdit,
   type RelationshipQuickEditProps,
 } from "./RelationshipQuickEdit";
-
-// Join field for displaying reverse relationships (virtual field)
-export { JoinField, type JoinFieldProps } from "./JoinField";

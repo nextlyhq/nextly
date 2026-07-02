@@ -213,7 +213,7 @@ export async function validateFieldValue(
   data: Record<string, unknown> = {}
 ): Promise<string | true> {
   // Run Zod validation first
-  const zodSchema = fieldToZodSchema(field as DataFieldConfig);
+  const zodSchema = fieldToZodSchema(field);
   const result = zodSchema.safeParse(value);
 
   if (!result.success) {
@@ -226,10 +226,9 @@ export async function validateFieldValue(
   }
 
   // Run custom validate function if defined
-  const dataField = field as DataFieldConfig;
-  if ("validate" in dataField && typeof dataField.validate === "function") {
+  if ("validate" in field && typeof field.validate === "function") {
     try {
-      const customResult = await dataField.validate(value as never, {
+      const customResult = await field.validate(value as never, {
         data,
         req: {}, // Minimal request context for client-side
       });

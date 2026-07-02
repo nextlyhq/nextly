@@ -88,21 +88,14 @@ const SKIP_FIELD_TYPES = new Set([
 ]);
 
 /**
- * Layout field types that are structural wrappers with no data key.
- * Their nested `fields` / `tabs` contain data fields that DO need processing.
- */
-const LAYOUT_FIELD_TYPES = new Set(["tabs", "collapsible", "row"]);
-
-/**
  * Sanitize all field values in an entry data object based on field definitions.
  *
  * Iterates over field definitions, looks up corresponding values in the data
  * object, and runs them through `sanitizeFieldValue()`. Handles nested fields
  * recursively:
  * - `group` fields: recurses into the group's sub-fields
- * - `array` fields: iterates each array item and recurses into the field's sub-fields
+ * - `repeater` fields: iterates each row and recurses into the field's sub-fields
  * - `component` fields: recurses into the component's field definitions (if available)
- * - Layout types (`tabs`, `collapsible`, `row`): traverses into nested fields
  *
  * Skips `richText`, `json`, `code`, and `password` fields — they are handled
  * at output time or are intentionally raw.
@@ -132,26 +125,6 @@ export function sanitizeEntryData(
   config?: SanitizationConfigInput
 ): void {
   for (const field of fields) {
-    if (LAYOUT_FIELD_TYPES.has(field.type)) {
-      if (
-        field.type === "tabs" &&
-        "tabs" in field &&
-        Array.isArray((field as { tabs?: unknown[] }).tabs)
-      ) {
-        for (const tab of (
-          field as { tabs?: Array<{ fields?: FieldDefinition[] }> }
-        ).tabs!) {
-          if (Array.isArray(tab.fields)) {
-            sanitizeEntryData(data, tab.fields, config);
-          }
-        }
-      }
-      if (field.fields && Array.isArray(field.fields)) {
-        sanitizeEntryData(data, field.fields, config);
-      }
-      continue;
-    }
-
     if (!field.name) continue;
 
     if (SKIP_FIELD_TYPES.has(field.type)) continue;

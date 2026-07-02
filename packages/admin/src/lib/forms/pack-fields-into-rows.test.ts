@@ -77,16 +77,9 @@ describe("packFieldsIntoRows", () => {
     expect(packFieldsIntoRows([a, b])).toEqual([[a], [b]]);
   });
 
-  it("Tabs / Row / Collapsible / Array / Blocks / Component all force a row break", () => {
+  it("Tabs / Row / Collapsible  / Component all force a row break", () => {
     const a = text("a", "50%");
-    const types = [
-      "tabs",
-      "row",
-      "collapsible",
-      "array",
-      "blocks",
-      "component",
-    ];
+    const types = ["tabs", "row", "collapsible", "component"];
     for (const t of types) {
       const blockField = block(t);
       const b = text("b", "50%");

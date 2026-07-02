@@ -5,7 +5,7 @@
  *
  * Provides entry-level context to all child components in the form.
  * Includes entry ID, collection slug, and other metadata needed by
- * virtual fields like JoinField.
+ * deeply nested field components.
  *
  * @module components/entries/EntryForm/EntryFormContext
  * @since 1.0.0
@@ -72,8 +72,7 @@ const EntryFormContext = createContext<EntryFormContextValue | null>(null);
  * EntryFormContextProvider - Provides entry context to child components
  *
  * Wraps the form content to provide entry-level information like
- * entryId and collectionSlug to deeply nested components like
- * JoinField that need to query related entries.
+ * entryId and collectionSlug to deeply nested field components.
  *
  * @example
  * ```tsx
@@ -160,14 +159,14 @@ export function useEntryFormContext(): EntryFormContextValue {
  *
  * @example
  * ```tsx
- * function MaybeJoinField({ field }) {
+ * function ConditionalField({ field }) {
  *   const context = useOptionalEntryFormContext();
  *
  *   if (!context?.entryId) {
- *     return <div>Save the entry to see related items</div>;
+ *     return <div>Save the entry first</div>;
  *   }
  *
- *   return <JoinField field={field} />;
+ *   return <RelatedContent entryId={context.entryId} />;
  * }
  * ```
  */
