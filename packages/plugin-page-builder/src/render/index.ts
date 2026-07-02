@@ -1,4 +1,11 @@
-// "./render" entry — server-first renderer. MUST stay import-safe: no "use client",
-// no browser globals, and NO getNextly import (the host injects a dataProvider).
-// Populated in M3. Stub for the F0 scaffold.
-export {};
+/**
+ * "./render" entry — server-first renderer. Import-safe: no "use client" (except the
+ * isolated ErrorBoundary island), no browser globals, NO getNextly (the host injects a
+ * dataProvider). Built-in block renderers are registered as a side effect in M3.2.
+ */
+export { PageRenderer } from "./PageRenderer";
+export type { PageRendererProps } from "./PageRenderer";
+export { RenderNode } from "./RenderNode";
+export type { RenderNodeProps } from "./RenderNode";
+export { BlockErrorBoundary } from "./ErrorBoundary";
+export type { DataProvider, FindArgs, ResolvedMedia } from "./dataProvider";
