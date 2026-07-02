@@ -1,5 +1,17 @@
 # @nextlyhq/plugin-form-builder
 
+## 0.0.2-alpha.30
+
+### Patch Changes
+
+- [#145](https://github.com/nextlyhq/nextly/pull/145) [`76bde2a`](https://github.com/nextlyhq/nextly/commit/76bde2a647b70203e2cd457688ec30d1d6428fc5) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - The API reference was not correctly specified in the `useEffect` dependency array. It was set as `[api]`, whereas it should have been `[api.public]`.
+
+- Updated dependencies [[`76bde2a`](https://github.com/nextlyhq/nextly/commit/76bde2a647b70203e2cd457688ec30d1d6428fc5)]:
+  - @nextlyhq/admin@0.0.2-alpha.30
+  - nextly@0.0.2-alpha.30
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.30
+  - @nextlyhq/ui@0.0.2-alpha.30
+
 ## 0.0.2-alpha.29
 
 ### Patch Changes

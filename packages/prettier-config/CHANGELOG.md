@@ -1,5 +1,11 @@
 # @nextlyhq/prettier-config
 
+## 0.0.2-alpha.22
+
+### Patch Changes
+
+- [#145](https://github.com/nextlyhq/nextly/pull/145) [`76bde2a`](https://github.com/nextlyhq/nextly/commit/76bde2a647b70203e2cd457688ec30d1d6428fc5) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - The API reference was not correctly specified in the `useEffect` dependency array. It was set as `[api]`, whereas it should have been `[api.public]`.
+
 ## 0.0.2-alpha.21
 
 ### Patch Changes
