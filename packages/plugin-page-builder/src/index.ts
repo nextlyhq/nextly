@@ -1,4 +1,8 @@
-// "." entry — isomorphic, React-free public API (core types, tree ops, registries,
-// defineBlock, pageBuilder plugin factory, pageBuilderField). Populated from ./core in
-// F0.3 and later milestones. Stub for the F0 scaffold.
-export {};
+/**
+ * "." entry — isomorphic, React-free public API.
+ *
+ * Exposes the core contracts + open registries (`defineBlock`, `createBlockRegistry`,
+ * `defaultBlockRegistry`, control registry) and all types. The `pageBuilder()` plugin
+ * factory and `pageBuilderField()` helper are added in later milestones.
+ */
+export * from "./core";
