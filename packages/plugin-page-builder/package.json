@@ -1,0 +1,98 @@
+{
+  "name": "@nextlyhq/plugin-page-builder",
+  "version": "0.0.2-alpha.29",
+  "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./admin": {
+      "types": "./dist/admin/index.d.ts",
+      "import": "./dist/admin/index.js"
+    },
+    "./render": {
+      "types": "./dist/render/index.d.ts",
+      "import": "./dist/render/index.js"
+    },
+    "./styles/editor.css": "./dist/styles/editor.css"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "css-tree": "^2.3.1"
+  },
+  "peerDependencies": {
+    "@nextlyhq/admin": "0.0.2-alpha.29",
+    "nextly": "0.0.2-alpha.29",
+    "@nextlyhq/plugin-sdk": "workspace:*",
+    "@nextlyhq/ui": "0.0.2-alpha.29",
+    "@tanstack/react-query": ">=5.0.0",
+    "lucide-react": ">=0.400.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0",
+    "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
+  },
+  "devDependencies": {
+    "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/plugin-sdk": "workspace:*",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "@nextlyhq/ui": "workspace:*",
+    "@tanstack/react-query": "^5.0.0",
+    "@types/css-tree": "^2.3.4",
+    "@types/node": "^20.0.0",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "lucide-react": "^0.469.0",
+    "nextly": "workspace:*",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "nextly-plugin",
+    "plugin",
+    "page-builder",
+    "blocks",
+    "visual-editor",
+    "cms",
+    "headless-cms"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/plugin-page-builder"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "homepage": "https://nextlyhq.com",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "author": "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)"
+}
