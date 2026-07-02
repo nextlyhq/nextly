@@ -1,6 +1,12 @@
 /**
- * Isomorphic core barrel — React-free at runtime. Later milestones add tree ops
- * (M1), validation/migration (M1), the style compiler + sanitizer + bindings (M2).
+ * Isomorphic core barrel — React-free at runtime. Tree ops + validation + migration
+ * (M1); style compiler + CSS sanitizer + bindings (M2).
  */
 export * from "./types";
 export * from "./registry";
+export * from "./tree";
+export * from "./validate";
+export * from "./migrate";
+export * from "./style-compiler";
+export * from "./css-sanitize";
+export * from "./bindings";
