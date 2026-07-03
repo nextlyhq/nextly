@@ -14,3 +14,5 @@ export {
   FIELD_COMPONENT_PATH,
 } from "./collections/pageBuilderField";
 export type { PageBuilderFieldOptions } from "./collections/pageBuilderField";
+export { editorChoiceFields } from "./collections/editorChoice";
+export type { EditorChoiceOptions } from "./collections/editorChoice";

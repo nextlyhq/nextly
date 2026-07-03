@@ -1,13 +1,6 @@
-import {
-  defineCollection,
-  text,
-  richText,
-  code,
-  select,
-  option,
-} from "nextly/config";
+import { defineCollection, text, code } from "nextly/config";
 
-import { pageBuilderField } from "./pageBuilderField";
+import { editorChoiceFields } from "./editorChoice";
 
 /**
  * Registry path of the full-screen builder Edit view — still exported (and registered)
@@ -31,28 +24,8 @@ export function pagesCollection() {
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
-      // The editor choice, shown on every page.
-      select({
-        name: "editorMode",
-        label: "Editor",
-        defaultValue: "builder",
-        options: [
-          option("Page Builder", "builder"),
-          option("Normal editor", "normal"),
-        ],
-        admin: { description: "Choose how to edit this page." },
-      }),
-      // Page Builder — the visual block tree (reuses the existing `content` column).
-      pageBuilderField("content", {
-        label: "Page Builder",
-        condition: { field: "editorMode", equals: "builder" },
-      }),
-      // Normal editor — Nextly's default rich-text form.
-      richText({
-        name: "body",
-        label: "Content",
-        admin: { condition: { field: "editorMode", equals: "normal" } },
-      }),
+      // The Elementor-style editor choice (select + Page Builder + normal rich text).
+      ...editorChoiceFields(),
       code({ name: "customCss", admin: { language: "css" } }),
     ],
     status: true,
