@@ -64,14 +64,21 @@ export function EditorProvider({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
 
+  // Hold the latest callback in a ref so the sync effect depends ONLY on the document.
+  // Callers (e.g. PageBuilderField) commonly pass an inline arrow — depending on its
+  // identity would re-run the effect every render and, via the host form's onChange,
+  // loop infinitely ("Maximum update depth exceeded").
+  const onDocumentChangeRef = useRef(onDocumentChange);
+  onDocumentChangeRef.current = onDocumentChange;
+
   // Push document changes to a host form (field mount), not on the initial mount.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
-    onDocumentChange?.(state.document);
-  }, [state.document, onDocumentChange]);
+    onDocumentChangeRef.current?.(state.document);
+  }, [state.document]);
 
   // Debounced draft autosave (only while there are unsaved changes).
   useEffect(() => {
