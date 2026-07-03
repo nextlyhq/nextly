@@ -102,6 +102,13 @@ jobs:
 
           VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
 
+          # Stable releases already become `latest`
+          # No need to run dist-tag for them
+          if [[ "$VERSION" != *-* ]]; then
+            echo "Stable release ${VERSION} detected. Skipping dist-tag step."
+            exit 0
+          fi
+
           PACKAGES=(
             "nextly"
             "create-nextly-app"
