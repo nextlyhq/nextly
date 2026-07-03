@@ -1,19 +1,28 @@
-import { defineCollection, text, json, code } from "nextly/config";
+import {
+  defineCollection,
+  text,
+  richText,
+  code,
+  select,
+  option,
+} from "nextly/config";
 
-import { defaultBlockRegistry, validateDocument } from "../core";
+import { pageBuilderField } from "./pageBuilderField";
 
-/** The admin Edit-view override — resolves to the full editor (registered in M4). */
+/**
+ * Registry path of the full-screen builder Edit view — still exported (and registered)
+ * for hosts that want a builder-only collection. The default `pages` collection below
+ * instead offers a per-entry CHOICE between the normal Nextly editor and the builder.
+ */
 export const EDIT_VIEW_PATH =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderEditView";
 
 /**
- * The plugin-owned `pages` collection. `content` holds the serialized block tree.
- *
- * Node-side the block registry is empty at config-load (block renderers live in the
- * React `./render` entry), so the field validator runs with `allowUnknown: true` — it
- * enforces the security-critical structural invariants (depth / node count / unique ids
- * / namespaced types). Full block-type validation runs in the editor + renderer, where
- * the registry is populated. (Documented simplification; see M3 plan.)
+ * The plugin-owned `pages` collection. Each page CHOOSES its editor (Elementor-style):
+ *  - "Page Builder" → the visual block tree (`content`, a `pageBuilderField`).
+ *  - "Normal editor" → Nextly's default rich-text form (`body`).
+ * The front-end renders whichever was chosen. Using field conditions (not an Edit-view
+ * override) keeps the normal editor available — a single Edit view can't offer both.
  */
 export function pagesCollection() {
   return defineCollection({
@@ -22,17 +31,31 @@ export function pagesCollection() {
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
-      json({
-        name: "content",
-        validate: value =>
-          validateDocument(value, defaultBlockRegistry, { allowUnknown: true }),
+      // The editor choice, shown on every page.
+      select({
+        name: "editorMode",
+        label: "Editor",
+        defaultValue: "builder",
+        options: [
+          option("Page Builder", "builder"),
+          option("Normal editor", "normal"),
+        ],
+        admin: { description: "Choose how to edit this page." },
+      }),
+      // Page Builder — the visual block tree (reuses the existing `content` column).
+      pageBuilderField("content", {
+        label: "Page Builder",
+        condition: { field: "editorMode", equals: "builder" },
+      }),
+      // Normal editor — Nextly's default rich-text form.
+      richText({
+        name: "body",
+        label: "Content",
+        admin: { condition: { field: "editorMode", equals: "normal" } },
       }),
       code({ name: "customCss", admin: { language: "css" } }),
     ],
     status: true,
-    admin: {
-      useAsTitle: "title",
-      components: { views: { Edit: { Component: EDIT_VIEW_PATH } } },
-    },
+    admin: { useAsTitle: "title" },
   });
 }

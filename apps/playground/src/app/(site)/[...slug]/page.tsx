@@ -34,8 +34,11 @@ function makeDataProvider(nx: NextlyInstance): DataProvider {
 }
 
 interface PageData {
+  title?: string;
   content?: unknown;
   customCss?: string;
+  editorMode?: string;
+  body?: string;
 }
 
 export default async function SitePage({
@@ -52,11 +55,25 @@ export default async function SitePage({
       status: { equals: "published" },
     },
     limit: 1,
-  });
+    // Return rich-text fields as HTML so normal-editor pages render directly.
+    richTextFormat: "html",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- richTextFormat is a query option
+  } as any);
 
   const page = items[0] as PageData | undefined;
-  if (!page?.content) notFound();
+  if (!page) notFound();
 
+  // Normal editor → render Nextly's rich-text body.
+  if (page.editorMode === "normal") {
+    return (
+      <article
+        style={{ maxWidth: 760, margin: "48px auto", padding: "0 24px" }}
+        dangerouslySetInnerHTML={{ __html: page.body ?? "" }}
+      />
+    );
+  }
+
+  if (!page.content) notFound();
   return (
     <PageRenderer
       document={page.content as never}

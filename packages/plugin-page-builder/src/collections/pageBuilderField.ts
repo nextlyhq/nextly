@@ -40,7 +40,10 @@ export function pageBuilderField(
     name,
     label: opts.label,
     admin: { component: FIELD_COMPONENT_PATH, condition: opts.condition },
+    // An unset builder field is valid (e.g. when another editor mode is chosen).
     validate: value =>
-      validateDocument(value, defaultBlockRegistry, { allowUnknown: true }),
+      value == null
+        ? true
+        : validateDocument(value, defaultBlockRegistry, { allowUnknown: true }),
   });
 }
