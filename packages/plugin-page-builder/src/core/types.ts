@@ -129,6 +129,8 @@ export interface BlockRenderArgs<P = Record<string, unknown>> {
   props: P;
   node: BlockNode;
   slots: Record<string, ReactNode>;
+  /** The scoped class the block MUST apply to its own root element (no wrapper div). */
+  className: string;
 }
 
 export interface BlockDefinition<P = Record<string, unknown>> {

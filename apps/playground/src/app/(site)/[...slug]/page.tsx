@@ -1,0 +1,64 @@
+/**
+ * Public page-builder render route (page-builder M3.3). This is the ONE place the host
+ * app wires the CMS into the renderer: it initializes the Direct API and hands the
+ * page's block tree to `<PageRenderer>`. The plugin itself never imports `getNextly`.
+ */
+import {
+  PageRenderer,
+  type DataProvider,
+} from "@nextlyhq/plugin-page-builder/render";
+import { notFound } from "next/navigation";
+import { getNextly } from "nextly";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+function makeDataProvider(nx: NextlyInstance): DataProvider {
+  return {
+    find: async args => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Direct API arg shapes vary by slug
+      const result = await nx.find(args as any);
+      return { items: result.items ?? [] };
+    },
+    findOne: async ({ collection, id }) => {
+      const doc = await nx.findByID({ collection, id });
+      return doc ?? null;
+    },
+    // M3: images use a denormalized url; a real media resolver lands with the picker (M5).
+    resolveMedia: async () => null,
+  };
+}
+
+interface PageData {
+  content?: unknown;
+  customCss?: string;
+}
+
+export default async function SitePage({
+  params,
+}: {
+  params: Promise<{ slug: string[] }>;
+}) {
+  const { slug } = await params;
+  const nx = await getNextly({ config: nextlyConfig });
+  const { items } = await nx.find({
+    collection: "pages",
+    where: {
+      slug: { equals: slug.join("/") },
+      status: { equals: "published" },
+    },
+    limit: 1,
+  });
+
+  const page = items[0] as PageData | undefined;
+  if (!page?.content) notFound();
+
+  return (
+    <PageRenderer
+      document={page.content as never}
+      customCss={page.customCss}
+      dataProvider={makeDataProvider(nx)}
+    />
+  );
+}

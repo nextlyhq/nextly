@@ -10,15 +10,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./admin": {
       "types": "./dist/admin/index.d.ts",
-      "import": "./dist/admin/index.js"
+      "import": "./dist/admin/index.js",
+      "default": "./dist/admin/index.js"
     },
     "./render": {
       "types": "./dist/render/index.d.ts",
-      "import": "./dist/render/index.js"
+      "import": "./dist/render/index.js",
+      "default": "./dist/render/index.js"
     },
     "./styles/editor.css": "./dist/styles/editor.css"
   },
