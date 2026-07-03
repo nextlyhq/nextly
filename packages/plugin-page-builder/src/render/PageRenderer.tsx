@@ -12,6 +12,7 @@ import { compileDocumentCss, type BreakpointDef } from "../core/style-compiler";
 import type { BlockDocument } from "../core/types";
 
 import type { DataProvider } from "./dataProvider";
+import { DEFAULT_QUERY_BUDGET } from "./query/types";
 import { RenderNode } from "./RenderNode";
 
 const PAGE_ROOT_CLASS = "nx-pb-page";
@@ -47,6 +48,7 @@ export function PageRenderer({
         node={document.root}
         registry={registry}
         dataProvider={dataProvider}
+        budget={{ n: DEFAULT_QUERY_BUDGET }}
       />
     </div>
   );

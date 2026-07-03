@@ -13,7 +13,7 @@ const html = (node: BlockNode) =>
   );
 
 describe("core block renderers", () => {
-  it("registers all 7 core blocks", () => {
+  it("registers all 8 core blocks", () => {
     for (const t of [
       "paragraph",
       "heading",
@@ -22,6 +22,7 @@ describe("core block renderers", () => {
       "video",
       "container",
       "grid",
+      "query-loop",
     ]) {
       expect(defaultBlockRegistry.has(`core/${t}`)).toBe(true);
     }
