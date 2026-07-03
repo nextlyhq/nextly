@@ -83,6 +83,32 @@ describe("editorReducer", () => {
     expect(node.props.level).toBe("h2"); // untouched default
   });
 
+  it("SET_CUSTOM_CLASS sets and clears the node customClass", () => {
+    const start = initialState(baseDoc());
+    const added = editorReducer(start, {
+      type: "ADD",
+      parentId: start.document.root.id,
+      slot: "default",
+      nodeType: "core/heading",
+      index: 0,
+    });
+    const id = added.document.root.slots!.default![0].id;
+    const set = editorReducer(added, {
+      type: "SET_CUSTOM_CLASS",
+      id,
+      customClass: "  promo  ",
+    });
+    expect(set.document.root.slots!.default![0].customClass).toBe("promo");
+    const cleared = editorReducer(set, {
+      type: "SET_CUSTOM_CLASS",
+      id,
+      customClass: "   ",
+    });
+    expect(
+      cleared.document.root.slots!.default![0].customClass
+    ).toBeUndefined();
+  });
+
   it("UPDATE_STYLE merges into the active breakpoint slice", () => {
     const start = initialState(baseDoc());
     const added = editorReducer(start, {

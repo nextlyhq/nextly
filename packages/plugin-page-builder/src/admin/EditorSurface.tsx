@@ -8,6 +8,7 @@
 import { Button } from "@nextlyhq/ui";
 
 import { Canvas } from "./canvas/Canvas";
+import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
 
 const BREAKPOINTS = ["base", "tablet", "mobile"];
@@ -67,13 +68,10 @@ export function EditorSurface() {
         <aside
           style={{
             borderLeft: "1px solid #e5e7eb",
-            padding: 8,
             overflow: "auto",
           }}
         >
-          {state.selectedId
-            ? `Selected: ${state.selectedId}`
-            : "Inspector (M5)"}
+          <Inspector />
         </aside>
       </div>
     </div>
