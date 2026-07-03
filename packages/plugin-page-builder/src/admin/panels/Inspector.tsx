@@ -21,6 +21,7 @@ import {
   registerDefaultControls,
   renderControl,
 } from "../controls/registerDefaultControls";
+import { locateNode } from "../logic/locate";
 import { useEditor } from "../store/EditorProvider";
 
 registerDefaultControls();
@@ -97,9 +98,42 @@ function StyleTab({
 }
 
 function AdvancedTab({ node }: { node: BlockNode }) {
-  const { dispatch } = useEditor();
+  const { state, dispatch } = useEditor();
+  const loc = locateNode(state.document.root, node.id);
+  const move = (delta: number) => {
+    if (!loc) return;
+    const next = loc.index + delta;
+    if (next < 0 || next >= loc.count) return;
+    dispatch({
+      type: "MOVE",
+      id: node.id,
+      parentId: loc.parentId,
+      slot: loc.slot,
+      index: next,
+    });
+  };
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {loc ? (
+        <div style={{ display: "flex", gap: 6 }}>
+          <Button
+            variant="outline"
+            disabled={loc.index <= 0}
+            aria-label="Move block up"
+            onClick={() => move(-1)}
+          >
+            ↑ Move up
+          </Button>
+          <Button
+            variant="outline"
+            disabled={loc.index >= loc.count - 1}
+            aria-label="Move block down"
+            onClick={() => move(1)}
+          >
+            ↓ Move down
+          </Button>
+        </div>
+      ) : null}
       <div>
         {renderControl("text", {
           label: "Custom CSS class",
