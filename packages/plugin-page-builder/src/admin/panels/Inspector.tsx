@@ -7,7 +7,16 @@
  * block actions. Style edits the base layer; Responsive edits the active breakpoint's
  * override layer so per-device changes are visible in the iframe canvas.
  */
-import { Button, Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
+import {
+  Button,
+  Input,
+  Label,
+  Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@nextlyhq/ui";
 
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
@@ -28,8 +37,100 @@ registerDefaultControls();
 
 const BASE = "base";
 
-function ContentTab({ node }: { node: BlockNode }) {
+function BindableField({
+  node,
+  field,
+}: {
+  node: BlockNode;
+  field: ContentField;
+}) {
   const { dispatch } = useEditor();
+  const bound = node.bindings?.[field.name];
+
+  if (!field.bindable) {
+    return renderControl(field.type, {
+      label: field.label,
+      field,
+      value: node.props[field.name],
+      onChange: value =>
+        dispatch({
+          type: "UPDATE_PROPS",
+          id: node.id,
+          props: { [field.name]: value },
+        }),
+    });
+  }
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 4,
+        }}
+      >
+        <Label style={{ fontSize: 12, color: "#6b7280" }}>{field.label}</Label>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "#6b7280",
+          }}
+        >
+          Bind
+          <Switch
+            checked={!!bound}
+            onCheckedChange={on =>
+              dispatch({
+                type: "SET_BINDING",
+                id: node.id,
+                prop: field.name,
+                binding: on ? { source: "field", path: "" } : null,
+              })
+            }
+          />
+        </label>
+      </div>
+      {bound ? (
+        <>
+          <Input
+            value={bound.path}
+            placeholder="field path, e.g. title or author.name"
+            aria-label={`${field.label} binding path`}
+            onChange={e =>
+              dispatch({
+                type: "SET_BINDING",
+                id: node.id,
+                prop: field.name,
+                binding: { source: "field", path: e.target.value },
+              })
+            }
+          />
+          <p style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
+            Resolves from the current Query Loop item.
+          </p>
+        </>
+      ) : (
+        renderControl(field.type, {
+          field,
+          value: node.props[field.name],
+          onChange: value =>
+            dispatch({
+              type: "UPDATE_PROPS",
+              id: node.id,
+              props: { [field.name]: value },
+            }),
+        })
+      )}
+    </div>
+  );
+}
+
+function ContentTab({ node }: { node: BlockNode }) {
   const def = defaultBlockRegistry.get(node.type);
   const fields = narrowContentFields(def?.contentFields);
   if (fields.length === 0) {
@@ -38,19 +139,7 @@ function ContentTab({ node }: { node: BlockNode }) {
   return (
     <div>
       {fields.map((field: ContentField) => (
-        <div key={field.name}>
-          {renderControl(field.type, {
-            label: field.label,
-            field,
-            value: node.props[field.name],
-            onChange: value =>
-              dispatch({
-                type: "UPDATE_PROPS",
-                id: node.id,
-                props: { [field.name]: value },
-              }),
-          })}
-        </div>
+        <BindableField key={field.name} node={node} field={field} />
       ))}
     </div>
   );
