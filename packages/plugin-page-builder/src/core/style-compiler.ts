@@ -33,6 +33,34 @@ export interface CompileOptions {
   breakpoints?: BreakpointDef[];
 }
 
+/**
+ * Default design-token palette (spec §8). Token refs (`{ token: "color.primary" }`)
+ * compile to `var(--nx-color-primary)`; these values back those vars out of the box so
+ * tokens work without extra config. A host can override via `PageRenderer`'s `tokens`
+ * prop (a fuller project-config surface is a future door).
+ */
+export const DEFAULT_TOKENS: Record<string, string> = {
+  "color.primary": "#4f46e5",
+  "color.secondary": "#0ea5e9",
+  "color.accent": "#f59e0b",
+  "color.text": "#111827",
+  "color.muted": "#6b7280",
+  "color.surface": "#f8fafc",
+};
+
+/** Emit the token palette as CSS custom properties on the page root. */
+export function compileTokensCss(
+  rootClass: string,
+  tokens: Record<string, string> = DEFAULT_TOKENS
+): string {
+  const decls: string[] = [];
+  for (const [key, value] of Object.entries(tokens)) {
+    const v = safeValue(value);
+    if (v) decls.push(`--nx-${key.replace(/\./g, "-")}: ${v}`);
+  }
+  return decls.length ? `.${rootClass} { ${decls.join("; ")}; }` : "";
+}
+
 /** Deterministic, short, stable scoped class for a node id (FNV-1a → base36). */
 export function nodeClass(id: string): string {
   let h = 0x811c9dc5;

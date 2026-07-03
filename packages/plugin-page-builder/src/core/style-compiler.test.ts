@@ -4,6 +4,7 @@ import {
   nodeClass,
   compileNodeCss,
   compileDocumentCss,
+  compileTokensCss,
   DEFAULT_BREAKPOINTS,
 } from "./style-compiler";
 import { makeNode } from "./tree";
@@ -29,6 +30,12 @@ describe("style compiler", () => {
     expect(css).toContain(`.${nodeClass(n.id)}`);
     expect(css).toContain("padding-top: 24px");
     expect(css).toContain("background-color: #111");
+  });
+
+  it("compiles a token palette into CSS custom properties on the root", () => {
+    const css = compileTokensCss("nx-pb-page", { "color.primary": "#7c3aed" });
+    expect(css).toContain(".nx-pb-page");
+    expect(css).toContain("--nx-color-primary: #7c3aed");
   });
 
   it("emits :hover rules + a transition from styleHover", () => {

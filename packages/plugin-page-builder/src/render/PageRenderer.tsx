@@ -8,7 +8,11 @@ import type { ReactNode } from "react";
 
 import { sanitizeCustomCss } from "../core/css-sanitize";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
-import { compileDocumentCss, type BreakpointDef } from "../core/style-compiler";
+import {
+  compileDocumentCss,
+  compileTokensCss,
+  type BreakpointDef,
+} from "../core/style-compiler";
 import type { BlockDocument } from "../core/types";
 
 import type { DataProvider } from "./dataProvider";
@@ -23,6 +27,8 @@ export interface PageRendererProps {
   dataProvider?: DataProvider;
   customCss?: string;
   breakpoints?: BreakpointDef[];
+  /** Design-token overrides (`{ "color.primary": "#..." }`). Defaults ship a palette. */
+  tokens?: Record<string, string>;
   /** Reserved (i18n, spec §13) — threaded through but ignored in the MVP. */
   locale?: string;
 }
@@ -33,10 +39,13 @@ export function PageRenderer({
   dataProvider,
   customCss,
   breakpoints,
+  tokens,
 }: PageRendererProps): ReactNode {
   if (!document?.root) return null;
 
   const css =
+    compileTokensCss(PAGE_ROOT_CLASS, tokens) +
+    "\n" +
     compileDocumentCss(document, { breakpoints }) +
     "\n" +
     sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS);

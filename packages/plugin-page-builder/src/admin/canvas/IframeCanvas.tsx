@@ -10,7 +10,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { BREAKPOINT_WIDTHS } from "../../core/responsive";
-import { compileDocumentCss } from "../../core/style-compiler";
+import {
+  compileDocumentCss,
+  compileTokensCss,
+} from "../../core/style-compiler";
 import { useEditor } from "../store/EditorProvider";
 
 const OVERLAY_CSS = [
@@ -69,7 +72,10 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
       pageStyle.id = "nx-pb-style";
       doc.head.appendChild(pageStyle);
     }
-    pageStyle.textContent = compileDocumentCss(state.document);
+    pageStyle.textContent =
+      compileTokensCss("nx-pb-page") +
+      "\n" +
+      compileDocumentCss(state.document);
   }, [state.document, body]);
 
   return (
