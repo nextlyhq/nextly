@@ -30,6 +30,9 @@ const OVERLAY_CSS = [
   // Empty-container placeholder.
   ".nx-pb-dropzone-empty{border:2px dashed #c7d2fe;border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:#6366f1;font-size:13px;background:#f8f9ff}",
   ".nx-pb-dropzone-empty[data-active]{border-color:#4f46e5;background:#eef2ff;color:#4338ca}",
+  // Grid drop targets (layout-safe: inset shadow / outline, no box).
+  ".nx-pb-drop-before{box-shadow:inset 3px 0 0 #4f46e5}",
+  ".nx-pb-drop-append{outline:2px dashed #4f46e5;outline-offset:-2px}",
 ].join("");
 
 export function IframeCanvas({ children }: { children: ReactNode }) {
@@ -90,7 +93,10 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
           background: "#fff",
           height: "100%",
           width: width ? `${width}px` : "100%",
-          maxWidth: "100%",
+          // A fixed device width must NOT be capped to the pane — the canvas scrolls
+          // instead, so the preview stays a faithful WYSIWYG at that width.
+          maxWidth: width ? "none" : "100%",
+          flexShrink: 0,
           boxShadow: width ? "0 0 0 1px #e5e7eb" : "none",
           borderRadius: width ? 8 : 0,
         }}

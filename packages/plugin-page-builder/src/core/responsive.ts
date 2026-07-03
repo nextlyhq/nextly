@@ -6,8 +6,15 @@
 import type { ResponsiveStyle, StyleValues } from "./types";
 
 /** Editor preview widths per breakpoint (px). "base" = full width (0 → 100%). */
+/**
+ * Editor preview widths per breakpoint (px). "base" is a fixed, representative desktop
+ * width (not fluid) so the canvas is a faithful WYSIWYG: the editor renders content at a
+ * definite width and the published page matches at that same width — width-dependent
+ * layout (max-width, centering, %) can't be pixel-matched between a fluid page and a
+ * narrower editor pane otherwise.
+ */
 export const BREAKPOINT_WIDTHS: Record<string, number> = {
-  base: 0,
+  base: 1280,
   tablet: 768,
   mobile: 375,
 };
