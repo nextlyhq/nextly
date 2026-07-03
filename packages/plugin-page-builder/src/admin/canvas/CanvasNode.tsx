@@ -2,14 +2,14 @@
 
 /**
  * Canvas rendering of the block tree (spec §9). Uses the SAME production block render
- * (true WYSIWYG — no wrapper div), then augments the block's own element with a stable
- * `data-nx-id`, a click-to-select handler, the selection class, per-block error isolation,
- * and — for non-root nodes — a @dnd-kit sortable ref so it can be dragged/reordered.
+ * (true WYSIWYG), augments the block's own element with a stable `data-nx-id`, click-to-
+ * select, the selection class, per-block error isolation, and a @dnd-kit draggable handle
+ * so it can be picked up. Between every pair of siblings (and inside empty containers) a
+ * DropZone shows exactly where a dragged block will land.
  *
- * The root container is rendered by `CanvasNode`; its descendants render through
- * `SortableNode`, which carries the drag/drop position context.
+ * The root container renders via `CanvasNode`; descendants render via `DraggableNode`.
  */
-import { useSortable } from "@dnd-kit/react/sortable";
+import { useDraggable } from "@dnd-kit/react";
 import {
   cloneElement,
   isValidElement,
@@ -24,28 +24,71 @@ import type { BlockNode } from "../../core/types";
 import { BlockErrorBoundary } from "../../render/ErrorBoundary";
 import { useEditor } from "../store/EditorProvider";
 
+import { DropZone } from "./DropZone";
+
 const BLOCK_TYPE = "nx-block";
 
-function classFor(node: BlockNode, selected: boolean): string {
-  return [nodeClass(node.id), node.customClass, selected && "nx-pb-selected"]
+function classFor(
+  node: BlockNode,
+  selected: boolean,
+  dragging = false
+): string {
+  return [
+    nodeClass(node.id),
+    node.customClass,
+    selected && "nx-pb-selected",
+    dragging && "nx-pb-dragging",
+  ]
     .filter(Boolean)
     .join(" ");
 }
 
-/** Build the rendered slot children, each wrapped as a SortableNode. */
-function renderSlots(node: BlockNode): Record<string, ReactNode> {
-  const slots: Record<string, ReactNode> = {};
-  if (!node.slots) return slots;
-  for (const [name, children] of Object.entries(node.slots)) {
-    slots[name] = children.map((child, index) => (
-      <SortableNode
+/** Render a slot's children interleaved with drop zones (empty → a single placeholder). */
+function renderSlot(node: BlockNode, slotName: string): ReactNode {
+  const children = node.slots?.[slotName] ?? [];
+  if (children.length === 0) {
+    return (
+      <DropZone
+        key="dz-empty"
+        parentId={node.id}
+        slot={slotName}
+        index={0}
+        empty
+      />
+    );
+  }
+  const out: ReactNode[] = [];
+  children.forEach((child, i) => {
+    out.push(
+      <DropZone key={`dz-${i}`} parentId={node.id} slot={slotName} index={i} />
+    );
+    out.push(
+      <DraggableNode
         key={child.id}
         node={child}
         parentId={node.id}
-        slot={name}
-        index={index}
+        slot={slotName}
+        index={i}
       />
-    ));
+    );
+  });
+  out.push(
+    <DropZone
+      key={`dz-${children.length}`}
+      parentId={node.id}
+      slot={slotName}
+      index={children.length}
+    />
+  );
+  return out;
+}
+
+function buildSlots(node: BlockNode): Record<string, ReactNode> {
+  const slots: Record<string, ReactNode> = {};
+  if (node.slots) {
+    for (const name of Object.keys(node.slots)) {
+      slots[name] = renderSlot(node, name);
+    }
   }
   return slots;
 }
@@ -75,7 +118,7 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   const element = def.render({
     props: node.props,
     node,
-    slots: renderSlots(node),
+    slots: buildSlots(node),
     className,
   });
   if (!isValidElement(element)) return element;
@@ -85,8 +128,8 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   });
 }
 
-/** A draggable/sortable descendant node. */
-function SortableNode({
+/** A draggable descendant node. */
+function DraggableNode({
   node,
   parentId,
   slot,
@@ -100,16 +143,14 @@ function SortableNode({
   const { state, dispatch } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
-  const className = classFor(node, selected);
 
-  const { ref } = useSortable({
+  const { ref, isDragging } = useDraggable({
     id: node.id,
-    index,
-    group: `${parentId}:${slot}`,
     type: BLOCK_TYPE,
-    accept: BLOCK_TYPE,
     data: { kind: "node", nodeId: node.id, parentId, slot, index },
   });
+
+  const className = classFor(node, selected, isDragging);
 
   const select = (e: MouseEvent) => {
     e.stopPropagation();
@@ -130,7 +171,7 @@ function SortableNode({
   const element = def.render({
     props: node.props,
     node,
-    slots: renderSlots(node),
+    slots: buildSlots(node),
     className,
   });
   if (!isValidElement(element)) return element;

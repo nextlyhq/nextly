@@ -13,11 +13,24 @@ import { BREAKPOINT_WIDTHS } from "../../core/responsive";
 import { compileDocumentCss } from "../../core/style-compiler";
 import { useEditor } from "../store/EditorProvider";
 
-const OVERLAY_CSS =
-  "body{margin:0;font-family:system-ui,-apple-system,sans-serif}" +
-  "[data-nx-id]{cursor:pointer}" +
-  ".nx-pb-selected{outline:2px solid #6366f1;outline-offset:-2px}" +
-  ".nx-pb-empty{color:#9ca3af;padding:32px;text-align:center;font-size:14px}";
+const OVERLAY_CSS = [
+  "body{margin:0;font-family:system-ui,-apple-system,sans-serif}",
+  // Blocks are grabbable; hovering hints the boundary (Elementor-like).
+  "[data-nx-id]{cursor:grab}",
+  "[data-nx-id]:active{cursor:grabbing}",
+  "[data-nx-id]:hover{outline:1px dashed #a5b4fc;outline-offset:-1px}",
+  ".nx-pb-selected,[data-nx-id].nx-pb-selected:hover{outline:2px solid #6366f1;outline-offset:-2px}",
+  ".nx-pb-dragging{opacity:.4}",
+  ".nx-pb-empty{color:#9ca3af;padding:32px;text-align:center;font-size:14px}",
+  // Between-item drop zones: collapsed at rest, a hint while dragging, a bold blue
+  // insertion bar when they are the active drop target.
+  ".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",
+  ".nx-pb-dropzone[data-drag]{height:6px;margin:3px 0;background:rgba(99,102,241,.12)}",
+  ".nx-pb-dropzone[data-active]{height:6px;margin:4px 0;background:#4f46e5;box-shadow:0 0 0 4px rgba(79,70,229,.15)}",
+  // Empty-container placeholder.
+  ".nx-pb-dropzone-empty{border:2px dashed #c7d2fe;border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:#6366f1;font-size:13px;background:#f8f9ff}",
+  ".nx-pb-dropzone-empty[data-active]{border-color:#4f46e5;background:#eef2ff;color:#4338ca}",
+].join("");
 
 export function IframeCanvas({ children }: { children: ReactNode }) {
   const { state, dispatch } = useEditor();

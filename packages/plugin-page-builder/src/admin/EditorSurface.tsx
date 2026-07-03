@@ -3,31 +3,34 @@
 /**
  * The 3-pane editor surface (spec §9): left block library | center iframe canvas | right
  * inspector, with a breakpoint switcher. A single DragDropProvider spans all panes so a
- * library source can drop into the canvas and canvas nodes can reorder; drops are guarded
- * by the pure `canDrop` rule. Keyboard users add via the library's Insert buttons and
- * reorder via the inspector — no pointer required.
+ * library source can drop into the canvas and canvas nodes can reorder; between-item drop
+ * zones show exactly where a block lands, and a DragOverlay chip follows the cursor. Drops
+ * are planned by the pure `planDrop`. Keyboard users add via the library's Insert buttons
+ * and reorder via the inspector — no pointer required.
  */
-import { DragDropProvider } from "@dnd-kit/react";
+import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { Button } from "@nextlyhq/ui";
 
 import { defaultBlockRegistry } from "../core/registry";
-import { findNode } from "../core/tree";
 
 import { Canvas } from "./canvas/Canvas";
-import { canDrop } from "./logic/dropRules";
+import { planDrop, type DragSource } from "./logic/dropPlan";
 import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
 
 const BREAKPOINTS = ["base", "tablet", "mobile"];
 
-interface DragData {
-  kind?: "library" | "node";
-  blockType?: string;
-  nodeId?: string;
-  parentId?: string;
-  slot?: string;
-  index?: number;
+/** Human label for the dragged block, shown in the drag overlay chip. */
+function dragLabel(data: DragSource): string {
+  if (data.kind === "library" && data.blockType) {
+    return defaultBlockRegistry.get(data.blockType)?.label ?? data.blockType;
+  }
+  if (data.kind === "node" && data.nodeId) {
+    // The overlay only has the source's data; the label is best-effort.
+    return "Block";
+  }
+  return "Block";
 }
 
 export function EditorSurface() {
@@ -43,40 +46,14 @@ export function EditorSurface() {
   }) => {
     if (event.canceled) return;
     const { source, target } = event.operation;
-    if (!source || !target || source.id === target.id) return;
-    const s = (source.data ?? {}) as DragData;
-    const t = (target.data ?? {}) as DragData;
-    if (t.kind !== "node" || t.parentId == null || t.slot == null) return;
-
-    const parent = findNode(root, t.parentId);
-    if (!parent) return;
-    const index = t.index ?? 0;
-
-    if (s.kind === "library" && s.blockType) {
-      if (!canDrop(parent.type, t.slot, s.blockType, defaultBlockRegistry).ok) {
-        return;
-      }
-      dispatch({
-        type: "ADD",
-        parentId: t.parentId,
-        slot: t.slot,
-        nodeType: s.blockType,
-        index,
-      });
-    } else if (s.kind === "node" && s.nodeId) {
-      const moving = findNode(root, s.nodeId);
-      if (!moving) return;
-      if (!canDrop(parent.type, t.slot, moving.type, defaultBlockRegistry).ok) {
-        return;
-      }
-      dispatch({
-        type: "MOVE",
-        id: s.nodeId,
-        parentId: t.parentId,
-        slot: t.slot,
-        index,
-      });
-    }
+    if (!source || !target) return;
+    const action = planDrop(
+      source.data ?? {},
+      target.data ?? {},
+      root,
+      defaultBlockRegistry
+    );
+    if (action) dispatch(action);
   };
 
   return (
@@ -141,6 +118,30 @@ export function EditorSurface() {
           </aside>
         </div>
       </div>
+
+      <DragOverlay>
+        {source => (
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: "#4338ca",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              boxShadow: "0 8px 24px rgba(67,56,202,0.35)",
+              pointerEvents: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span aria-hidden>⠿</span>
+            {dragLabel(source?.data ?? {})}
+          </div>
+        )}
+      </DragOverlay>
     </DragDropProvider>
   );
 }
