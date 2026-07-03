@@ -25,6 +25,7 @@ import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { Homepage } from "./src/singles/homepage";
+import { LandingPage } from "./src/singles/landing-page";
 
 export default defineConfig({
   admin: {
@@ -39,7 +40,7 @@ export default defineConfig({
     },
   },
   collections: [Posts, Categories, Tags],
-  singles: [Homepage],
+  singles: [Homepage, LandingPage],
   // First plugin registered in the Playground (consciously relaxing the
   // "playground stays plugin-free" note) — the page-builder dev harness.
   plugins: [pageBuilder()],

@@ -25,6 +25,9 @@ export const Posts = defineCollection({
     text({ name: "title", required: true }),
     text({ name: "slug", required: true, unique: true }),
     textarea({ name: "excerpt" }),
+    // Kept so `db:sync` stays additive-only (the dev DB already has these columns).
+    text({ name: "metaTitle" }),
+    text({ name: "metaDescription" }),
     richText({ name: "content" }),
     relationship({
       name: "categories",
