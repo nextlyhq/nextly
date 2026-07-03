@@ -131,6 +131,9 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:^
         version: link:../../packages/admin
+      '@nextlyhq/plugin-page-builder':
+        specifier: workspace:^
+        version: link:../../packages/plugin-page-builder
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
@@ -13024,11 +13027,6 @@ snapshots:
       esbuild: 0.25.12
       load-tsconfig: 0.2.5
 
-  bundle-require@5.1.0(esbuild@0.28.1):
-    dependencies:
-      esbuild: 0.28.1
-      load-tsconfig: 0.2.5
-
   cac@6.7.14: {}
 
   call-bind-apply-helpers@1.0.2:
@@ -16321,12 +16319,12 @@ snapshots:
 
   tsup@8.5.0(jiti@2.6.1)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3):
     dependencies:
-      bundle-require: 5.1.0(esbuild@0.28.1)
+      bundle-require: 5.1.0(esbuild@0.25.12)
       cac: 6.7.14
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3
-      esbuild: 0.28.1
+      esbuild: 0.25.12
       fix-dts-default-cjs-exports: 1.0.1
       joycon: 3.1.1
       picocolors: 1.1.1
@@ -16349,12 +16347,12 @@ snapshots:
 
   tsup@8.5.0(jiti@2.6.1)(postcss@8.5.14)(tsx@4.20.5)(typescript@5.9.3)(yaml@2.8.3):
     dependencies:
-      bundle-require: 5.1.0(esbuild@0.28.1)
+      bundle-require: 5.1.0(esbuild@0.25.12)
       cac: 6.7.14
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3
-      esbuild: 0.28.1
+      esbuild: 0.25.12
       fix-dts-default-cjs-exports: 1.0.1
       joycon: 3.1.1
       picocolors: 1.1.1
