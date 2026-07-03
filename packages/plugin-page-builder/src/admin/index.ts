@@ -8,7 +8,11 @@ import {
   registerKnownPlugin,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { registerDefaultControls } from "./controls/registerDefaultControls";
 import { PageBuilderEditView } from "./PageBuilderEditView";
+
+// Register the built-in inspector controls into the (open) control registry on load.
+registerDefaultControls();
 
 const EDIT_VIEW_PATH =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderEditView";
