@@ -100,17 +100,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # All packages share a lockstep version; read it from the first entry.
           VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
-
-          # Only stable releases (no pre-release identifier) should carry the
-          # "latest" dist-tag. Pre-releases (alpha/beta/rc) intentionally keep
-          # whatever dist-tag changesets already applied (e.g. "alpha") so that
-          # `npm install nextly` never resolves to an unstable version.
-          if [[ "$VERSION" == *-* ]]; then
-            echo "Pre-release version $VERSION detected — skipping dist-tag latest promotion."
-            exit 0
-          fi
 
           PACKAGES=(
             "nextly"
