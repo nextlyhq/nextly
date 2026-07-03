@@ -9,6 +9,17 @@ export const FIELD_COMPONENT_PATH =
 export interface PageBuilderFieldOptions {
   /** Admin label for the field editor. */
   label?: string;
+  /**
+   * Show the editor only when a sibling field matches — enables an Elementor-style
+   * "choose your editor" workflow (e.g. show the builder only when a `mode` select is
+   * "page-builder"). Maps to the field's `admin.condition`.
+   */
+  condition?: {
+    field: string;
+    equals?: unknown;
+    notEquals?: unknown;
+    exists?: boolean;
+  };
 }
 
 /**
@@ -28,7 +39,7 @@ export function pageBuilderField(
   return json({
     name,
     label: opts.label,
-    admin: { component: FIELD_COMPONENT_PATH },
+    admin: { component: FIELD_COMPONENT_PATH, condition: opts.condition },
     validate: value =>
       validateDocument(value, defaultBlockRegistry, { allowUnknown: true }),
   });
