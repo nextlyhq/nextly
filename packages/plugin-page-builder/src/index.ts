@@ -9,3 +9,8 @@ export * from "./core";
 export { pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export { pagesCollection, EDIT_VIEW_PATH } from "./collections/pages";
+export {
+  pageBuilderField,
+  FIELD_COMPONENT_PATH,
+} from "./collections/pageBuilderField";
+export type { PageBuilderFieldOptions } from "./collections/pageBuilderField";

@@ -47,14 +47,31 @@ export function draftKeyFor(
 export function EditorProvider({
   document: doc,
   draftKey,
+  onDocumentChange,
   children,
 }: {
   document: BlockDocument;
   draftKey: string;
+  /**
+   * Fired whenever the document changes (skipping the initial mount) — used by the
+   * field mount (`PageBuilderField`) to sync into the host react-hook-form. The full
+   * Edit-view leaves this unset and persists via `SaveShell`.
+   */
+  onDocumentChange?: (document: BlockDocument) => void;
   children: ReactNode;
 }) {
   const [state, dispatch] = useReducer(editorReducer, doc, initialState);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstRender = useRef(true);
+
+  // Push document changes to a host form (field mount), not on the initial mount.
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    onDocumentChange?.(state.document);
+  }, [state.document, onDocumentChange]);
 
   // Debounced draft autosave (only while there are unsaved changes).
   useEffect(() => {
