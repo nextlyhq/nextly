@@ -31,6 +31,20 @@ describe("style compiler", () => {
     expect(css).toContain("background-color: #111");
   });
 
+  it("emits :hover rules + a transition from styleHover", () => {
+    const n = makeNode(
+      "core/button",
+      {},
+      { base: { backgroundColor: "#333" } }
+    );
+    n.styleHover = { base: { backgroundColor: "#4f46e5" } };
+    const css = compileNodeCss(n);
+    const cls = nodeClass(n.id);
+    expect(css).toContain(`.${cls}:hover`);
+    expect(css).toContain("background-color: #4f46e5");
+    expect(css).toContain("transition:");
+  });
+
   it("resolves design-token references to CSS vars", () => {
     const n = makeNode(
       "core/heading",

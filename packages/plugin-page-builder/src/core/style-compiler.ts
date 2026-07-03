@@ -127,24 +127,31 @@ export function compileNodeCss(
   node: BlockNode,
   opts: CompileOptions = {}
 ): string {
-  const style: ResponsiveStyle | undefined = node.style;
-  if (!style) return "";
   const bps = opts.breakpoints ?? DEFAULT_BREAKPOINTS;
   const cls = nodeClass(node.id);
   const blocks: string[] = [];
 
-  const base = style.base ? compileStyleValues(style.base) : [];
-  if (base.length) blocks.push(`.${cls} { ${base.join("; ")}; }`);
+  const hasHover = !!node.styleHover && Object.keys(node.styleHover).length > 0;
+  // Smooth the normal → hover change (Elementor-style).
+  if (hasHover) blocks.push(`.${cls} { transition: all 0.2s ease; }`);
 
-  for (const bp of bps) {
-    const sv = style[bp.id];
-    const decls = sv ? compileStyleValues(sv) : [];
-    if (decls.length) {
-      blocks.push(
-        `@media (max-width: ${bp.maxWidth}px) { .${cls} { ${decls.join("; ")}; } }`
-      );
+  const emit = (style: ResponsiveStyle | undefined, suffix: string): void => {
+    if (!style) return;
+    const base = style.base ? compileStyleValues(style.base) : [];
+    if (base.length) blocks.push(`.${cls}${suffix} { ${base.join("; ")}; }`);
+    for (const bp of bps) {
+      const sv = style[bp.id];
+      const decls = sv ? compileStyleValues(sv) : [];
+      if (decls.length) {
+        blocks.push(
+          `@media (max-width: ${bp.maxWidth}px) { .${cls}${suffix} { ${decls.join("; ")}; } }`
+        );
+      }
     }
-  }
+  };
+
+  emit(node.style, "");
+  emit(node.styleHover, ":hover");
 
   return blocks.join("\n");
 }

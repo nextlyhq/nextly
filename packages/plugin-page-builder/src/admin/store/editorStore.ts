@@ -57,7 +57,14 @@ export type EditorAction =
   | { type: "REMOVE"; id: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
-  | { type: "UPDATE_STYLE"; id: string; breakpoint: string; style: StyleValues }
+  | {
+      type: "UPDATE_STYLE";
+      id: string;
+      breakpoint: string;
+      style: StyleValues;
+      /** Which state to write — normal (default) or hover. */
+      styleState?: "normal" | "hover";
+    }
   | { type: "SET_BINDING"; id: string; prop: string; binding: Binding | null }
   | { type: "SET_CUSTOM_CLASS"; id: string; customClass: string }
   | { type: "REPLACE"; document: BlockDocument }
@@ -137,12 +144,13 @@ export function editorReducer(
 
     case "UPDATE_STYLE": {
       const node = findNode(root, action.id);
-      const style = { ...(node?.style ?? {}) };
+      const key = action.styleState === "hover" ? "styleHover" : "style";
+      const style = { ...(node?.[key] ?? {}) };
       style[action.breakpoint] = {
         ...(style[action.breakpoint] ?? {}),
         ...action.style,
       };
-      return commit(state, updateNode(root, action.id, { style }));
+      return commit(state, updateNode(root, action.id, { [key]: style }));
     }
 
     case "SET_BINDING": {

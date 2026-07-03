@@ -1,22 +1,16 @@
 "use client";
 
 /**
- * The inspector (spec §9). Tabs are auto-generated from the selected block's definition:
- * Content from `def.contentFields` (plugin control set), Style + Responsive from
- * `def.styleControls` + the control registry, Advanced for the customClass escape hatch +
- * block actions. Style edits the base layer; Responsive edits the active breakpoint's
- * override layer so per-device changes are visible in the iframe canvas.
+ * The inspector (spec §9). A polished, three-tab settings panel generated from the
+ * selected block's definition:
+ *  - Content — `def.contentFields` via the plugin control set (with per-field "bind"
+ *    toggles for Query Loop data).
+ *  - Style   — `def.styleControls`, with a Normal / Hover state switch (hover writes
+ *    `node.styleHover`) and the active device breakpoint (from the toolbar) shown inline.
+ *  - Advanced — reorder, custom class, duplicate / delete.
  */
-import {
-  Button,
-  Input,
-  Label,
-  Switch,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@nextlyhq/ui";
+import { Button, Input, Label, Switch } from "@nextlyhq/ui";
+import { useState } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
@@ -36,6 +30,85 @@ import { useEditor } from "../store/EditorProvider";
 registerDefaultControls();
 
 const BASE = "base";
+type Tab = "content" | "style" | "advanced";
+type StyleState = "normal" | "hover";
+
+// ---------------------------------------------------------------------------
+// Small presentational helpers
+// ---------------------------------------------------------------------------
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+        color: "#9ca3af",
+        margin: "4px 0 8px",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <p style={{ fontSize: 12, color: "#9ca3af", padding: "8px 0" }}>
+      {children}
+    </p>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        padding: 2,
+        gap: 2,
+        background: "#f3f4f6",
+        borderRadius: 8,
+      }}
+    >
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          style={{
+            border: "none",
+            cursor: "pointer",
+            borderRadius: 6,
+            padding: "4px 10px",
+            fontSize: 12,
+            fontWeight: 600,
+            color: value === o.value ? "#111827" : "#6b7280",
+            background: value === o.value ? "#fff" : "transparent",
+            boxShadow: value === o.value ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
 
 function BindableField({
   node,
@@ -134,49 +207,81 @@ function ContentTab({ node }: { node: BlockNode }) {
   const def = defaultBlockRegistry.get(node.type);
   const fields = narrowContentFields(def?.contentFields);
   if (fields.length === 0) {
-    return <Empty>No content options for this block.</Empty>;
+    return <Empty>This block has no content options.</Empty>;
   }
   return (
     <div>
-      {fields.map((field: ContentField) => (
+      <SectionLabel>Content</SectionLabel>
+      {fields.map(field => (
         <BindableField key={field.name} node={node} field={field} />
       ))}
     </div>
   );
 }
 
-function StyleTab({
-  node,
-  breakpoint,
-}: {
-  node: BlockNode;
-  breakpoint: string;
-}) {
-  const { dispatch } = useEditor();
+function StyleTab({ node }: { node: BlockNode }) {
+  const { state, dispatch } = useEditor();
+  const [styleState, setStyleState] = useState<StyleState>("normal");
   const def = defaultBlockRegistry.get(node.type);
   const controls = def?.styleControls ?? [];
+  const bp = state.activeBreakpoint;
+  const tree = styleState === "hover" ? node.styleHover : node.style;
+
   if (controls.length === 0) {
-    return <Empty>No style options for this block.</Empty>;
+    return <Empty>This block has no style options.</Empty>;
   }
-  const isOverride = breakpoint !== BASE;
+
   return (
     <div>
-      {isOverride ? (
-        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
-          Editing <strong>{breakpoint}</strong> overrides. Empty values fall
-          back to the base style.
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 12,
+        }}
+      >
+        <Segmented<StyleState>
+          value={styleState}
+          onChange={setStyleState}
+          options={[
+            { value: "normal", label: "Normal" },
+            { value: "hover", label: "Hover" },
+          ]}
+        />
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: bp === BASE ? "#9ca3af" : "#4338ca",
+            background: bp === BASE ? "transparent" : "#eef2ff",
+            padding: bp === BASE ? 0 : "2px 8px",
+            borderRadius: 6,
+          }}
+          title="Editing styles for this device (change with the toolbar)"
+        >
+          {bp === BASE ? "Desktop" : bp}
+        </span>
+      </div>
+
+      {styleState === "hover" ? (
+        <p style={{ fontSize: 11, color: "#6b7280", margin: "0 0 10px" }}>
+          Applied on <strong>:hover</strong>; empty values fall back to Normal.
         </p>
       ) : null}
+
+      <SectionLabel>Style</SectionLabel>
       {controls.map((ref: ControlRef) => (
         <div key={`${ref.control}:${ref.styleKey}`}>
           {renderControl(ref.control, {
             label: ref.label,
-            value: readStyleValue(node.style, ref.styleKey, breakpoint),
+            value: readStyleValue(tree, ref.styleKey, bp),
             onChange: value =>
               dispatch({
                 type: "UPDATE_STYLE",
                 id: node.id,
-                breakpoint,
+                breakpoint: bp,
+                styleState,
                 style: { [ref.styleKey]: value },
               }),
           })}
@@ -202,30 +307,41 @@ function AdvancedTab({ node }: { node: BlockNode }) {
     });
   };
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 14 }}>
       {loc ? (
-        <div style={{ display: "flex", gap: 6 }}>
-          <Button
-            variant="outline"
-            disabled={loc.index <= 0}
-            aria-label="Move block up"
-            onClick={() => move(-1)}
-          >
-            ↑ Move up
-          </Button>
-          <Button
-            variant="outline"
-            disabled={loc.index >= loc.count - 1}
-            aria-label="Move block down"
-            onClick={() => move(1)}
-          >
-            ↓ Move down
-          </Button>
+        <div>
+          <SectionLabel>Arrange</SectionLabel>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Button
+              variant="outline"
+              disabled={loc.index <= 0}
+              aria-label="Move block up"
+              onClick={() => move(-1)}
+            >
+              ↑ Up
+            </Button>
+            <Button
+              variant="outline"
+              disabled={loc.index >= loc.count - 1}
+              aria-label="Move block down"
+              onClick={() => move(1)}
+            >
+              ↓ Down
+            </Button>
+            <Button
+              variant="outline"
+              aria-label="Duplicate block"
+              onClick={() => dispatch({ type: "DUPLICATE", id: node.id })}
+            >
+              ⧉ Duplicate
+            </Button>
+          </div>
         </div>
       ) : null}
+
       <div>
+        <SectionLabel>Custom CSS class</SectionLabel>
         {renderControl("text", {
-          label: "Custom CSS class",
           value: node.customClass ?? "",
           onChange: value =>
             dispatch({
@@ -235,50 +351,45 @@ function AdvancedTab({ node }: { node: BlockNode }) {
             }),
         })}
       </div>
+
       <div style={{ fontSize: 11, color: "#9ca3af" }}>
         <div>
-          Type: <code>{node.type}</code>
-        </div>
-        <div>
-          ID: <code>{node.id}</code>
+          Type <code>{node.type}</code>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 6 }}>
-        <Button
-          variant="outline"
-          onClick={() => dispatch({ type: "DUPLICATE", id: node.id })}
-        >
-          Duplicate
-        </Button>
-        <Button
-          variant="destructive"
-          onClick={() => dispatch({ type: "REMOVE", id: node.id })}
-        >
-          Delete
-        </Button>
-      </div>
+
+      <Button
+        variant="destructive"
+        aria-label="Delete block"
+        onClick={() => dispatch({ type: "REMOVE", id: node.id })}
+      >
+        Delete block
+      </Button>
     </div>
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <p style={{ fontSize: 12, color: "#9ca3af", padding: "8px 0" }}>
-      {children}
-    </p>
-  );
-}
+// ---------------------------------------------------------------------------
+// Inspector shell
+// ---------------------------------------------------------------------------
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "content", label: "Content" },
+  { id: "style", label: "Style" },
+  { id: "advanced", label: "Advanced" },
+];
 
 export function Inspector() {
   const { state } = useEditor();
+  const [tab, setTab] = useState<Tab>("content");
   const node = state.selectedId
     ? findNode(state.document.root, state.selectedId)
     : undefined;
 
   if (!node) {
     return (
-      <div style={{ fontSize: 13, color: "#9ca3af", padding: 8 }}>
-        Select a block to edit its content and style.
+      <div style={{ padding: 16, fontSize: 13, color: "#9ca3af" }}>
+        Select a block on the canvas to edit its content and style.
       </div>
     );
   }
@@ -286,30 +397,52 @@ export function Inspector() {
   const def = defaultBlockRegistry.get(node.type);
 
   return (
-    <div style={{ padding: 8 }}>
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
-        {def?.label ?? node.type}
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ padding: "12px 12px 0" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>
+          {def?.label ?? node.type}
+        </div>
+        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10 }}>
+          {def?.category ?? "block"}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 2,
+            padding: 2,
+            background: "#f3f4f6",
+            borderRadius: 8,
+          }}
+        >
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              aria-pressed={tab === t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                flex: 1,
+                border: "none",
+                cursor: "pointer",
+                borderRadius: 6,
+                padding: "6px 0",
+                fontSize: 12,
+                fontWeight: 600,
+                color: tab === t.id ? "#111827" : "#6b7280",
+                background: tab === t.id ? "#fff" : "transparent",
+                boxShadow: tab === t.id ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <Tabs defaultValue="content">
-        <TabsList style={{ width: "100%" }}>
-          <TabsTrigger value="content">Content</TabsTrigger>
-          <TabsTrigger value="style">Style</TabsTrigger>
-          <TabsTrigger value="responsive">Responsive</TabsTrigger>
-          <TabsTrigger value="advanced">Advanced</TabsTrigger>
-        </TabsList>
-        <TabsContent value="content">
-          <ContentTab node={node} />
-        </TabsContent>
-        <TabsContent value="style">
-          <StyleTab node={node} breakpoint={BASE} />
-        </TabsContent>
-        <TabsContent value="responsive">
-          <StyleTab node={node} breakpoint={state.activeBreakpoint} />
-        </TabsContent>
-        <TabsContent value="advanced">
-          <AdvancedTab node={node} />
-        </TabsContent>
-      </Tabs>
+      <div style={{ padding: 12, overflow: "auto", flex: 1 }}>
+        {tab === "content" && <ContentTab node={node} />}
+        {tab === "style" && <StyleTab node={node} />}
+        {tab === "advanced" && <AdvancedTab node={node} />}
+      </div>
     </div>
   );
 }

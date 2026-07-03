@@ -44,6 +44,8 @@ export interface BlockNode {
   props: Record<string, unknown>;
   /** Typed, responsive style overrides (spec §8). */
   style?: ResponsiveStyle;
+  /** Responsive style overrides applied on `:hover` (spec §8, hover states). */
+  styleHover?: ResponsiveStyle;
   /** Named child regions. "default" is the primary slot; only container blocks have slots. */
   slots?: Record<string, BlockNode[]>;
   /** Typed data bindings, keyed by the prop they fill. Kept separate from `props` (spec §10). */
