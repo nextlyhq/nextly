@@ -75,4 +75,27 @@ describe("core block renderers", () => {
     });
     expect(html(container)).toContain("inside");
   });
+
+  it("grid applies an inline column template from the columns prop", () => {
+    const out = html(
+      makeNode("core/grid", { columns: 3 }, undefined, { default: [] })
+    );
+    expect(out).toContain("repeat(3, minmax(0, 1fr))");
+  });
+
+  it("image renders the editor media object (url + alt) when present", () => {
+    const out = html(
+      makeNode("core/image", { media: { url: "/x.jpg", alt: "X" } })
+    );
+    expect(out).toContain('src="/x.jpg"');
+    expect(out).toContain('alt="X"');
+  });
+
+  it("every block exposes inspector metadata (content and/or style controls)", () => {
+    for (const def of defaultBlockRegistry.all()) {
+      const hasContent = (def.contentFields?.length ?? 0) > 0;
+      const hasStyle = (def.styleControls?.length ?? 0) > 0;
+      expect(hasContent || hasStyle).toBe(true);
+    }
+  });
 });
