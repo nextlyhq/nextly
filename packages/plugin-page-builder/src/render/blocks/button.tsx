@@ -9,6 +9,18 @@ export const button = defineBlock({
   icon: "MousePointerClick",
   category: "basic",
   defaultProps: { text: "Click me", link: { href: "", target: "" } },
+  contentFields: [
+    { name: "text", type: "text", label: "Label", bindable: true },
+    { name: "link", type: "link", label: "Link" },
+  ],
+  styleControls: [
+    { control: "color", styleKey: "color", label: "Text color" },
+    { control: "color", styleKey: "backgroundColor", label: "Background" },
+    { control: "dimension", styleKey: "borderRadius", label: "Radius" },
+    { control: "align", styleKey: "textAlign", label: "Align" },
+    { control: "spacing", styleKey: "padding", label: "Padding" },
+    { control: "spacing", styleKey: "margin", label: "Margin" },
+  ],
   render: ({ props, className }) => {
     const link = (props.link ?? {}) as { href?: string; target?: string };
     const href = safeUrl(link.href);

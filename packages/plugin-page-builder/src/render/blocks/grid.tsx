@@ -1,9 +1,14 @@
 import { defineBlock } from "../../core/registry";
 
-// Grid layout (display:grid, grid-template-columns, gap) is emitted by the style
-// compiler from the node's style; the editor writes those from `columns`/`gap`. The
-// renderer only provides the grid container element + its slot.
-export const grid = defineBlock({
+// Grid layout: the column count + gap are driven by the `columns`/`gap` content fields and
+// applied as an inline grid style (safe: CSS values in a style object are never executed).
+// Colours/spacing/etc. still come from the style compiler via `className`.
+interface GridProps {
+  columns?: number;
+  gap?: string;
+}
+
+export const grid = defineBlock<GridProps>({
   type: "core/grid",
   version: 1,
   label: "Grid",
@@ -12,7 +17,32 @@ export const grid = defineBlock({
   isContainer: true,
   slots: [{ name: "default" }],
   defaultProps: { columns: 2, gap: "16px" },
-  render: ({ slots, className }) => (
-    <div className={className}>{slots.default}</div>
-  ),
+  contentFields: [
+    { name: "columns", type: "number", label: "Columns" },
+    { name: "gap", type: "text", label: "Gap", placeholder: "16px" },
+  ],
+  styleControls: [
+    { control: "color", styleKey: "backgroundColor", label: "Background" },
+    { control: "spacing", styleKey: "padding", label: "Padding" },
+    { control: "spacing", styleKey: "margin", label: "Margin" },
+  ],
+  render: ({ props, slots, className }) => {
+    const columns =
+      typeof props.columns === "number" && props.columns > 0
+        ? Math.min(props.columns, 12)
+        : 2;
+    const gap = typeof props.gap === "string" ? props.gap : "16px";
+    return (
+      <div
+        className={className}
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          gap,
+        }}
+      >
+        {slots.default}
+      </div>
+    );
+  },
 });

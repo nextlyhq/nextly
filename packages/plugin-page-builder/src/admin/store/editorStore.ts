@@ -59,6 +59,7 @@ export type EditorAction =
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | { type: "UPDATE_STYLE"; id: string; breakpoint: string; style: StyleValues }
   | { type: "SET_BINDING"; id: string; prop: string; binding: Binding | null }
+  | { type: "SET_CUSTOM_CLASS"; id: string; customClass: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
   | { type: "UNDO" }
@@ -150,6 +151,11 @@ export function editorReducer(
       if (action.binding) bindings[action.prop] = action.binding;
       else delete bindings[action.prop];
       return commit(state, updateNode(root, action.id, { bindings }));
+    }
+
+    case "SET_CUSTOM_CLASS": {
+      const customClass = action.customClass.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { customClass }));
     }
 
     case "REPLACE":

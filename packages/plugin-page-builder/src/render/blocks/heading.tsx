@@ -11,6 +11,22 @@ export const heading = defineBlock({
   icon: "Heading",
   category: "basic",
   defaultProps: { text: "New heading", level: "h2" },
+  contentFields: [
+    { name: "text", type: "text", label: "Text", bindable: true },
+    {
+      name: "level",
+      type: "select",
+      label: "Level",
+      options: LEVELS.map(l => ({ value: l, label: l.toUpperCase() })),
+    },
+  ],
+  styleControls: [
+    { control: "color", styleKey: "color", label: "Text color" },
+    { control: "dimension", styleKey: "fontSize", label: "Font size" },
+    { control: "align", styleKey: "textAlign", label: "Align" },
+    { control: "spacing", styleKey: "padding", label: "Padding" },
+    { control: "spacing", styleKey: "margin", label: "Margin" },
+  ],
   render: ({ props, className }) => {
     const level = LEVELS.includes(String(props.level))
       ? String(props.level)
