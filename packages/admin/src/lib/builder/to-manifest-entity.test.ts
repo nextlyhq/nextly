@@ -111,15 +111,19 @@ describe("mapBuilderFieldToManifest", () => {
     });
   });
 
-  it("records a plugin/unsupported field type as its json storage primitive", () => {
-    // e.g. the page builder's "page-builder" type — recorded as json so the manifest stays
-    // valid; the DB keeps the real type so the plugin editor still renders.
+  it("preserves a plugin-contributed field type verbatim", () => {
+    // e.g. the page builder's "page-builder" type — the manifest now stores the real
+    // type (the manifest Zod accepts plugin slugs) so it round-trips to production; the
+    // CLI column classifier resolves it to a column via the field-type registry.
     const entity = collectionToManifestEntity({
       slug: "x",
       settings: {},
       fields: [{ name: "content", type: "page-builder" }],
     });
-    expect(entity.fields[0]).toMatchObject({ name: "content", type: "json" });
+    expect(entity.fields[0]).toMatchObject({
+      name: "content",
+      type: "page-builder",
+    });
   });
 
   it("maps an empty field list to a field-less entity with labels + status (create case)", () => {
