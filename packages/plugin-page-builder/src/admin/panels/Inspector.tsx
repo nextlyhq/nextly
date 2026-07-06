@@ -10,7 +10,7 @@
  *  - Advanced — reorder, custom class, duplicate / delete.
  */
 import { Button, Input, Label, Switch } from "@nextlyhq/ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
@@ -26,6 +26,8 @@ import {
 } from "../controls/registerDefaultControls";
 import { locateNode } from "../logic/locate";
 import { useEditor } from "../store/EditorProvider";
+
+import { firstPopulatedTab } from "./inspectorTabs";
 
 registerDefaultControls();
 
@@ -219,9 +221,16 @@ function ContentTab({ node }: { node: BlockNode }) {
   );
 }
 
-function StyleTab({ node }: { node: BlockNode }) {
+function StyleTab({
+  node,
+  styleState,
+  setStyleState,
+}: {
+  node: BlockNode;
+  styleState: StyleState;
+  setStyleState: (v: StyleState) => void;
+}) {
   const { state, dispatch } = useEditor();
-  const [styleState, setStyleState] = useState<StyleState>("normal");
   const def = defaultBlockRegistry.get(node.type);
   const controls = def?.styleControls ?? [];
   const bp = state.activeBreakpoint;
@@ -382,9 +391,20 @@ const TABS: { id: Tab; label: string }[] = [
 export function Inspector() {
   const { state } = useEditor();
   const [tab, setTab] = useState<Tab>("content");
+  const [styleState, setStyleState] = useState<StyleState>("normal");
   const node = state.selectedId
     ? findNode(state.document.root, state.selectedId)
     : undefined;
+  const def = node ? defaultBlockRegistry.get(node.type) : undefined;
+
+  // On selection change, open a populated tab and reset Hover mode, so panel state from
+  // the previously-selected block never leaks (spec §3.5).
+  // Depends only on the selection id: reset when the selected block changes, not when
+  // `def`/setters change identity.
+  useEffect(() => {
+    setTab(firstPopulatedTab(def));
+    setStyleState("normal");
+  }, [state.selectedId]);
 
   if (!node) {
     return (
@@ -393,8 +413,6 @@ export function Inspector() {
       </div>
     );
   }
-
-  const def = defaultBlockRegistry.get(node.type);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -440,7 +458,13 @@ export function Inspector() {
       </div>
       <div style={{ padding: 12, overflow: "auto", flex: 1 }}>
         {tab === "content" && <ContentTab node={node} />}
-        {tab === "style" && <StyleTab node={node} />}
+        {tab === "style" && (
+          <StyleTab
+            node={node}
+            styleState={styleState}
+            setStyleState={setStyleState}
+          />
+        )}
         {tab === "advanced" && <AdvancedTab node={node} />}
       </div>
     </div>
