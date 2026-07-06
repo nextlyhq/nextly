@@ -24,6 +24,7 @@ import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
 import { findNode } from "../../core/tree";
 import type { BlockNode, ControlRef } from "../../core/types";
+import { QUERY_LOOP_TYPE } from "../../render/query/types";
 import {
   narrowContentFields,
   type ContentField,
@@ -37,6 +38,7 @@ import { locateNode } from "../logic/locate";
 import { useEditor } from "../store/EditorProvider";
 
 import { firstPopulatedTab } from "./inspectorTabs";
+import { QueryLoopSettings } from "./QueryLoopSettings";
 
 registerDefaultControls();
 
@@ -177,6 +179,10 @@ function BindableField({
 }
 
 function ContentTab({ node }: { node: BlockNode }) {
+  // The Query Loop authors through its own discovery-driven panel, not content fields.
+  if (node.type === QUERY_LOOP_TYPE) {
+    return <QueryLoopSettings node={node} />;
+  }
   const def = defaultBlockRegistry.get(node.type);
   const fields = narrowContentFields(def?.contentFields);
   if (fields.length === 0) {
@@ -364,9 +370,12 @@ export function Inspector() {
   const def = node ? defaultBlockRegistry.get(node.type) : undefined;
 
   // On selection change, open a populated tab and reset Hover mode, so panel state from
-  // the previously-selected block never leaks (spec §3.5).
+  // the previously-selected block never leaks (spec §3.5). The Query Loop always has its
+  // Content panel populated (the settings UI), so open there.
   useEffect(() => {
-    setTab(firstPopulatedTab(def));
+    const initial =
+      node?.type === QUERY_LOOP_TYPE ? "content" : firstPopulatedTab(def);
+    setTab(initial);
     setStyleState("normal");
   }, [state.selectedId]);
 

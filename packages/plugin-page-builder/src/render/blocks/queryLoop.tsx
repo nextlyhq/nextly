@@ -25,16 +25,6 @@ export const queryLoop = defineBlock({
     columns: 1,
     gap: "16px",
   },
-  contentFields: [
-    {
-      name: "collection",
-      type: "text",
-      label: "Collection slug",
-      placeholder: "e.g. posts",
-    },
-    { name: "sort", type: "text", label: "Sort", placeholder: "-createdAt" },
-    { name: "limit", type: "number", label: "Limit" },
-  ],
   styleControls: [
     { control: "spacing", styleKey: "padding", label: "Padding" },
     { control: "spacing", styleKey: "margin", label: "Margin" },
