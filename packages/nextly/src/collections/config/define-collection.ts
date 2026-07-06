@@ -310,6 +310,12 @@ export interface CollectionAdminOptions {
   isPlugin?: boolean;
 
   /**
+   * Page Builder plugin: per-entity editor-choice opt-in. When `enabled`, entries of this
+   * collection offer a Default vs Page Builder choice (see @nextlyhq/plugin-page-builder).
+   */
+  pageBuilder?: { enabled?: boolean; defaultMode?: "default" | "builder" };
+
+  /**
    * Icon identifier for the collection.
    * Should be a valid icon name from the icon library (e.g., Lucide).
    *

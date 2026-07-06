@@ -103,6 +103,12 @@ export interface SingleAdminOptions {
    * @example 'Configure site settings like name, logo, and SEO defaults.'
    */
   description?: string;
+
+  /**
+   * Page Builder plugin: per-entity editor-choice opt-in. When `enabled`, this single
+   * offers a Default vs Page Builder choice (see @nextlyhq/plugin-page-builder).
+   */
+  pageBuilder?: { enabled?: boolean; defaultMode?: "default" | "builder" };
 }
 
 // ============================================================
