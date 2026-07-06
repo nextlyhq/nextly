@@ -197,8 +197,10 @@ function DraggableNode({
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
-  // Inline text editing: a selected text block becomes contentEditable; disable dragging
-  // while editing so a mouse text-selection doesn't move the block.
+  // Inline text editing: a selected text block becomes contentEditable so you can type on
+  // the canvas. The block stays DRAGGABLE while editing — a still click edits, a >4px drag
+  // moves it (the sensor's distance threshold arbitrates). Disabling drag here would make
+  // text blocks un-draggable, since clicking to grab one also selects it.
   const textProp = INLINE_TEXT_PROP[node.type];
   const editing = !!textProp && selected;
 
@@ -207,7 +209,6 @@ function DraggableNode({
     type: BLOCK_TYPE,
     data: { kind: "node", nodeId: node.id, parentId, slot, index },
     sensors: dragSensors,
-    disabled: editing,
   });
 
   // Grid child: "insert before me" target.
