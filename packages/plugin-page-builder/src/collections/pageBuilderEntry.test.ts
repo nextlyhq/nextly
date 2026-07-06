@@ -5,6 +5,7 @@ import {
   PAGE_BUILDER_CONTENT_FIELD,
   PAGE_BUILDER_FIELD_TYPE,
   pageBuilderFields,
+  withPageBuilder,
 } from "./pageBuilderEntry";
 import { FIELD_COMPONENT_PATH } from "./pageBuilderField";
 
@@ -53,5 +54,33 @@ describe("pageBuilderFields in a Single", () => {
     expect(names).toContain("title");
     expect(names).toContain("editorMode");
     expect(names).toContain(PAGE_BUILDER_CONTENT_FIELD);
+  });
+});
+
+describe("withPageBuilder", () => {
+  it("appends the editor-choice fields and sets admin.pageBuilder.enabled", () => {
+    const config = withPageBuilder({
+      slug: "landing",
+      fields: [text({ name: "title" })],
+    });
+    const names = (config.fields as Record<string, unknown>[]).map(f => f.name);
+    expect(names).toEqual(["title", "editorMode", PAGE_BUILDER_CONTENT_FIELD]);
+    expect(
+      (config.admin as { pageBuilder?: { enabled?: boolean } }).pageBuilder
+        ?.enabled
+    ).toBe(true);
+  });
+
+  it("preserves existing admin config + honors defaultMode", () => {
+    const config = withPageBuilder(
+      { slug: "x", fields: [], admin: { group: "Content" } },
+      { defaultMode: "builder" }
+    );
+    const admin = config.admin as {
+      group?: string;
+      pageBuilder?: { defaultMode?: string };
+    };
+    expect(admin.group).toBe("Content");
+    expect(admin.pageBuilder?.defaultMode).toBe("builder");
   });
 });

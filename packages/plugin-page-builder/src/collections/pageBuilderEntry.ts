@@ -49,3 +49,26 @@ export function pageBuilderFields(opts: { defaultMode?: EditorMode } = {}) {
     }),
   ];
 }
+
+/**
+ * Opt a CODE-FIRST collection/single config into the Page Builder editor choice: appends
+ * `pageBuilderFields()` and sets `admin.pageBuilder.enabled` (the flag the admin/front-end
+ * read). Wrap the config passed to `defineCollection`/`defineSingle`:
+ *
+ * ```ts
+ * defineCollection(withPageBuilder({ slug: "landing", fields: [text({ name: "title" })] }));
+ * ```
+ */
+export function withPageBuilder<
+  T extends { fields?: unknown[]; admin?: Record<string, unknown> },
+>(config: T, opts: { defaultMode?: EditorMode } = {}): T {
+  const defaultMode: EditorMode = opts.defaultMode ?? "default";
+  return {
+    ...config,
+    fields: [...(config.fields ?? []), ...pageBuilderFields({ defaultMode })],
+    admin: {
+      ...(config.admin ?? {}),
+      pageBuilder: { enabled: true, defaultMode },
+    },
+  };
+}
