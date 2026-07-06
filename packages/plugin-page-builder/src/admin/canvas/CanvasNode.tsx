@@ -28,9 +28,11 @@ import { defaultBlockRegistry } from "../../core/registry";
 import { nodeClass } from "../../core/style-compiler";
 import type { BlockNode } from "../../core/types";
 import { BlockErrorBoundary } from "../../render/ErrorBoundary";
+import { QUERY_LOOP_TYPE } from "../../render/query/types";
 import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
+import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
 import { DropZone } from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
@@ -264,10 +266,18 @@ function DraggableNode({
     );
   }
 
-  const augmented = cloneElement(
-    element as ReactElement<Record<string, unknown>>,
-    { "data-nx-id": node.id, ref }
-  );
+  // The Query Loop keeps its editable template, and we APPEND a read-only sample-data
+  // preview after it so the author sees how the template maps to real entries (spec §5).
+  const el = element as ReactElement<Record<string, unknown>>;
+  const augmented =
+    node.type === QUERY_LOOP_TYPE
+      ? cloneElement(
+          el,
+          { "data-nx-id": node.id, ref },
+          (el.props as { children?: ReactNode }).children,
+          <QueryLoopSamplePreview key="__nx-sample" node={node} />
+        )
+      : cloneElement(el, { "data-nx-id": node.id, ref });
 
   return (
     <BlockErrorBoundary
