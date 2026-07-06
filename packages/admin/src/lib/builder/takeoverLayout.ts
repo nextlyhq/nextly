@@ -10,8 +10,10 @@
  *
  * The rule is driven entirely by field-type metadata (`branding.plugins[]
  * .fieldTypes[].layout === "takeover"`) and the generic condition evaluator — no
- * plugin-specific knowledge lives here. The page-builder plugin is simply the
- * first field type to opt in.
+ * plugin-specific knowledge lives here. A field counts as a takeover field when
+ * its `type` matches the registered takeover type OR its `admin.component`
+ * matches that type's editor component (so both the first-class `type` form and
+ * the legacy `json` + `admin.component` form are recognized).
  *
  * @module lib/builder/takeoverLayout
  */
@@ -19,24 +21,40 @@ import type { FieldCondition } from "@admin/components/features/schema-builder/t
 
 import { evaluateCondition } from "./condition-evaluator";
 
+/** A registered field type that takes over the form body when visible. */
+export interface TakeoverType {
+  type: string;
+  /** The type's editor component path, used as an alternate match key. */
+  component?: string;
+}
+
 export interface LayoutField {
   name?: string;
   type?: string;
   // Loose on purpose: any field config (FieldConfig, ManifestField, …) must be
   // assignable to LayoutField so the generic `T` binds to the caller's type. The
   // condition is cast to FieldCondition where it's actually evaluated.
-  admin?: { condition?: unknown } | null;
+  admin?: { condition?: unknown; component?: unknown } | null;
 }
 
 /** System fields rendered separately (never part of the editable body). */
 const SYSTEM_FIELDS = new Set(["title", "slug"]);
 
-/** True when a field's type is one of the registered takeover types. */
+function componentOf(f: LayoutField): string | undefined {
+  const c = f.admin?.component;
+  return typeof c === "string" ? c : undefined;
+}
+
+/** True when a field's type/component matches one of the takeover types. */
 export function isTakeoverField(
   f: LayoutField,
-  takeoverTypes: Set<string>
+  takeovers: TakeoverType[]
 ): boolean {
-  return typeof f.type === "string" && takeoverTypes.has(f.type);
+  return takeovers.some(
+    t =>
+      f.type === t.type ||
+      (t.component !== undefined && componentOf(f) === t.component)
+  );
 }
 
 /** The name of the field a takeover field's condition watches, if any. */
@@ -45,20 +63,29 @@ function controllerName(f: LayoutField): string | undefined {
 }
 
 /**
- * Field types flagged `layout: "takeover"` in the admin branding metadata.
+ * Field types flagged `layout: "takeover"` in the admin branding metadata,
+ * paired with their editor component path.
  */
 export function takeoverTypesFromBranding(
   plugins:
-    | Array<{ fieldTypes?: Array<{ type: string; layout?: string }> }>
+    | Array<{
+        fieldTypes?: Array<{
+          type: string;
+          component?: string;
+          layout?: string;
+        }>;
+      }>
     | undefined
-): Set<string> {
-  const set = new Set<string>();
+): TakeoverType[] {
+  const out: TakeoverType[] = [];
   for (const p of plugins ?? []) {
     for (const ft of p.fieldTypes ?? []) {
-      if (ft.layout === "takeover") set.add(ft.type);
+      if (ft.layout === "takeover") {
+        out.push({ type: ft.type, component: ft.component });
+      }
     }
   }
-  return set;
+  return out;
 }
 
 /**
@@ -67,11 +94,11 @@ export function takeoverTypesFromBranding(
  */
 export function takeoverControllerNames<T extends LayoutField>(
   fields: T[],
-  takeoverTypes: Set<string>
+  takeovers: TakeoverType[]
 ): string[] {
   const names = new Set<string>();
   for (const f of fields) {
-    if (isTakeoverField(f, takeoverTypes)) {
+    if (isTakeoverField(f, takeovers)) {
       const c = controllerName(f);
       if (c) names.add(c);
     }
@@ -86,7 +113,7 @@ export function takeoverControllerNames<T extends LayoutField>(
  */
 export function computeMainFields<T extends LayoutField>(
   fields: T[],
-  opts: { takeoverTypes: Set<string>; values: Record<string, unknown> }
+  opts: { takeoverTypes: TakeoverType[]; values: Record<string, unknown> }
 ): T[] {
   const body = fields.filter(f => !SYSTEM_FIELDS.has(f.name ?? ""));
 

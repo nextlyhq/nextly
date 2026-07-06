@@ -6,8 +6,10 @@ import {
   takeoverTypesFromBranding,
 } from "./takeoverLayout";
 
-const takeoverTypes = new Set(["page-builder"]);
+const CANVAS_COMPONENT = "@nextlyhq/plugin-page-builder/admin#PageBuilderField";
+const takeoverTypes = [{ type: "page-builder", component: CANVAS_COMPONENT }];
 
+// UI-created shape: the canvas field uses the first-class `page-builder` type.
 const fields = [
   { name: "title", type: "text" },
   { name: "slug", type: "text" },
@@ -20,18 +22,39 @@ const fields = [
   { name: "summary", type: "textarea" },
 ];
 
+// Code-first shape: `json` field whose admin.component is the plugin editor.
+const codeFirstFields = [
+  { name: "editormode", type: "select" },
+  {
+    name: "content",
+    type: "json",
+    admin: {
+      component: CANVAS_COMPONENT,
+      condition: { field: "editormode", equals: "builder" },
+    },
+  },
+  { name: "summary", type: "textarea" },
+];
+
 describe("computeMainFields", () => {
   it("strips title/slug and returns the full body when no takeover is active", () => {
     const out = computeMainFields(fields, {
       takeoverTypes,
       values: { editormode: "default" },
     });
-    // content stays in the body — it self-hides via its own FieldRenderer condition.
     expect(out.map(f => f.name)).toEqual(["editormode", "content", "summary"]);
   });
 
-  it("collapses to the takeover field + its controller when active", () => {
+  it("collapses to the takeover field + its controller when active (type match)", () => {
     const out = computeMainFields(fields, {
+      takeoverTypes,
+      values: { editormode: "builder" },
+    });
+    expect(out.map(f => f.name)).toEqual(["editormode", "content"]);
+  });
+
+  it("collapses via admin.component match (code-first json canvas field)", () => {
+    const out = computeMainFields(codeFirstFields, {
       takeoverTypes,
       values: { editormode: "builder" },
     });
@@ -40,7 +63,7 @@ describe("computeMainFields", () => {
 
   it("returns the full body when no takeover type is registered", () => {
     const out = computeMainFields(fields, {
-      takeoverTypes: new Set(),
+      takeoverTypes: [],
       values: { editormode: "builder" },
     });
     expect(out.map(f => f.name)).toEqual(["editormode", "content", "summary"]);
@@ -58,22 +81,29 @@ describe("computeMainFields", () => {
 });
 
 describe("takeoverTypesFromBranding", () => {
-  it("collects only field types flagged layout: takeover", () => {
-    const set = takeoverTypesFromBranding([
+  it("collects field types flagged layout: takeover with their component", () => {
+    const out = takeoverTypesFromBranding([
       {
         fieldTypes: [
-          { type: "page-builder", layout: "takeover" },
-          { type: "rating" },
+          {
+            type: "page-builder",
+            component: CANVAS_COMPONENT,
+            layout: "takeover",
+          },
+          { type: "rating", component: "x#R" },
         ],
       },
-      { fieldTypes: [{ type: "map", layout: "takeover" }] },
+      { fieldTypes: [{ type: "map", component: "x#M", layout: "takeover" }] },
     ]);
-    expect([...set].sort()).toEqual(["map", "page-builder"]);
+    expect(out.map(t => t.type).sort()).toEqual(["map", "page-builder"]);
+    expect(out.find(t => t.type === "page-builder")?.component).toBe(
+      CANVAS_COMPONENT
+    );
   });
 
   it("handles missing plugins/fieldTypes", () => {
-    expect(takeoverTypesFromBranding(undefined).size).toBe(0);
-    expect(takeoverTypesFromBranding([{}]).size).toBe(0);
+    expect(takeoverTypesFromBranding(undefined)).toEqual([]);
+    expect(takeoverTypesFromBranding([{}])).toEqual([]);
   });
 });
 
@@ -85,6 +115,6 @@ describe("takeoverControllerNames", () => {
   });
 
   it("returns empty when no takeover field is present", () => {
-    expect(takeoverControllerNames(fields, new Set())).toEqual([]);
+    expect(takeoverControllerNames(fields, [])).toEqual([]);
   });
 });
