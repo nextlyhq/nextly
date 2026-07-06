@@ -35,6 +35,7 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
+  PageBuilderToggle,
   SafeChangeConfirmDialog,
   SchemaChangeDialog,
   type BuilderSettingsValues,
@@ -596,6 +597,11 @@ export default function CollectionBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        <PageBuilderToggle
+          fields={builder.fields}
+          setFields={builder.setFields}
+          disabled={isLocked}
+        />
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}
