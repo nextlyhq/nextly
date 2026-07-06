@@ -6,7 +6,7 @@ const f = (name: string, type = "text") => ({ name, type });
 const schema = [
   f("title"),
   f("slug"),
-  f("editorMode", "select"),
+  f("editormode", "select"),
   f("content", "page-builder"),
   f("seo"),
 ];
@@ -31,20 +31,20 @@ describe("computeMainFields", () => {
       enabled: true,
       editorMode: "builder",
     }).map(x => x.name);
-    expect(out).toEqual(["editorMode", "content"]);
+    expect(out).toEqual(["editormode", "content"]);
   });
   it("in default mode returns all non-title/slug fields", () => {
     const out = computeMainFields(schema, {
       enabled: true,
       editorMode: "default",
     }).map(x => x.name);
-    expect(out).toEqual(["editorMode", "content", "seo"]);
+    expect(out).toEqual(["editormode", "content", "seo"]);
   });
   it("when not enabled returns all non-title/slug fields regardless of mode", () => {
     const out = computeMainFields(schema, {
       enabled: false,
       editorMode: "builder",
     }).map(x => x.name);
-    expect(out).toEqual(["editorMode", "content", "seo"]);
+    expect(out).toEqual(["editormode", "content", "seo"]);
   });
 });

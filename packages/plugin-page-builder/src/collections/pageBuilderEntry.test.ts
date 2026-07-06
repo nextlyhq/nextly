@@ -16,7 +16,7 @@ describe("pageBuilderFields", () => {
 
     const [mode, builder] = fields;
     expect(mode.type).toBe("select");
-    expect(mode.name).toBe("editorMode");
+    expect(mode.name).toBe("editormode");
     expect(mode.defaultValue).toBe("default"); // default = normal editor
 
     expect(builder.name).toBe(PAGE_BUILDER_CONTENT_FIELD);
@@ -52,7 +52,7 @@ describe("pageBuilderFields in a Single", () => {
     }) as { fields: Record<string, unknown>[] };
     const names = single.fields.map(f => f.name);
     expect(names).toContain("title");
-    expect(names).toContain("editorMode");
+    expect(names).toContain("editormode");
     expect(names).toContain(PAGE_BUILDER_CONTENT_FIELD);
   });
 });
@@ -64,7 +64,7 @@ describe("withPageBuilder", () => {
       fields: [text({ name: "title" })],
     });
     const names = (config.fields as Record<string, unknown>[]).map(f => f.name);
-    expect(names).toEqual(["title", "editorMode", PAGE_BUILDER_CONTENT_FIELD]);
+    expect(names).toEqual(["title", "editormode", PAGE_BUILDER_CONTENT_FIELD]);
     expect(
       (config.admin as { pageBuilder?: { enabled?: boolean } }).pageBuilder
         ?.enabled

@@ -151,7 +151,7 @@ import { PageRenderer } from "@nextlyhq/plugin-page-builder/render";
 
 const article = await nx.findOne({ collection: "articles", where: { slug } });
 export default function Article() {
-  return article.editorMode === "builder" ? (
+  return article.editormode === "builder" ? (
     <PageRenderer
       document={article.content}
       registry={registry}

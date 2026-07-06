@@ -417,7 +417,7 @@ export function SingleForm({
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Page Builder mode: show only the canvas + editor switch (title/slug/status are separate).
   const pbEnabled = isPageBuilderEnabled(allFields, schema.admin);
-  const editorMode = form.watch("editorMode");
+  const editorMode = form.watch("editormode");
   const mainFields = computeMainFields(allFields, {
     enabled: pbEnabled,
     editorMode,

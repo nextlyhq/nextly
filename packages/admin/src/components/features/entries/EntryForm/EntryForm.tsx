@@ -192,7 +192,7 @@ export function EntryForm({
   // Page Builder mode: when an entry chose the visual builder, show only the canvas + the
   // editor switch (title/slug/status are separate system components, always kept).
   const pbEnabled = isPageBuilderEnabled(allFields, collection.admin);
-  const editorMode = form.watch("editorMode");
+  const editorMode = form.watch("editormode");
   const mainFields = computeMainFields(allFields, {
     enabled: pbEnabled,
     editorMode,

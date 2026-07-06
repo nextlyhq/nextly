@@ -7,7 +7,9 @@
  * mode, the edit form shows only the canvas + the editor switch; title/slug/status are
  * rendered by separate system components and are never in this list.
  */
-export const EDITOR_MODE_FIELD = "editorMode";
+// All-lowercase: the schema builder normalizes field names to lowercase, and code-first uses
+// the same lowercase name, so detection stays stable across both.
+export const EDITOR_MODE_FIELD = "editormode";
 export const PAGE_BUILDER_FIELD_TYPE = "page-builder";
 
 interface Field {
