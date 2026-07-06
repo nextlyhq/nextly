@@ -112,6 +112,57 @@ export const Homepage = defineSingle({
 same way — hand the field's value to `PageRenderer` (for a single, fetch via
 `nx.findSingle({ slug })`).
 
+## Per-entry editor choice (Default vs Page Builder)
+
+Let **each entry** of a collection or single choose between the normal Nextly fields and the
+visual Page Builder canvas — Elementor/WordPress-style.
+
+**Code-first:** wrap the config with `withPageBuilder()`. It adds an `editorMode` select + the
+reserved `content` page-builder field, and sets `admin.pageBuilder.enabled`:
+
+```ts
+import { withPageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineCollection, text, textarea } from "nextly/config";
+
+export const Articles = defineCollection(
+  withPageBuilder({
+    slug: "articles",
+    labels: { singular: "Article", plural: "Articles" },
+    status: true,
+    fields: [
+      text({ name: "title", required: true }),
+      text({ name: "slug", required: true, unique: true }),
+      textarea({ name: "excerpt" }),
+    ],
+  })
+);
+```
+
+**UI-created collections/singles:** open the schema builder → toggle **"Use Page Builder"**
+(shown only when this plugin is installed). It adds/removes the same two fields.
+
+When an entry picks **Page Builder**, the edit screen shows the canvas plus the essentials
+(title, slug, status); the other fields are hidden. Picking **Default** shows the normal form.
+
+**Front-end** — render whichever the entry chose:
+
+```tsx
+import { PageRenderer } from "@nextlyhq/plugin-page-builder/render";
+
+const article = await nx.findOne({ collection: "articles", where: { slug } });
+export default function Article() {
+  return article.editorMode === "builder" ? (
+    <PageRenderer
+      document={article.content}
+      registry={registry}
+      dataProvider={dp}
+    />
+  ) : (
+    <NormalArticle entry={article} />
+  ); // your normal-fields template
+}
+```
+
 ## Built-in blocks
 
 `core/heading`, `core/paragraph`, `core/image`, `core/button`, `core/video`,
