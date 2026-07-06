@@ -70,6 +70,12 @@ export interface PluginMetadata {
   /** Dashboard widgets contributed via `contributes.admin.widgets`. */
   widgets?: PluginWidgetMeta[];
   /**
+   * Component rendered in the schema-builder pages (above the field list),
+   * contributed via `contributes.admin.schemaBuilderSlot`. Receives `{ fields,
+   * setFields, disabled, context }`.
+   */
+  schemaBuilderSlot?: string;
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout).
