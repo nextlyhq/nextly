@@ -9,7 +9,15 @@
  *    `node.styleHover`) and the active device breakpoint (from the toolbar) shown inline.
  *  - Advanced — reorder, custom class, duplicate / delete.
  */
-import { Button, Input, Label, Switch } from "@nextlyhq/ui";
+import {
+  Input,
+  Label,
+  Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
@@ -24,6 +32,7 @@ import {
   registerDefaultControls,
   renderControl,
 } from "../controls/registerDefaultControls";
+import { ArrowDown, ArrowUp, blockIcon, Copy, Trash2 } from "../icons";
 import { locateNode } from "../logic/locate";
 import { useEditor } from "../store/EditorProvider";
 
@@ -40,66 +49,33 @@ type StyleState = "normal" | "hover";
 // ---------------------------------------------------------------------------
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 0.6,
-        textTransform: "uppercase",
-        color: "#9ca3af",
-        margin: "4px 0 8px",
-      }}
-    >
-      {children}
-    </div>
-  );
+  return <div className="nx-pb-section-label">{children}</div>;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <p style={{ fontSize: 12, color: "#9ca3af", padding: "8px 0" }}>
-      {children}
-    </p>
-  );
+  return <p className="nx-pb-empty">{children}</p>;
 }
 
 function Segmented<T extends string>({
   value,
   options,
   onChange,
+  ariaLabel,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
+  ariaLabel?: string;
 }) {
   return (
-    <div
-      style={{
-        display: "inline-flex",
-        padding: 2,
-        gap: 2,
-        background: "#f3f4f6",
-        borderRadius: 8,
-      }}
-    >
+    <div className="nx-pb-seg" role="group" aria-label={ariaLabel}>
       {options.map(o => (
         <button
           key={o.value}
           type="button"
+          className="nx-pb-seg-btn"
           aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
-          style={{
-            border: "none",
-            cursor: "pointer",
-            borderRadius: 6,
-            padding: "4px 10px",
-            fontSize: 12,
-            fontWeight: 600,
-            color: value === o.value ? "#111827" : "#6b7280",
-            background: value === o.value ? "#fff" : "transparent",
-            boxShadow: value === o.value ? "0 1px 2px rgba(0,0,0,.08)" : "none",
-          }}
         >
           {o.label}
         </button>
@@ -146,15 +122,10 @@ function BindableField({
           marginBottom: 4,
         }}
       >
-        <Label style={{ fontSize: 12, color: "#6b7280" }}>{field.label}</Label>
+        <Label className="nx-pb-control-label">{field.label}</Label>
         <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11,
-            color: "#6b7280",
-          }}
+          className="nx-pb-control-label"
+          style={{ display: "flex", alignItems: "center", gap: 6 }}
         >
           Bind
           <Switch
@@ -185,7 +156,7 @@ function BindableField({
               })
             }
           />
-          <p style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
+          <p className="nx-pb-empty" style={{ marginTop: 2 }}>
             Resolves from the current Query Loop item.
           </p>
         </>
@@ -253,20 +224,15 @@ function StyleTab({
         <Segmented<StyleState>
           value={styleState}
           onChange={setStyleState}
+          ariaLabel="Style state"
           options={[
             { value: "normal", label: "Normal" },
             { value: "hover", label: "Hover" },
           ]}
         />
         <span
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: bp === BASE ? "#9ca3af" : "#4338ca",
-            background: bp === BASE ? "transparent" : "#eef2ff",
-            padding: bp === BASE ? 0 : "2px 8px",
-            borderRadius: 6,
-          }}
+          className="nx-pb-device-badge"
+          data-active={bp !== BASE || undefined}
           title="Editing styles for this device (change with the toolbar)"
         >
           {bp === BASE ? "Desktop" : bp}
@@ -274,7 +240,7 @@ function StyleTab({
       </div>
 
       {styleState === "hover" ? (
-        <p style={{ fontSize: 11, color: "#6b7280", margin: "0 0 10px" }}>
+        <p className="nx-pb-empty" style={{ margin: "0 0 10px" }}>
           Applied on <strong>:hover</strong>; empty values fall back to Normal.
         </p>
       ) : null}
@@ -321,29 +287,32 @@ function AdvancedTab({ node }: { node: BlockNode }) {
         <div>
           <SectionLabel>Arrange</SectionLabel>
           <div style={{ display: "flex", gap: 6 }}>
-            <Button
-              variant="outline"
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
               disabled={loc.index <= 0}
               aria-label="Move block up"
               onClick={() => move(-1)}
             >
-              ↑ Up
-            </Button>
-            <Button
-              variant="outline"
+              <ArrowUp size={15} aria-hidden /> Up
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
               disabled={loc.index >= loc.count - 1}
               aria-label="Move block down"
               onClick={() => move(1)}
             >
-              ↓ Down
-            </Button>
-            <Button
-              variant="outline"
+              <ArrowDown size={15} aria-hidden /> Down
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
               aria-label="Duplicate block"
               onClick={() => dispatch({ type: "DUPLICATE", id: node.id })}
             >
-              ⧉ Duplicate
-            </Button>
+              <Copy size={15} aria-hidden /> Duplicate
+            </button>
           </div>
         </div>
       ) : null}
@@ -361,19 +330,22 @@ function AdvancedTab({ node }: { node: BlockNode }) {
         })}
       </div>
 
-      <div style={{ fontSize: 11, color: "#9ca3af" }}>
-        <div>
-          Type <code>{node.type}</code>
-        </div>
+      <div className="nx-pb-empty">
+        Type <code>{node.type}</code>
       </div>
 
-      <Button
-        variant="destructive"
+      <button
+        type="button"
+        className="nx-pb-icon-btn"
         aria-label="Delete block"
+        style={{
+          color: "hsl(var(--destructive))",
+          borderColor: "hsl(var(--destructive) / 0.4)",
+        }}
         onClick={() => dispatch({ type: "REMOVE", id: node.id })}
       >
-        Delete block
-      </Button>
+        <Trash2 size={15} aria-hidden /> Delete block
+      </button>
     </div>
   );
 }
@@ -381,12 +353,6 @@ function AdvancedTab({ node }: { node: BlockNode }) {
 // ---------------------------------------------------------------------------
 // Inspector shell
 // ---------------------------------------------------------------------------
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "content", label: "Content" },
-  { id: "style", label: "Style" },
-  { id: "advanced", label: "Advanced" },
-];
 
 export function Inspector() {
   const { state } = useEditor();
@@ -399,8 +365,6 @@ export function Inspector() {
 
   // On selection change, open a populated tab and reset Hover mode, so panel state from
   // the previously-selected block never leaks (spec §3.5).
-  // Depends only on the selection id: reset when the selected block changes, not when
-  // `def`/setters change identity.
   useEffect(() => {
     setTab(firstPopulatedTab(def));
     setStyleState("normal");
@@ -408,65 +372,59 @@ export function Inspector() {
 
   if (!node) {
     return (
-      <div style={{ padding: 16, fontSize: 13, color: "#9ca3af" }}>
-        Select a block on the canvas to edit its content and style.
-      </div>
+      <>
+        <div className="nx-pb-pane-header">Settings</div>
+        <div className="nx-pb-inspector-empty">
+          Select a block on the canvas to edit its content and style.
+        </div>
+      </>
     );
   }
 
+  const Icon = blockIcon(def?.icon);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ padding: "12px 12px 0" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>
-          {def?.label ?? node.type}
-        </div>
-        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10 }}>
-          {def?.category ?? "block"}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            gap: 2,
-            padding: 2,
-            background: "#f3f4f6",
-            borderRadius: 8,
-          }}
-        >
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              type="button"
-              aria-pressed={tab === t.id}
-              onClick={() => setTab(t.id)}
-              style={{
-                flex: 1,
-                border: "none",
-                cursor: "pointer",
-                borderRadius: 6,
-                padding: "6px 0",
-                fontSize: 12,
-                fontWeight: 600,
-                color: tab === t.id ? "#111827" : "#6b7280",
-                background: tab === t.id ? "#fff" : "transparent",
-                boxShadow: tab === t.id ? "0 1px 2px rgba(0,0,0,.08)" : "none",
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
+    <div className="nx-pb-inspector">
+      <div className="nx-pb-inspector-header">
+        <span className="nx-pb-block-icon">
+          <Icon size={16} aria-hidden />
+        </span>
+        <div>
+          <div className="nx-pb-inspector-title">{def?.label ?? node.type}</div>
+          <div className="nx-pb-inspector-sub">{def?.category ?? "block"}</div>
         </div>
       </div>
-      <div style={{ padding: 12, overflow: "auto", flex: 1 }}>
-        {tab === "content" && <ContentTab node={node} />}
-        {tab === "style" && (
-          <StyleTab
-            node={node}
-            styleState={styleState}
-            setStyleState={setStyleState}
-          />
-        )}
-        {tab === "advanced" && <AdvancedTab node={node} />}
-      </div>
+      <Tabs
+        value={tab}
+        onValueChange={v => setTab(v as Tab)}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        <TabsList style={{ margin: "10px 12px 0" }}>
+          <TabsTrigger value="content">Content</TabsTrigger>
+          <TabsTrigger value="style">Style</TabsTrigger>
+          <TabsTrigger value="advanced">Advanced</TabsTrigger>
+        </TabsList>
+        <div style={{ padding: 12, overflow: "auto", flex: 1 }}>
+          <TabsContent value="content">
+            <ContentTab node={node} />
+          </TabsContent>
+          <TabsContent value="style">
+            <StyleTab
+              node={node}
+              styleState={styleState}
+              setStyleState={setStyleState}
+            />
+          </TabsContent>
+          <TabsContent value="advanced">
+            <AdvancedTab node={node} />
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
   );
 }
