@@ -12,6 +12,7 @@ import { useDraggable } from "@dnd-kit/react";
 import { defaultBlockRegistry } from "../../core/registry";
 import { findNode } from "../../core/tree";
 import { DEFAULT_SLOT, type BlockDefinition } from "../../core/types";
+import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 const CATEGORY_ORDER = ["basic", "layout", "media", "dynamic"];
@@ -22,6 +23,7 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
     id: `lib:${def.type}`,
     type: "nx-block",
     data: { kind: "library", blockType: def.type },
+    sensors: dragSensors,
   });
 
   const insert = () => {

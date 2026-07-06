@@ -28,6 +28,7 @@ import { defaultBlockRegistry } from "../../core/registry";
 import { nodeClass } from "../../core/style-compiler";
 import type { BlockNode } from "../../core/types";
 import { BlockErrorBoundary } from "../../render/ErrorBoundary";
+import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { DropZone } from "./DropZone";
@@ -197,6 +198,7 @@ function DraggableNode({
     id: node.id,
     type: BLOCK_TYPE,
     data: { kind: "node", nodeId: node.id, parentId, slot, index },
+    sensors: dragSensors,
   });
 
   // Grid child: "insert before me" target.
