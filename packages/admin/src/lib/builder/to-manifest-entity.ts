@@ -1,9 +1,9 @@
 /**
  * Map builder output (FieldDefinition[] + settings) → a `ui-schema.json`
  * collection entity (spec §4.12). The field `type` is recorded verbatim,
- * including plugin-contributed types (e.g. the page builder's "page-builder"):
- * the manifest Zod accepts plugin slugs and the CLI column classifier resolves
- * them via the field-type registry, so the real type round-trips to production.
+ * including plugin-contributed field types: the manifest Zod accepts plugin
+ * slugs and the CLI column classifier resolves them via the field-type
+ * registry, so the real type round-trips to production.
  * The per-field mapping is shared by the collection/single/component mappers via
  * `mapBuilderFieldToManifest`.
  *
@@ -166,10 +166,10 @@ const PASSTHROUGH_KEYS = [
  * Shared by every entity mapper so the field translation stays in one place.
  */
 export function mapBuilderFieldToManifest(f: BuilderFieldInput): ManifestField {
-  // Record the field type verbatim — including plugin-contributed types (e.g. the
-  // page builder's "page-builder"). The manifest Zod accepts plugin slugs and the
-  // CLI column classifier resolves them via the field-type registry, so the real
-  // type round-trips to production. The field picker prevents typos.
+  // Record the field type verbatim — including plugin-contributed field types.
+  // The manifest Zod accepts plugin slugs and the CLI column classifier resolves
+  // them via the field-type registry, so the real type round-trips to
+  // production. The field picker prevents typos.
   const out: ManifestField = {
     name: f.name,
     type: f.type,

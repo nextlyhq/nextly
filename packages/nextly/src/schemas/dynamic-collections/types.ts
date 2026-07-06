@@ -151,12 +151,6 @@ export interface CollectionAdminConfig {
   isPlugin?: boolean;
 
   /**
-   * Page Builder plugin: per-entity editor-choice opt-in. When `enabled`, entries of this
-   * collection offer a Default vs Page Builder choice (see @nextlyhq/plugin-page-builder).
-   */
-  pageBuilder?: { enabled?: boolean; defaultMode?: "default" | "builder" };
-
-  /**
    * Preview URL configuration for content preview workflows.
    *
    * For UI-created collections, use `urlTemplate` with placeholders.

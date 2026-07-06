@@ -116,11 +116,11 @@ const fieldAdmin = z
 // FieldNode type breaks the circular inference.
 export type FieldNode = {
   name: string;
-  // Canonical tokens, OR a plugin-contributed field type (e.g. the page
-  // builder's "page-builder"). Plugin types resolve to a column via the
-  // field-type registry in classifyFieldKind and keep their real type in the
-  // DB metadata so the plugin editor still renders. `string & {}` widens the
-  // union while preserving autocomplete for the canonical tokens.
+  // Canonical tokens, OR a plugin-contributed field type slug. Plugin types
+  // resolve to a column via the field-type registry in classifyFieldKind and
+  // keep their real type in the DB metadata so the plugin's editor still
+  // renders. `string & {}` widens the union while preserving autocomplete for
+  // the canonical tokens.
   type: (typeof UI_FIELD_TYPES)[number] | (string & {});
   label?: string;
   required?: boolean;
@@ -174,10 +174,10 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
         .string()
         .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
       // A canonical token, OR a plugin-contributed field type slug. Plugin
-      // types (e.g. "page-builder") aren't in the canonical enum; accept any
-      // slug-shaped token so the manifest preserves the real type through to
-      // production. The field-type registry (classifyFieldKind) maps it to a
-      // storage column; an unregistered type falls back to a text column.
+      // types aren't in the canonical enum; accept any slug-shaped token so the
+      // manifest preserves the real type through to production. The field-type
+      // registry (classifyFieldKind) maps it to a storage column; an
+      // unregistered type falls back to a text column.
       type: z.union([z.enum(UI_FIELD_TYPES), z.string().regex(SLUG_RE)]),
       label: z.string().optional(),
       required: z.boolean().optional(),
