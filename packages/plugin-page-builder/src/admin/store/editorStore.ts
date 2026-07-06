@@ -72,6 +72,15 @@ export type EditorAction =
   | { type: "UNDO" }
   | { type: "REDO" };
 
+/** Keep a selection only if the id still resolves in the given document. */
+function keepValidSelection(
+  document: BlockDocument,
+  selectedId: string | null
+): string | null {
+  if (!selectedId) return null;
+  return findNode(document.root, selectedId) ? selectedId : null;
+}
+
 /** Build a fresh node for `type` from the registry's declared defaults. */
 export function createNodeFromType(nodeType: string): BlockNode {
   const def = defaultBlockRegistry.get(nodeType);
@@ -181,6 +190,7 @@ export function editorReducer(
       return {
         ...state,
         document: prev,
+        selectedId: keepValidSelection(prev, state.selectedId),
         past: state.past.slice(0, -1),
         future: [state.document, ...state.future],
         dirty: true,
@@ -193,6 +203,7 @@ export function editorReducer(
       return {
         ...state,
         document: next,
+        selectedId: keepValidSelection(next, state.selectedId),
         past: [...state.past, state.document],
         future: state.future.slice(1),
         dirty: true,
