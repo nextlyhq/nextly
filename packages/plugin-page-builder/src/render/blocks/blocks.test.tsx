@@ -77,6 +77,15 @@ describe("core block renderers", () => {
     expect(html(container)).toContain("inside");
   });
 
+  it("container renders its chosen semantic tag, defaulting to <section>", () => {
+    const def = makeNode("core/container", {}, undefined, { default: [] });
+    expect(html(def)).toContain("<section");
+    const asArticle = makeNode("core/container", { as: "article" }, undefined, {
+      default: [],
+    });
+    expect(html(asArticle)).toContain("<article");
+  });
+
   it("grid applies an inline column template from the columns prop", () => {
     const out = html(
       makeNode("core/grid", { columns: 3 }, undefined, { default: [] })
@@ -90,6 +99,12 @@ describe("core block renderers", () => {
     );
     expect(out).toContain('src="/x.jpg"');
     expect(out).toContain('alt="X"');
+  });
+
+  it("image renders a bound media value that is a plain URL string", () => {
+    // Simulates a Query Loop binding resolving `media` to a string URL.
+    const out = html(makeNode("core/image", { media: "/bound.jpg" }));
+    expect(out).toContain('src="/bound.jpg"');
   });
 
   it("every block exposes inspector metadata (content and/or style controls)", () => {

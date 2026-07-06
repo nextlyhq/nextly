@@ -39,8 +39,14 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import {
+  computeMainFields,
+  takeoverControllerNames,
+  takeoverTypesFromBranding,
+} from "@admin/lib/builder/takeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
 
@@ -409,9 +415,16 @@ export function SingleForm({
   const allFields = schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
-  const mainFields = allFields.filter(
-    f => !("name" in f) || (f.name !== "slug" && f.name !== "title")
+  // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
+  // body to itself + its condition controller. Generic — driven by field-type metadata.
+  const branding = useBranding();
+  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
+  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
+  const watched = controllerNames.length ? form.watch(controllerNames) : [];
+  const values = Object.fromEntries(
+    controllerNames.map((n, i) => [n, watched[i]])
   );
+  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, EntrySystemHeader shows Save Draft / Update split, and

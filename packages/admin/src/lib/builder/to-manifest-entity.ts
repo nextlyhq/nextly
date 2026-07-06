@@ -1,18 +1,16 @@
 /**
  * Map builder output (FieldDefinition[] + settings) → a `ui-schema.json`
- * collection entity (spec §4.12). Field types are validated against the
- * canonical `UI_SCHEMA_FIELD_TYPES` set; an unsupported type throws (the field
- * picker prevents it, this is a defensive backstop). The per-field mapping is
- * shared by the collection/single/component mappers via
+ * collection entity (spec §4.12). The field `type` is recorded verbatim,
+ * including plugin-contributed field types: the manifest Zod accepts plugin
+ * slugs and the CLI column classifier resolves them via the field-type
+ * registry, so the real type round-trips to production.
+ * The per-field mapping is shared by the collection/single/component mappers via
  * `mapBuilderFieldToManifest`.
  *
  * @module lib/builder/to-manifest-entity
  * @since v0.0.3-alpha (Plan D4)
  */
-import {
-  UI_SCHEMA_FIELD_TYPES,
-  type UiSchemaFieldType,
-} from "./ui-schema-mode";
+import { type UiSchemaFieldType } from "./ui-schema-mode";
 
 /** Validation shape carried by builder fields (superset of FieldDefinition's). */
 export interface BuilderFieldValidationInput {
@@ -96,7 +94,9 @@ export type CollectionToManifestArgs = EntityToManifestArgs;
 /** A ui-schema field (mirrors the package's UiSchemaField / FieldNode shape). */
 export interface ManifestField {
   name: string;
-  type: UiSchemaFieldType;
+  // A canonical ui-schema type OR a plugin-contributed field type slug. `string
+  // & {}` widens the union while preserving autocomplete for canonical types.
+  type: UiSchemaFieldType | (string & {});
   label?: string;
   required?: boolean;
   unique?: boolean;
@@ -132,8 +132,6 @@ export interface ManifestEntity {
   fields: ManifestField[];
 }
 
-const SUPPORTED = new Set<string>(UI_SCHEMA_FIELD_TYPES);
-
 /** Scalar/object props copied verbatim from a builder field to the manifest. */
 const PASSTHROUGH_KEYS = [
   "label",
@@ -168,14 +166,13 @@ const PASSTHROUGH_KEYS = [
  * Shared by every entity mapper so the field translation stays in one place.
  */
 export function mapBuilderFieldToManifest(f: BuilderFieldInput): ManifestField {
-  if (!SUPPORTED.has(f.type)) {
-    throw new Error(
-      `unsupported field type '${f.type}' for ui-schema.json (field '${f.name}')`
-    );
-  }
+  // Record the field type verbatim — including plugin-contributed field types.
+  // The manifest Zod accepts plugin slugs and the CLI column classifier resolves
+  // them via the field-type registry, so the real type round-trips to
+  // production. The field picker prevents typos.
   const out: ManifestField = {
     name: f.name,
-    type: f.type as UiSchemaFieldType,
+    type: f.type,
   };
   const sink = out as unknown as Record<string, unknown>;
   for (const key of PASSTHROUGH_KEYS) {

@@ -52,6 +52,15 @@ export function usePluginPageRegistration(
       // for plugins with no collections/pages/settings.
       const slotPath = plugin.header?.slot ?? plugin.headerSlot;
       if (slotPath) componentPaths.push(slotPath);
+      // Schema-builder slot + custom field-type editors are delivered via
+      // branding (not collection admin.components), so import their modules here
+      // too — otherwise `PluginSlot` can't resolve them on the builder/entry
+      // pages until some collection happens to reference the same module.
+      if (plugin.schemaBuilderSlot)
+        componentPaths.push(plugin.schemaBuilderSlot);
+      for (const ft of plugin.fieldTypes ?? []) {
+        componentPaths.push(ft.component);
+      }
     }
 
     if (componentPaths.length > 0) {

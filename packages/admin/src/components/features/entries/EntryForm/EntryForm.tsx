@@ -15,8 +15,14 @@
  * @since 1.0.0
  */
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import {
+  computeMainFields,
+  takeoverControllerNames,
+  takeoverTypesFromBranding,
+} from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
 import { EntryFormActions } from "./EntryFormActions";
@@ -185,9 +191,18 @@ export function EntryForm({
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
 
-  const mainFields = allFields.filter(
-    f => f.name !== "slug" && f.name !== "title"
+  // Takeover layout: when a field whose type is flagged `layout: "takeover"` is
+  // active (its condition passes), show only that field + its condition controller;
+  // otherwise the full body. Generic — driven by field-type metadata, not by any
+  // specific plugin. (title/slug/status are separate system components, always kept.)
+  const branding = useBranding();
+  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
+  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
+  const watched = controllerNames.length ? form.watch(controllerNames) : [];
+  const values = Object.fromEntries(
+    controllerNames.map((n, i) => [n, watched[i]])
   );
+  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
 
   // Get form errors and submit attempt count. submitCount gates the
   // top-level "Please fix the following errors" toast in FormErrorSummary

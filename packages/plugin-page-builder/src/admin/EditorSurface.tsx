@@ -9,29 +9,23 @@
  * and reorder via the inspector — no pointer required.
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
-import { Button } from "@nextlyhq/ui";
+import { type LucideIcon } from "lucide-react";
 
 import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
-import { planDrop, type DragSource } from "./logic/dropPlan";
+import { Monitor, Smartphone, Tablet } from "./icons";
+import { dragLabel } from "./logic/dragLabel";
+import { planDrop } from "./logic/dropPlan";
 import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
 
-const BREAKPOINTS = ["base", "tablet", "mobile"];
-
-/** Human label for the dragged block, shown in the drag overlay chip. */
-function dragLabel(data: DragSource): string {
-  if (data.kind === "library" && data.blockType) {
-    return defaultBlockRegistry.get(data.blockType)?.label ?? data.blockType;
-  }
-  if (data.kind === "node" && data.nodeId) {
-    // The overlay only has the source's data; the label is best-effort.
-    return "Block";
-  }
-  return "Block";
-}
+const BREAKPOINTS: { id: string; label: string; Icon: LucideIcon }[] = [
+  { id: "base", label: "Desktop", Icon: Monitor },
+  { id: "tablet", label: "Tablet", Icon: Tablet },
+  { id: "mobile", label: "Mobile", Icon: Smartphone },
+];
 
 export function EditorSurface() {
   const { state, dispatch } = useEditor();
@@ -58,62 +52,34 @@ export function EditorSurface() {
 
   return (
     <DragDropProvider onDragEnd={onDragEnd}>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          height: "70vh",
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: 6,
-            padding: 8,
-            borderBottom: "1px solid #e5e7eb",
-          }}
-        >
-          {BREAKPOINTS.map(bp => (
-            <Button
-              key={bp}
-              variant={state.activeBreakpoint === bp ? "default" : "outline"}
-              onClick={() =>
-                dispatch({ type: "SET_BREAKPOINT", breakpoint: bp })
-              }
-            >
-              {bp}
-            </Button>
-          ))}
+      <div className="nx-pb-editor">
+        <div className="nx-pb-toolbar">
+          <div className="nx-pb-seg" role="group" aria-label="Preview device">
+            {BREAKPOINTS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                className="nx-pb-seg-btn"
+                aria-pressed={state.activeBreakpoint === id}
+                aria-label={label}
+                onClick={() =>
+                  dispatch({ type: "SET_BREAKPOINT", breakpoint: id })
+                }
+              >
+                <Icon size={15} aria-hidden />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "200px 1fr 300px",
-            flex: 1,
-            minHeight: 0,
-          }}
-        >
-          <aside
-            style={{
-              borderRight: "1px solid #e5e7eb",
-              padding: 8,
-              overflow: "auto",
-            }}
-          >
+        <div className="nx-pb-body">
+          <aside className="nx-pb-pane nx-pb-pane--left">
             <BlockLibrary />
           </aside>
-          <main style={{ minHeight: 0 }}>
+          <main className="nx-pb-pane--center">
             <Canvas />
           </main>
-          <aside
-            style={{
-              borderLeft: "1px solid #e5e7eb",
-              overflow: "auto",
-            }}
-          >
+          <aside className="nx-pb-pane nx-pb-pane--right">
             <Inspector />
           </aside>
         </div>
@@ -127,18 +93,18 @@ export function EditorSurface() {
               alignItems: "center",
               gap: 6,
               padding: "6px 12px",
-              borderRadius: 8,
-              background: "#4338ca",
-              color: "#fff",
+              borderRadius: "var(--radius)",
+              background: "hsl(var(--primary))",
+              color: "hsl(var(--primary-foreground))",
               fontSize: 13,
               fontWeight: 600,
-              boxShadow: "0 8px 24px rgba(67,56,202,0.35)",
+              boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
               pointerEvents: "none",
               whiteSpace: "nowrap",
             }}
           >
             <span aria-hidden>⠿</span>
-            {dragLabel(source?.data ?? {})}
+            {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
           </div>
         )}
       </DragOverlay>

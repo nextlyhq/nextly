@@ -36,6 +36,7 @@ import {
   FieldEditorSheet,
   FieldPickerModal,
   SafeChangeConfirmDialog,
+  SchemaBuilderSlots,
   SchemaChangeDialog,
   type BuilderSettingsValues,
   type EnabledHook,
@@ -596,6 +597,12 @@ export default function CollectionBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        <SchemaBuilderSlots
+          fields={builder.fields}
+          setFields={builder.setFields}
+          disabled={isLocked}
+          context="collection"
+        />
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}

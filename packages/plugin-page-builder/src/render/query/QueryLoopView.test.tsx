@@ -8,18 +8,21 @@ import "../blocks";
 import { QueryLoopView } from "./QueryLoopView";
 import type { QueryResult } from "./types";
 
-function loopNode() {
+function loopNode(props: Record<string, unknown> = {}) {
   const heading = makeNode("core/heading", { text: "x", level: "h3" });
   heading.bindings = { text: { source: "field", path: "title" } };
-  return makeNode("core/query-loop", { collection: "posts" }, undefined, {
-    default: [heading],
-  });
+  return makeNode(
+    "core/query-loop",
+    { collection: "posts", ...props },
+    undefined,
+    { default: [heading] }
+  );
 }
 
-const render = (result: QueryResult) =>
+const render = (result: QueryResult, props: Record<string, unknown> = {}) =>
   renderToStaticMarkup(
     <QueryLoopView
-      node={loopNode()}
+      node={loopNode(props)}
       registry={defaultBlockRegistry}
       className="nx"
       result={result}
@@ -55,5 +58,15 @@ describe("QueryLoopView", () => {
     expect(html).toContain("Second");
     expect(html).toContain('data-nx-loop-item="0"');
     expect(html).toContain('data-nx-loop-item="1"');
+  });
+
+  it("applies a column grid when columns > 1", () => {
+    const html = render({ items: [{ id: "1", title: "A" }] }, { columns: 3 });
+    expect(html).toContain("repeat(3, minmax(0, 1fr))");
+  });
+
+  it("stays a plain list (no grid) for a single column", () => {
+    const html = render({ items: [{ id: "1", title: "A" }] }, { columns: 1 });
+    expect(html).not.toContain("grid-template-columns");
   });
 });

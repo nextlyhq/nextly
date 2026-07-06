@@ -16,3 +16,14 @@ export {
 export type { PageBuilderFieldOptions } from "./collections/pageBuilderField";
 export { editorChoiceFields } from "./collections/editorChoice";
 export type { EditorChoiceOptions } from "./collections/editorChoice";
+export {
+  pageBuilderFields,
+  withPageBuilder,
+  PAGE_BUILDER_FIELD_TYPE,
+  PAGE_BUILDER_CONTENT_FIELD,
+  PAGE_BUILDER_TYPE,
+} from "./collections/pageBuilderEntry";
+export type {
+  PageBuilderAdminConfig,
+  EditorMode,
+} from "./collections/pageBuilderEntry";

@@ -1027,10 +1027,10 @@ importers:
   packages/plugin-page-builder:
     dependencies:
       '@dnd-kit/dom':
-        specifier: ^0.5.0
+        specifier: 0.5.0
         version: 0.5.0
       '@dnd-kit/react':
-        specifier: ^0.5.0
+        specifier: 0.5.0
         version: 0.5.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       css-tree:
         specifier: ^2.3.1

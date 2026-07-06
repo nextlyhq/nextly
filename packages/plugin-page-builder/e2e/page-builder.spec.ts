@@ -53,6 +53,64 @@ test.describe("page builder editor", () => {
     await expect(page.getByText(/published|saved/i)).toBeVisible();
   });
 
+  test("clicking a block opens its settings, first try", async ({ page }) => {
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Heading" }).click();
+    const canvas = page.frameLocator('iframe[title="Page preview"]');
+    // Click the block itself (not the inspector) and expect the Content field to appear.
+    await canvas.locator("h2").click();
+    await expect(page.getByLabel("Text")).toBeVisible();
+  });
+
+  test("the inspector panel stays inside the editor on a narrow viewport", async ({
+    page,
+  }) => {
+    // Regression: the 1fr canvas column must shrink (min-width:0) so the editor's
+    // overflow:hidden never clips the right-hand inspector off-screen.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Paragraph" }).click();
+    const clipped = await page.evaluate(() => {
+      const editor = document.querySelector(".nx-pb-editor");
+      const right = document.querySelector(".nx-pb-pane--right");
+      if (!editor || !right) return true;
+      return (
+        right.getBoundingClientRect().right >
+        editor.getBoundingClientRect().right + 1
+      );
+    });
+    expect(clipped).toBe(false);
+  });
+
+  test("a freshly inserted Image is visible and selectable", async ({
+    page,
+  }) => {
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Image" }).click();
+    const canvas = page.frameLocator('iframe[title="Page preview"]');
+    const placeholder = canvas.getByText(/Image — click to configure/);
+    await expect(placeholder).toBeVisible();
+    await placeholder.click();
+    // The image inspector exposes the media control label.
+    await expect(page.getByText(/Image/).first()).toBeVisible();
+  });
+
+  test("a small click on a block selects instead of dragging it", async ({
+    page,
+  }) => {
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Heading" }).click();
+    await page.getByRole("button", { name: "Insert Paragraph" }).click();
+    const canvas = page.frameLocator('iframe[title="Page preview"]');
+    // A plain click (no drag) must not reorder — heading stays first.
+    await canvas.locator("h2").click();
+    await expect(page.getByLabel("Text")).toBeVisible();
+    const tags = await canvas
+      .locator("h2, p")
+      .evaluateAll(els => els.map(e => e.tagName.toLowerCase()));
+    expect(tags[0]).toBe("h2");
+  });
+
   test("query loop preview shows the template once at design time", async ({
     page,
   }) => {
@@ -61,6 +119,19 @@ test.describe("page builder editor", () => {
     const canvas = page.frameLocator('iframe[title="Page preview"]');
     await expect(
       canvas.locator('[data-nx-query-loop="preview"]')
+    ).toBeVisible();
+  });
+
+  test("query loop is authored via a collection dropdown, not a text slug", async ({
+    page,
+  }) => {
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Query Loop" }).click();
+    const canvas = page.frameLocator('iframe[title="Page preview"]');
+    // Selecting the loop opens the dedicated settings panel with a Collection dropdown.
+    await canvas.locator('[data-nx-query-loop="preview"]').click();
+    await expect(
+      page.getByRole("combobox", { name: "Collection" })
     ).toBeVisible();
   });
 

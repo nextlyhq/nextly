@@ -22,15 +22,20 @@ export const image = defineBlock<ImageProps>({
   icon: "Image",
   category: "media",
   defaultProps: { url: "", alt: "" },
-  contentFields: [{ name: "media", type: "media", label: "Image" }],
+  contentFields: [
+    { name: "media", type: "media", label: "Image", bindable: true },
+  ],
   styleControls: [
     { control: "dimension", styleKey: "width", label: "Width" },
     { control: "dimension", styleKey: "borderRadius", label: "Radius" },
     { control: "spacing", styleKey: "margin", label: "Margin" },
   ],
   render: ({ props, className }) => {
-    // Prefer the editor's media object; fall back to flat props (back-compat).
-    const media = props.media ?? {};
+    // `media` may be the editor's media object, or — when bound to a Query Loop item's
+    // field — a `{ url }` object or a plain URL string; normalize all three.
+    const raw: unknown = props.media;
+    const media: MediaValue =
+      typeof raw === "string" ? { url: raw } : ((raw as MediaValue) ?? {});
     const src = safeUrl(media.url ?? props.url);
     if (!src) return null;
     const alt = media.alt ?? props.alt;

@@ -50,8 +50,8 @@ export function MediaControl({ value, onChange, label }: ControlProps) {
           style={{
             maxWidth: "100%",
             maxHeight: 120,
-            borderRadius: 6,
-            border: "1px solid #e5e7eb",
+            borderRadius: "var(--radius)",
+            border: "1px solid hsl(var(--border))",
             marginBottom: 6,
           }}
         />

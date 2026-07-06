@@ -28,6 +28,7 @@ import {
   FieldEditorSheet,
   FieldPickerModal,
   SafeChangeConfirmDialog,
+  SchemaBuilderSlots,
   SchemaChangeDialog,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
@@ -509,6 +510,12 @@ export default function SingleBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        <SchemaBuilderSlots
+          fields={builder.fields}
+          setFields={builder.setFields}
+          disabled={isLocked}
+          context="single"
+        />
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}

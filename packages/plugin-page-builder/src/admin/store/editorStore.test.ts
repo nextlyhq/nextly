@@ -63,6 +63,39 @@ describe("editorReducer", () => {
     expect(redone.document.root.slots!.default!.length).toBe(1);
   });
 
+  it("UNDO clears selection when the selected node no longer exists", () => {
+    const start = initialState(baseDoc());
+    const added = editorReducer(start, {
+      type: "ADD",
+      parentId: start.document.root.id,
+      slot: "default",
+      nodeType: "core/paragraph",
+      index: 0,
+    });
+    const addedId = added.document.root.slots!.default![0].id;
+    const selected = editorReducer(added, { type: "SELECT", id: addedId });
+    // Undo removes the paragraph — selection must not dangle.
+    const undone = editorReducer(selected, { type: "UNDO" });
+    expect(undone.selectedId).toBeNull();
+  });
+
+  it("UNDO keeps selection when the selected node still exists", () => {
+    const start = initialState(baseDoc());
+    const rootId = start.document.root.id;
+    const selected = editorReducer(start, { type: "SELECT", id: rootId });
+    const added = editorReducer(selected, {
+      type: "ADD",
+      parentId: rootId,
+      slot: "default",
+      nodeType: "core/paragraph",
+      index: 0,
+    });
+    // Root still exists after undo; if root was selected it stays selected.
+    const reselectRoot = editorReducer(added, { type: "SELECT", id: rootId });
+    const undone = editorReducer(reselectRoot, { type: "UNDO" });
+    expect(undone.selectedId).toBe(rootId);
+  });
+
   it("UPDATE_PROPS merges props", () => {
     const start = initialState(baseDoc());
     const added = editorReducer(start, {
