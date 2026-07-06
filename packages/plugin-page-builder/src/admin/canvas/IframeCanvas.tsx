@@ -22,7 +22,9 @@ const OVERLAY_CSS = [
   "[data-nx-id]{cursor:grab}",
   "[data-nx-id]:active{cursor:grabbing}",
   "[data-nx-id]:hover{outline:1px dashed #a5b4fc;outline-offset:-1px}",
-  ".nx-pb-selected,[data-nx-id].nx-pb-selected:hover{outline:2px solid #6366f1;outline-offset:-2px}",
+  // Selected block: solid ring + a small grip badge (top-left) as a grab cue.
+  ".nx-pb-selected,[data-nx-id].nx-pb-selected:hover{outline:2px solid #6366f1;outline-offset:-2px;position:relative}",
+  ".nx-pb-selected::before{content:'\\283F';position:absolute;top:-2px;left:-2px;transform:translateY(-100%);font-size:12px;line-height:1;padding:2px 5px;background:#6366f1;color:#fff;border-radius:4px 4px 0 0;pointer-events:none;z-index:2}",
   ".nx-pb-dragging{opacity:.4}",
   ".nx-pb-empty{color:#9ca3af;padding:32px;text-align:center;font-size:14px}",
   // Between-item drop zones: collapsed at rest, a hint while dragging, a bold blue
