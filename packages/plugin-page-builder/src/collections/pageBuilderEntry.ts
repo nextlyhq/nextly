@@ -12,19 +12,26 @@ export const PAGE_BUILDER_TYPE = "page-builder";
 
 export type EditorMode = "default" | "builder";
 
-/** Per-collection/single opt-in config, stored under the entity's `admin.pageBuilder`. */
+/**
+ * @deprecated The editor-choice is now signalled purely by the presence of the
+ * `page-builder` field (a `layout: "takeover"` field type) — no collection-level
+ * flag is read anymore. Retained only for back-compat of existing type imports.
+ */
 export interface PageBuilderAdminConfig {
-  /** When true, entries of this entity get the Default / Page Builder choice. */
   enabled?: boolean;
-  /** Default per-entry editor mode. Default "default" (normal editor). */
   defaultMode?: EditorMode;
 }
 
-/** Field-type descriptor registered via the plugin's `contributes.fieldTypes`. */
+/**
+ * Field-type descriptor registered via the plugin's `contributes.fieldTypes`.
+ * `layout: "takeover"` tells the admin entry form to show only this field (plus
+ * its editor-mode controller) when the field is visible — hiding the rest.
+ */
 export const PAGE_BUILDER_FIELD_TYPE = {
   type: PAGE_BUILDER_TYPE,
   storage: "json",
   component: FIELD_COMPONENT_PATH,
+  layout: "takeover",
 } as const;
 
 /**
@@ -56,24 +63,22 @@ export function pageBuilderFields(opts: { defaultMode?: EditorMode } = {}) {
 }
 
 /**
- * Opt a CODE-FIRST collection/single config into the Page Builder editor choice: appends
- * `pageBuilderFields()` and sets `admin.pageBuilder.enabled` (the flag the admin/front-end
- * read). Wrap the config passed to `defineCollection`/`defineSingle`:
+ * Opt a CODE-FIRST collection/single config into the Page Builder editor choice:
+ * appends `pageBuilderFields()`. The presence of the `page-builder` field is the
+ * signal — no collection-level flag needed. Wrap the config passed to
+ * `defineCollection`/`defineSingle`:
  *
  * ```ts
  * defineCollection(withPageBuilder({ slug: "landing", fields: [text({ name: "title" })] }));
  * ```
  */
-export function withPageBuilder<
-  T extends { fields?: unknown[]; admin?: Record<string, unknown> },
->(config: T, opts: { defaultMode?: EditorMode } = {}): T {
+export function withPageBuilder<T extends { fields?: unknown[] }>(
+  config: T,
+  opts: { defaultMode?: EditorMode } = {}
+): T {
   const defaultMode: EditorMode = opts.defaultMode ?? "default";
   return {
     ...config,
     fields: [...(config.fields ?? []), ...pageBuilderFields({ defaultMode })],
-    admin: {
-      ...(config.admin ?? {}),
-      pageBuilder: { enabled: true, defaultMode },
-    },
   };
 }

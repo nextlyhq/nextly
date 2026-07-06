@@ -28,6 +28,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
         ],
+        // Schema-builder "Use Page Builder" toggle, rendered generically by the
+        // admin above the field list in the collection/single builders.
+        schemaBuilderSlot:
+          "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle",
       },
     },
   });

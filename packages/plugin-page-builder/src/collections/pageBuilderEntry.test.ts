@@ -42,6 +42,10 @@ describe("PAGE_BUILDER_FIELD_TYPE", () => {
     expect(PAGE_BUILDER_FIELD_TYPE.storage).toBe("json");
     expect(PAGE_BUILDER_FIELD_TYPE.component).toBe(FIELD_COMPONENT_PATH);
   });
+
+  it("declares a takeover layout so the entry form hides sibling fields", () => {
+    expect(PAGE_BUILDER_FIELD_TYPE.layout).toBe("takeover");
+  });
 });
 
 describe("pageBuilderFields in a Single", () => {
@@ -58,29 +62,29 @@ describe("pageBuilderFields in a Single", () => {
 });
 
 describe("withPageBuilder", () => {
-  it("appends the editor-choice fields and sets admin.pageBuilder.enabled", () => {
+  it("appends the editor-choice fields (presence is the signal — no admin flag)", () => {
     const config = withPageBuilder({
       slug: "landing",
       fields: [text({ name: "title" })],
     });
     const names = (config.fields as Record<string, unknown>[]).map(f => f.name);
     expect(names).toEqual(["title", "editormode", PAGE_BUILDER_CONTENT_FIELD]);
+    // No longer writes admin.pageBuilder — the page-builder field is the signal.
     expect(
-      (config.admin as { pageBuilder?: { enabled?: boolean } }).pageBuilder
-        ?.enabled
-    ).toBe(true);
+      (config as { admin?: { pageBuilder?: unknown } }).admin?.pageBuilder
+    ).toBeUndefined();
   });
 
-  it("preserves existing admin config + honors defaultMode", () => {
+  it("preserves existing admin config + honors defaultMode on the select", () => {
     const config = withPageBuilder(
       { slug: "x", fields: [], admin: { group: "Content" } },
       { defaultMode: "builder" }
     );
-    const admin = config.admin as {
-      group?: string;
-      pageBuilder?: { defaultMode?: string };
-    };
+    const admin = config.admin as { group?: string };
     expect(admin.group).toBe("Content");
-    expect(admin.pageBuilder?.defaultMode).toBe("builder");
+    const mode = (config.fields as Record<string, unknown>[]).find(
+      f => f.name === "editormode"
+    );
+    expect(mode?.defaultValue).toBe("builder");
   });
 });
