@@ -11,6 +11,7 @@ import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
 import type { DataProvider } from "../dataProvider";
 import { RenderNode } from "../RenderNode";
 
+import { loopGridStyle } from "./grid";
 import type { QueryBudget } from "./runQuery";
 import type { QueryResult } from "./types";
 
@@ -56,7 +57,11 @@ export function QueryLoopView({
   }
 
   return (
-    <div className={className} data-nx-query-loop="list">
+    <div
+      className={className}
+      data-nx-query-loop="list"
+      style={loopGridStyle(node.props)}
+    >
       {result.items.map((item, i) => (
         <div
           key={typeof item.id === "string" ? item.id : i}
