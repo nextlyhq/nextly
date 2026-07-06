@@ -62,6 +62,26 @@ test.describe("page builder editor", () => {
     await expect(page.getByLabel("Text")).toBeVisible();
   });
 
+  test("the inspector panel stays inside the editor on a narrow viewport", async ({
+    page,
+  }) => {
+    // Regression: the 1fr canvas column must shrink (min-width:0) so the editor's
+    // overflow:hidden never clips the right-hand inspector off-screen.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Paragraph" }).click();
+    const clipped = await page.evaluate(() => {
+      const editor = document.querySelector(".nx-pb-editor");
+      const right = document.querySelector(".nx-pb-pane--right");
+      if (!editor || !right) return true;
+      return (
+        right.getBoundingClientRect().right >
+        editor.getBoundingClientRect().right + 1
+      );
+    });
+    expect(clipped).toBe(false);
+  });
+
   test("a freshly inserted Image is visible and selectable", async ({
     page,
   }) => {

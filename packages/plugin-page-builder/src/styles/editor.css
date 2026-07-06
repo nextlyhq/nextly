@@ -46,6 +46,10 @@
   border-left: 1px solid hsl(var(--border));
 }
 .nx-pb-pane--center {
+  /* min-width:0 lets the 1fr canvas column shrink below the iframe's min-content instead
+     of forcing the 3-column grid wider than the editor — otherwise the editor's
+     overflow:hidden clips the right-hand inspector off-screen on narrower viewports. */
+  min-width: 0;
   min-height: 0;
   background: hsl(var(--muted));
 }
