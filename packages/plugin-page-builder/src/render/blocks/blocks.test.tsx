@@ -101,6 +101,12 @@ describe("core block renderers", () => {
     expect(out).toContain('alt="X"');
   });
 
+  it("image renders a bound media value that is a plain URL string", () => {
+    // Simulates a Query Loop binding resolving `media` to a string URL.
+    const out = html(makeNode("core/image", { media: "/bound.jpg" }));
+    expect(out).toContain('src="/bound.jpg"');
+  });
+
   it("every block exposes inspector metadata (content and/or style controls)", () => {
     for (const def of defaultBlockRegistry.all()) {
       const hasContent = (def.contentFields?.length ?? 0) > 0;
