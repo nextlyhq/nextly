@@ -1,8 +1,14 @@
 /**
  * Pure add/remove of the Page Builder editor-choice fields for the schema builder's field
- * list. Enabling appends an `editormode` select + a reserved `content` field of the plugin's
- * `page-builder` type (shown only in builder mode); disabling removes both. Idempotent.
+ * list. Enabling appends an `editormode` select + a reserved `content` canvas field — a
+ * `json` field wired to the plugin's editor via `admin.component` (NOT a custom field type,
+ * so it round-trips through `ui-schema.json` cleanly). Disabling removes both. Idempotent.
  */
+
+/** Fallback component path if the plugin's field type isn't discoverable from branding. */
+export const PAGE_BUILDER_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderField";
+
 export interface BuilderFieldLike {
   id: string;
   name?: string;
@@ -14,15 +20,24 @@ export interface BuilderFieldLike {
   defaultValue?: unknown;
 }
 
+function isCanvasField(f: BuilderFieldLike): boolean {
+  if (f.type === "page-builder") return true;
+  const component = (f.admin as { component?: string } | null | undefined)
+    ?.component;
+  return (
+    typeof component === "string" && component.includes("plugin-page-builder")
+  );
+}
+
 export function hasPageBuilderFields(fields: BuilderFieldLike[]): boolean {
   return (
-    fields.some(f => f.name === "editormode") &&
-    fields.some(f => f.type === "page-builder")
+    fields.some(f => f.name === "editormode") && fields.some(isCanvasField)
   );
 }
 
 export function addPageBuilderFields<T extends BuilderFieldLike>(
-  fields: T[]
+  fields: T[],
+  componentPath: string = PAGE_BUILDER_COMPONENT
 ): T[] {
   if (hasPageBuilderFields(fields)) return fields;
   const editormode = {
@@ -41,9 +56,12 @@ export function addPageBuilderFields<T extends BuilderFieldLike>(
     id: "pb-content",
     name: "content",
     label: "Page Builder",
-    type: "page-builder",
+    type: "json",
     validation: {},
-    admin: { condition: { field: "editormode", equals: "builder" } },
+    admin: {
+      component: componentPath,
+      condition: { field: "editormode", equals: "builder" },
+    },
   } as unknown as T;
   return [...fields, editormode, content];
 }
@@ -51,7 +69,5 @@ export function addPageBuilderFields<T extends BuilderFieldLike>(
 export function removePageBuilderFields<T extends BuilderFieldLike>(
   fields: T[]
 ): T[] {
-  return fields.filter(
-    f => f.name !== "editormode" && f.type !== "page-builder"
-  );
+  return fields.filter(f => f.name !== "editormode" && !isCanvasField(f));
 }

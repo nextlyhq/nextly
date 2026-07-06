@@ -9,12 +9,15 @@ import {
 const base = [{ id: "1", name: "title", type: "text" }];
 
 describe("page builder toggle helpers", () => {
-  it("adds editormode + a page-builder content field once (idempotent)", () => {
+  it("adds editormode + a json content field wired to the plugin editor (idempotent)", () => {
     const out = addPageBuilderFields(base);
     expect(out.some(f => f.name === "editormode")).toBe(true);
-    expect(
-      out.some(f => f.type === "page-builder" && f.name === "content")
-    ).toBe(true);
+    const content = out.find(f => f.name === "content") as {
+      type?: string;
+      admin?: { component?: string };
+    };
+    expect(content?.type).toBe("json"); // storage primitive, not a custom type
+    expect(content?.admin?.component).toContain("plugin-page-builder");
     expect(hasPageBuilderFields(out)).toBe(true);
     expect(
       addPageBuilderFields(out).filter(f => f.name === "editormode")

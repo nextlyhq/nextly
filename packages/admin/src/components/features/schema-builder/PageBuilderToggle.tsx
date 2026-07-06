@@ -29,8 +29,14 @@ export function PageBuilderToggle<T extends BuilderFieldLike>({
   disabled?: boolean;
 }) {
   const branding = useBranding();
-  const installed = (branding.plugins ?? []).some(p => p.name === PLUGIN_NAME);
-  if (!installed) return null;
+  const plugin = (branding.plugins ?? []).find(p => p.name === PLUGIN_NAME);
+  if (!plugin) return null;
+
+  // The canvas field renders via the plugin's registered editor component (discovered from
+  // the plugin's field-type metadata), stored as a plain `json` field so the manifest is happy.
+  const componentPath = plugin.fieldTypes?.find(
+    ft => ft.type === "page-builder"
+  )?.component;
 
   const on = hasPageBuilderFields(fields);
   return (
@@ -42,7 +48,7 @@ export function PageBuilderToggle<T extends BuilderFieldLike>({
         onCheckedChange={next =>
           setFields(
             next
-              ? addPageBuilderFields(fields)
+              ? addPageBuilderFields(fields, componentPath)
               : removePageBuilderFields(fields)
           )
         }
