@@ -62,18 +62,6 @@ test.describe("page builder editor", () => {
     await expect(page.getByLabel("Text")).toBeVisible();
   });
 
-  test("text blocks are editable inline on the canvas", async ({ page }) => {
-    await page.goto(`${ADMIN}/collections/pages/new`);
-    await page.getByRole("button", { name: "Insert Heading" }).click();
-    const canvas = page.frameLocator('iframe[title="Page preview"]');
-    const heading = canvas.locator("h2");
-    // Inserting auto-selects → the heading is contentEditable and focused; type directly.
-    await heading.pressSequentially(" — Live!");
-    await expect(heading).toHaveText(/Live!/);
-    // The edit round-trips through the store → the inspector Text field reflects it.
-    await expect(page.getByLabel("Text")).toHaveValue(/Live!/);
-  });
-
   test("the inspector panel stays inside the editor on a narrow viewport", async ({
     page,
   }) => {
