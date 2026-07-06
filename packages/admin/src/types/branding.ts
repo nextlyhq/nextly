@@ -69,8 +69,12 @@ export interface PluginMetadata {
   };
   /** Dashboard widgets contributed via `contributes.admin.widgets`. */
   widgets?: PluginWidgetMeta[];
-  /** Custom field types — `type` → admin editor component path. */
-  fieldTypes?: Array<{ type: string; component: string }>;
+  /**
+   * Custom field types — `type` → admin editor component path. `layout:
+   * "takeover"` marks a type whose visible field collapses the entry-form body
+   * to just that field + its condition controller (see takeoverLayout).
+   */
+  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
 }
 
 export interface AdminBranding {
