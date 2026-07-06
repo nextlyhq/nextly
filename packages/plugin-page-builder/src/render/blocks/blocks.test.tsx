@@ -77,6 +77,15 @@ describe("core block renderers", () => {
     expect(html(container)).toContain("inside");
   });
 
+  it("container renders its chosen semantic tag, defaulting to <section>", () => {
+    const def = makeNode("core/container", {}, undefined, { default: [] });
+    expect(html(def)).toContain("<section");
+    const asArticle = makeNode("core/container", { as: "article" }, undefined, {
+      default: [],
+    });
+    expect(html(asArticle)).toContain("<article");
+  });
+
   it("grid applies an inline column template from the columns prop", () => {
     const out = html(
       makeNode("core/grid", { columns: 3 }, undefined, { default: [] })
