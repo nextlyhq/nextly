@@ -17,6 +17,10 @@
 
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import {
+  computeMainFields,
+  isPageBuilderEnabled,
+} from "@admin/lib/builder/pageBuilderLayout";
 import { cn } from "@admin/lib/utils";
 
 import { EntryFormActions } from "./EntryFormActions";
@@ -185,9 +189,14 @@ export function EntryForm({
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
 
-  const mainFields = allFields.filter(
-    f => f.name !== "slug" && f.name !== "title"
-  );
+  // Page Builder mode: when an entry chose the visual builder, show only the canvas + the
+  // editor switch (title/slug/status are separate system components, always kept).
+  const pbEnabled = isPageBuilderEnabled(allFields, collection.admin);
+  const editorMode = form.watch("editorMode");
+  const mainFields = computeMainFields(allFields, {
+    enabled: pbEnabled,
+    editorMode,
+  });
 
   // Get form errors and submit attempt count. submitCount gates the
   // top-level "Please fix the following errors" toast in FormErrorSummary

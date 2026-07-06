@@ -41,6 +41,10 @@ import {
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import {
+  computeMainFields,
+  isPageBuilderEnabled,
+} from "@admin/lib/builder/pageBuilderLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
 
@@ -63,6 +67,8 @@ export interface SingleSchema {
     icon?: string;
     hidden?: boolean;
     description?: string;
+    /** Page Builder editor-choice opt-in (see @nextlyhq/plugin-page-builder). */
+    pageBuilder?: { enabled?: boolean };
   };
   /**
    * Whether this Single has the Draft/Published lifecycle enabled. When
@@ -409,9 +415,13 @@ export function SingleForm({
   const allFields = schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
-  const mainFields = allFields.filter(
-    f => !("name" in f) || (f.name !== "slug" && f.name !== "title")
-  );
+  // Page Builder mode: show only the canvas + editor switch (title/slug/status are separate).
+  const pbEnabled = isPageBuilderEnabled(allFields, schema.admin);
+  const editorMode = form.watch("editorMode");
+  const mainFields = computeMainFields(allFields, {
+    enabled: pbEnabled,
+    editorMode,
+  });
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, EntrySystemHeader shows Save Draft / Update split, and

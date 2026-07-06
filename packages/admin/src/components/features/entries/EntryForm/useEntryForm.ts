@@ -78,6 +78,8 @@ export interface EntryFormCollection {
   /** Admin configuration including preview settings */
   admin?: {
     preview?: EntryFormPreviewConfig;
+    /** Page Builder editor-choice opt-in (see @nextlyhq/plugin-page-builder). */
+    pageBuilder?: { enabled?: boolean };
   };
   /**
    * Whether the collection has the Draft/Published status feature enabled.
