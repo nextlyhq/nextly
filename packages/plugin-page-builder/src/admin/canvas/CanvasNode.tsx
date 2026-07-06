@@ -20,7 +20,6 @@ import { useDraggable, useDroppable } from "@dnd-kit/react";
 import {
   cloneElement,
   isValidElement,
-  type MouseEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -34,6 +33,18 @@ import { useEditor } from "../store/EditorProvider";
 import { DropZone } from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
+
+/** Visual stand-in shown on the canvas for a block whose render() is empty (e.g. an
+ *  Image with no source), so it stays visible and selectable at author time. */
+const placeholderStyle = {
+  padding: "14px 16px",
+  fontSize: 13,
+  color: "#6b7280",
+  border: "1px dashed #cbd5e1",
+  borderRadius: 6,
+  textAlign: "center" as const,
+  background: "#f8fafc",
+};
 
 /** Containers whose children lay out horizontally — no interleaved DropZones (parity). */
 function isHorizontal(node: BlockNode): boolean {
@@ -130,7 +141,7 @@ function buildSlots(node: BlockNode): Record<string, ReactNode> {
 
 /** Root renderer — the page container, not itself draggable. */
 export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
-  const { state, dispatch } = useEditor();
+  const { state } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
   const className = classFor(node, selected);
@@ -145,21 +156,21 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
     );
   }
 
-  const select = (e: MouseEvent) => {
-    e.stopPropagation();
-    dispatch({ type: "SELECT", id: node.id });
-  };
-
   const element = def.render({
     props: node.props,
     node,
     slots: buildSlots(node),
     className,
   });
-  if (!isValidElement(element)) return element;
+  if (!isValidElement(element)) {
+    return (
+      <div className={className} data-nx-id={node.id} style={placeholderStyle}>
+        {def.label} — click to configure
+      </div>
+    );
+  }
   return cloneElement(element as ReactElement<Record<string, unknown>>, {
     "data-nx-id": node.id,
-    onClick: select,
   });
 }
 
@@ -178,7 +189,7 @@ function DraggableNode({
   /** When set (grid child), this element is also an "insert before" drop target. */
   dropBeforeIndex?: number;
 }): ReactNode {
-  const { state, dispatch } = useEditor();
+  const { state } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
@@ -221,11 +232,6 @@ function DraggableNode({
 
   const ref = mergeRefs(dragRef, before.ref, grid ? append.ref : undefined);
 
-  const select = (e: MouseEvent) => {
-    e.stopPropagation();
-    dispatch({ type: "SELECT", id: node.id });
-  };
-
   if (!def) {
     return (
       <div
@@ -243,17 +249,29 @@ function DraggableNode({
     slots: buildSlots(node),
     className,
   });
-  if (!isValidElement(element)) return element;
+  if (!isValidElement(element)) {
+    return (
+      <div
+        ref={ref}
+        className={className}
+        data-nx-id={node.id}
+        style={placeholderStyle}
+      >
+        {def.label} — click to configure
+      </div>
+    );
+  }
 
   const augmented = cloneElement(
     element as ReactElement<Record<string, unknown>>,
-    { "data-nx-id": node.id, onClick: select, ref }
+    { "data-nx-id": node.id, ref }
   );
 
   return (
     <BlockErrorBoundary
       fallback={
         <div
+          ref={ref}
           data-nx-id={node.id}
           className={className}
           style={{
@@ -263,7 +281,6 @@ function DraggableNode({
             border: "1px dashed #fca5a5",
             borderRadius: 6,
           }}
-          onClick={select}
         >
           {def.label} failed to render.
         </div>
