@@ -12,6 +12,11 @@
 import {
   Input,
   Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
   Tabs,
   TabsContent,
@@ -20,11 +25,17 @@ import {
 } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
+import { getPath } from "../../core/bindings";
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
 import { findNode } from "../../core/tree";
-import type { BlockNode, ControlRef } from "../../core/types";
+import type { Binding, BlockNode, ControlRef } from "../../core/types";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
+import {
+  getCollectionFields,
+  getSampleEntries,
+  type CollectionField,
+} from "../api/collectionsApi";
 import {
   narrowContentFields,
   type ContentField,
@@ -35,10 +46,13 @@ import {
 } from "../controls/registerDefaultControls";
 import { ArrowDown, ArrowUp, blockIcon, Copy, Trash2 } from "../icons";
 import { locateNode } from "../logic/locate";
+import { findEnclosingLoop } from "../logic/queryLoop";
 import { useEditor } from "../store/EditorProvider";
 
 import { firstPopulatedTab } from "./inspectorTabs";
 import { QueryLoopSettings } from "./QueryLoopSettings";
+
+const NONE = "__none__";
 
 registerDefaultControls();
 
@@ -89,6 +103,114 @@ function Segmented<T extends string>({
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
+
+/** A short, safe preview string for a resolved binding value. */
+function previewText(v: unknown): string {
+  if (v == null) return "—";
+  let s: string;
+  if (typeof v === "string") s = v;
+  else if (typeof v === "number" || typeof v === "boolean") s = String(v);
+  else s = JSON.stringify(v) ?? "—";
+  return s.length > 40 ? `${s.slice(0, 40)}…` : s;
+}
+
+/**
+ * Binding editor for a bindable field. Inside a Query Loop we discover the loop collection's
+ * fields and show a field DROPDOWN plus a live value from a sample entry; outside a loop (or
+ * if discovery fails) we fall back to a raw path input.
+ */
+function BindingPathEditor({
+  node,
+  field,
+  binding,
+}: {
+  node: BlockNode;
+  field: ContentField;
+  binding: Binding;
+}) {
+  const { state, dispatch } = useEditor();
+  const loop = findEnclosingLoop(state.document.root, node.id);
+  const collection =
+    loop && typeof loop.props.collection === "string"
+      ? loop.props.collection
+      : "";
+  const [fields, setFields] = useState<CollectionField[]>([]);
+  const [sample, setSample] = useState<Record<string, unknown> | null>(null);
+
+  const setPath = (path: string) =>
+    dispatch({
+      type: "SET_BINDING",
+      id: node.id,
+      prop: field.name,
+      binding: { source: "field", path },
+    });
+
+  useEffect(() => {
+    let alive = true;
+    if (!collection) {
+      setFields([]);
+      setSample(null);
+      return;
+    }
+    getCollectionFields(collection)
+      .then(f => alive && setFields(f))
+      .catch(() => alive && setFields([]));
+    getSampleEntries(collection, { limit: 1 })
+      .then(rows => alive && setSample(rows[0] ?? null))
+      .catch(() => alive && setSample(null));
+    return () => {
+      alive = false;
+    };
+  }, [collection]);
+
+  // No loop context / discovery unavailable → raw path input.
+  if (!collection || fields.length === 0) {
+    return (
+      <>
+        <Input
+          value={binding.path}
+          placeholder="field path, e.g. title or author.name"
+          aria-label={`${field.label} binding path`}
+          onChange={e => setPath(e.target.value)}
+        />
+        <p className="nx-pb-empty" style={{ marginTop: 2 }}>
+          Resolves from the current Query Loop item.
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Select
+        value={binding.path || NONE}
+        onValueChange={v => setPath(v === NONE ? "" : v)}
+      >
+        <SelectTrigger aria-label={`${field.label} field`}>
+          <SelectValue placeholder="Choose a field…" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE}>Choose a field…</SelectItem>
+          {fields.map(f => (
+            <SelectItem key={f.name} value={f.name}>
+              {f.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="nx-pb-empty" style={{ marginTop: 2 }}>
+        {binding.path ? (
+          <>
+            Preview:{" "}
+            <strong>{previewText(getPath(sample ?? {}, binding.path))}</strong>
+          </>
+        ) : (
+          "Pick a field from the loop collection."
+        )}
+      </p>
+    </>
+  );
+}
 
 function BindableField({
   node,
@@ -144,24 +266,7 @@ function BindableField({
         </label>
       </div>
       {bound ? (
-        <>
-          <Input
-            value={bound.path}
-            placeholder="field path, e.g. title or author.name"
-            aria-label={`${field.label} binding path`}
-            onChange={e =>
-              dispatch({
-                type: "SET_BINDING",
-                id: node.id,
-                prop: field.name,
-                binding: { source: "field", path: e.target.value },
-              })
-            }
-          />
-          <p className="nx-pb-empty" style={{ marginTop: 2 }}>
-            Resolves from the current Query Loop item.
-          </p>
-        </>
+        <BindingPathEditor node={node} field={field} binding={bound} />
       ) : (
         renderControl(field.type, {
           field,
