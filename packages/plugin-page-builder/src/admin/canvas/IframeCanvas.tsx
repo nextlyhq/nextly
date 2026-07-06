@@ -44,7 +44,12 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
   const { state, dispatch } = useEditor();
   const ref = useRef<HTMLIFrameElement>(null);
   const [body, setBody] = useState<HTMLElement | null>(null);
-  const width = BREAKPOINT_WIDTHS[state.activeBreakpoint] || 0;
+  // Desktop/base is FLUID (fills the pane); only tablet/mobile use a fixed device width.
+  // A fixed desktop frame (1280px) clips behind the panels when the pane is narrower.
+  const width =
+    state.activeBreakpoint === "base"
+      ? 0
+      : BREAKPOINT_WIDTHS[state.activeBreakpoint] || 0;
 
   // Attach to the iframe document once it exists (onLoad or already-complete).
   const attach = () => {
@@ -100,9 +105,11 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
     <div
       style={{
         display: "flex",
-        justifyContent: "center",
+        // "safe center" centers the device frame but falls back to the start edge when it
+        // would overflow — so a narrow pane scrolls from the left instead of clipping it.
+        justifyContent: "safe center",
         height: "100%",
-        background: "#f3f4f6",
+        background: "hsl(var(--muted))",
         overflow: "auto",
         padding: width ? 16 : 0,
       }}
