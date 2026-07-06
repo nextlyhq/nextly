@@ -34,7 +34,7 @@ export function ControlRow({
   return (
     <div style={{ display: "grid", gap: 4, marginBottom: 10 }}>
       {label ? (
-        <Label htmlFor={htmlFor} style={{ fontSize: 12, color: "#6b7280" }}>
+        <Label htmlFor={htmlFor} className="nx-pb-control-label">
           {label}
         </Label>
       ) : null}
@@ -106,7 +106,7 @@ export function BooleanControl({ value, onChange, label }: ControlProps) {
         marginBottom: 10,
       }}
     >
-      <Label htmlFor={id} style={{ fontSize: 12, color: "#6b7280" }}>
+      <Label htmlFor={id} className="nx-pb-control-label">
         {label}
       </Label>
       <Switch
@@ -148,23 +148,14 @@ const ALIGN = [
 export function AlignControl({ value, onChange, label }: ControlProps) {
   return (
     <ControlRow label={label}>
-      <div style={{ display: "flex", gap: 4 }} role="group" aria-label={label}>
+      <div className="nx-pb-choice" role="group" aria-label={label}>
         {ALIGN.map(a => (
           <button
             key={a.value}
             type="button"
+            className="nx-pb-choice-btn"
             aria-pressed={value === a.value}
             onClick={() => onChange(value === a.value ? undefined : a.value)}
-            style={{
-              flex: 1,
-              padding: "6px 4px",
-              fontSize: 12,
-              cursor: "pointer",
-              border: "1px solid #e5e7eb",
-              borderRadius: 6,
-              background: value === a.value ? "#eef2ff" : "#fff",
-              color: value === a.value ? "#4338ca" : "#374151",
-            }}
           >
             {a.label}
           </button>
@@ -224,12 +215,11 @@ export function LinkControl({ value, onChange, label }: ControlProps) {
         onChange={e => onChange({ ...v, href: e.target.value })}
       />
       <label
+        className="nx-pb-control-label"
         style={{
           display: "flex",
           alignItems: "center",
           gap: 6,
-          fontSize: 12,
-          color: "#6b7280",
           marginTop: 4,
         }}
       >
