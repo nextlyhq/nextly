@@ -22,7 +22,10 @@ import { evaluateCondition } from "./condition-evaluator";
 export interface LayoutField {
   name?: string;
   type?: string;
-  admin?: { condition?: FieldCondition } | null;
+  // Loose on purpose: any field config (FieldConfig, ManifestField, …) must be
+  // assignable to LayoutField so the generic `T` binds to the caller's type. The
+  // condition is cast to FieldCondition where it's actually evaluated.
+  admin?: { condition?: unknown } | null;
 }
 
 /** System fields rendered separately (never part of the editable body). */
@@ -38,7 +41,7 @@ export function isTakeoverField(
 
 /** The name of the field a takeover field's condition watches, if any. */
 function controllerName(f: LayoutField): string | undefined {
-  return f.admin?.condition?.field;
+  return (f.admin?.condition as FieldCondition | undefined)?.field;
 }
 
 /**
@@ -90,7 +93,10 @@ export function computeMainFields<T extends LayoutField>(
   const activeTakeovers = body.filter(
     f =>
       isTakeoverField(f, opts.takeoverTypes) &&
-      evaluateCondition(f.admin?.condition, valueFor(f, opts.values))
+      evaluateCondition(
+        f.admin?.condition as FieldCondition | undefined,
+        valueFor(f, opts.values)
+      )
   );
   if (activeTakeovers.length === 0) return body;
 
