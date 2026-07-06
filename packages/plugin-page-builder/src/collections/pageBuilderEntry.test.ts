@@ -1,3 +1,4 @@
+import { defineSingle, text } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -39,5 +40,18 @@ describe("PAGE_BUILDER_FIELD_TYPE", () => {
     expect(PAGE_BUILDER_FIELD_TYPE.type).toBe("page-builder");
     expect(PAGE_BUILDER_FIELD_TYPE.storage).toBe("json");
     expect(PAGE_BUILDER_FIELD_TYPE.component).toBe(FIELD_COMPONENT_PATH);
+  });
+});
+
+describe("pageBuilderFields in a Single", () => {
+  it("composes into defineSingle alongside normal fields", () => {
+    const single = defineSingle({
+      slug: "homepage",
+      fields: [text({ name: "title" }), ...pageBuilderFields()],
+    }) as { fields: Record<string, unknown>[] };
+    const names = single.fields.map(f => f.name);
+    expect(names).toContain("title");
+    expect(names).toContain("editorMode");
+    expect(names).toContain(PAGE_BUILDER_CONTENT_FIELD);
   });
 });
