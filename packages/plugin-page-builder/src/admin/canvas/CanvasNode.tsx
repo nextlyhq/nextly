@@ -34,6 +34,7 @@ import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
 import { DropZone } from "./DropZone";
+import { INLINE_TEXT_PROP, InlineText } from "./InlineText";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -196,11 +197,17 @@ function DraggableNode({
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
+  // Inline text editing: a selected text block becomes contentEditable; disable dragging
+  // while editing so a mouse text-selection doesn't move the block.
+  const textProp = INLINE_TEXT_PROP[node.type];
+  const editing = !!textProp && selected;
+
   const { ref: dragRef, isDragging } = useDraggable({
     id: node.id,
     type: BLOCK_TYPE,
     data: { kind: "node", nodeId: node.id, parentId, slot, index },
     sensors: dragSensors,
+    disabled: editing,
   });
 
   // Grid child: "insert before me" target.
@@ -268,16 +275,27 @@ function DraggableNode({
 
   // The Query Loop keeps its editable template, and we APPEND a read-only sample-data
   // preview after it so the author sees how the template maps to real entries (spec §5).
+  // Text blocks render through InlineText so they can be edited directly on the canvas.
   const el = element as ReactElement<Record<string, unknown>>;
   const augmented =
-    node.type === QUERY_LOOP_TYPE
-      ? cloneElement(
-          el,
-          { "data-nx-id": node.id, ref },
-          (el.props as { children?: ReactNode }).children,
-          <QueryLoopSamplePreview key="__nx-sample" node={node} />
-        )
-      : cloneElement(el, { "data-nx-id": node.id, ref });
+    node.type === QUERY_LOOP_TYPE ? (
+      cloneElement(
+        el,
+        { "data-nx-id": node.id, ref },
+        (el.props as { children?: ReactNode }).children,
+        <QueryLoopSamplePreview key="__nx-sample" node={node} />
+      )
+    ) : textProp ? (
+      <InlineText
+        node={node}
+        textProp={textProp}
+        element={el}
+        editing={editing}
+        forwardedRef={ref}
+      />
+    ) : (
+      cloneElement(el, { "data-nx-id": node.id, ref })
+    );
 
   return (
     <BlockErrorBoundary
