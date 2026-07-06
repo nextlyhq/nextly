@@ -14,24 +14,13 @@ import { Button } from "@nextlyhq/ui";
 import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
-import { planDrop, type DragSource } from "./logic/dropPlan";
+import { dragLabel } from "./logic/dragLabel";
+import { planDrop } from "./logic/dropPlan";
 import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
 
 const BREAKPOINTS = ["base", "tablet", "mobile"];
-
-/** Human label for the dragged block, shown in the drag overlay chip. */
-function dragLabel(data: DragSource): string {
-  if (data.kind === "library" && data.blockType) {
-    return defaultBlockRegistry.get(data.blockType)?.label ?? data.blockType;
-  }
-  if (data.kind === "node" && data.nodeId) {
-    // The overlay only has the source's data; the label is best-effort.
-    return "Block";
-  }
-  return "Block";
-}
 
 export function EditorSurface() {
   const { state, dispatch } = useEditor();
@@ -138,7 +127,7 @@ export function EditorSurface() {
             }}
           >
             <span aria-hidden>⠿</span>
-            {dragLabel(source?.data ?? {})}
+            {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
           </div>
         )}
       </DragOverlay>
