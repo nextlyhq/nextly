@@ -1,17 +1,18 @@
 "use client";
 
 /**
- * The block library (spec §9). Lists every registered block grouped by category. Each
- * entry is BOTH a @dnd-kit draggable source (drag into the canvas) AND an "Insert" button
- * (click-to-insert) — the button is the keyboard-accessible, always-reliable path, while
- * drag is the pointer affordance. Inserts land in the selected container's default slot,
- * else at the end of the page root.
+ * The block library (spec §9). Lists every registered block grouped by category, with a
+ * search box and collapsible categories. Each entry is BOTH a @dnd-kit draggable source
+ * (drag into the canvas) AND an "Insert" button (click / keyboard-accessible path). Inserts
+ * land in the selected container's default slot, else at the end of the page root.
  */
 import { useDraggable } from "@dnd-kit/react";
+import { useMemo, useState } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
 import { findNode } from "../../core/tree";
 import { DEFAULT_SLOT, type BlockDefinition } from "../../core/types";
+import { blockIcon, ChevronDown, ChevronRight, Search } from "../icons";
 import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
@@ -25,6 +26,7 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
     data: { kind: "library", blockType: def.type },
     sensors: dragSensors,
   });
+  const Icon = blockIcon(def.icon);
 
   const insert = () => {
     const root = state.document.root;
@@ -49,33 +51,17 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
   return (
     <div
       ref={ref}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 6,
-        padding: "6px 8px",
-        marginBottom: 4,
-        border: "1px solid #e5e7eb",
-        borderRadius: 6,
-        background: "#fff",
-        cursor: "grab",
-        opacity: isDragging ? 0.5 : 1,
-      }}
+      className="nx-pb-lib-item"
+      data-dragging={isDragging || undefined}
+      title={`Drag ${def.label} onto the canvas`}
     >
-      <span style={{ fontSize: 13 }}>{def.label}</span>
+      <Icon aria-hidden />
+      <span className="nx-pb-lib-item-label">{def.label}</span>
       <button
         type="button"
+        className="nx-pb-lib-item-insert"
         onClick={insert}
         aria-label={`Insert ${def.label}`}
-        style={{
-          fontSize: 11,
-          padding: "2px 8px",
-          border: "1px solid #d1d5db",
-          borderRadius: 4,
-          background: "#f9fafb",
-          cursor: "pointer",
-        }}
       >
         Insert
       </button>
@@ -83,38 +69,73 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
   );
 }
 
-export function BlockLibrary() {
-  const defs = defaultBlockRegistry.all();
-  const byCategory = new Map<string, BlockDefinition[]>();
-  for (const def of defs) {
-    const list = byCategory.get(def.category) ?? [];
-    list.push(def);
-    byCategory.set(def.category, list);
-  }
-  const categories = [...byCategory.keys()].sort(
-    (a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b)
-  );
-
+function Category({ name, defs }: { name: string; defs: BlockDefinition[] }) {
+  const [open, setOpen] = useState(true);
+  const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <div>
-      {categories.map(cat => (
-        <div key={cat} style={{ marginBottom: 12 }}>
-          <div
-            style={{
-              fontSize: 11,
-              textTransform: "uppercase",
-              letterSpacing: 0.4,
-              color: "#9ca3af",
-              marginBottom: 4,
-            }}
-          >
-            {cat}
-          </div>
-          {byCategory.get(cat)!.map(def => (
+    <div className="nx-pb-lib-cat">
+      <button
+        type="button"
+        className="nx-pb-lib-cat-btn"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Chevron aria-hidden />
+        {name}
+      </button>
+      {open ? (
+        <div className="nx-pb-lib-grid">
+          {defs.map(def => (
             <LibraryItem key={def.type} def={def} />
           ))}
         </div>
-      ))}
+      ) : null}
+    </div>
+  );
+}
+
+export function BlockLibrary() {
+  const [query, setQuery] = useState("");
+
+  const categories = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const byCategory = new Map<string, BlockDefinition[]>();
+    for (const def of defaultBlockRegistry.all()) {
+      if (q && !def.label.toLowerCase().includes(q)) continue;
+      const list = byCategory.get(def.category) ?? [];
+      list.push(def);
+      byCategory.set(def.category, list);
+    }
+    return [...byCategory.keys()]
+      .sort((a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b))
+      .map(name => ({ name, defs: byCategory.get(name)! }));
+  }, [query]);
+
+  return (
+    <div>
+      <div className="nx-pb-pane-header">Blocks</div>
+      <div className="nx-pb-lib-search">
+        <Search aria-hidden />
+        <input
+          type="search"
+          value={query}
+          placeholder="Search blocks"
+          aria-label="Search blocks"
+          onChange={e => setQuery(e.target.value)}
+        />
+      </div>
+      {categories.length === 0 ? (
+        <div className="nx-pb-lib-empty">No blocks match “{query}”.</div>
+      ) : (
+        categories.map(({ name, defs }) => (
+          // Remount per query so a filtered category always shows expanded.
+          <Category
+            key={`${name}:${query ? "q" : ""}`}
+            name={name}
+            defs={defs}
+          />
+        ))
+      )}
     </div>
   );
 }
