@@ -51,7 +51,7 @@ export interface PluginAdminMeta {
    * admin renders fields of these types. Serialized regardless of enabled state
    * (a disabled plugin's collections + their fields are retained, D14/D49).
    */
-  fieldTypes?: Array<{ type: string; component: string }>;
+  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
 }
 
 /**
@@ -130,6 +130,7 @@ export function buildPluginAdminMeta(
       meta.fieldTypes = fieldTypes.map(ft => ({
         type: ft.type,
         component: ft.component,
+        ...(ft.layout ? { layout: ft.layout } : {}),
       }));
     }
 

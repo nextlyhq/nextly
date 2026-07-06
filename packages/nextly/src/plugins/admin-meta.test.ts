@@ -15,6 +15,32 @@ function asPlugins(defs: unknown[]): PluginDefinition[] {
 }
 
 describe("buildPluginAdminMeta", () => {
+  it("serializes a field type's layout hint", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "page-builder",
+                storage: "json",
+                component: "@acme/p/admin#Canvas",
+                layout: "takeover",
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0]).toMatchObject({
+      type: "page-builder",
+      component: "@acme/p/admin#Canvas",
+      layout: "takeover",
+    });
+  });
+
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
