@@ -1,5 +1,6 @@
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
+import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 
 export interface PageBuilderOptions {
@@ -19,6 +20,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     enabled: opts.enabled,
     contributes: {
       collections: [pagesCollection()],
+      fieldTypes: [PAGE_BUILDER_FIELD_TYPE],
       permissions: [
         { action: "publish", resource: "pages", label: "Publish Pages" },
       ],
