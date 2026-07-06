@@ -102,6 +102,19 @@ test.describe("page builder editor", () => {
     ).toBeVisible();
   });
 
+  test("query loop is authored via a collection dropdown, not a text slug", async ({
+    page,
+  }) => {
+    await page.goto(`${ADMIN}/collections/pages/new`);
+    await page.getByRole("button", { name: "Insert Query Loop" }).click();
+    const canvas = page.frameLocator('iframe[title="Page preview"]');
+    // Selecting the loop opens the dedicated settings panel with a Collection dropdown.
+    await canvas.locator('[data-nx-query-loop="preview"]').click();
+    await expect(
+      page.getByRole("combobox", { name: "Collection" })
+    ).toBeVisible();
+  });
+
   test("field mount: edit the homepage single layout", async ({ page }) => {
     await page.goto(`${ADMIN}/singles/homepage`);
     await page.getByRole("button", { name: "Insert Paragraph" }).click();
