@@ -78,6 +78,22 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
       compileDocumentCss(state.document);
   }, [state.document, body]);
 
+  // Selection via a native delegated listener ON THE IFRAME DOCUMENT. React's synthetic
+  // events don't cross the portal→iframe boundary, so onClick handlers inside the canvas
+  // fire unreliably; a native listener on the iframe document does not have that problem.
+  // Clicking empty space (no [data-nx-id] ancestor) deselects.
+  useEffect(() => {
+    const doc = ref.current?.contentDocument;
+    if (!doc) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      const el = target?.closest?.("[data-nx-id]") ?? null;
+      dispatch({ type: "SELECT", id: el?.getAttribute("data-nx-id") ?? null });
+    };
+    doc.addEventListener("click", onClick);
+    return () => doc.removeEventListener("click", onClick);
+  }, [body, dispatch]);
+
   return (
     <div
       style={{
@@ -88,7 +104,6 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
         overflow: "auto",
         padding: width ? 16 : 0,
       }}
-      onClick={() => dispatch({ type: "SELECT", id: null })}
     >
       <iframe
         ref={ref}
