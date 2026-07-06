@@ -1,13 +1,9 @@
 /**
  * Pure add/remove of the Page Builder editor-choice fields for the schema builder's field
- * list. Enabling appends an `editormode` select + a reserved `content` canvas field — a
- * `json` field wired to the plugin's editor via `admin.component` (NOT a custom field type,
- * so it round-trips through `ui-schema.json` cleanly). Disabling removes both. Idempotent.
+ * list. Enabling appends an `editormode` select + a reserved `content` canvas field of the
+ * plugin's `page-builder` field type (rendered by the plugin editor via the plugin's
+ * registered field-type → component mapping). Disabling removes both. Idempotent.
  */
-
-/** Fallback component path if the plugin's field type isn't discoverable from branding. */
-export const PAGE_BUILDER_COMPONENT =
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderField";
 
 export interface BuilderFieldLike {
   id: string;
@@ -36,8 +32,7 @@ export function hasPageBuilderFields(fields: BuilderFieldLike[]): boolean {
 }
 
 export function addPageBuilderFields<T extends BuilderFieldLike>(
-  fields: T[],
-  componentPath: string = PAGE_BUILDER_COMPONENT
+  fields: T[]
 ): T[] {
   if (hasPageBuilderFields(fields)) return fields;
   const editormode = {
@@ -56,12 +51,9 @@ export function addPageBuilderFields<T extends BuilderFieldLike>(
     id: "pb-content",
     name: "content",
     label: "Page Builder",
-    type: "json",
+    type: "page-builder",
     validation: {},
-    admin: {
-      component: componentPath,
-      condition: { field: "editormode", equals: "builder" },
-    },
+    admin: { condition: { field: "editormode", equals: "builder" } },
   } as unknown as T;
   return [...fields, editormode, content];
 }

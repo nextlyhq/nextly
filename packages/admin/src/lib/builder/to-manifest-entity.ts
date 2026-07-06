@@ -168,14 +168,16 @@ const PASSTHROUGH_KEYS = [
  * Shared by every entity mapper so the field translation stays in one place.
  */
 export function mapBuilderFieldToManifest(f: BuilderFieldInput): ManifestField {
-  if (!SUPPORTED.has(f.type)) {
-    throw new Error(
-      `unsupported field type '${f.type}' for ui-schema.json (field '${f.name}')`
-    );
-  }
+  // Plugin-contributed field types (e.g. the page builder's "page-builder") aren't part of
+  // the canonical ui-schema set. Record them as their storage primitive — `json` — so the
+  // manifest stays valid and columns still materialize. The DB is the runtime source of
+  // truth and keeps the real type, so the plugin's editor still renders. Everything else
+  // unsupported is still coerced to `json` rather than dropped (the field picker prevents
+  // typos, so unsupported types here are plugin fields added programmatically).
+  const type = (SUPPORTED.has(f.type) ? f.type : "json") as UiSchemaFieldType;
   const out: ManifestField = {
     name: f.name,
-    type: f.type as UiSchemaFieldType,
+    type,
   };
   const sink = out as unknown as Record<string, unknown>;
   for (const key of PASSTHROUGH_KEYS) {
