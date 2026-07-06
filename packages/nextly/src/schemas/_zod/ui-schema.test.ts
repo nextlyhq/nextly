@@ -68,9 +68,21 @@ describe("parseUiSchema", () => {
     expect(r.success).toBe(false);
   });
 
-  it("rejects an unknown field type", () => {
+  it("accepts a plugin-contributed field type slug", () => {
+    // Plugin field types (e.g. the page builder's "page-builder") aren't in the
+    // canonical enum. The manifest accepts any slug-shaped token so the real type
+    // round-trips to production; the field-type registry resolves it to a column.
     const r = parseUiSchema({
-      collections: [{ slug: "x", fields: [{ name: "a", type: "wat" }] }],
+      collections: [
+        { slug: "x", fields: [{ name: "a", type: "page-builder" }] },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects a malformed (non-slug) field type", () => {
+    const r = parseUiSchema({
+      collections: [{ slug: "x", fields: [{ name: "a", type: "Not A Type" }] }],
     });
     expect(r.success).toBe(false);
   });
