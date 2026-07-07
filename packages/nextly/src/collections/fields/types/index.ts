@@ -12,11 +12,6 @@
 // Re-exports from individual field type modules
 // ============================================================
 
-// Base types (foundation for all field types)
-// ============================================================
-// Unified Field Config Types
-// ============================================================
-
 import type { FieldType } from "./base";
 import type { CheckboxFieldConfig } from "./checkbox";
 import type { ChipsFieldConfig } from "./chips";
@@ -25,7 +20,6 @@ import type { ComponentFieldConfig } from "./component";
 import type { DateFieldConfig } from "./date";
 import type { EmailFieldConfig } from "./email";
 import type { GroupFieldConfig } from "./group";
-import type { JoinFieldConfig } from "./join";
 import type { JSONFieldConfig } from "./json";
 import type { NumberFieldConfig } from "./number";
 import type { PasswordFieldConfig } from "./password";
@@ -37,20 +31,6 @@ import type { SelectFieldConfig } from "./select";
 import type { TextFieldConfig } from "./text";
 import type { TextareaFieldConfig } from "./textarea";
 import type { UploadFieldConfig } from "./upload";
-
-// Numeric field configs
-
-// Selection field configs
-
-// Media field configs
-
-// Relational field configs
-
-// Structured field configs
-
-// Component field configs
-
-// Virtual field configs (computed at read time, no data storage)
 
 export * from "./base";
 
@@ -87,31 +67,20 @@ export * from "./component";
 // Array-like field types
 export * from "./chips";
 
-// Virtual field types (computed at read time, no data storage)
-export * from "./join";
-
 export * from "./json";
 
 /**
- * Union of all field configs that store data in the database.
+ * Union of all field configurations.
  *
- * These field types create columns/fields in the database and
- * contribute to the document's data structure.
- *
- * Includes:
- * - Text types: text, textarea, richText, email, password, code
- * - Numeric types: number
- * - Selection types: checkbox, date, select, radio
- * - Media types: upload
- * - Relational types: relationship
- * - Structured types: repeater, group, json
+ * This is the primary type used when working with fields in Nextly.
+ * It covers all data-storing field types.
  *
  * @example
  * ```typescript
- * function processDataField(field: DataFieldConfig) {
- *   // TypeScript knows this field stores data
- *   console.log(`Processing data field: ${field.name}`);
- * }
+ * const fields: FieldConfig[] = [
+ *   { type: 'text', name: 'title', required: true },
+ *   { type: 'relationship', name: 'author', relationTo: 'users' },
+ * ];
  * ```
  */
 export type DataFieldConfig =
@@ -135,48 +104,19 @@ export type DataFieldConfig =
   | ChipsFieldConfig;
 
 /**
- * Union of all virtual field configs (computed at read time, no data storage).
+ * Alias for FieldConfig — all fields store data in the database.
  *
- * Virtual fields query related data at read time and display it in the Admin
- * Panel. They do not create database columns or store any data directly.
- *
- * Includes:
- * - join: Displays entries from another collection that reference this document
- *
- * @example
- * ```typescript
- * function isVirtualField(field: FieldConfig): field is VirtualFieldConfig {
- *   return VIRTUAL_FIELD_TYPES.includes(field.type as VirtualFieldType);
- * }
- * ```
+ * @deprecated Use `FieldConfig` directly. `DataFieldConfig` is kept
+ * for backwards compatibility.
  */
-export type VirtualFieldConfig = JoinFieldConfig;
-
-/**
- * Union of all field configurations.
- *
- * This is the primary type used when working with fields in Nextly.
- * It includes data-storing fields and virtual fields.
- *
- * Use `DataFieldConfig` when you specifically need data fields,
- * or `VirtualFieldConfig` for computed/virtual fields like join.
- *
- * @example
- * ```typescript
- * const fields: FieldConfig[] = [
- *   { type: 'text', name: 'title', required: true },
- *   { type: 'join', name: 'posts', collection: 'posts', on: 'author' },
- * ];
- * ```
- */
-export type FieldConfig = DataFieldConfig | VirtualFieldConfig;
+export type FieldConfig = DataFieldConfig;
 
 // ============================================================
 // Field Type Constants
 // ============================================================
 
 /**
- * Field type for data-storing fields.
+ * Field type string union — all supported field types.
  * Extracted from FieldType for type-safe constant arrays.
  */
 export type DataFieldType =
@@ -200,13 +140,7 @@ export type DataFieldType =
   | "chips";
 
 /**
- * Field type for virtual fields (computed at read time, no data storage).
- * Extracted from FieldType for type-safe constant arrays.
- */
-export type VirtualFieldType = "join";
-
-/**
- * Array of field types that store data in the database.
+ * Array of all supported field types.
  *
  * Use this constant for runtime type checking and filtering.
  *
@@ -240,26 +174,7 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
 ] as const;
 
 /**
- * Array of virtual field types (computed at read time, no database column).
- *
- * Use this constant for runtime type checking and filtering.
- *
- * @example
- * ```typescript
- * if (VIRTUAL_FIELD_TYPES.includes(field.type)) {
- *   // This field is virtual, skip database generation
- *   return;
- * }
- * ```
- */
-export const VIRTUAL_FIELD_TYPES: readonly VirtualFieldType[] = [
-  "join",
-] as const;
-
-/**
  * Array of all supported field types.
- *
- * Combines data-storing and virtual field types.
  *
  * @example
  * ```typescript
@@ -270,5 +185,4 @@ export const VIRTUAL_FIELD_TYPES: readonly VirtualFieldType[] = [
  */
 export const ALL_FIELD_TYPES: readonly FieldType[] = [
   ...DATA_FIELD_TYPES,
-  ...VIRTUAL_FIELD_TYPES,
 ] as const;

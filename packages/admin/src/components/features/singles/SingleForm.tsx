@@ -195,17 +195,13 @@ function getDefaultValues(
           (field as { defaultValue?: number }).defaultValue ?? null;
         break;
       case "checkbox":
-      case "boolean":
         defaults[fieldName] =
           (field as { defaultValue?: boolean }).defaultValue ?? false;
         break;
       case "date":
-      case "time":
-      case "dateTime":
         defaults[fieldName] =
           (field as { defaultValue?: string }).defaultValue ?? null;
         break;
-      case "relation":
       case "relationship": {
         const relationField = field as {
           multiple?: boolean;

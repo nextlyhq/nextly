@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.29",
+  "version": "0.0.2-alpha.31",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",

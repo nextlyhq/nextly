@@ -89,9 +89,8 @@ export type ColumnKind =
   | "fkSingle" // single-target foreign key — text/varchar(36)
   | "skip"; // layout-only field types — no column emitted
 
-// Layout-only field types don't create database columns. Mirrors the
-// previously-duplicated set in both consumers.
-const LAYOUT_FIELD_TYPES = new Set(["tabs", "collapsible", "row"]);
+// Layout-only field types don't create database columns.
+const LAYOUT_FIELD_TYPES = new Set<string>();
 
 export function toSnakeCase(name: string): string {
   return name
@@ -149,7 +148,6 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     case "text":
     case "email":
     case "password":
-    case "slug":
     case "select":
     case "radio":
       return "text";
@@ -168,7 +166,6 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     }
 
     case "checkbox":
-    case "toggle":
       return "boolean";
 
     case "date":
@@ -186,18 +183,13 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "repeater":
     case "group":
-    case "blocks":
     case "component":
     case "json":
     case "chips":
       return "json";
 
-    case "point":
-      // Stored as JSON { lat, lng }
-      return "json";
-
     default: {
-      // Plugin-contributed custom field type (C7) maps to its declared storage
+      // Plugin-contributed custom field type maps to its declared storage
       // primitive; otherwise fall back to text (legacy default — no change).
       const custom = getFieldType(field.type);
       if (custom) return STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";

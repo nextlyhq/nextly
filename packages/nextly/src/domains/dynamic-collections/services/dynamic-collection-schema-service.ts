@@ -954,7 +954,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "json":
       case "repeater":
       case "group":
-      case "blocks":
         return "'{}'";
       case "chips":
         return "'[]'";
@@ -965,8 +964,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "select":
       case "radio":
         return "''";
-      case "point":
-        return this.dialect === "postgresql" ? "'(0,0)'" : '\'{"x":0,"y":0}\'';
       default:
         return "''";
     }

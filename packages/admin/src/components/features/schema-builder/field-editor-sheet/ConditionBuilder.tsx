@@ -38,8 +38,6 @@ type Props = {
 // boolean / text-style / number / date / select / radio.
 const ELIGIBLE_SOURCE_TYPES = new Set([
   "checkbox",
-  "toggle",
-  "boolean",
   "text",
   "textarea",
   "richText",
@@ -60,7 +58,7 @@ const TEXT_TYPES = new Set([
   "code",
   "password",
 ]);
-const BOOLEAN_TYPES = new Set(["checkbox", "toggle", "boolean"]);
+const BOOLEAN_TYPES = new Set(["checkbox"]);
 const PICKER_TYPES = new Set(["select", "radio"]);
 
 const OPERATOR_LABELS: Record<ConditionOperator, string> = {

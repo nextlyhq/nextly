@@ -5,10 +5,7 @@
  * Contains UI display info and categorization for field types.
  */
 
-import {
-  FieldType,
-  type FieldTypeDefinition,
-} from "@admin/types/field-types";
+import { FieldType, type FieldTypeDefinition } from "@admin/types/field-types";
 
 /**
  * Field categories for UI organization
@@ -139,34 +136,6 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
     },
   },
 
-  // Content
-  [FieldType.EDITOR]: {
-    type: FieldType.EDITOR,
-    label: "Editor",
-    description: "Rich text editor with formatting options",
-    icon: "edit",
-    category: FIELD_CATEGORIES.CONTENT,
-    defaultConfig: {
-      validation: {
-        required: false,
-      },
-    },
-  },
-  [FieldType.MEDIA]: {
-    type: FieldType.MEDIA,
-    label: "Media",
-    description: "Upload and manage media files",
-    icon: "media",
-    category: FIELD_CATEGORIES.CONTENT,
-    defaultConfig: {
-      allowed_types: ["*"],
-      max_size: 10000000,
-      validation: {
-        required: false,
-      },
-    },
-  },
-
   // Choice
   [FieldType.SELECT]: {
     type: FieldType.SELECT,
@@ -182,9 +151,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       },
     },
   },
-  [FieldType.BOOLEAN]: {
-    type: FieldType.BOOLEAN,
-    label: "Boolean",
+  [FieldType.CHECKBOX]: {
+    type: FieldType.CHECKBOX,
+    label: "Checkbox",
     description: "Yes/no or true/false values with multiple display options",
     icon: "toggle-left",
     category: FIELD_CATEGORIES.CHOICE,
@@ -230,9 +199,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
   },
 
   // Relational
-  [FieldType.RELATION]: {
-    type: FieldType.RELATION,
-    label: "Relation",
+  [FieldType.RELATIONSHIP]: {
+    type: FieldType.RELATIONSHIP,
+    label: "Relationship",
     description: "Reference to other content",
     icon: "link",
     category: FIELD_CATEGORIES.RELATIONAL,
@@ -248,29 +217,11 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       },
     },
   },
-  [FieldType.USER]: {
-    type: FieldType.USER,
-    label: "User",
-    description: "Reference to a user",
-    icon: "user",
-    category: FIELD_CATEGORIES.RELATIONAL,
-    defaultConfig: {
-      multiple_content_types_selection: false,
-      searchable: true,
-      multiselect: false,
-      display_field: "username",
-      validation: {
-        required: false,
-        min_items: 0,
-        max_items: 1,
-      },
-    },
-  },
 
   // Advanced
-  [FieldType.DATE_PICKER]: {
-    type: FieldType.DATE_PICKER,
-    label: "Date Picker",
+  [FieldType.DATE]: {
+    type: FieldType.DATE,
+    label: "Date",
     description: "Date picker for date/time values",
     icon: "calendar",
     category: FIELD_CATEGORIES.ADVANCED,
@@ -278,23 +229,6 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       date_format: "yyyy-MM-dd",
       validation: {
         required: false,
-      },
-    },
-  },
-  [FieldType.TIME_PICKER]: {
-    type: FieldType.TIME_PICKER,
-    label: "Time Picker",
-    description: "Time picker for selecting time values",
-    icon: "clock",
-    category: FIELD_CATEGORIES.ADVANCED,
-    defaultConfig: {
-      time_format: "24h",
-      step: 15,
-      validation: {
-        required: false,
-      },
-      ui: {
-        show_seconds: false,
       },
     },
   },
@@ -333,6 +267,58 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       ui: {
         description: "",
         collapsible: true,
+      },
+    },
+  },
+
+  [FieldType.CODE]: {
+    type: FieldType.CODE,
+    label: "Code",
+    description: "Source code with syntax highlighting",
+    icon: "code",
+    category: FIELD_CATEGORIES.ADVANCED,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.JSON]: {
+    type: FieldType.JSON,
+    label: "JSON",
+    description: "Raw JSON value",
+    icon: "braces",
+    category: FIELD_CATEGORIES.ADVANCED,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.UPLOAD]: {
+    type: FieldType.UPLOAD,
+    label: "Upload",
+    description: "File or image upload",
+    icon: "upload",
+    category: FIELD_CATEGORIES.BASIC,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.COMPONENT]: {
+    type: FieldType.COMPONENT,
+    label: "Component",
+    description: "Embed a reusable component",
+    icon: "puzzle",
+    category: FIELD_CATEGORIES.LAYOUT,
+    defaultConfig: {
+      validation: {
+        required: false,
       },
     },
   },

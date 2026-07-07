@@ -5,8 +5,7 @@
 // them inline here so the picker stays self-contained.
 //
 // PR C (2026-05-03) audit results:
-//   - Restored `toggle` (legacy palette had it; first picker shipped
-//     without it).
+//   - Dropped `toggle` (no backend schema support; use `checkbox` instead).
 //   - Dropped `blocks` (speculative addition; no editor exists; can be
 //     re-added when an editor is built).
 //   - Renamed "Rich text" -> "Editor" with a Lexical
@@ -113,13 +112,6 @@ export const FIELD_TYPES_CATALOG: readonly FieldTypeEntry[] = [
     category: "Advanced",
     hint: "Boolean rendered as a checkbox",
     icon: "CheckSquare",
-  },
-  {
-    type: "toggle",
-    label: "Toggle",
-    category: "Advanced",
-    hint: "Boolean rendered as a switch",
-    icon: "ToggleLeft",
   },
   {
     type: "json",

@@ -71,11 +71,7 @@ export function toCamelCase(name: string): string {
 const ALWAYS_JSON_TYPES: ReadonlySet<string> = new Set([
   "json",
   "repeater",
-  "blocks",
   "group",
-  "tabs",
-  "collapsible",
-  "point",
   "richText",
   "component",
 ]);

@@ -29,13 +29,12 @@ describe("FieldPickerModal", () => {
     render(
       <FieldPickerModal
         open
-        excludedTypes={["relationship", "blocks"]}
+        excludedTypes={["relationship"]}
         onCancel={vi.fn()}
         onSelect={vi.fn()}
       />
     );
     expect(screen.queryByText("Relationship")).not.toBeInTheDocument();
-    expect(screen.queryByText("Blocks")).not.toBeInTheDocument();
     // Category header for Relational disappears too when its only entry
     // was excluded.
     expect(screen.queryByText(/^relational$/i)).not.toBeInTheDocument();
@@ -118,17 +117,5 @@ describe("FieldPickerModal", () => {
     );
     // Block-specific copy that the legacy catalog used.
     expect(screen.queryByText(/heterogeneous block list/i)).toBeNull();
-  });
-
-  it("lists toggle (restored in PR C)", () => {
-    render(
-      <FieldPickerModal
-        open
-        excludedTypes={[]}
-        onCancel={vi.fn()}
-        onSelect={vi.fn()}
-      />
-    );
-    expect(screen.getByText("Toggle")).toBeInTheDocument();
   });
 });

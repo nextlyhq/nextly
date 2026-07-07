@@ -19,7 +19,8 @@
     "@nextlyhq/storage-vercel-blob": "0.0.1",
     "@nextlyhq/telemetry": "0.0.1",
     "@nextlyhq/tsconfig": "0.0.1",
-    "@nextlyhq/ui": "0.0.1"
+    "@nextlyhq/ui": "0.0.1",
+    "@nextlyhq/plugin-page-builder": "0.0.2-alpha.29"
   },
   "changesets": [
     "absolute-media-urls",
@@ -44,6 +45,8 @@
     "migrate-create-component-columns",
     "migrate-create-component-parent-index",
     "neon-schema-apply-perf",
+    "nine-keys-invent",
+    "page-builder-editor-choice",
     "plugin-platform",
     "pnpm10-only-built-deps",
     "pnpm11-build-allowlist-workspace",

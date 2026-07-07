@@ -1,20 +1,14 @@
 // Why: lock the catalog contract so future drift (missing icon, wrong
 // category, regressing on parity with the legacy palette) is caught in
-// tests. The legacy palette had `toggle`; PR C restores it. PR C also
-// drops the speculative `blocks` entry that has no editor.
+// tests.
+// - PR C restored toggle from the legacy palette; later removed since it
+//   has no backend schema support (use checkbox instead).
+// - PR C also drops the speculative `blocks` entry that has no editor.
 import { describe, expect, it } from "vitest";
 
 import { FIELD_TYPES_CATALOG } from "../field-types-catalog";
 
 describe("FIELD_TYPES_CATALOG", () => {
-  it("includes toggle (restored from legacy palette)", () => {
-    expect(FIELD_TYPES_CATALOG.find(t => t.type === "toggle")).toBeDefined();
-  });
-
-  it("does NOT include blocks (no editor exists for it)", () => {
-    expect(FIELD_TYPES_CATALOG.find(t => t.type === "blocks")).toBeUndefined();
-  });
-
   it("every entry carries an icon (Lucide name)", () => {
     for (const entry of FIELD_TYPES_CATALOG) {
       expect(entry.icon, `${entry.type} missing icon`).toBeTruthy();

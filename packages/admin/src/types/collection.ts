@@ -9,32 +9,20 @@
  * - Selection: checkbox, date, select, radio
  * - Media: upload
  * - Relational: relationship
- * - Structured: array, group, json
- *
- * Legacy types (for backwards compatibility):
- * - string (alias for text)
- * - decimal (alias for number with float format)
- * - boolean (alias for checkbox)
- * - richtext (alias for richText)
- * - relation (alias for relationship)
+ * - Structured: repeater, group, json, component
  */
 export type FieldPrimitiveType =
   // Text types
   | "text"
-  | "string" // Alias for text
   | "textarea"
   | "richText"
-  | "richtext" // Alias
   | "email"
   | "password"
   | "code"
   // Number types
   | "number"
-  | "decimal" // Alias
   // Selection types
   | "checkbox"
-  | "boolean" // Alias for checkbox
-  | "toggle" // Boolean rendered as a switch (legacy palette had this)
   | "date"
   | "select"
   | "radio"
@@ -43,12 +31,10 @@ export type FieldPrimitiveType =
   | "upload"
   // Relational types
   | "relationship"
-  | "relation" // Alias
   // Structured types
   | "repeater"
   | "group"
   | "component"
-  | "blocks"
   | "json";
 
 /**
@@ -175,15 +161,6 @@ export interface FieldDefinition {
   components?: string[];
   /** Whether this component field allows multiple instances (array) */
   repeatable?: boolean;
-  /** Block types for blocks field */
-  blocks?: Array<{
-    slug: string;
-    labels?: {
-      singular?: string;
-      plural?: string;
-    };
-    fields: FieldDefinition[];
-  }>;
 }
 
 /**

@@ -134,18 +134,7 @@ function toCollectionForColumns(
 
   // Determine default columns: use admin config or auto-generate from first few fields
   // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = [
-    "tabs",
-    "collapsible",
-    "row",
-    "ui",
-    "group",
-    "relationship",
-    "repeater",
-    "array",
-    "blocks",
-    "component",
-  ];
+  const layoutTypes = ["group", "relationship", "repeater", "component"];
   const dataFields = rawFields.filter(
     (f): f is { name: string; type: string } =>
       typeof f.name === "string" &&

@@ -33,12 +33,10 @@ const fieldTypeMapping: Record<string, FieldType> = {
   number: FieldType.NUMBER,
   richtext: FieldType.RICH_TEXT,
   select: FieldType.SELECT,
-  boolean: FieldType.BOOLEAN,
+  checkbox: FieldType.CHECKBOX,
   radio: FieldType.RADIO,
-  relation: FieldType.RELATION,
-  user: FieldType.USER,
-  date: FieldType.DATE_PICKER,
-  timepicker: FieldType.TIME_PICKER,
+  relationship: FieldType.RELATIONSHIP,
+  date: FieldType.DATE,
 };
 
 interface AddFieldProps {

@@ -20,18 +20,15 @@ import { z } from "zod";
  * manifest round-trips through `getColumnDescriptor` with no translation.
  */
 export const UI_FIELD_TYPES = [
-  // original v1 subset
   "text",
   "textarea",
   "richText",
   "number",
   "checkbox",
-  "toggle",
   "date",
   "select",
   "relationship",
   "upload",
-  // widened to the full canonical set
   "email",
   "password",
   "code",
@@ -258,8 +255,7 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
         const dv = f.defaultValue;
         const okType =
           (f.type === "number" && typeof dv === "number") ||
-          ((f.type === "checkbox" || f.type === "toggle") &&
-            typeof dv === "boolean") ||
+          (f.type === "checkbox" && typeof dv === "boolean") ||
           ([
             "text",
             "textarea",

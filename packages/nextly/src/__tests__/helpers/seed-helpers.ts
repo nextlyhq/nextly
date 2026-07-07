@@ -27,7 +27,7 @@
  *   name: "Blog Posts",
  *   fields: [
  *     { name: "title", type: "text", required: true },
- *     { name: "body", type: "richtext" },
+ *     { name: "body", type: "richText" },
  *   ],
  * });
  *
@@ -245,7 +245,7 @@ function computeSchemaHash(fields: SeedField[]): string {
  *   name: "Blog Posts",
  *   fields: [
  *     { name: "title", type: "text", required: true },
- *     { name: "body", type: "richtext" },
+ *     { name: "body", type: "richText" },
  *     { name: "publishedAt", type: "date" },
  *   ],
  * });
@@ -335,10 +335,10 @@ export async function seedTestSingle(
     label: options.name,
     tableName,
     description: options.description ?? null,
-     
+
     fields: options.fields as any,
     schemaHash,
-     
+
     source: (options.source ?? "ui") as any,
   });
 
@@ -399,10 +399,10 @@ export async function seedTestComponent(
     label,
     tableName,
     description: options.description ?? null,
-     
+
     fields: options.fields as any,
     schemaHash,
-     
+
     source: (options.source ?? "ui") as any,
   });
 
@@ -492,7 +492,7 @@ export async function seedTestUser(
     email: options?.email,
     name: options?.name,
   });
-   
+
   await db.insert(schema.users).values(userData as any);
 
   // Link user to role
