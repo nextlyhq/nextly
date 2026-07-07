@@ -112,7 +112,13 @@ export function EditorProvider({
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       try {
-        localStorage.setItem(draftKey, JSON.stringify(state.document));
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            document: state.document,
+            customCss: state.customCss,
+          })
+        );
       } catch {
         /* quota / unavailable — ignore */
       }
@@ -120,7 +126,7 @@ export function EditorProvider({
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [state.document, state.dirty, draftKey]);
+  }, [state.document, state.customCss, state.dirty, draftKey]);
 
   return (
     <EditorContext.Provider
