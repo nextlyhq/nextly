@@ -27,6 +27,8 @@ import {
 interface EditorContextValue {
   state: EditorState;
   dispatch: Dispatch<EditorAction>;
+  /** Whether page-level custom CSS is editable in this mount (Edit view: yes; field mount: no — the host form owns persistence there). */
+  pageCssEnabled: boolean;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -47,20 +49,31 @@ export function draftKeyFor(
 export function EditorProvider({
   document: doc,
   draftKey,
+  customCss,
   onDocumentChange,
+  onCustomCssChange,
   children,
 }: {
   document: BlockDocument;
   draftKey: string;
+  /**
+   * Initial page-level custom CSS. Passing a string (even "") enables the page-CSS
+   * editor panel; leaving it undefined (field mount) hides it.
+   */
+  customCss?: string;
   /**
    * Fired whenever the document changes (skipping the initial mount) — used by the
    * field mount (`PageBuilderField`) to sync into the host react-hook-form. The full
    * Edit-view leaves this unset and persists via `SaveShell`.
    */
   onDocumentChange?: (document: BlockDocument) => void;
+  /** Same contract as `onDocumentChange`, for the page custom CSS. */
+  onCustomCssChange?: (customCss: string) => void;
   children: ReactNode;
 }) {
-  const [state, dispatch] = useReducer(editorReducer, doc, initialState);
+  const [state, dispatch] = useReducer(editorReducer, undefined, () =>
+    initialState(doc, customCss ?? "")
+  );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
 
@@ -80,13 +93,32 @@ export function EditorProvider({
     onDocumentChangeRef.current?.(state.document);
   }, [state.document]);
 
+  // Same for the page custom CSS (its own first-render guard: CSS edits must sync
+  // even before any document edit, and vice versa).
+  const onCustomCssChangeRef = useRef(onCustomCssChange);
+  onCustomCssChangeRef.current = onCustomCssChange;
+  const firstCssRender = useRef(true);
+  useEffect(() => {
+    if (firstCssRender.current) {
+      firstCssRender.current = false;
+      return;
+    }
+    onCustomCssChangeRef.current?.(state.customCss);
+  }, [state.customCss]);
+
   // Debounced draft autosave (only while there are unsaved changes).
   useEffect(() => {
     if (!state.dirty) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       try {
-        localStorage.setItem(draftKey, JSON.stringify(state.document));
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            document: state.document,
+            customCss: state.customCss,
+          })
+        );
       } catch {
         /* quota / unavailable — ignore */
       }
@@ -94,10 +126,12 @@ export function EditorProvider({
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [state.document, state.dirty, draftKey]);
+  }, [state.document, state.customCss, state.dirty, draftKey]);
 
   return (
-    <EditorContext.Provider value={{ state, dispatch }}>
+    <EditorContext.Provider
+      value={{ state, dispatch, pageCssEnabled: customCss !== undefined }}
+    >
       {children}
     </EditorContext.Provider>
   );

@@ -176,6 +176,24 @@ describe("editorReducer", () => {
     expect(editorReducer(added, { type: "MARK_SAVED" }).dirty).toBe(false);
   });
 
+  it("SET_PAGE_CUSTOM_CSS updates customCss and marks dirty without touching history", () => {
+    const start = initialState(baseDoc(), ".old{}");
+    const s = editorReducer(start, {
+      type: "SET_PAGE_CUSTOM_CSS",
+      customCss: ".hero{color:red}",
+    });
+    expect(s.customCss).toBe(".hero{color:red}");
+    expect(s.dirty).toBe(true);
+    expect(s.past.length).toBe(0);
+    expect(s.document).toBe(start.document);
+  });
+
+  it("REPLACE keeps the current customCss", () => {
+    const start = initialState(baseDoc(), ".hero{color:red}");
+    const s = editorReducer(start, { type: "REPLACE", document: baseDoc() });
+    expect(s.customCss).toBe(".hero{color:red}");
+  });
+
   it("bounds the undo history", () => {
     let s = initialState(baseDoc());
     for (let i = 0; i < 120; i++) {

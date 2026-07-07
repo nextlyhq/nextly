@@ -18,7 +18,6 @@ export function SaveShell({ props }: { props: CustomEditViewProps }) {
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const [title, setTitle] = useState(str(data.title));
   const [slug, setSlug] = useState(str(data.slug));
-  const customCss = str(data.customCss); // edited via a panel in a later milestone
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +34,7 @@ export function SaveShell({ props }: { props: CustomEditViewProps }) {
         title,
         slug,
         content: state.document,
-        customCss,
+        customCss: state.customCss,
         status,
       });
       dispatch({ type: "MARK_SAVED" });
