@@ -53,7 +53,10 @@ export function pageBuilderFields(opts: { defaultMode?: EditorMode } = {}) {
         option("Default", "default"),
         option("Page Builder", "builder"),
       ],
-      admin: { description: "Choose how to edit this entry." },
+      // Hidden field: it stores the per-entry mode but never renders as a field.
+      // The choice is surfaced as a toolbar toggle (contributes.admin
+      // .entryFormToolbarSlot) and it's kept out of the schema-builder field list.
+      admin: { hidden: true, description: "Choose how to edit this entry." },
     }),
     pageBuilderField(PAGE_BUILDER_CONTENT_FIELD, {
       label: "Page Builder",

@@ -30,6 +30,7 @@ import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
+import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
@@ -317,6 +318,12 @@ export function EntryForm({
                 isDirty={isDirty}
                 entry={entry}
                 collectionSlug={collection.name}
+                toolbarSlot={
+                  <EntryFormToolbarSlots
+                    context="collection"
+                    controllerField={controllerNames[0]}
+                  />
+                }
                 onSaveDraft={() => {
                   void handleSubmit(undefined, "save-draft");
                 }}

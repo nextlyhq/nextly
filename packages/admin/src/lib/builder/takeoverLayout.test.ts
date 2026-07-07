@@ -61,6 +61,30 @@ describe("computeMainFields", () => {
     expect(out.map(f => f.name)).toEqual(["editormode", "content"]);
   });
 
+  it("never renders admin.hidden fields (plumbing kept out of the body)", () => {
+    const withHidden = [
+      { name: "headline", type: "text" },
+      { name: "editormode", type: "select", admin: { hidden: true } },
+      {
+        name: "content",
+        type: "page-builder",
+        admin: { condition: { field: "editormode", equals: "builder" } },
+      },
+    ];
+    // Default: hidden editormode excluded; headline + content remain.
+    const def = computeMainFields(withHidden, {
+      takeoverTypes,
+      values: { editormode: "default" },
+    });
+    expect(def.map(f => f.name)).toEqual(["headline", "content"]);
+    // Builder: takeover active → only the canvas (hidden controller excluded).
+    const builder = computeMainFields(withHidden, {
+      takeoverTypes,
+      values: { editormode: "builder" },
+    });
+    expect(builder.map(f => f.name)).toEqual(["content"]);
+  });
+
   it("returns the full body when no takeover type is registered", () => {
     const out = computeMainFields(fields, {
       takeoverTypes: [],

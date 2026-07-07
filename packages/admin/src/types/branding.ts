@@ -76,6 +76,12 @@ export interface PluginMetadata {
    */
   schemaBuilderSlot?: string;
   /**
+   * Component rendered in the entry/single form header toolbar, contributed via
+   * `contributes.admin.entryFormToolbarSlot`. Receives `{ context,
+   * controllerField }` and reads/writes form state via react-hook-form context.
+   */
+  entryFormToolbarSlot?: string;
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout).

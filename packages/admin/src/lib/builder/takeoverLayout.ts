@@ -34,11 +34,20 @@ export interface LayoutField {
   // Loose on purpose: any field config (FieldConfig, ManifestField, …) must be
   // assignable to LayoutField so the generic `T` binds to the caller's type. The
   // condition is cast to FieldCondition where it's actually evaluated.
-  admin?: { condition?: unknown; component?: unknown } | null;
+  admin?: { condition?: unknown; component?: unknown; hidden?: boolean } | null;
 }
 
 /** System fields rendered separately (never part of the editable body). */
 const SYSTEM_FIELDS = new Set(["title", "slug"]);
+
+/**
+ * A field the entry form never renders inline (its value still lives in the form
+ * state). Used for plugin plumbing like the page-builder mode field, which is
+ * driven by a toolbar control instead of a visible field.
+ */
+function isHidden(f: LayoutField): boolean {
+  return f.admin?.hidden === true;
+}
 
 function componentOf(f: LayoutField): string | undefined {
   const c = f.admin?.component;
@@ -115,7 +124,9 @@ export function computeMainFields<T extends LayoutField>(
   fields: T[],
   opts: { takeoverTypes: TakeoverType[]; values: Record<string, unknown> }
 ): T[] {
-  const body = fields.filter(f => !SYSTEM_FIELDS.has(f.name ?? ""));
+  const body = fields.filter(
+    f => !SYSTEM_FIELDS.has(f.name ?? "") && !isHidden(f)
+  );
 
   const activeTakeovers = body.filter(
     f =>

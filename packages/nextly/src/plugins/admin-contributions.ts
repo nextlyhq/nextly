@@ -146,4 +146,13 @@ export interface PluginAdminContributions {
    * core knowing the plugin. Rendered inside the plugin boundary.
    */
   schemaBuilderSlot?: ComponentPath;
+  /**
+   * @experimental A component rendered in the entry/single form header toolbar.
+   * Receives `{ context: "collection" | "single"; controllerField?: string }` and
+   * reads/writes form state via react-hook-form context (it renders inside the
+   * form's provider). Lets a plugin add a form-level control (e.g. a Default /
+   * Page Builder mode toggle) without core knowing the plugin. Rendered inside
+   * the plugin boundary.
+   */
+  entryFormToolbarSlot?: ComponentPath;
 }

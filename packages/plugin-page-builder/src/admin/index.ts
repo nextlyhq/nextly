@@ -11,6 +11,7 @@ import {
 import { registerDefaultControls } from "./controls/registerDefaultControls";
 import { PageBuilderEditView } from "./PageBuilderEditView";
 import { PageBuilderField } from "./PageBuilderField";
+import { PageBuilderModeToggle } from "./PageBuilderModeToggle";
 import { PageBuilderToggle } from "./PageBuilderToggle";
 
 // Register the built-in inspector controls into the (open) control registry on load.
@@ -22,10 +23,14 @@ const EDIT_VIEW_PATH =
 const FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#PageBuilderField";
 // Schema-builder slot component (contributes.admin.schemaBuilderSlot).
 const TOGGLE_PATH = "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle";
+// Entry-form toolbar slot component (contributes.admin.entryFormToolbarSlot).
+const MODE_TOGGLE_PATH =
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle";
 const COMPONENTS = {
   [EDIT_VIEW_PATH]: PageBuilderEditView,
   [FIELD_PATH]: PageBuilderField,
   [TOGGLE_PATH]: PageBuilderToggle,
+  [MODE_TOGGLE_PATH]: PageBuilderModeToggle,
 };
 
 // Eager registration on module load.
@@ -40,4 +45,5 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 export { PageBuilderEditView };
 export { PageBuilderField };
 export { PageBuilderToggle };
+export { PageBuilderModeToggle };
 export type { CustomEditViewProps } from "./types";

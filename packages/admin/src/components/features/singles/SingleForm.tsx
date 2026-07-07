@@ -31,6 +31,7 @@ import { z } from "zod";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
+import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
@@ -494,6 +495,12 @@ export function SingleForm({
               isDirty={isDirty}
               entry={entryLike}
               collectionSlug={schema.slug}
+              toolbarSlot={
+                <EntryFormToolbarSlots
+                  context="single"
+                  controllerField={controllerNames[0]}
+                />
+              }
               onSaveDraft={() => {
                 void handleSubmit(undefined, "save-draft");
               }}
