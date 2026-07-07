@@ -1,6 +1,7 @@
 import { defineCollection, text, code } from "nextly/config";
 
 import { editorChoiceFields } from "./editorChoice";
+import { PAGE_BUILDER_CUSTOM_CSS_FIELD } from "./pageBuilderEntry";
 
 /**
  * Registry path of the full-screen builder Edit view — still exported (and registered)
@@ -26,7 +27,7 @@ export function pagesCollection() {
       text({ name: "slug", required: true, unique: true }),
       // The Elementor-style editor choice (select + Page Builder + normal rich text).
       ...editorChoiceFields(),
-      code({ name: "customCss", admin: { language: "css" } }),
+      code({ name: PAGE_BUILDER_CUSTOM_CSS_FIELD, admin: { language: "css" } }),
     ],
     status: true,
     admin: { useAsTitle: "title" },

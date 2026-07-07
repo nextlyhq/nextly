@@ -4,6 +4,9 @@ import { FIELD_COMPONENT_PATH, pageBuilderField } from "./pageBuilderField";
 
 /** Reserved system field holding the BlockDocument JSON (spec §2). */
 export const PAGE_BUILDER_CONTENT_FIELD = "content";
+/** Sibling field for page-level custom CSS. When the host entity has a field with this
+ *  name, the builder's Page settings panel edits it (synced into the host form). */
+export const PAGE_BUILDER_CUSTOM_CSS_FIELD = "customCss";
 /** Per-entry editor-choice select field. All-lowercase so it survives the schema builder's
  *  field-name normalization (which lowercases), identical to the code-first name. */
 export const EDITOR_MODE_FIELD = "editormode";

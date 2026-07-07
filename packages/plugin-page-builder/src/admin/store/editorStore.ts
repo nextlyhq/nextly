@@ -30,9 +30,13 @@ export interface EditorState {
   past: BlockDocument[];
   future: BlockDocument[];
   dirty: boolean;
+  customCss: string;
 }
 
-export function initialState(document: BlockDocument): EditorState {
+export function initialState(
+  document: BlockDocument,
+  customCss = ""
+): EditorState {
   return {
     document,
     selectedId: null,
@@ -40,6 +44,7 @@ export function initialState(document: BlockDocument): EditorState {
     past: [],
     future: [],
     dirty: false,
+    customCss,
   };
 }
 
@@ -67,6 +72,7 @@ export type EditorAction =
     }
   | { type: "SET_BINDING"; id: string; prop: string; binding: Binding | null }
   | { type: "SET_CUSTOM_CLASS"; id: string; customClass: string }
+  | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
   | { type: "UNDO" }
@@ -175,9 +181,12 @@ export function editorReducer(
       return commit(state, updateNode(root, action.id, { customClass }));
     }
 
+    case "SET_PAGE_CUSTOM_CSS":
+      return { ...state, customCss: action.customCss, dirty: true };
+
     case "REPLACE":
       return {
-        ...initialState(action.document),
+        ...initialState(action.document, state.customCss),
         activeBreakpoint: state.activeBreakpoint,
       };
 

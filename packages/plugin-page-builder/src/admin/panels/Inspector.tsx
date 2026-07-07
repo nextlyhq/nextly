@@ -22,6 +22,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  Textarea,
 } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
@@ -461,12 +462,44 @@ function AdvancedTab({ node }: { node: BlockNode }) {
   );
 }
 
+/**
+ * Page-level settings, shown when no block is selected. Currently hosts the page
+ * custom-CSS editor (Edit view only). Selectors are scoped to the page root on
+ * render, so CSS here cannot leak onto the rest of the site.
+ */
+function PagePanel() {
+  const { state, dispatch } = useEditor();
+  return (
+    <div style={{ padding: 12 }}>
+      <SectionLabel>Page</SectionLabel>
+      <Label htmlFor="nx-pb-page-css" className="nx-pb-control-label">
+        Custom CSS
+      </Label>
+      <Textarea
+        id="nx-pb-page-css"
+        value={state.customCss}
+        spellCheck={false}
+        rows={12}
+        placeholder={".hero {\n  color: rebeccapurple;\n}"}
+        style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}
+        onChange={e =>
+          dispatch({ type: "SET_PAGE_CUSTOM_CSS", customCss: e.target.value })
+        }
+      />
+      <p className="nx-pb-empty" style={{ marginTop: 4 }}>
+        Applies to this page only. Unsafe rules (imports, scripts, data URLs)
+        are stripped on render.
+      </p>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Inspector shell
 // ---------------------------------------------------------------------------
 
 export function Inspector() {
-  const { state } = useEditor();
+  const { state, pageCssEnabled } = useEditor();
   const [tab, setTab] = useState<Tab>("content");
   const [styleState, setStyleState] = useState<StyleState>("normal");
   const node = state.selectedId
@@ -491,6 +524,7 @@ export function Inspector() {
         <div className="nx-pb-inspector-empty">
           Select a block on the canvas to edit its content and style.
         </div>
+        {pageCssEnabled ? <PagePanel /> : null}
       </>
     );
   }

@@ -24,11 +24,13 @@ function emptyDoc(): BlockDocument {
 export function PageBuilderEditView(props: CustomEditViewProps) {
   const data = props.initialData ?? {};
   const doc = (data.content as BlockDocument | undefined) ?? emptyDoc();
+  const customCss = typeof data.customCss === "string" ? data.customCss : "";
 
   return (
     <EditorProvider
       document={doc}
       draftKey={draftKeyFor(props.collectionSlug, props.entryId)}
+      customCss={customCss}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <SaveShell props={props} />
