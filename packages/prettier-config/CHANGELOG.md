@@ -1,5 +1,11 @@
 # @nextlyhq/prettier-config
 
+## 0.0.2-alpha.25
+
+### Patch Changes
+
+- [#154](https://github.com/nextlyhq/nextly/pull/154) [`17a5e16`](https://github.com/nextlyhq/nextly/commit/17a5e164e8679d95d401d88097a913e599d0bbcf) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Add editable page-level custom CSS with live preview in the page builder editor
+
 ## 0.0.2-alpha.24
 
 ### Patch Changes
