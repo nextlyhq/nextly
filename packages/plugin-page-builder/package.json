@@ -4,6 +4,10 @@
   "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
   "license": "MIT",
   "type": "module",
+  "sideEffects": [
+    "**/*.css",
+    "./dist/admin/index.js"
+  ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -46,7 +50,7 @@
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.29",
     "nextly": "0.0.2-alpha.29",
-    "@nextlyhq/plugin-sdk": "workspace:*",
+    "@nextlyhq/plugin-sdk": "0.0.2-alpha.29",
     "@nextlyhq/ui": "0.0.2-alpha.29",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
