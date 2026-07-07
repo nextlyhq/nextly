@@ -1,5 +1,17 @@
 # @nextlyhq/plugin-page-builder
 
+## 0.0.2-alpha.33
+
+### Patch Changes
+
+- [#154](https://github.com/nextlyhq/nextly/pull/154) [`17a5e16`](https://github.com/nextlyhq/nextly/commit/17a5e164e8679d95d401d88097a913e599d0bbcf) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Add editable page-level custom CSS with live preview in the page builder editor
+
+- Updated dependencies [[`17a5e16`](https://github.com/nextlyhq/nextly/commit/17a5e164e8679d95d401d88097a913e599d0bbcf)]:
+  - @nextlyhq/admin@0.0.2-alpha.33
+  - nextly@0.0.2-alpha.33
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.33
+  - @nextlyhq/ui@0.0.2-alpha.33
+
 ## 0.0.2-alpha.32
 
 ### Patch Changes
