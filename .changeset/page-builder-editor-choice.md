@@ -8,6 +8,7 @@
 "@nextlyhq/eslint-config": patch
 "nextly": patch
 "@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/storage-s3": patch
@@ -30,4 +31,4 @@ Per-entry editor choice + the generic, plugin-agnostic platform hooks that power
 
 - **Managed (hidden) fields.** A field marked `admin.hidden` is kept out of the schema-builder "Your fields" list and out of the entry-form body while its value still lives in the form state — used for plugin plumbing that's driven by a toolbar control rather than shown as a field.
 
-The `@nextlyhq/plugin-page-builder` plugin (published separately) is the first consumer of all of the above: it registers a `page-builder` field type with `layout: "takeover"`, contributes the "Use Page Builder" schema-builder toggle and the per-entry Default / Page Builder form-toolbar toggle, and works for both code-first (`withPageBuilder()`) and UI-created collections and singles.
+`@nextlyhq/plugin-page-builder` is the first consumer of all of the above and is published through the same release: it registers a `page-builder` field type with `layout: "takeover"`, contributes the "Use Page Builder" schema-builder toggle and the per-entry Default / Page Builder form-toolbar toggle, ships the visual block editor (drag-and-drop canvas, inspector, responsive preview, query loop), and works for both code-first (`withPageBuilder()`) and UI-created collections and singles. Packaging: declares `sideEffects` so its admin components register from a plain side-effect import, with pinned peer versions for clean installs.
