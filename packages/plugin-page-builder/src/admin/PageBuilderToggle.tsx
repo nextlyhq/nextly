@@ -57,6 +57,9 @@ function addPageBuilderFields<T extends BuilderField>(fields: T[]): T[] {
       { value: "default", label: "Default" },
       { value: "builder", label: "Page Builder" },
     ],
+    // Hidden: stores the per-entry mode but never shows as a field. The choice is
+    // a toolbar toggle; it's also filtered out of the schema-builder field list.
+    admin: { hidden: true },
   } as unknown as T;
   const content = {
     id: "pb-content",

@@ -32,6 +32,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         // admin above the field list in the collection/single builders.
         schemaBuilderSlot:
           "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle",
+        // Per-entry Normal / Page Builder toggle, rendered in the entry/single
+        // form header toolbar (drives the hidden editor-mode field).
+        entryFormToolbarSlot:
+          "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle",
       },
     },
   });

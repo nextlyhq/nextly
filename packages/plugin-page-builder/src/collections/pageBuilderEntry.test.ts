@@ -18,6 +18,8 @@ describe("pageBuilderFields", () => {
     expect(mode.type).toBe("select");
     expect(mode.name).toBe("editormode");
     expect(mode.defaultValue).toBe("default"); // default = normal editor
+    // Hidden field: never rendered inline; surfaced as a toolbar toggle instead.
+    expect((mode.admin as { hidden?: boolean }).hidden).toBe(true);
 
     expect(builder.name).toBe(PAGE_BUILDER_CONTENT_FIELD);
     expect((builder.admin as { component?: string }).component).toBe(
