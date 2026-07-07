@@ -48,6 +48,8 @@ export interface PluginAdminMeta {
   widgets?: PluginAdminWidget[];
   /** Schema-builder slot component path — present only for enabled plugins. */
   schemaBuilderSlot?: string;
+  /** Entry/single form toolbar slot component path — present only for enabled plugins. */
+  entryFormToolbarSlot?: string;
   /**
    * Custom field types — `type` → admin editor component path, so the
    * admin renders fields of these types. Serialized regardless of enabled state
@@ -125,6 +127,8 @@ export function buildPluginAdminMeta(
         meta.widgets = admin.widgets;
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
+      if (admin.entryFormToolbarSlot)
+        meta.entryFormToolbarSlot = admin.entryFormToolbarSlot;
     }
 
     // Custom field types — serialized regardless of enabled state so the
