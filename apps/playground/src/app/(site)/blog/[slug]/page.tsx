@@ -13,6 +13,10 @@ import { getNextly } from "nextly";
 
 import nextlyConfig from "../../../../../nextly.config";
 
+// DB-backed page: render per-request; never prerendered at build (the build
+// environment has no database).
+export const dynamic = "force-dynamic";
+
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
 function makeDataProvider(nx: NextlyInstance): DataProvider {
