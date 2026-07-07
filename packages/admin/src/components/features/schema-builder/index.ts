@@ -26,6 +26,7 @@ export { FieldPickerModal } from "./FieldPickerModal";
 export { FieldEditorSheet } from "./FieldEditorSheet";
 export { BuilderToolbar } from "./BuilderToolbar";
 export { BuilderFieldList } from "./BuilderFieldList";
+export { SchemaBuilderSlots } from "./SchemaBuilderSlots";
 export type {
   BuilderConfig,
   BuilderKind,

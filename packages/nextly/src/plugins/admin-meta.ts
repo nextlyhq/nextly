@@ -46,12 +46,16 @@ export interface PluginAdminMeta {
   };
   /** Dashboard widgets — present only for enabled plugins. */
   widgets?: PluginAdminWidget[];
+  /** Schema-builder slot component path — present only for enabled plugins. */
+  schemaBuilderSlot?: string;
+  /** Entry/single form toolbar slot component path — present only for enabled plugins. */
+  entryFormToolbarSlot?: string;
   /**
    * Custom field types — `type` → admin editor component path, so the
    * admin renders fields of these types. Serialized regardless of enabled state
    * (a disabled plugin's collections + their fields are retained, D14/D49).
    */
-  fieldTypes?: Array<{ type: string; component: string }>;
+  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
 }
 
 /**
@@ -121,6 +125,10 @@ export function buildPluginAdminMeta(
       if (slot) meta.headerSlot = slot;
       if (admin.widgets && admin.widgets.length > 0)
         meta.widgets = admin.widgets;
+      if (admin.schemaBuilderSlot)
+        meta.schemaBuilderSlot = admin.schemaBuilderSlot;
+      if (admin.entryFormToolbarSlot)
+        meta.entryFormToolbarSlot = admin.entryFormToolbarSlot;
     }
 
     // Custom field types — serialized regardless of enabled state so the
@@ -130,6 +138,7 @@ export function buildPluginAdminMeta(
       meta.fieldTypes = fieldTypes.map(ft => ({
         type: ft.type,
         component: ft.component,
+        ...(ft.layout ? { layout: ft.layout } : {}),
       }));
     }
 

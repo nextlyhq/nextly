@@ -1,3 +1,4 @@
+import { pageBuilderField } from "@nextlyhq/plugin-page-builder";
 import {
   defineCollection,
   text,
@@ -6,6 +7,8 @@ import {
   date,
   upload,
   relationship,
+  select,
+  option,
 } from "nextly/config";
 
 // Demo Posts collection for the contributor playground. Exercises the
@@ -25,7 +28,31 @@ export const Posts = defineCollection({
     text({ name: "title", required: true }),
     text({ name: "slug", required: true, unique: true }),
     textarea({ name: "excerpt" }),
-    richText({ name: "content" }),
+    // Kept so `db:sync` stays additive-only (the dev DB already has these columns).
+    text({ name: "metaTitle" }),
+    text({ name: "metaDescription" }),
+    // Editor choice (Elementor-style): pick how to author the body. The matching editor
+    // field appears below; the front-end renders whichever was chosen.
+    select({
+      name: "editorMode",
+      label: "Editor",
+      defaultValue: "standard",
+      options: [
+        option("Standard editor", "standard"),
+        option("Page Builder", "page-builder"),
+      ],
+      admin: { description: "Choose how to build this post's body." },
+    }),
+    // Standard editor — shown only in "standard" mode.
+    richText({
+      name: "content",
+      admin: { condition: { field: "editorMode", equals: "standard" } },
+    }),
+    // Visual page builder — shown only in "page-builder" mode.
+    pageBuilderField("layout", {
+      label: "Visual Layout",
+      condition: { field: "editorMode", equals: "page-builder" },
+    }),
     relationship({
       name: "categories",
       relationTo: "categories",

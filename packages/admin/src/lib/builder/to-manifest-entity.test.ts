@@ -111,15 +111,19 @@ describe("mapBuilderFieldToManifest", () => {
     });
   });
 
-  it("throws on an unsupported field type (defensive — picker prevents it)", () => {
-    expect(() =>
-      collectionToManifestEntity({
-        slug: "x",
-        settings: {},
-        // `geopoint` is not in the canonical UI_SCHEMA_FIELD_TYPES set.
-        fields: [{ name: "where", type: "geopoint" }],
-      })
-    ).toThrowError(/unsupported field type/i);
+  it("preserves a plugin-contributed field type verbatim", () => {
+    // e.g. the page builder's "page-builder" type — the manifest now stores the real
+    // type (the manifest Zod accepts plugin slugs) so it round-trips to production; the
+    // CLI column classifier resolves it to a column via the field-type registry.
+    const entity = collectionToManifestEntity({
+      slug: "x",
+      settings: {},
+      fields: [{ name: "content", type: "page-builder" }],
+    });
+    expect(entity.fields[0]).toMatchObject({
+      name: "content",
+      type: "page-builder",
+    });
   });
 
   it("maps an empty field list to a field-less entity with labels + status (create case)", () => {

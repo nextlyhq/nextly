@@ -30,6 +30,10 @@ import {
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError } from "../../errors/index";
@@ -367,6 +371,18 @@ async function loadConfigInternal(
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
+
+      // Register plugin custom field types (C7/D16) so the CLI's column
+      // classifier (getColumnDescriptor) resolves each plugin type to its
+      // storage primitive when reading ui-schema.json — parity with runtime boot
+      // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
+      // D49) since field types are declarative + schema-affecting.
+      clearFieldTypes();
+      for (const fieldTypePlugin of plugins) {
+        for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
+          registerFieldType(fieldType);
+        }
+      }
 
       // Load the Builder set (ui-schema) and resolve the deferred extend +
       // relation targets against it — the SAME shared functions the runtime boot

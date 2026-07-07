@@ -115,6 +115,12 @@ export interface EntrySystemHeaderProps {
   isRailCollapsed?: boolean;
   /** Rail toggle handler. */
   onToggleRail?: () => void;
+  /**
+   * Plugin-contributed toolbar controls, rendered at the start of the action
+   * cluster (left of Save/Publish). Kept as an opaque node so the header stays
+   * plugin-agnostic — the caller builds it from `entryFormToolbarSlot`.
+   */
+  toolbarSlot?: React.ReactNode;
 }
 
 export function EntrySystemHeader({
@@ -140,6 +146,7 @@ export function EntrySystemHeader({
   lockIdentity = false,
   isRailCollapsed = false,
   onToggleRail,
+  toolbarSlot,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +217,7 @@ export function EntrySystemHeader({
 
       {/* Action cluster — right-aligned */}
       <div className="flex items-center gap-1.5 shrink-0">
+        {toolbarSlot}
         {hasStatus && isPublishedEdit ? (
           <>
             <Button

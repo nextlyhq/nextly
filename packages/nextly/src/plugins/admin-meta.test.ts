@@ -15,6 +15,82 @@ function asPlugins(defs: unknown[]): PluginDefinition[] {
 }
 
 describe("buildPluginAdminMeta", () => {
+  it("serializes a field type's layout hint", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "page-builder",
+                storage: "json",
+                component: "@acme/p/admin#Canvas",
+                layout: "takeover",
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0]).toMatchObject({
+      type: "page-builder",
+      component: "@acme/p/admin#Canvas",
+      layout: "takeover",
+    });
+  });
+
+  it("serializes schemaBuilderSlot for an enabled plugin only", () => {
+    const enabled = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
+        },
+      ]),
+      undefined
+    );
+    expect(enabled[0].schemaBuilderSlot).toBe("@acme/p/admin#Toggle");
+
+    const disabled = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
+        },
+      ]),
+      undefined
+    );
+    expect(disabled[0].schemaBuilderSlot).toBeUndefined();
+  });
+
+  it("serializes entryFormToolbarSlot for an enabled plugin only", () => {
+    const enabled = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
+        },
+      ]),
+      undefined
+    );
+    expect(enabled[0].entryFormToolbarSlot).toBe("@acme/p/admin#Bar");
+
+    const disabled = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
+        },
+      ]),
+      undefined
+    );
+    expect(disabled[0].entryFormToolbarSlot).toBeUndefined();
+  });
+
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

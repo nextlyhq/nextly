@@ -60,7 +60,11 @@ export function BuilderFieldList({
   readOnly = false,
 }: Props) {
   const systemFields = fields.filter(f => f.isSystem);
-  const userFields = fields.filter(f => !f.isSystem);
+  // Hidden fields are plumbing (e.g. a plugin's mode field driven by a form
+  // toolbar) — keep them out of the editable "Your fields" list.
+  const userFields = fields.filter(
+    f => !f.isSystem && f.admin?.hidden !== true
+  );
 
   const rows = packIntoRows<RowItem>(
     userFields.map(f => ({

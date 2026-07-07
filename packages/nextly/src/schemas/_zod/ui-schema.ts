@@ -113,7 +113,12 @@ const fieldAdmin = z
 // FieldNode type breaks the circular inference.
 export type FieldNode = {
   name: string;
-  type: (typeof UI_FIELD_TYPES)[number];
+  // Canonical tokens, OR a plugin-contributed field type slug. Plugin types
+  // resolve to a column via the field-type registry in classifyFieldKind and
+  // keep their real type in the DB metadata so the plugin's editor still
+  // renders. `string & {}` widens the union while preserving autocomplete for
+  // the canonical tokens.
+  type: (typeof UI_FIELD_TYPES)[number] | (string & {});
   label?: string;
   required?: boolean;
   unique?: boolean;
@@ -165,7 +170,12 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
       name: z
         .string()
         .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
-      type: z.enum(UI_FIELD_TYPES),
+      // A canonical token, OR a plugin-contributed field type slug. Plugin
+      // types aren't in the canonical enum; accept any slug-shaped token so the
+      // manifest preserves the real type through to production. The field-type
+      // registry (classifyFieldKind) maps it to a storage column; an
+      // unregistered type falls back to a text column.
+      type: z.union([z.enum(UI_FIELD_TYPES), z.string().regex(SLUG_RE)]),
       label: z.string().optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),

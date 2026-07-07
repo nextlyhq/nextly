@@ -102,6 +102,13 @@ export interface PluginFieldType {
   storage: "text" | "longText" | "boolean" | "number" | "timestamp" | "json";
   /** Admin field-editor component path, resolved via the component registry. */
   component: ComponentPath;
+  /**
+   * Layout hint for the entry/single form. `"takeover"`: when a visible field of
+   * this type is present, the form body shows only that field plus the field that
+   * controls its `admin.condition` (e.g. an editor-mode switch), hiding the rest.
+   * Generic — any plugin field type may opt in.
+   */
+  layout?: "takeover";
 }
 
 /**

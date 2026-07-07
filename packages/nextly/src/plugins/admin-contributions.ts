@@ -138,4 +138,21 @@ export interface PluginAdminContributions {
    * on permission and renders inside the plugin boundary.
    */
   header?: PluginHeaderContributions;
+  /**
+   * @experimental A component rendered in the schema-builder pages (collection +
+   * single builders), above the field list. Receives `{ fields, setFields,
+   * disabled, context: "collection" | "single" }` so it can add builder-time
+   * controls (e.g. an editor-choice toggle) that mutate the field list — without
+   * core knowing the plugin. Rendered inside the plugin boundary.
+   */
+  schemaBuilderSlot?: ComponentPath;
+  /**
+   * @experimental A component rendered in the entry/single form header toolbar.
+   * Receives `{ context: "collection" | "single"; controllerField?: string }` and
+   * reads/writes form state via react-hook-form context (it renders inside the
+   * form's provider). Lets a plugin add a form-level control (e.g. a Default /
+   * Page Builder mode toggle) without core knowing the plugin. Rendered inside
+   * the plugin boundary.
+   */
+  entryFormToolbarSlot?: ComponentPath;
 }

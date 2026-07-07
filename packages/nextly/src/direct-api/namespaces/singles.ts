@@ -52,11 +52,15 @@ export async function findSingle<TSlug extends SingleSlug>(
   ) {
     const single = await ctx.singleRegistryService.getSingleBySlug(args.slug);
     if (single?.fields && Array.isArray(single.fields)) {
+      // Redundant in this package's own tsconfig, but required when the value is
+      // re-checked from a consumer's compilation (e.g. the playground) where the
+      // transform's return widens to Record<string, unknown>.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
       data = transformRichTextFields(
         result.data,
         single.fields,
         config.richTextFormat
-      );
+      ) as DataFromSingleSlug<TSlug>;
     }
   }
 
