@@ -47,6 +47,7 @@
     "neon-schema-apply-perf",
     "nine-keys-invent",
     "page-builder-editor-choice",
+    "page-builder-peer-ranges",
     "plugin-platform",
     "pnpm10-only-built-deps",
     "pnpm11-build-allowlist-workspace",
