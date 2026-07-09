@@ -310,6 +310,7 @@ export async function runMigrateCreate(
       name: name!,
       dialect,
       migrationsDir,
+      defaultLocale: configResult.config.localization?.defaultLocale,
       collections,
       singles,
       components,
@@ -431,9 +432,11 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        localized?: boolean;
       }[];
       dbName?: string;
       status?: boolean;
+      localized?: boolean;
     };
     const slug = e.slug;
     const fields = (e.fields ?? []).map(f => ({
@@ -444,6 +447,9 @@ function toMinimalEntities(
       relationTo: f.relationTo,
       unique: f.unique,
       index: f.index,
+      // Forward the per-field localized flag so translatable columns are
+      // relocated to the companion `_locales` table (i18n M3b-2).
+      localized: f.localized,
     }));
     return {
       slug,
@@ -453,6 +459,9 @@ function toMinimalEntities(
       // the system status column on first sync. Mirrors the same
       // forwarding in migrate-check.ts:toMinimalEntities.
       status: e.status === true,
+      // Forward collection-level localization so the main snapshot omits
+      // localized columns and a companion migration is emitted.
+      localized: e.localized === true,
     };
   });
 }
