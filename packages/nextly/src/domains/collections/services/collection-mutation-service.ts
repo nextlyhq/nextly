@@ -40,10 +40,15 @@ import type { ComponentDataService } from "../../../services/components/componen
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import type { RequestContext } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  validateFields,
+  type FieldError,
+} from "../validation/validate-fields";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -150,6 +155,47 @@ export class CollectionMutationService extends BaseService {
     private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Run server-side per-field validation (i18n M5b) for a write. Returns field errors (empty =
+   * valid). `required` on a localized field is enforced only for the default-language row so the
+   * "publish default now, translate later" workflow proceeds; shared required fields are always
+   * enforced. See {@link validateFields}.
+   */
+  private async validateWrite(
+    collectionName: string,
+    fields: FieldDefinition[],
+    data: Record<string, unknown>,
+    isCreate: boolean,
+    locale: string | undefined,
+    user?: UserContext
+  ): Promise<FieldError[]> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    const localizedFieldNames = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
+    );
+    const enforceLocalizedRequired =
+      !this.localization ||
+      resolveRequestedLocale(this.localization, locale) ===
+        this.localization.defaultLocale;
+    return validateFields(fields, data, {
+      isCreate,
+      localizedFieldNames,
+      enforceLocalizedRequired,
+      req: { user } as unknown as RequestContext,
+    });
+  }
+
+  /** Build a 400 validation-failure result from field errors. */
+  private validationFailure(errors: FieldError[]): CollectionServiceResult {
+    return {
+      success: false,
+      statusCode: 400,
+      message: `Validation failed: ${errors.map(e => e.message).join("; ")}`,
+      data: { errors },
+    };
   }
 
   /**
@@ -737,6 +783,20 @@ export class CollectionMutationService extends BaseService {
       // - SQLite: integer (unix timestamp via mode:"timestamp")
       // Using Date objects (not ISO strings) because SQLite's integer mode
       // calls .getTime() which fails on strings.
+      // i18n M5b: server-side per-field validation (runs after hooks/defaults/slug-gen, before
+      // the DB write). `required` on a localized field is enforced only for the default-locale row.
+      const createErrors = await this.validateWrite(
+        params.collectionName,
+        fields,
+        finalData,
+        true,
+        params.locale,
+        params.user
+      );
+      if (createErrors.length > 0) {
+        return this.validationFailure(createErrors);
+      }
+
       const now = new Date();
       const rawEntryData = {
         id: this.collectionService.generateId(),
@@ -1272,6 +1332,20 @@ export class CollectionMutationService extends BaseService {
             schemaColumns: Object.keys(schema as unknown as object),
           })
         );
+      }
+
+      // i18n M5b: server-side per-field validation for the update (only fields present in the
+      // patch are checked; required cannot be blanked). Runs before the split + write.
+      const updateErrors = await this.validateWrite(
+        params.collectionName,
+        fields,
+        finalData,
+        false,
+        params.locale,
+        params.user
+      );
+      if (updateErrors.length > 0) {
+        return this.validationFailure(updateErrors);
       }
 
       // i18n M5: pull translatable values out of the main update (finalData uses camelCase field
