@@ -77,6 +77,7 @@ import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
   populateCompanionFields,
+  populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -141,12 +142,38 @@ export class CollectionQueryService extends BaseService {
     locale: string | undefined,
     fallbackLocale: string | false | undefined
   ): string[] | null {
-    if (!this.localization) return null;
+    // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
+    if (!this.localization || locale === "all") return null;
     const requested = resolveRequestedLocale(this.localization, locale);
     if (fallbackLocale === false || fallbackLocale === "none") {
       return [requested];
     }
     return resolveFallbackChain(this.localization, requested);
+  }
+
+  /**
+   * `locale=all` populate (admin/export): set each localized field to a language-keyed object
+   * covering every configured locale. No-op when localization is off, the request isn't
+   * `locale=all`, or the collection isn't localized.
+   */
+  private async populateLocalizedAll(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    locale: string | undefined,
+    preloaded?: CompanionSchema | null
+  ): Promise<void> {
+    if (!this.localization || locale !== "all" || rows.length === 0) return;
+    const companion =
+      preloaded ??
+      (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateCompanionFieldsAllLocales({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFieldNames: companion.localizedFieldNames,
+      rows,
+      locales: this.localization.locales.map(l => l.code),
+    });
   }
 
   /**
@@ -445,9 +472,10 @@ export class CollectionQueryService extends BaseService {
         params.locale,
         params.fallbackLocale
       );
-      const companion = localeChain
-        ? await this.fileManager.loadCompanionSchema(params.collectionName)
-        : null;
+      const companion =
+        localeChain || params.locale === "all"
+          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          : null;
       const localizedCtx = this.buildLocalizedQueryContext(
         companion,
         localeChain,
@@ -779,6 +807,13 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         companion
       );
+      // `locale=all` → language-keyed values per localized field (admin/export).
+      await this.populateLocalizedAll(
+        params.collectionName,
+        entries,
+        params.locale,
+        companion
+      );
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -1063,9 +1098,10 @@ export class CollectionQueryService extends BaseService {
         params.locale,
         params.fallbackLocale
       );
-      const companion = localeChain
-        ? await this.fileManager.loadCompanionSchema(params.collectionName)
-        : null;
+      const companion =
+        localeChain || params.locale === "all"
+          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          : null;
       const localizedCtx = this.buildLocalizedQueryContext(
         companion,
         localeChain,
@@ -1427,6 +1463,12 @@ export class CollectionQueryService extends BaseService {
         params.collectionName,
         [entry as Record<string, unknown>],
         this.resolveLocaleChain(params.locale, params.fallbackLocale)
+      );
+      // `locale=all` → language-keyed values per localized field (admin/export).
+      await this.populateLocalizedAll(
+        params.collectionName,
+        [entry as Record<string, unknown>],
+        params.locale
       );
 
       // Get collection metadata to identify relation fields and hooks

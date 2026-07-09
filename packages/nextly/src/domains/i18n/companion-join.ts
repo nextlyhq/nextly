@@ -131,6 +131,77 @@ export async function populateCompanionFields(
   }
 }
 
+export interface PopulateCompanionAllArgs {
+  db: SelectableDb;
+  companionTable: unknown;
+  localizedFieldNames: string[];
+  rows: Record<string, unknown>[];
+  /** Every configured locale code to project. */
+  locales: string[];
+  idKey?: string;
+}
+
+/**
+ * `locale=all` variant (admin/export): instead of one resolved value, set each localized field
+ * to a language-keyed object (`{ en: "...", de: "..." }`) covering every configured locale.
+ * Missing translations are `null`. Mutates `rows` in place; resilient to a missing companion
+ * table (same as {@link populateCompanionFields}).
+ */
+export async function populateCompanionFieldsAllLocales(
+  args: PopulateCompanionAllArgs
+): Promise<void> {
+  const { db, companionTable, localizedFieldNames, rows, locales } = args;
+  const idKey = args.idKey ?? "id";
+  if (
+    rows.length === 0 ||
+    localizedFieldNames.length === 0 ||
+    locales.length === 0
+  ) {
+    return;
+  }
+  const ids = rows
+    .map(r => r[idKey])
+    .filter((id): id is string | number => id !== null && id !== undefined);
+  if (ids.length === 0) return;
+
+  const table = companionTable as CompanionTable;
+  let companionRows: Record<string, unknown>[];
+  try {
+    companionRows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          inArray(table._parent as never, ids),
+          inArray(table._locale as never, locales)
+        )
+      );
+  } catch {
+    return; // companion table not present yet — leave rows untouched
+  }
+
+  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
+  for (const cr of companionRows) {
+    let perLocale = byParent.get(cr._parent);
+    if (!perLocale) {
+      perLocale = {};
+      byParent.set(cr._parent, perLocale);
+    }
+    perLocale[String(cr._locale)] = cr;
+  }
+
+  for (const row of rows) {
+    const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    for (const field of localizedFieldNames) {
+      const keyed: Record<string, unknown> = {};
+      for (const code of locales) {
+        keyed[code] = perLocaleRows[code]?.[field] ?? null;
+      }
+      row[field] = keyed;
+    }
+  }
+}
+
 /**
  * Build an ORDER BY expression for a localized field: a `COALESCE` of correlated subqueries,
  * one per fallback-chain locale, each pulling the companion value for that locale

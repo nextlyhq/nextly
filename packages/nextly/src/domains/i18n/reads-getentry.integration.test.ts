@@ -164,4 +164,28 @@ describe("getEntry — localized field resolution (M4a)", () => {
     } | null;
     expect(doc?.heading).toBe("Hallo");
   });
+
+  it("locale=all returns a language-keyed object per localized field", async () => {
+    const t = await boot();
+    const created = await t.nextly.create({
+      collection: "pages",
+      data: { title: "Page 1", views: 3 },
+    });
+    const id = (created as { item: { id: string } }).item.id;
+    await seedCompanion(t, [
+      { parent: id, locale: "en", heading: "Hello" },
+      { parent: id, locale: "de", heading: "Hallo" },
+    ]);
+
+    const handler = handlerOf(t);
+    const all = await handler.getEntry({
+      collectionName: "pages",
+      entryId: id,
+      locale: "all",
+      overrideAccess: true,
+    });
+    expect(all.data?.heading).toEqual({ en: "Hello", de: "Hallo" });
+    // Shared fields stay flat.
+    expect(all.data?.title).toBe("Page 1");
+  });
 });

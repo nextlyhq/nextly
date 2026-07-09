@@ -58,6 +58,13 @@ export interface FindParams {
 export interface CountParams {
   /** Query filters using Nextly where syntax */
   where?: Record<string, unknown>;
+  /**
+   * Content locale (i18n M4). Keeps the count in parity with a locale-scoped list — a
+   * localized where/search filters within this language, so the total must match the rows.
+   */
+  locale?: string;
+  /** Fallback locale when a translation is missing (`false`/`"none"` disables fallback). */
+  fallbackLocale?: string;
 }
 
 /**
@@ -487,6 +494,13 @@ export const entryApi = {
     const query = new URLSearchParams();
     if (params.where && Object.keys(params.where).length > 0) {
       query.set("where", JSON.stringify(params.where));
+    }
+    // i18n M4: forward the content locale so a locale-scoped count matches the list.
+    if (params.locale) {
+      query.set("locale", params.locale);
+    }
+    if (params.fallbackLocale) {
+      query.set("fallback-locale", params.fallbackLocale);
     }
     // Why: admin counts include drafts by default — same rationale as
     // `find` above. Without this, /entries/count returns the published-
