@@ -74,6 +74,7 @@ import {
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
+  buildCompanionExists,
   buildLocalizedOrderExpr,
   populateCompanionFields,
 } from "../../i18n/companion-join";
@@ -92,6 +93,20 @@ import {
   getMinSearchLength,
   isJsonFieldType,
 } from "./collection-utils";
+
+/**
+ * Localized-query context (i18n M4c) threaded into the search/where builders so a localized
+ * field filters via a companion EXISTS on the requested locale instead of being silently
+ * dropped. `null`/absent → non-localized behavior (unchanged).
+ */
+interface LocalizedQueryContext {
+  companionTableName: string;
+  localizedFieldNames: string[];
+  /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
+  mainIdColumn: unknown;
+  /** The locale to filter on (the requested locale — chain head). */
+  locale: string;
+}
 
 export class CollectionQueryService extends BaseService {
   constructor(
@@ -157,6 +172,91 @@ export class CollectionQueryService extends BaseService {
       rows,
       localeChain,
     });
+  }
+
+  /**
+   * Build a companion EXISTS condition for a where-filter on a localized field (i18n M4c).
+   * Maps the where operator to a SQL predicate on the companion column for the requested locale.
+   * Returns `undefined` for operators not supported over the companion (caller falls through).
+   */
+  private buildLocalizedWhereExists(
+    ctx: LocalizedQueryContext,
+    fieldName: string,
+    op: string,
+    value: unknown,
+    dialect: string
+  ): ReturnType<typeof sql> | undefined {
+    const t = sql.identifier(ctx.companionTableName);
+    const col = sql.identifier(fieldName);
+    let valueCondition: ReturnType<typeof sql> | undefined;
+    switch (op) {
+      case "=":
+        valueCondition = sql`${t}.${col} = ${value}`;
+        break;
+      case "!=":
+        valueCondition = sql`${t}.${col} <> ${value}`;
+        break;
+      case ">":
+        valueCondition = sql`${t}.${col} > ${value}`;
+        break;
+      case ">=":
+        valueCondition = sql`${t}.${col} >= ${value}`;
+        break;
+      case "<":
+        valueCondition = sql`${t}.${col} < ${value}`;
+        break;
+      case "<=":
+        valueCondition = sql`${t}.${col} <= ${value}`;
+        break;
+      case "LIKE":
+        valueCondition = sql`${t}.${col} LIKE ${value}`;
+        break;
+      case "ILIKE":
+        valueCondition =
+          dialect === "postgresql"
+            ? sql`${t}.${col} ILIKE ${value}`
+            : sql`${t}.${col} LIKE ${value}`;
+        break;
+      case "IS NULL":
+        valueCondition = sql`${t}.${col} IS NULL`;
+        break;
+      case "IS NOT NULL":
+        valueCondition = sql`${t}.${col} IS NOT NULL`;
+        break;
+      case "IN":
+        if (Array.isArray(value) && value.length > 0) {
+          valueCondition = sql`${t}.${col} IN ${value}`;
+        }
+        break;
+      default:
+        return undefined;
+    }
+    if (!valueCondition) return undefined;
+    return buildCompanionExists({
+      companionTableName: ctx.companionTableName,
+      mainIdColumn: ctx.mainIdColumn,
+      locale: ctx.locale,
+      valueCondition,
+    });
+  }
+
+  /**
+   * Build the localized-query context for the search/where builders, or `null` when the
+   * collection isn't localized. Uses the requested locale (chain head) for EXISTS filtering.
+   */
+  private buildLocalizedQueryContext(
+    companion: CompanionSchema | null,
+    localeChain: string[] | null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
+    schema: any
+  ): LocalizedQueryContext | null {
+    if (!companion || !localeChain || localeChain.length === 0) return null;
+    return {
+      companionTableName: companion.companionTableName,
+      localizedFieldNames: companion.localizedFieldNames,
+      mainIdColumn: schema.id,
+      locale: localeChain[0],
+    };
   }
 
   // ============================================================
@@ -348,6 +448,11 @@ export class CollectionQueryService extends BaseService {
       const companion = localeChain
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema
+      );
 
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
@@ -462,12 +567,14 @@ export class CollectionQueryService extends BaseService {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
-            // Build search condition
+            // Build search condition (localizedCtx routes localized searchable fields to
+            // a companion EXISTS instead of dropping them).
             const searchCondition = this.buildSearchCondition(
               schema,
               searchableFields,
               params.search,
-              dialect
+              dialect,
+              localizedCtx
             );
 
             if (searchCondition) {
@@ -542,7 +649,8 @@ export class CollectionQueryService extends BaseService {
         const whereCondition = this.buildDrizzleCondition(
           internalWhere,
           schema,
-          dialect
+          dialect,
+          localizedCtx
         );
 
         if (whereCondition) {
@@ -949,6 +1057,21 @@ export class CollectionQueryService extends BaseService {
         params.collectionName
       );
 
+      // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
+      // counts the SAME rows the page returns (count==list parity).
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
+      const companion = localeChain
+        ? await this.fileManager.loadCompanionSchema(params.collectionName)
+        : null;
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema
+      );
+
       // Build count query using Drizzle
       // Start with a base count query
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
@@ -1009,12 +1132,14 @@ export class CollectionQueryService extends BaseService {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
-            // Build search condition
+            // Build search condition (localizedCtx routes localized searchable fields to
+            // a companion EXISTS instead of dropping them).
             const searchCondition = this.buildSearchCondition(
               schema,
               searchableFields,
               params.search,
-              dialect
+              dialect,
+              localizedCtx
             );
 
             if (searchCondition) {
@@ -1073,7 +1198,8 @@ export class CollectionQueryService extends BaseService {
           const whereCondition = this.buildDrizzleCondition(
             internalWhere,
             schema,
-            dialect
+            dialect,
+            localizedCtx
           );
 
           if (whereCondition) {
@@ -1449,7 +1575,8 @@ export class CollectionQueryService extends BaseService {
     schema: any,
     fields: string[],
     query: string,
-    dialect: string = "postgresql"
+    dialect: string = "postgresql",
+    localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof or> | undefined {
     if (!query || fields.length === 0) {
       return undefined;
@@ -1458,26 +1585,33 @@ export class CollectionQueryService extends BaseService {
     // Normalize and escape the search query
     const searchTerm = `%${query.trim().replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
-    // Build OR conditions for each searchable field
+    // Build OR conditions for each searchable field. A localized searchable field lives in the
+    // companion table (absent from the main schema); match it via a companion EXISTS on the
+    // requested locale instead of silently dropping it. Non-localized fields keep the
+    // main-table ILIKE/LIKE.
     const conditions = fields
-      .filter(fieldName => {
-        const column = schema[fieldName];
-        if (!column) return false;
-
-        // Try to avoid non-text columns if possible.
-        // Drizzle columns have different internal structures depending on the dialect,
-        // but often we can check the data type.
-        // For now, we trust getSearchableFields and explicit configurations,
-        // but we filter out missing columns to prevent crashes.
-        return true;
-      })
       .map(fieldName => {
-        // Use ILIKE for PostgreSQL, LIKE for others (MySQL/SQLite are case-insensitive)
-        if (dialect === "postgresql") {
-          return ilike(schema[fieldName], searchTerm);
+        if (localizedCtx?.localizedFieldNames.includes(fieldName)) {
+          const t = sql.identifier(localizedCtx.companionTableName);
+          const col = sql.identifier(fieldName);
+          const valueCondition =
+            dialect === "postgresql"
+              ? sql`${t}.${col} ILIKE ${searchTerm}`
+              : sql`${t}.${col} LIKE ${searchTerm}`;
+          return buildCompanionExists({
+            companionTableName: localizedCtx.companionTableName,
+            mainIdColumn: localizedCtx.mainIdColumn,
+            locale: localizedCtx.locale,
+            valueCondition,
+          });
         }
-        return like(schema[fieldName], searchTerm);
-      });
+        const column = schema[fieldName];
+        if (!column) return undefined; // not on main table and not localized → skip
+        return dialect === "postgresql"
+          ? ilike(column, searchTerm)
+          : like(column, searchTerm);
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
     if (conditions.length === 0) {
       return undefined;
@@ -1502,7 +1636,8 @@ export class CollectionQueryService extends BaseService {
     whereClause: ReturnType<typeof buildWhereClause>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    dialect: string = "postgresql"
+    dialect: string = "postgresql",
+    localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof and> | undefined {
     if (!whereClause) {
       return undefined;
@@ -1513,7 +1648,12 @@ export class CollectionQueryService extends BaseService {
     const buildSingleCondition = (condition: any): any => {
       // Check if it's a nested WhereClause (has and/or)
       if (condition.and || condition.or) {
-        return this.buildDrizzleCondition(condition, schema, dialect);
+        return this.buildDrizzleCondition(
+          condition,
+          schema,
+          dialect,
+          localizedCtx
+        );
       }
 
       // It's a WhereCondition
@@ -1521,6 +1661,21 @@ export class CollectionQueryService extends BaseService {
 
       // Get the column from schema (handle dot notation for nested fields)
       const columnParts = column.split(".");
+
+      // i18n M4c: a filter on a localized field targets the companion table (absent from the
+      // main schema). Resolve it to a companion EXISTS on the requested locale so the filter
+      // takes effect instead of being silently skipped.
+      if (localizedCtx?.localizedFieldNames.includes(columnParts[0])) {
+        const localizedCond = this.buildLocalizedWhereExists(
+          localizedCtx,
+          columnParts[0],
+          op,
+          value,
+          dialect
+        );
+        if (localizedCond) return localizedCond;
+      }
+
       const schemaColumn = schema[columnParts[0]];
 
       if (!schemaColumn) {
