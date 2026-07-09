@@ -951,6 +951,16 @@ async function handleAdminMetaRequest(): Promise<Response> {
 
   payload.showBuilder = resolvedShowBuilder;
 
+  // Content-localization config for the admin (present only when i18n is enabled).
+  const localization = config?.localization;
+  if (localization) {
+    payload.locales = {
+      defaultLocale: localization.defaultLocale,
+      fallback: localization.fallback,
+      locales: localization.locales,
+    };
+  }
+
   const colors = branding?.colors;
   if (colors) {
     const resolved: Record<string, string> = {};

@@ -49,6 +49,14 @@ export {
   type SanitizedRateLimitingConfig,
 } from "./collections/config/define-config";
 
+// Multilingual (i18n) config types
+export type {
+  LocalizationConfig,
+  LocaleInput,
+  ResolvedLocale,
+  SanitizedLocalizationConfig,
+} from "./domains/i18n/config/types";
+
 // Storage plugin types (for advanced usage)
 export type {
   StoragePlugin,

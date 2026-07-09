@@ -33,6 +33,7 @@
  */
 
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
+import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -309,6 +310,10 @@ function validateNextlyConfig(config: NextlyConfig): void {
 
   if (config.users) {
     assertValidUserConfig(config.users);
+  }
+
+  if (config.localization) {
+    validateLocalizationConfig(config.localization);
   }
 }
 
