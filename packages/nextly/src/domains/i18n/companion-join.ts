@@ -14,6 +14,14 @@
 
 import { and, inArray, sql, type SQL } from "drizzle-orm";
 
+/** One localized field: its API/row key (camelCase) + its physical companion column (snake_case). */
+export interface LocalizedFieldRef {
+  /** Field name — the API/row key (e.g. `metaTitle`). */
+  name: string;
+  /** Physical companion column — snake_case (e.g. `meta_title`). Used for SQL/lookup. */
+  column: string;
+}
+
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
 function isBlank(value: unknown): boolean {
   return value === null || value === undefined || value === "";
@@ -51,8 +59,8 @@ export interface PopulateCompanionArgs {
   db: SelectableDb;
   /** The companion `_locales` Drizzle table object (from `loadCompanionSchema`). */
   companionTable: unknown;
-  /** Names of the localized fields to resolve onto each row. */
-  localizedFieldNames: string[];
+  /** The localized fields to resolve onto each row (row key = `name`, companion column = `column`). */
+  localizedFields: LocalizedFieldRef[];
   /** The result rows to mutate in place (each must carry the parent id under `idKey`). */
   rows: Record<string, unknown>[];
   /** The fallback chain: `[requested, …fallbacks, default]`. Single element = no fallback. */
@@ -69,11 +77,11 @@ export interface PopulateCompanionArgs {
 export async function populateCompanionFields(
   args: PopulateCompanionArgs
 ): Promise<void> {
-  const { db, companionTable, localizedFieldNames, rows, localeChain } = args;
+  const { db, companionTable, localizedFields, rows, localeChain } = args;
   const idKey = args.idKey ?? "id";
   if (
     rows.length === 0 ||
-    localizedFieldNames.length === 0 ||
+    localizedFields.length === 0 ||
     localeChain.length === 0
   ) {
     return;
@@ -121,12 +129,12 @@ export async function populateCompanionFields(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFieldNames) {
+    for (const field of localizedFields) {
       const perLocaleValue: Record<string, unknown> = {};
       for (const code of localeChain) {
-        perLocaleValue[code] = perLocaleRows[code]?.[field];
+        perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field] = resolveLocalizedValue(perLocaleValue, localeChain);
+      row[field.name] = resolveLocalizedValue(perLocaleValue, localeChain);
     }
   }
 }
@@ -134,7 +142,7 @@ export async function populateCompanionFields(
 export interface PopulateCompanionAllArgs {
   db: SelectableDb;
   companionTable: unknown;
-  localizedFieldNames: string[];
+  localizedFields: LocalizedFieldRef[];
   rows: Record<string, unknown>[];
   /** Every configured locale code to project. */
   locales: string[];
@@ -150,11 +158,11 @@ export interface PopulateCompanionAllArgs {
 export async function populateCompanionFieldsAllLocales(
   args: PopulateCompanionAllArgs
 ): Promise<void> {
-  const { db, companionTable, localizedFieldNames, rows, locales } = args;
+  const { db, companionTable, localizedFields, rows, locales } = args;
   const idKey = args.idKey ?? "id";
   if (
     rows.length === 0 ||
-    localizedFieldNames.length === 0 ||
+    localizedFields.length === 0 ||
     locales.length === 0
   ) {
     return;
@@ -192,12 +200,12 @@ export async function populateCompanionFieldsAllLocales(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFieldNames) {
+    for (const field of localizedFields) {
       const keyed: Record<string, unknown> = {};
       for (const code of locales) {
-        keyed[code] = perLocaleRows[code]?.[field] ?? null;
+        keyed[code] = perLocaleRows[code]?.[field.column] ?? null;
       }
-      row[field] = keyed;
+      row[field.name] = keyed;
     }
   }
 }
@@ -211,12 +219,14 @@ export async function populateCompanionFieldsAllLocales(
 export function buildLocalizedOrderExpr(args: {
   companionTableName: string;
   mainIdColumn: unknown;
-  fieldName: string;
+  /** The companion column name (snake_case). */
+  column: string;
   localeChain: string[];
 }): SQL {
-  const { companionTableName, mainIdColumn, fieldName, localeChain } = args;
+  const { companionTableName, mainIdColumn, column: columnName, localeChain } =
+    args;
   const t = sql.identifier(companionTableName);
-  const col = sql.identifier(fieldName);
+  const col = sql.identifier(columnName);
   const perLocale = localeChain.map(
     code =>
       sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${code}), '')`

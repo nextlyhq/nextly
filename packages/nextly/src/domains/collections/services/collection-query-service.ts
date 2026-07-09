@@ -78,6 +78,7 @@ import {
   buildLocalizedOrderExpr,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  type LocalizedFieldRef,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -102,7 +103,8 @@ import {
  */
 interface LocalizedQueryContext {
   companionTableName: string;
-  localizedFieldNames: string[];
+  /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
+  localizedFields: LocalizedFieldRef[];
   /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
@@ -170,7 +172,7 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
-      localizedFieldNames: companion.localizedFieldNames,
+      localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
     });
@@ -195,7 +197,7 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
-      localizedFieldNames: companion.localizedFieldNames,
+      localizedFields: companion.localizedFields,
       rows,
       localeChain,
     });
@@ -208,13 +210,13 @@ export class CollectionQueryService extends BaseService {
    */
   private buildLocalizedWhereExists(
     ctx: LocalizedQueryContext,
-    fieldName: string,
+    column: string,
     op: string,
     value: unknown,
     dialect: string
   ): ReturnType<typeof sql> | undefined {
     const t = sql.identifier(ctx.companionTableName);
-    const col = sql.identifier(fieldName);
+    const col = sql.identifier(column);
     let valueCondition: ReturnType<typeof sql> | undefined;
     switch (op) {
       case "=":
@@ -280,7 +282,7 @@ export class CollectionQueryService extends BaseService {
     if (!companion || !localeChain || localeChain.length === 0) return null;
     return {
       companionTableName: companion.companionTableName,
-      localizedFieldNames: companion.localizedFieldNames,
+      localizedFields: companion.localizedFields,
       mainIdColumn: schema.id,
       locale: localeChain[0],
     };
@@ -718,8 +720,8 @@ export class CollectionQueryService extends BaseService {
         // localized and this field is one of its translatable fields.
         const localizedSortField =
           companion && localeChain
-            ? [sortField, sortFieldSnake].find(f =>
-                companion.localizedFieldNames.includes(f)
+            ? companion.localizedFields.find(
+                f => f.name === sortField || f.column === sortFieldSnake
               )
             : undefined;
 
@@ -731,7 +733,7 @@ export class CollectionQueryService extends BaseService {
           const orderExpr = buildLocalizedOrderExpr({
             companionTableName: companion.companionTableName,
             mainIdColumn: schema.id,
-            fieldName: localizedSortField,
+            column: localizedSortField.column,
             localeChain,
           });
           query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
@@ -1633,9 +1635,12 @@ export class CollectionQueryService extends BaseService {
     // main-table ILIKE/LIKE.
     const conditions = fields
       .map(fieldName => {
-        if (localizedCtx?.localizedFieldNames.includes(fieldName)) {
+        const localizedField = localizedCtx?.localizedFields.find(
+          f => f.name === fieldName
+        );
+        if (localizedCtx && localizedField) {
           const t = sql.identifier(localizedCtx.companionTableName);
-          const col = sql.identifier(fieldName);
+          const col = sql.identifier(localizedField.column);
           const valueCondition =
             dialect === "postgresql"
               ? sql`${t}.${col} ILIKE ${searchTerm}`
@@ -1707,10 +1712,13 @@ export class CollectionQueryService extends BaseService {
       // i18n M4c: a filter on a localized field targets the companion table (absent from the
       // main schema). Resolve it to a companion EXISTS on the requested locale so the filter
       // takes effect instead of being silently skipped.
-      if (localizedCtx?.localizedFieldNames.includes(columnParts[0])) {
+      const localizedWhereField = localizedCtx?.localizedFields.find(
+        f => f.name === columnParts[0]
+      );
+      if (localizedCtx && localizedWhereField) {
         const localizedCond = this.buildLocalizedWhereExists(
           localizedCtx,
-          columnParts[0],
+          localizedWhereField.column,
           op,
           value,
           dialect
