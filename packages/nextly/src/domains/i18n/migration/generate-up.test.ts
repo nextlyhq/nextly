@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 
-import { buildLocalizationUpSql } from "./generate-up";
+import {
+  buildCompanionCreateOnlySql,
+  buildLocalizationUpSql,
+} from "./generate-up";
 import type { CompanionMigrationSpec } from "./types";
 
 const spec = (
@@ -47,5 +50,17 @@ describe("buildLocalizationUpSql", () => {
     });
     expect(sql).toContain("`dc_pages_locales`");
     expect(sql).toContain("`meta` JSON");
+  });
+});
+
+describe("buildCompanionCreateOnlySql", () => {
+  it("emits only the CREATE (no seed, no drop) for a fresh collection", () => {
+    const sql = buildCompanionCreateOnlySql(spec("sqlite"));
+    expect(sql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(sql).toContain(`PRIMARY KEY ("_parent", "_locale")`);
+    expect(sql).toContain(`REFERENCES "dc_pages" ("id") ON DELETE CASCADE`);
+    expect(sql).not.toContain("INSERT INTO");
+    expect(sql).not.toContain("DROP COLUMN");
+    expect(sql.trimEnd().endsWith(");")).toBe(true);
   });
 });
