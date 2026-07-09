@@ -56,3 +56,44 @@ export function writeLocalizationMigrationFile(
   writeFileSync(path, content, "utf-8");
   return path;
 }
+
+export interface WriteCompanionMigrationOpts {
+  /** `enable` = create+seed+drop; `create-only` = bare CREATE for a fresh collection. */
+  kind: "enable" | "create-only";
+  /** Pre-planned UP SQL (from `planCompanionMigration`). */
+  upSql: string;
+  /** Pre-planned DOWN SQL (from `planCompanionMigration`). */
+  downSql: string;
+  /** injectable clock for deterministic file names in tests. */
+  now: Date;
+}
+
+/**
+ * Write a snapshot-less companion `.sql` migration from a pre-planned
+ * `planCompanionMigration` result. Like {@link writeLocalizationMigrationFile}, it writes
+ * **no** paired `meta/<name>.snapshot.json` so the file-migration runner executes it
+ * verbatim (the only path that runs the cross-table `INSERT ... SELECT` seed).
+ *
+ * Callers (migrate:create) pass the UP/DOWN SQL the planner produced so the file's shape
+ * matches the planned transition (create-only vs enable) exactly.
+ *
+ * @returns the absolute path of the written `.sql` file.
+ */
+export function writeCompanionMigrationFile(
+  migrationsDir: string,
+  spec: CompanionMigrationSpec,
+  opts: WriteCompanionMigrationOpts
+): string {
+  const verb = opts.kind === "enable" ? "enable" : "create";
+  const slug = `${verb}_localization_${spec.collection}`;
+  const baseName = `${formatTimestamp(opts.now)}_${slug}`;
+  const header =
+    `-- Migration: ${baseName}\n` +
+    `-- Collections: ${spec.collection}\n` +
+    `-- Generated: localization companion (${opts.kind}) (i18n)\n`;
+  const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
+
+  const path = resolve(migrationsDir, `${baseName}.sql`);
+  writeFileSync(path, content, "utf-8");
+  return path;
+}

@@ -27,6 +27,7 @@ export type DynamicTableRow = {
   fields: string;
   slug: string;
   status?: boolean | number | null;
+  localized?: boolean | number | null;
 };
 
 /**
@@ -49,15 +50,16 @@ export async function loadDynamicTables(
   register: (
     tableName: string,
     fields: unknown[],
-    hasStatus: boolean
+    hasStatus: boolean,
+    localized: boolean
   ) => Promise<void>
 ): Promise<void> {
-  // Components don't have a `status` column — selecting it would fail on
-  // strict dialects. Branch the SELECT so the boot pass survives every
+  // Components don't have `status` / `localized` columns — selecting them would
+  // fail on strict dialects. Branch the SELECT so the boot pass survives every
   // dialect/version combination.
   const hasStatusColumn = sourceTable !== "dynamic_components";
   const selectSql = hasStatusColumn
-    ? `SELECT table_name, fields, slug, status FROM ${sourceTable}`
+    ? `SELECT table_name, fields, slug, status, localized FROM ${sourceTable}`
     : `SELECT table_name, fields, slug FROM ${sourceTable}`;
 
   try {
@@ -74,7 +76,8 @@ export async function loadDynamicTables(
         // sqlite returns 0/1, postgres returns booleans, mysql may return
         // 0/1 as numbers — same dance as the registry deserializer.
         const hasStatus = row.status === 1 || row.status === true;
-        await register(row.table_name, fields, hasStatus);
+        const localized = row.localized === 1 || row.localized === true;
+        await register(row.table_name, fields, hasStatus, localized);
       } catch {
         // Skip individual row if schema generation fails.
       }

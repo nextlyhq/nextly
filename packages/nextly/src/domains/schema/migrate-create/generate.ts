@@ -25,6 +25,13 @@ import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import {
+  planCompanionMigration,
+  type CompanionMigrationPlan,
+} from "../../i18n/migration/plan-companion-migration";
+import type { CompanionMigrationSpec } from "../../i18n/migration/types";
+import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -66,6 +73,9 @@ export interface MinimalConfigField {
   // unique/plain index for this field (Stage C1).
   unique?: boolean;
   index?: boolean;
+  // Forwarded so localized fields are omitted from the main table's desired
+  // state and relocated to the companion `_locales` table (i18n M3b-2).
+  localized?: boolean;
 }
 
 /**
@@ -87,6 +97,14 @@ export interface MinimalConfigEntity {
    * when this flag flips. Components don't carry status — leave unset.
    */
   status?: boolean;
+  /**
+   * Whether content-localization is enabled for this collection/single
+   * (`defineCollection({ localized: true })`). When true, fields resolved as
+   * translatable are omitted from the main-table desired snapshot and relocated
+   * to the migration-owned companion `_locales` table (i18n Option B). Ignored
+   * for components (not localizable in M3b).
+   */
+  localized?: boolean;
 }
 
 export interface GenerateArgs {
@@ -104,6 +122,12 @@ export interface GenerateArgs {
    * Each is appended to the generated SQL when an operation touches its table.
    */
   metadataUpserts?: { tableName: string; sql: string }[];
+  /**
+   * Default locale for localized collections (from `config.localization.defaultLocale`).
+   * Used as the `_locale` value when seeding existing rows into the companion table on
+   * an enable transition. Defaults to `"en"` when omitted.
+   */
+  defaultLocale?: string;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -144,12 +168,16 @@ export async function generateMigration(
   args: GenerateArgs
 ): Promise<GenerateResult | null> {
   const metaDir = resolve(args.migrationsDir, "meta");
+  // Single clock for the whole run so the main file and its companions share a
+  // deterministic base timestamp (companions get a strictly-later one below).
+  const now = args.now ?? new Date();
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
   const previousSnapshot = previous?.data.snapshot ?? EMPTY_SNAPSHOT;
 
-  // 2. Build desired snapshot from config.
+  // 2. Build desired snapshot from config. Localized collections omit their
+  //    translatable columns here (they live in the companion `_locales` table).
   const desiredSnapshot = buildDesiredSnapshotFromConfig(
     args.collections,
     args.singles,
@@ -157,25 +185,41 @@ export async function generateMigration(
     args.dialect
   );
 
+  // 2a. Plan companion `_locales` migrations for localized collections (i18n
+  //     Option B: companions are migration-owned, emitted as snapshot-less .sql).
+  const companionPlans = planCompanionMigrations(
+    args.collections,
+    previousSnapshot,
+    args.dialect,
+    args.defaultLocale ?? "en"
+  );
+
   // 3. Diff.
   let operations = diffSnapshots(previousSnapshot, desiredSnapshot);
-  if (operations.length === 0) {
+
+  // 3a. On an ENABLE transition the diff wants to DROP the localized columns
+  //     from the main table — but the companion migration already relocates them
+  //     (create + seed + drop). Strip those drops so we don't drop twice.
+  operations = stripRelocatedDrops(operations, companionPlans);
+
+  const hasCompanions = companionPlans.length > 0;
+  if (operations.length === 0 && !hasCompanions) {
     return null;
   }
 
-  // 4. Rename detection.
-  const detector = new RegexRenameDetector();
-  const candidates = detector.detect(operations, args.dialect);
-
-  // 5. Prompt.
-  const decisions = await promptRenames(candidates, {
-    nonInteractive: args.nonInteractive,
-    autoAccept: args.autoAcceptRenames,
-  });
-
-  // 6. Apply rename decisions.
-  operations = applyRenameDecisions(operations, decisions);
-  if (operations.length === 0) {
+  // 4-6. Rename detection + prompt + apply — only meaningful when the main table
+  //      itself changed. A localization-only run has no main-table ops to rename.
+  let decisions: RenameDecision[] = [];
+  if (operations.length > 0) {
+    const detector = new RegexRenameDetector();
+    const candidates = detector.detect(operations, args.dialect);
+    decisions = await promptRenames(candidates, {
+      nonInteractive: args.nonInteractive,
+      autoAccept: args.autoAcceptRenames,
+    });
+    operations = applyRenameDecisions(operations, decisions);
+  }
+  if (operations.length === 0 && !hasCompanions) {
     return null;
   }
 
@@ -210,10 +254,10 @@ export async function generateMigration(
     singles: singleSlugs,
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
-    now: args.now,
+    now,
   });
 
-  const baseName = `${formatTimestamp(args.now ?? new Date())}_${slugify(args.name)}`;
+  const baseName = `${formatTimestamp(now)}_${slugify(args.name)}`;
   await mkdir(args.migrationsDir, { recursive: true });
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
   await writeFile(sqlPath, sqlContent, "utf-8");
@@ -225,12 +269,108 @@ export async function generateMigration(
     sqlContent
   );
 
+  // 9. Emit the snapshot-less companion `.sql` files AFTER the main migration.
+  //    A fresh companion's FK references the main table, so it must sort/run
+  //    strictly after the main file — give each a timestamp a few ms later.
+  companionPlans.forEach(({ spec, plan }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, spec, {
+      kind: plan.kind === "enable" ? "enable" : "create-only",
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+      now: new Date(now.getTime() + i + 1),
+    });
+  });
+
   return {
     sqlPath,
     snapshotPath,
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
   };
+}
+
+/** A localized collection's derived companion spec paired with its planned migration. */
+interface CompanionPlanEntry {
+  spec: CompanionMigrationSpec;
+  plan: CompanionMigrationPlan;
+}
+
+/**
+ * Plan the companion `_locales` migration for every localized collection, comparing the
+ * previous committed snapshot's main table against the new localized spec.
+ *
+ * The transition is derived purely from the previous snapshot (companions are NOT stored in
+ * snapshots — they are migration-owned):
+ *   - previous main table absent           → fresh collection → create-only companion.
+ *   - previous main table HELD the columns → enabling now      → create + seed + drop.
+ *   - previous main table lacked them      → already localized → none (companion exists).
+ */
+function planCompanionMigrations(
+  collections: MinimalConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry[] {
+  const entries: CompanionPlanEntry[] = [];
+  for (const c of collections) {
+    if (c.localized !== true) continue;
+    const spec = deriveCompanionSpec({
+      slug: c.slug,
+      dbName: c.tableName,
+      fields: c.fields,
+      dialect,
+      defaultLocale,
+      collectionLocalized: true,
+    });
+    if (!spec) continue;
+
+    const prevTable = previousSnapshot.tables.find(
+      t => t.name === spec.mainTable
+    );
+    const prevMainColumnNames = prevTable
+      ? prevTable.columns.map(col => col.name)
+      : [];
+    // If the table existed but the localized columns are already gone, a prior
+    // migration created the companion → nothing to do (companionExisted).
+    const hadLocalizedColumns = spec.columns.some(col =>
+      prevMainColumnNames.includes(col.name)
+    );
+    const companionExisted = prevTable !== undefined && !hadLocalizedColumns;
+
+    const plan = planCompanionMigration({
+      spec,
+      prevMainColumnNames,
+      companionExisted,
+    });
+    if (plan.kind !== "none") entries.push({ spec, plan });
+  }
+  return entries;
+}
+
+/**
+ * Remove the main-table `drop_column` operations that a companion ENABLE migration already
+ * performs (create + seed + drop). Without this, the localized columns would be dropped twice
+ * — once by the main migration's diff, once by the companion — and the second drop fails.
+ */
+function stripRelocatedDrops(
+  operations: Operation[],
+  companionPlans: CompanionPlanEntry[]
+): Operation[] {
+  const relocated = new Set<string>();
+  for (const { spec, plan } of companionPlans) {
+    if (plan.kind !== "enable") continue; // create-only has no main-table drops
+    for (const col of spec.columns) {
+      relocated.add(`${spec.mainTable}::${col.name}`);
+    }
+  }
+  if (relocated.size === 0) return operations;
+  return operations.filter(
+    op =>
+      !(
+        op.type === "drop_column" &&
+        relocated.has(`${op.tableName}::${op.columnName}`)
+      )
+  );
 }
 
 /**
@@ -254,13 +394,20 @@ export function buildDesiredSnapshotFromConfig(
     // Why: forward the entity's Draft/Published flag so the snapshot
     // includes the system status column when enabled. Mirrors the same
     // forwarding pushschema-pipeline.ts already does for the diff path.
+    // `localized` omits translatable columns (they live in the companion).
     tables.push(
       buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
         hasStatus: c.status === true,
+        localized: c.localized === true,
       })
     );
   }
   for (const c of singles) {
+    // NOTE (i18n M3b-2): singles localization is deferred — `deriveCompanionSpec`
+    // is collection-shaped (dc_ naming) and singles' single-row semantics need
+    // their own companion design. Omitting localized cols here without emitting a
+    // companion would drop data with nowhere to go, so singles keep all columns on
+    // the main table until singles localization lands.
     tables.push(
       buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
         hasStatus: c.status === true,

@@ -1,6 +1,35 @@
 import { ddlType, q } from "./ddl-types";
 import type { CompanionMigrationSpec } from "./types";
 
+/** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
+ *  enable UP and the create-only path so the companion shape stays identical. */
+function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
+  const { dialect, mainTable, companionTable, parentIdType, columns } = spec;
+  const colDefs = columns
+    .map(c => `  ${q(c.name, dialect)} ${ddlType(c, dialect)}`)
+    .join(",\n");
+  return (
+    `CREATE TABLE ${q(companionTable, dialect)} (\n` +
+    `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
+    `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
+    `${colDefs},\n` +
+    `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
+    `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
+    `)`
+  );
+}
+
+/**
+ * Create-only companion migration for a FRESH localized collection: just the
+ * `CREATE TABLE <companion>`. No seed (the main table never held the localized columns)
+ * and no main-table drop. Used when a collection is localized from birth.
+ */
+export function buildCompanionCreateOnlySql(
+  spec: CompanionMigrationSpec
+): string {
+  return `${buildCompanionCreateStatement(spec)};`;
+}
+
 /**
  * UP migration for ENABLING localization on a collection's columns:
  *   1. CREATE the companion `_locales` table (composite PK, FK to main.id ON DELETE CASCADE)
@@ -12,28 +41,10 @@ import type { CompanionMigrationSpec } from "./types";
  * Companion columns are created nullable (localized columns are always nullable).
  */
 export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
-  const {
-    dialect,
-    mainTable,
-    companionTable,
-    defaultLocale,
-    parentIdType,
-    columns,
-  } = spec;
+  const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
   const colNames = columns.map(c => q(c.name, dialect));
 
-  const colDefs = columns
-    .map(c => `  ${q(c.name, dialect)} ${ddlType(c, dialect)}`)
-    .join(",\n");
-
-  const create =
-    `CREATE TABLE ${q(companionTable, dialect)} (\n` +
-    `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
-    `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
-    `${colDefs},\n` +
-    `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
-    `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
-    `)`;
+  const create = buildCompanionCreateStatement(spec);
 
   const seed =
     `INSERT INTO ${q(companionTable, dialect)} ` +

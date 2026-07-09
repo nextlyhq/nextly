@@ -389,9 +389,11 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        localized?: boolean;
       }[];
       dbName?: string;
       status?: boolean;
+      localized?: boolean;
     };
     return {
       slug: e.slug,
@@ -404,12 +406,17 @@ function toMinimalEntities(
         relationTo: f.relationTo,
         unique: f.unique,
         index: f.index,
+        localized: f.localized,
       })),
       // Why: forward the Draft/Published flag so migrate:check's drift
       // detection compares status correctly. Components don't carry
       // status — leaving the field unset (undefined) defaults to off
       // inside buildDesiredSnapshotFromConfig.
       status: e.status === true,
+      // Forward localization so the drift check's desired snapshot omits
+      // localized columns — matching the live main table after the companion
+      // migration relocated them (no false drift).
+      localized: e.localized === true,
     };
   });
 }
