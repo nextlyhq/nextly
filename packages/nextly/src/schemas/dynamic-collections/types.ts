@@ -374,6 +374,9 @@ export interface DynamicCollectionInsert {
    */
   status?: boolean;
 
+  /** Collection-level i18n master switch. Default: false. */
+  localized?: boolean;
+
   /** Admin UI configuration options */
   admin?: CollectionAdminConfig;
 
@@ -523,6 +526,9 @@ export interface DynamicCollectionRecord extends DynamicCollectionInsert {
 
   /** Whether Draft/Published status is enabled (required, defaults to false) */
   status: boolean;
+
+  /** Whether collection-level i18n is enabled (required, defaults to false) */
+  localized: boolean;
 
   /** Whether collection is locked from UI edits (required) */
   locked: boolean;

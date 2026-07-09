@@ -89,6 +89,8 @@ export interface CodeFirstCollectionConfig {
   timestamps?: boolean;
   /** Whether the collection has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Whether collection-level i18n is enabled (mirrors `status`). */
+  localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
   configPath?: string;
   /**
@@ -258,6 +260,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // `timestamps` and `locked` are written in this code path; the
       // SQLite/postgres/mysql Drizzle column types accept either form.
       status: data.status === true ? 1 : 0,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -384,6 +387,9 @@ export class CollectionRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
     // Writeable so code-first sync can reconcile a changed `dbName`.
     if (data.tableName !== undefined) {
       updateData.table_name = this.ensureTableNamePrefix(data.tableName);
@@ -486,6 +492,7 @@ export class CollectionRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first collections that
             // opt in actually write the column on first sync.
             status: config.status === true,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
@@ -494,6 +501,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.status === true) !== (existing.status === true) ||
+          (config.localized === true) !== (existing.localized === true) ||
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -518,6 +526,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              localized: config.localized === true,
               tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
@@ -652,6 +661,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       locked: (data.locked ?? isPipelineSource(data.source)) ? 1 : 0,
       // Same as registerCollection — persist Draft/Published as 0/1.
       status: data.status === true ? 1 : 0,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -799,6 +809,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // SQLite returns 0/1 even with mode:"boolean" in some driver/dialect
       // combinations, so accept both shapes.
       status: r.status === 1 || r.status === true,
+      localized: r.localized === 1 || r.localized === true,
       configPath,
       schemaHash,
       schemaVersion,

@@ -102,6 +102,8 @@ export interface CodeFirstSingleConfig {
 
   /** Whether the Single has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Whether single-level i18n is enabled (mirrors `status`). */
+  localized?: boolean;
 
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
@@ -396,6 +398,9 @@ export class SingleRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
 
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
@@ -555,6 +560,7 @@ export class SingleRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first Singles that opt
             // in actually write the column on first sync.
             status: config.status === true,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
@@ -562,7 +568,8 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.seedPermissionsForSingle(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true)
+          (config.status === true) !== (existing.status === true) ||
+          (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -578,6 +585,7 @@ export class SingleRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              localized: config.localized === true,
             },
             { source: "code" }
           );
@@ -666,6 +674,7 @@ export class SingleRegistryService extends BaseRegistryService<
       // Why: read the new status meta-column, defaulting to false for legacy
       // rows written before the column existed.
       status: Boolean(r.status),
+      localized: Boolean(r.localized),
       configPath,
       schemaHash,
       schemaVersion,
@@ -741,6 +750,7 @@ export class SingleRegistryService extends BaseRegistryService<
       // Persist Draft/Published flag so the Singles edit form shows the
       // Save Draft / Publish split when the schema opts in.
       status: data.status === true ? 1 : 0,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,
