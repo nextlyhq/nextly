@@ -66,6 +66,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
           fields: string;
           tableName: string;
           status: boolean | number | null;
+          localized: boolean | number | null;
         }>("dynamic_collections", {
           where: {
             and: [{ column: "slug", op: "=", value: collectionName }],
@@ -82,6 +83,9 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
             tableName: result.tableName,
             // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
+            // i18n M4: forward the localized flag so loadCompanionSchema can
+            // build the companion table for localized reads.
+            localized: result.localized === true || result.localized === 1,
           };
         }
       } catch (error) {
