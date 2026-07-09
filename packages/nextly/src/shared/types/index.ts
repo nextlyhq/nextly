@@ -54,6 +54,8 @@ export interface RequestContext {
   };
   /** Request locale for i18n (e.g., 'en', 'es', 'fr') */
   locale?: string;
+  /** Fallback locale (or `false` to disable fallback) for localized reads. */
+  fallbackLocale?: string | false;
   /** Unique request identifier for tracing/logging */
   requestId?: string;
   /**
