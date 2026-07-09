@@ -37,6 +37,7 @@ import type {
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -81,7 +82,9 @@ export class CollectionEntryService extends BaseService {
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
     componentDataService?: ComponentDataService,
-    rbacAccessControlService?: RBACAccessControlService
+    rbacAccessControlService?: RBACAccessControlService,
+    /** Normalized localization config (i18n M4) — forwarded to the query service. */
+    localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
 
@@ -102,7 +105,8 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService
+      componentDataService,
+      localization
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -166,6 +170,10 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }) {
     return this.queryService.getEntry(params);

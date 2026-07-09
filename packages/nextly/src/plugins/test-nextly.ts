@@ -17,6 +17,8 @@ import { getService, registerServices, shutdownServices } from "../di/register";
 import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
+import { normalizeLocalization } from "../domains/i18n/config/normalize";
+import type { LocalizationConfig } from "../domains/i18n/config/types";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
@@ -47,6 +49,8 @@ export interface CreateTestNextlyOptions {
   singles?: SingleConfig[];
   /** Code-first components. */
   components?: ComponentConfig[];
+  /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
+  localization?: LocalizationConfig;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
@@ -141,6 +145,9 @@ export async function createTestNextly(
     collections: opts.collections,
     singles: opts.singles,
     components: opts.components,
+    localization: opts.localization
+      ? normalizeLocalization(opts.localization)
+      : undefined,
   });
 
   // Physical tables for code-first + plugin-contributed collections are created

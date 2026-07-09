@@ -1006,6 +1006,10 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
       name: "title",
       label: "Title",
       required: true,
+      // i18n: auto-injected system title is SHARED by default (spec §9a — localizing
+      // title/slug is a deliberate opt-in via a user-defined localized field, not a
+      // side effect of text fields localizing by default).
+      localized: false,
     });
   }
 
@@ -1016,6 +1020,8 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
       label: "Slug",
       required: true,
       unique: true,
+      // i18n: auto-injected system slug is SHARED by default (see title above).
+      localized: false,
     });
   }
 

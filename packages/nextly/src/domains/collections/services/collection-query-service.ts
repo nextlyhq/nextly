@@ -70,6 +70,12 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { populateCompanionFields } from "../../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  resolveFallbackChain,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -90,9 +96,58 @@ export class CollectionQueryService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService
+    private readonly componentDataService?: ComponentDataService,
+    /**
+     * Normalized localization config (i18n M4). When set and a collection is localized,
+     * reads resolve translatable fields from the companion `_locales` table for the
+     * requested locale with fallback. Absent → non-localized behavior (unchanged).
+     */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
+  }
+
+  // ============================================================
+  // i18n (M4) — companion-aware read helpers
+  // ============================================================
+
+  /**
+   * Resolve the fallback chain for a read request, or `null` when localization is off.
+   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale);
+   * otherwise the requested locale's configured chain + default locale is used (spec §8).
+   */
+  private resolveLocaleChain(
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): string[] | null {
+    if (!this.localization) return null;
+    const requested = resolveRequestedLocale(this.localization, locale);
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    return resolveFallbackChain(this.localization, requested);
+  }
+
+  /**
+   * Populate localized fields onto result rows from the companion `_locales` table for the
+   * resolved locale chain. No-op when localization is off (`localeChain === null`), there are no
+   * rows, or the collection is not localized (no companion). Shared by getEntry + listEntries.
+   */
+  private async populateLocalized(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    localeChain: string[] | null
+  ): Promise<void> {
+    if (!localeChain || rows.length === 0) return;
+    const companion = await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return;
+    await populateCompanionFields({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFieldNames: companion.localizedFieldNames,
+      rows,
+      localeChain,
+    });
   }
 
   // ============================================================
@@ -1054,6 +1109,17 @@ export class CollectionQueryService extends BaseService {
      * id, so visibility doesn't leak via response codes.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * resolved to this language (with fallback) from the companion `_locales` table. Ignored
+     * for non-localized collections. Defaults to the configured default locale.
+     */
+    locale?: string;
+    /**
+     * Fallback control. `false` / `"none"` disables fallback (raw requested language, blank if
+     * untranslated). Otherwise the configured fallback chain + default locale is used.
+     */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1160,6 +1226,15 @@ export class CollectionQueryService extends BaseService {
           data: null,
         };
       }
+
+      // i18n M4: resolve localized fields from the companion `_locales` table for the
+      // requested language (with fallback) BEFORE relationship expansion / hooks, so every
+      // downstream consumer sees the translated values. No-op for non-localized collections.
+      await this.populateLocalized(
+        params.collectionName,
+        [entry as Record<string, unknown>],
+        this.resolveLocaleChain(params.locale, params.fallbackLocale)
+      );
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(

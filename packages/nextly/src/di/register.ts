@@ -44,6 +44,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
   clearFieldTypes,
@@ -238,6 +239,13 @@ export interface NextlyServiceConfig {
    * Same rationale as admin: carried through so handlers can read it.
    */
   auth?: AuthConfig;
+
+  /**
+   * Content-localization configuration (i18n), normalized. Carried through so the
+   * collection read path can resolve a requested locale to its fallback chain when
+   * populating localized fields from the companion `_locales` table.
+   */
+  localization?: SanitizedLocalizationConfig;
 }
 
 // ============================================================
@@ -1148,6 +1156,9 @@ async function syncCodeFirstCollections(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,
+      // Forward the i18n master switch (mirrors status) so the boot sync persists
+      // dynamic_collections.localized — the read path keys companion resolution off it.
+      localized: collection.localized === true,
     }));
 
   const syncResult =

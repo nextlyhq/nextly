@@ -154,7 +154,10 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       hookRegistry ?? createNoOpHookRegistry(),
       accessControlService,
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      // i18n M4: forward normalized localization config so localized reads resolve
+      // translatable fields from the companion table.
+      ctx.config.localization
     );
 
     return new CollectionService(
@@ -174,7 +177,9 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       adapter,
       drizzleDb,
       logger,
-      basePath
+      basePath,
+      // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
+      ctx.config.localization
     );
 
     if (container.has("permissionSeedService")) {
