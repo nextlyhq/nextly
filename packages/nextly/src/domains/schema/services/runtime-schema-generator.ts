@@ -41,6 +41,8 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 
 import {
   type ColumnDescriptor,
@@ -67,6 +69,12 @@ export interface RuntimeSchemaResult {
 export interface RuntimeSchemaOptions {
   /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
   status?: boolean;
+  /**
+   * When true, this collection is localized: translatable fields live in the companion
+   * `_locales` table and are omitted from the main runtime table (kept in lockstep with
+   * `buildDesiredTableFromFields`'s `localized` option).
+   */
+  localized?: boolean;
 }
 
 /**
@@ -102,6 +110,94 @@ export function generateRuntimeSchema(
     table,
     schemaRecord: { [tableName]: table },
   };
+}
+
+/** Options for the companion `_locales` runtime table. */
+export interface RuntimeCompanionOptions {
+  /** When true, inject a per-locale `_status` column ('draft' | 'published'). */
+  status?: boolean;
+}
+
+/**
+ * Generate the queryable Drizzle table for a localized companion (`dc_<slug>_locales`).
+ *
+ * Columns: `_parent` (FK-shaped, type matching main.id), `_locale` varchar(20), an optional
+ * per-locale `_status`, and one nullable column per localized field. Index-only / no FK in the
+ * runtime object (mirrors the component child-table precedent — the composite PK + FK live only
+ * in M1's raw migration DDL). The companion is registered for queries by M3b; the schema
+ * pipeline never diffs it (migration-owned, Option B).
+ */
+export function generateCompanionRuntimeSchema(
+  companionTableName: string,
+  columns: LocalizedColumnSpec[],
+  dialect: SupportedDialect,
+  options: RuntimeCompanionOptions = {}
+): RuntimeSchemaResult {
+  const record = buildCompanionColumnRecord(columns, dialect, options);
+  let table: unknown;
+  switch (dialect) {
+    case "postgresql":
+      table = pgTable(companionTableName, record);
+      break;
+    case "mysql":
+      table = mysqlTable(companionTableName, record);
+      break;
+    case "sqlite":
+      table = sqliteTable(companionTableName, record);
+      break;
+    default:
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
+  }
+  return { table, schemaRecord: { [companionTableName]: table } };
+}
+
+function buildCompanionColumnRecord(
+  columns: LocalizedColumnSpec[],
+  dialect: SupportedDialect,
+  options: RuntimeCompanionOptions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
+): Record<string, any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
+  const out: Record<string, any> = {};
+
+  // _parent — type matches the main table's `id` (pg/sqlite text, mysql varchar(36)).
+  out._parent =
+    dialect === "postgresql"
+      ? pgText("_parent").notNull()
+      : dialect === "mysql"
+        ? mysqlVarchar("_parent", { length: 36 }).notNull()
+        : sqliteText("_parent").notNull();
+
+  // _locale — varchar(20) (text on sqlite).
+  out._locale =
+    dialect === "postgresql"
+      ? pgVarchar("_locale", { length: 20 }).notNull()
+      : dialect === "mysql"
+        ? mysqlVarchar("_locale", { length: 20 }).notNull()
+        : sqliteText("_locale").notNull();
+
+  if (options.status === true) {
+    out._status =
+      dialect === "postgresql"
+        ? pgVarchar("_status", { length: 20 }).notNull().default("draft")
+        : dialect === "mysql"
+          ? mysqlVarchar("_status", { length: 20 }).notNull().default("draft")
+          : sqliteText("_status").notNull().default("draft");
+  }
+
+  // Localized field columns — always nullable (localized-required is app-layer, M2).
+  for (const col of columns) {
+    const desc: ColumnDescriptor = {
+      name: col.name,
+      dialectType: "",
+      length: col.length,
+      nullable: true,
+      kind: col.kind,
+    };
+    out[col.name] = buildUserDrizzleColumn(desc, dialect);
+  }
+
+  return out;
 }
 
 function generatePostgresSchema(
@@ -149,6 +245,11 @@ function buildDrizzleColumnRecord(
   const hasTitleField = fields.some(f => f.name === "title");
   const hasSlugField = fields.some(f => f.name === "slug");
 
+  // Localized fields live in the companion `_locales` table; omit them from the main table.
+  const localizedNames = options.localized
+    ? new Set(resolveLocalizedFieldNames(fields, true))
+    : new Set<string>();
+
   // System columns first (id, created_at, updated_at; conditionally title,
   // slug, and status). Source-of-truth descriptor list lives in
   // field-column-descriptor.ts and stays in lockstep with the diff input.
@@ -163,6 +264,7 @@ function buildDrizzleColumnRecord(
   // User-defined fields. Layout-only field types and unmapped types
   // come back as `null` from getColumnDescriptor and are skipped.
   for (const field of fields) {
+    if (localizedNames.has(field.name)) continue; // companion-owned
     const desc = getColumnDescriptor(field, dialect);
     if (!desc) continue;
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
@@ -184,8 +286,10 @@ function buildSystemDrizzleColumn(
 ): unknown {
   if (dialect === "postgresql") {
     if (sys.name === "id") return pgText("id").primaryKey();
-    if (sys.name === "created_at") return pgTimestamp("created_at").defaultNow();
-    if (sys.name === "updated_at") return pgTimestamp("updated_at").defaultNow();
+    if (sys.name === "created_at")
+      return pgTimestamp("created_at").defaultNow();
+    if (sys.name === "updated_at")
+      return pgTimestamp("updated_at").defaultNow();
     if (sys.name === "status") {
       // Why: 'draft' default ensures backfill on enable doesn't accidentally
       // publish anything. Length 20 leaves headroom over "published" (9 chars).
