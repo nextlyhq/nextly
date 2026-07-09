@@ -13,7 +13,7 @@
 // NOT Object.keys() — bundle keys are JS export names (e.g. dynamicCollections),
 // not SQL names (dynamic_collections), and include non-table exports.
 
-import { isManagedTable } from "./managed-tables";
+import { isCompanionTable, isManagedTable } from "./managed-tables";
 
 const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
   kind: "SEQUENCE" | "INDEX";
@@ -143,6 +143,13 @@ export function filterUnsafeStatements(
       // reconcile is just noise. (User/collection slugs can't start with
       // `nextly_` — the slug validator reserves that prefix.)
       if (tableName.toLowerCase().startsWith("nextly_")) {
+        return false;
+      }
+
+      // Localized companion tables are migration-owned (Option B) and never part
+      // of the desired schema. Block their drop SILENTLY — the localization
+      // migration layer owns their lifecycle; warning on every reconcile is noise.
+      if (isCompanionTable(tableName)) {
         return false;
       }
 

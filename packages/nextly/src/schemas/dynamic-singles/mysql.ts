@@ -179,6 +179,8 @@ export const dynamicSinglesMysql = mysqlTable(
      * Default false; users opt in via the Schema Builder modal.
      */
     status: boolean("status").default(false).notNull(),
+    /** Single-level i18n master switch (mirrors `status`). */
+    localized: boolean("localized").default(false).notNull(),
 
     /**
      * Path to the config file (code-first Singles only).

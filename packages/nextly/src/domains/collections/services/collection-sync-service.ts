@@ -838,6 +838,8 @@ export class CollectionSyncService extends BaseService {
         // Why: status from defineCollection() input if present, otherwise false.
         // Code-first authors opt in by setting `status: true` on the config.
         status: (config as { status?: boolean }).status === true,
+        // Collection-level i18n master switch (mirrors `status`).
+        localized: (config as { localized?: boolean }).localized === true,
         admin: config.admin
           ? {
               group: config.admin.group,
