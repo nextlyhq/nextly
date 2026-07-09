@@ -727,6 +727,9 @@ const COLLECTIONS_METHODS: Record<
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
         status,
+        // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
       });
 
       type PaginatedShape = {
@@ -760,6 +763,9 @@ const COLLECTIONS_METHODS: Record<
         search: p.search,
         where: parseWhereParam(p.where),
         status,
+        // i18n M4: keep count in parity with listEntries' locale-scoped filtering.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
       });
       const data = unwrapServiceResult<{ totalDocs: number }>(result, {
         collectionName: p.collectionName,

@@ -139,6 +139,10 @@ export class CollectionEntryService extends BaseService {
     richTextFormat?: RichTextOutputFormat;
     sort?: string;
     overrideAccess?: boolean;
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return this.queryService.listEntries(params);
@@ -150,6 +154,10 @@ export class CollectionEntryService extends BaseService {
     search?: string;
     where?: WhereFilter;
     overrideAccess?: boolean;
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);

@@ -141,4 +141,27 @@ describe("getEntry — localized field resolution (M4a)", () => {
     });
     expect(noFallback.data?.heading).toBeNull();
   });
+
+  it("direct-api findByID forwards locale to the query service", async () => {
+    const t = await boot();
+    const created = await t.nextly.create({
+      collection: "pages",
+      data: { title: "Page 1", views: 3 },
+    });
+    const id = (created as { item: { id: string } }).item.id;
+    await seedCompanion(t, [
+      { parent: id, locale: "en", heading: "Hello" },
+      { parent: id, locale: "de", heading: "Hallo" },
+    ]);
+
+    const doc = (await t.nextly.findByID({
+      collection: "pages",
+      id,
+      locale: "de",
+      overrideAccess: true,
+    } as Parameters<typeof t.nextly.findByID>[0])) as {
+      heading?: string;
+    } | null;
+    expect(doc?.heading).toBe("Hallo");
+  });
 });

@@ -88,15 +88,24 @@ export async function populateCompanionFields(
   const parentCol = table._parent;
   const localeCol = table._locale;
 
-  const companionRows = await db
-    .select()
-    .from(companionTable)
-    .where(
-      and(
-        inArray(parentCol as never, ids),
-        inArray(localeCol as never, localeChain)
-      )
-    );
+  let companionRows: Record<string, unknown>[];
+  try {
+    companionRows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          inArray(parentCol as never, ids),
+          inArray(localeCol as never, localeChain)
+        )
+      );
+  } catch {
+    // The companion table may not physically exist yet — e.g. a localized collection
+    // whose companion migration hasn't been run (dev auto-sync leaves localized columns
+    // on the main table until `migrate`). Leave rows untouched (main-table values stand)
+    // rather than failing the whole read. Mirrors loadDynamicTables' fresh-DB resilience.
+    return;
+  }
 
   // Index: parentId -> locale -> companion row.
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
@@ -120,6 +129,28 @@ export async function populateCompanionFields(
       row[field] = resolveLocalizedValue(perLocaleValue, localeChain);
     }
   }
+}
+
+/**
+ * Build an ORDER BY expression for a localized field: a `COALESCE` of correlated subqueries,
+ * one per fallback-chain locale, each pulling the companion value for that locale
+ * (`NULLIF(...,'')` so a blank translation falls back in sort too). Used in-query so ORDER BY +
+ * LIMIT/OFFSET paginate correctly (a post-query populate cannot sort across pages).
+ */
+export function buildLocalizedOrderExpr(args: {
+  companionTableName: string;
+  mainIdColumn: unknown;
+  fieldName: string;
+  localeChain: string[];
+}): SQL {
+  const { companionTableName, mainIdColumn, fieldName, localeChain } = args;
+  const t = sql.identifier(companionTableName);
+  const col = sql.identifier(fieldName);
+  const perLocale = localeChain.map(
+    code =>
+      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${code}), '')`
+  );
+  return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }
 
 /**

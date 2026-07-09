@@ -43,7 +43,10 @@ import {
   resolveStatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
-import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import type {
+  CollectionFileManager,
+  CompanionSchema,
+} from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
   applyGeoFilters,
@@ -70,7 +73,10 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  buildLocalizedOrderExpr,
+  populateCompanionFields,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   resolveFallbackChain,
@@ -136,10 +142,13 @@ export class CollectionQueryService extends BaseService {
   private async populateLocalized(
     collectionName: string,
     rows: Record<string, unknown>[],
-    localeChain: string[] | null
+    localeChain: string[] | null,
+    preloaded?: CompanionSchema | null
   ): Promise<void> {
     if (!localeChain || rows.length === 0) return;
-    const companion = await this.fileManager.loadCompanionSchema(collectionName);
+    const companion =
+      preloaded ??
+      (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
     await populateCompanionFields({
       db: this.db as never,
@@ -295,6 +304,13 @@ export class CollectionQueryService extends BaseService {
      * Trusted callers (overrideAccess: true) default to 'all' if unset.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * resolved to this language (with fallback) from the companion `_locales` table.
+     */
+    locale?: string;
+    /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
@@ -321,6 +337,17 @@ export class CollectionQueryService extends BaseService {
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
+
+      // i18n M4: resolve the locale chain + load the companion once, so both the sort
+      // block (in-query ORDER BY on a localized column) and the post-query populate reuse
+      // it. `null` when localization is off or the collection isn't localized.
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
+      const companion = localeChain
+        ? await this.fileManager.loadCompanionSchema(params.collectionName)
+        : null;
 
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
@@ -549,11 +576,30 @@ export class CollectionQueryService extends BaseService {
 
         const sortFieldSnake = toSnakeCase(sortField);
 
+        // i18n M4: a localized sort field lives in the companion table (absent from the main
+        // schema). Order by a correlated subquery pulling the companion value for the requested
+        // locale (with fallback) so pagination is correct. Applied only when the collection is
+        // localized and this field is one of its translatable fields.
+        const localizedSortField =
+          companion && localeChain
+            ? [sortField, sortFieldSnake].find(f =>
+                companion.localizedFieldNames.includes(f)
+              )
+            : undefined;
+
         // Try both camelCase and snake_case versions of the field name
         // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
         const column = schema[sortField] || schema[sortFieldSnake];
 
-        if (column) {
+        if (localizedSortField && companion && localeChain) {
+          const orderExpr = buildLocalizedOrderExpr({
+            companionTableName: companion.companionTableName,
+            mainIdColumn: schema.id,
+            fieldName: localizedSortField,
+            localeChain,
+          });
+          query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
+        } else if (column) {
           query = query.orderBy(sortDesc ? desc(column) : asc(column));
         } else if (sortField) {
           // Log warning if sort field is not found in either format
@@ -601,6 +647,9 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             search: params.search,
             where: cleanedWhere, // Use cleaned where (without geo operators)
+            // Forward locale so count mirrors any locale-scoped filter (M4b parity).
+            locale: params.locale,
+            fallbackLocale: params.fallbackLocale,
           }),
         ]);
 
@@ -612,6 +661,16 @@ export class CollectionQueryService extends BaseService {
             ? countResult.data.totalDocs
             : 0;
       }
+
+      // i18n M4: resolve localized fields for the whole page from the companion table
+      // (batch — one query for all rows), with fallback, BEFORE relationship/component
+      // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
+      await this.populateLocalized(
+        params.collectionName,
+        entries,
+        localeChain,
+        companion
+      );
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -857,6 +916,14 @@ export class CollectionQueryService extends BaseService {
      * See listEntries for full semantics.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
+     * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
+     * effect on the count (localized display resolution is post-query).
+     */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
