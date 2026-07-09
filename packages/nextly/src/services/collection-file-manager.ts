@@ -5,7 +5,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
+import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
+import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -46,8 +48,12 @@ export interface CompanionSchema {
   table: unknown;
   /** Physical companion table name (e.g. `dc_pages_locales`). */
   companionTableName: string;
-  /** Names of the collection's translatable fields (they live on the companion). */
-  localizedFieldNames: string[];
+  /**
+   * The collection's translatable fields (they live on the companion). Each carries both the
+   * camelCase field name (row key) and the snake_case companion column, because the two differ
+   * for camelCase fields (`metaTitle` → `meta_title`).
+   */
+  localizedFields: LocalizedFieldRef[];
 }
 
 export class CollectionFileManager {
@@ -299,12 +305,14 @@ export class CollectionFileManager {
     const companionTableName = `${tableName}_locales`;
 
     const cached = this.schemaRegistry.get(companionTableName);
-    const localizedFieldNames = resolveLocalizedFieldNames(
+    // Pair each translatable field's API name (camelCase row key) with its physical companion
+    // column (snake_case) — the same conversion the column descriptor applies to main columns.
+    const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
       metadata.fields,
       true
-    );
-    if (localizedFieldNames.length === 0) return null;
-    if (cached) return { table: cached, companionTableName, localizedFieldNames };
+    ).map(name => ({ name, column: toSnakeCase(name) }));
+    if (localizedFields.length === 0) return null;
+    if (cached) return { table: cached, companionTableName, localizedFields };
 
     const companion = buildCompanionRuntimeTable({
       slug: collectionName,
@@ -319,7 +327,7 @@ export class CollectionFileManager {
     return {
       table: companion.table,
       companionTableName,
-      localizedFieldNames,
+      localizedFields,
     };
   }
 }

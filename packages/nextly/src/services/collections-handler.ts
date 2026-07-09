@@ -388,13 +388,15 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values stored for this language. */
+      locale?: string;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>
   ) {
     return this.entryService.createEntry(
-      this.resolveUserParam(params),
+      { ...this.resolveUserParam(params), locale: params.locale },
       body,
       params.depth
     );
@@ -486,13 +488,15 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values updated for this language. */
+      locale?: string;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>
   ) {
     return this.entryService.updateEntry(
-      this.resolveUserParam(params),
+      { ...this.resolveUserParam(params), locale: params.locale },
       body,
       params.depth
     );

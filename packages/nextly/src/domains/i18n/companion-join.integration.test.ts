@@ -39,7 +39,7 @@ describe("populateCompanionFields (real SQLite)", () => {
     await populateCompanionFields({
       db: db as never,
       companionTable,
-      localizedFieldNames: ["body"],
+      localizedFields: [{ name: "body", column: "body" }],
       rows,
       localeChain: ["de", "en"], // requested de, fallback en
     });
@@ -57,7 +57,7 @@ describe("populateCompanionFields (real SQLite)", () => {
     await populateCompanionFields({
       db: db as never,
       companionTable,
-      localizedFieldNames: ["body"],
+      localizedFields: [{ name: "body", column: "body" }],
       rows,
       localeChain: ["de"], // requested only
     });
@@ -71,7 +71,7 @@ describe("populateCompanionFields (real SQLite)", () => {
       populateCompanionFields({
         db: db as never,
         companionTable,
-        localizedFieldNames: ["body"],
+        localizedFields: [{ name: "body", column: "body" }],
         rows,
         localeChain: ["en"],
       })

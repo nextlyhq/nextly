@@ -791,6 +791,8 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` stores the translatable values for German.
+          locale: p.locale,
         },
         body as Record<string, unknown>
       );
@@ -855,6 +857,8 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` updates only the German translatable values.
+          locale: p.locale,
         },
         body as Record<string, unknown>
       );
