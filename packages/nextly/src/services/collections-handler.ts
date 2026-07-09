@@ -361,6 +361,10 @@ export class CollectionsHandler {
      * pass 'all' to see drafts too. Forwarded to query service as-is.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -454,6 +458,10 @@ export class CollectionsHandler {
      * === true). Same semantics as listEntries.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {

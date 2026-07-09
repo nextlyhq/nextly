@@ -67,6 +67,9 @@ export async function find<TSlug extends CollectionSlug>(
     user: config.user
       ? { id: config.user.id, role: config.user.role }
       : undefined,
+    // i18n M4: forward the content locale + fallback so localized fields resolve.
+    locale: config.locale,
+    fallbackLocale: config.fallbackLocale,
     context: config.context,
   });
 
@@ -117,6 +120,9 @@ export async function findByID<TSlug extends CollectionSlug>(
       user: config.user
         ? { id: config.user.id, role: config.user.role }
         : undefined,
+      // i18n M4: forward the content locale + fallback so localized fields resolve.
+      locale: config.locale,
+      fallbackLocale: config.fallbackLocale,
       context: config.context,
     });
 
@@ -365,6 +371,9 @@ export async function count(
     user: config.user
       ? { id: config.user.id, role: config.user.role }
       : undefined,
+    // i18n M4: parity with find() so locale-scoped counts match.
+    locale: config.locale,
+    fallbackLocale: config.fallbackLocale,
     context: config.context,
   });
 
