@@ -7,7 +7,8 @@
  *    table re-registered after a server restart).
  *  - The `status` column drives the `hasStatus` argument passed to the
  *    register callback (sqlite returns 0/1, postgres returns booleans).
- *  - The Components SELECT never asks for a `status` column.
+ *  - The `localized` column drives the `localized` argument (i18n M3b-2).
+ *  - The Components SELECT never asks for a `status` / `localized` column.
  *  - Adapter errors (table doesn't exist on a fresh DB) don't throw.
  */
 import { describe, it, expect, vi } from "vitest";
@@ -38,7 +39,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
     await loadDynamicTables(adapter, "dynamic_singles", register);
 
     expect(register).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledWith("single_banner", [], false);
+    expect(register).toHaveBeenCalledWith("single_banner", [], false, false);
   });
 
   it("skips rows where the JSON parses to a non-array", async () => {
@@ -59,7 +60,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     // Only the array-shaped row registers.
     expect(register).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledWith("single_ok", [], false);
+    expect(register).toHaveBeenCalledWith("single_ok", [], false, false);
   });
 
   it("forwards hasStatus=true when status=1 (sqlite)", async () => {
@@ -70,7 +71,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_singles", register);
 
-    expect(register).toHaveBeenCalledWith("single_a", [], true);
+    expect(register).toHaveBeenCalledWith("single_a", [], true, false);
   });
 
   it("forwards hasStatus=true when status=true (postgres)", async () => {
@@ -81,7 +82,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], true);
+    expect(register).toHaveBeenCalledWith("dc_a", [], true, false);
   });
 
   it("forwards hasStatus=false for legacy rows without a status field", async () => {
@@ -93,7 +94,46 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], false);
+    expect(register).toHaveBeenCalledWith("dc_a", [], false, false);
+  });
+
+  it("forwards localized=true when localized=1 (sqlite)", async () => {
+    const { adapter } = makeAdapter([
+      { table_name: "dc_pages", fields: "[]", slug: "pages", localized: 1 },
+    ]);
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(adapter, "dynamic_collections", register);
+
+    expect(register).toHaveBeenCalledWith("dc_pages", [], false, true);
+  });
+
+  it("forwards localized=true when localized=true (postgres)", async () => {
+    const { adapter } = makeAdapter([
+      {
+        table_name: "dc_pages",
+        fields: "[]",
+        slug: "pages",
+        status: true,
+        localized: true,
+      },
+    ]);
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(adapter, "dynamic_collections", register);
+
+    expect(register).toHaveBeenCalledWith("dc_pages", [], true, true);
+  });
+
+  it("forwards localized=false for legacy rows without a localized field", async () => {
+    const { adapter } = makeAdapter([
+      { table_name: "dc_a", fields: "[]", slug: "a", status: 0 },
+    ]);
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(adapter, "dynamic_collections", register);
+
+    expect(register).toHaveBeenCalledWith("dc_a", [], false, false);
   });
 });
 
@@ -110,13 +150,13 @@ describe("loadDynamicTables — SELECT shape", () => {
     const { adapter, calls } = makeAdapter([]);
     await loadDynamicTables(adapter, "dynamic_singles", vi.fn());
     expect(calls[0]).toBe(
-      "SELECT table_name, fields, slug, status FROM dynamic_singles"
+      "SELECT table_name, fields, slug, status, localized FROM dynamic_singles"
     );
 
     const second = makeAdapter([]);
     await loadDynamicTables(second.adapter, "dynamic_collections", vi.fn());
     expect(second.calls[0]).toBe(
-      "SELECT table_name, fields, slug, status FROM dynamic_collections"
+      "SELECT table_name, fields, slug, status, localized FROM dynamic_collections"
     );
   });
 });

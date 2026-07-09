@@ -403,10 +403,14 @@ export function buildDesiredSnapshotFromConfig(
     );
   }
   for (const c of singles) {
+    // NOTE (i18n M3b-2): singles localization is deferred — `deriveCompanionSpec`
+    // is collection-shaped (dc_ naming) and singles' single-row semantics need
+    // their own companion design. Omitting localized cols here without emitting a
+    // companion would drop data with nowhere to go, so singles keep all columns on
+    // the main table until singles localization lands.
     tables.push(
       buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
         hasStatus: c.status === true,
-        localized: c.localized === true,
       })
     );
   }
