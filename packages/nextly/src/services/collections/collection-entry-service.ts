@@ -209,6 +209,8 @@ export class CollectionEntryService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values updated for this language. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,

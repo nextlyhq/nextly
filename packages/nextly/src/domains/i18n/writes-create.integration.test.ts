@@ -47,7 +47,11 @@ function handlerOf(t: TestNextly) {
     createEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
-    ) => Promise<{ success: boolean; message?: string }>;
+    ) => Promise<{ success: boolean; message?: string; item?: { id: string } }>;
+    updateEntry: (
+      p: Record<string, unknown>,
+      body: Record<string, unknown>
+    ) => Promise<{ success: boolean }>;
     getEntry: (p: Record<string, unknown>) => Promise<{
       data: Record<string, unknown> | null;
     }>;
@@ -123,5 +127,64 @@ describe("createEntry — localized write routing (M5a)", () => {
     };
     const rows = await adapter.executeQuery('SELECT "heading" FROM "dc_pages"');
     expect(rows).toEqual([{ heading: "Hallo" }]);
+  });
+});
+
+describe("updateEntry — localized write routing (M5a)", () => {
+  async function idOf(t: TestNextly): Promise<string> {
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<{ id: string }[]>;
+    };
+    return (await adapter.executeQuery('SELECT "id" FROM "dc_pages"'))[0].id;
+  }
+
+  it("upserts the companion row: updates the existing locale, inserts a new one", async () => {
+    const t = await boot();
+    await createCompanionTable(t);
+    const handler = handlerOf(t);
+
+    await handler.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "T", heading: "Hallo" }
+    );
+    const id = await idOf(t);
+
+    // Update the German heading (upsert existing row).
+    await handler.updateEntry(
+      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      { heading: "Hallo2" }
+    );
+    // Update the English heading (insert a new companion row).
+    await handler.updateEntry(
+      { collectionName: "pages", entryId: id, locale: "en", overrideAccess: true },
+      { heading: "Hi" }
+    );
+
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
+    };
+    const rows = await adapter.executeQuery(
+      'SELECT "_locale","heading" FROM "dc_pages_locales" ORDER BY "_locale"'
+    );
+    expect(rows).toEqual([
+      { _locale: "de", heading: "Hallo2" },
+      { _locale: "en", heading: "Hi" },
+    ]);
+
+    // Reads reflect the per-locale values.
+    const de = await handler.getEntry({
+      collectionName: "pages",
+      entryId: id,
+      locale: "de",
+      overrideAccess: true,
+    });
+    expect(de.data?.heading).toBe("Hallo2");
+    const en = await handler.getEntry({
+      collectionName: "pages",
+      entryId: id,
+      locale: "en",
+      overrideAccess: true,
+    });
+    expect(en.data?.heading).toBe("Hi");
   });
 });

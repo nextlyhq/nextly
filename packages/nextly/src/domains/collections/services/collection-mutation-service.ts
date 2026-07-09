@@ -152,6 +152,50 @@ export class CollectionMutationService extends BaseService {
     super(adapter, logger);
   }
 
+  /**
+   * Upsert the companion `_locales` row for `(parentId, locale)` with the provided localized
+   * columns (i18n M5, updateEntry). Only the provided columns are written — an existing row for
+   * another locale, or other localized fields on this locale's row, are left untouched. Uses the
+   * PK `(_parent, _locale)` conflict target. Runs inside the caller's transaction via `tx.execute`.
+   */
+  private async upsertCompanionRow(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter tx surface
+    tx: any,
+    companionTableName: string,
+    parentId: string,
+    locale: string,
+    companionData: Record<string, unknown>
+  ): Promise<void> {
+    const cols = Object.keys(companionData);
+    if (cols.length === 0) return;
+    const isMysql = this.dialect === "mysql";
+    const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+    const params: unknown[] = [];
+    const ph = () => (this.dialect === "postgresql" ? `$${params.length}` : "?");
+
+    const allCols = ["_parent", "_locale", ...cols];
+    const valuePlaceholders = allCols
+      .map(c => {
+        params.push(
+          c === "_parent" ? parentId : c === "_locale" ? locale : companionData[c]
+        );
+        return ph();
+      })
+      .join(", ");
+
+    const conflict = isMysql
+      ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
+      : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
+          .map(c => `${q(c)} = excluded.${q(c)}`)
+          .join(", ")}`;
+
+    await tx.execute(
+      `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
+        `VALUES (${valuePlaceholders}) ${conflict}`,
+      params
+    );
+  }
+
   /** Whether the companion `_locales` table physically exists (migration has run). */
   private async companionTableExists(companionTableName: string): Promise<boolean> {
     const q =
@@ -196,9 +240,16 @@ export class CollectionMutationService extends BaseService {
     const writeLocale = resolveRequestedLocale(this.localization, locale);
     const companionData: Record<string, unknown> = {};
     for (const field of companion.localizedFields) {
-      if (Object.prototype.hasOwnProperty.call(entryData, field.column)) {
-        companionData[field.column] = entryData[field.column];
-        delete entryData[field.column]; // migrated main table has no localized columns
+      // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
+      // field names. Accept either; always store under the snake_case companion column.
+      const key = Object.prototype.hasOwnProperty.call(entryData, field.column)
+        ? field.column
+        : Object.prototype.hasOwnProperty.call(entryData, field.name)
+          ? field.name
+          : null;
+      if (key !== null) {
+        companionData[field.column] = entryData[key];
+        delete entryData[key]; // migrated main table has no localized columns
       }
     }
     return {
@@ -877,6 +928,8 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5): translatable values are updated for this language only. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -1221,6 +1274,15 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // i18n M5: pull translatable values out of the main update (finalData uses camelCase field
+      // keys) so they update the companion `_locales` row for the write's locale instead. `null`
+      // = not localized / companion not migrated yet (values stay on main — dev path, unchanged).
+      const localizedUpdate = await this.splitLocalizedWriteData(
+        params.collectionName,
+        finalData,
+        params.locale
+      );
+
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
       // tx.execute() is used for the UPDATE so it runs on the same DB client
@@ -1249,6 +1311,18 @@ export class CollectionMutationService extends BaseService {
           `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
           sqlParams as (string | number | boolean | Date | null | undefined)[]
         );
+
+        // i18n M5: upsert the translatable values into the companion row for the write's locale
+        // (same transaction). Only the provided localized columns are touched.
+        if (localizedUpdate && Object.keys(localizedUpdate.companionData).length > 0) {
+          await this.upsertCompanionRow(
+            tx,
+            localizedUpdate.companionTableName,
+            params.entryId,
+            localizedUpdate.writeLocale,
+            localizedUpdate.companionData
+          );
+        }
 
         // Save component field data to separate comp_{slug} tables
         if (
