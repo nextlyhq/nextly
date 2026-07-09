@@ -7,6 +7,7 @@ import { getHookRegistry } from "@nextly/hooks/hook-registry";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -59,7 +60,9 @@ export class CollectionsHandler {
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
     logger: Logger = consoleLogger,
-    consumerAppRoot?: string
+    consumerAppRoot?: string,
+    /** Normalized localization config (i18n M4) — enables companion-aware reads. */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
@@ -81,6 +84,7 @@ export class CollectionsHandler {
           fields: string;
           tableName: string;
           status: boolean | number | null;
+          localized: boolean | number | null;
         }>("dynamic_collections", {
           where: {
             and: [{ column: "slug", op: "=", value: collectionName }],
@@ -97,6 +101,8 @@ export class CollectionsHandler {
             tableName: result.tableName,
             // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
+            // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
+            localized: result.localized === true || result.localized === 1,
           };
         }
       } catch (error) {
@@ -141,7 +147,9 @@ export class CollectionsHandler {
       this.relationshipService,
       hookRegistry,
       accessControlService,
-      componentDataService
+      componentDataService,
+      undefined,
+      this.localization
     );
   }
 
@@ -417,6 +425,10 @@ export class CollectionsHandler {
      * pass 'all' to see drafts too. Forwarded to query service as-is.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {

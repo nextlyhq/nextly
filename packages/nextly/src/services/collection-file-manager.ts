@@ -4,6 +4,8 @@ import * as path from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
+import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -30,7 +32,23 @@ export type CollectionMetadataFetcher = (collectionName: string) => Promise<{
   fields: FieldDefinition[];
   tableName: string;
   status?: boolean;
+  /**
+   * Whether content-localization is enabled for this collection (i18n M4). When true, the
+   * companion `<tableName>_locales` table holds the translatable columns and
+   * {@link CollectionFileManager.loadCompanionSchema} can build its queryable Drizzle table.
+   */
+  localized?: boolean;
 } | null>;
+
+/** The companion `_locales` runtime schema for a localized collection. */
+export interface CompanionSchema {
+  /** The queryable Drizzle table object for `<mainTable>_locales`. */
+  table: unknown;
+  /** Physical companion table name (e.g. `dc_pages_locales`). */
+  companionTableName: string;
+  /** Names of the collection's translatable fields (they live on the companion). */
+  localizedFieldNames: string[];
+}
 
 export class CollectionFileManager {
   private migrationsDir: string;
@@ -258,5 +276,50 @@ export class CollectionFileManager {
     throw new Error(
       `Schema for collection "${collectionName}" not found in registry. ${guidance}`
     );
+  }
+
+  /**
+   * Load (and cache) the companion `<table>_locales` runtime Drizzle schema for a localized
+   * collection (i18n M4). Returns `null` when the collection is not localized / has no localized
+   * fields — callers use that to take the unchanged non-localized read path.
+   *
+   * Built on-demand from the collection's field metadata (mirrors {@link loadDynamicSchema}'s
+   * fallback path) so the read path can JOIN the companion without a second table registry.
+   * The result is cached under the companion's SQL name so repeated reads reuse one table object.
+   */
+  async loadCompanionSchema(
+    collectionName: string
+  ): Promise<CompanionSchema | null> {
+    if (!this.adapter || !this.metadataFetcher) return null;
+    const metadata = await this.metadataFetcher(collectionName);
+    if (!metadata || metadata.localized !== true) return null;
+
+    const tableName =
+      metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
+    const companionTableName = `${tableName}_locales`;
+
+    const cached = this.schemaRegistry.get(companionTableName);
+    const localizedFieldNames = resolveLocalizedFieldNames(
+      metadata.fields,
+      true
+    );
+    if (localizedFieldNames.length === 0) return null;
+    if (cached) return { table: cached, companionTableName, localizedFieldNames };
+
+    const companion = buildCompanionRuntimeTable({
+      slug: collectionName,
+      tableName,
+      fields: metadata.fields,
+      dialect: this.adapter.dialect,
+      localized: true,
+    });
+    if (!companion) return null;
+
+    this.schemaRegistry.set(companionTableName, companion.table);
+    return {
+      table: companion.table,
+      companionTableName,
+      localizedFieldNames,
+    };
   }
 }

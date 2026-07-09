@@ -815,6 +815,10 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
+        // disables fallback. Non-localized collections ignore both.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
