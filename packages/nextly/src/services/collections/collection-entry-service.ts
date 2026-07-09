@@ -116,7 +116,8 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService
+      componentDataService,
+      localization
     );
     this.bulkService = new CollectionBulkService(
       adapter,
@@ -192,6 +193,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values stored for this language. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,

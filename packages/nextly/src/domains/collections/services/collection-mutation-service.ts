@@ -42,6 +42,8 @@ import { BaseService } from "../../../shared/base-service";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -139,9 +141,71 @@ export class CollectionMutationService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService
+    private readonly componentDataService?: ComponentDataService,
+    /**
+     * Normalized localization config (i18n M5). When set and a collection is localized, writes
+     * route translatable field values to the companion `_locales` row for the write's locale.
+     * Absent → non-localized behavior (unchanged).
+     */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
+  }
+
+  /** Whether the companion `_locales` table physically exists (migration has run). */
+  private async companionTableExists(companionTableName: string): Promise<boolean> {
+    const q =
+      this.adapter.dialect === "mysql"
+        ? `\`${companionTableName}\``
+        : `"${companionTableName}"`;
+    try {
+      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Split `entryData` (snake_case keys) into main-table data and companion data for a localized
+   * collection: localized columns move to `companionData` and are removed from `mainData` (the
+   * migrated main table no longer has them). Returns `null` when the collection isn't localized
+   * or the companion table doesn't exist yet (dev/unmigrated → localized cols stay on main).
+   */
+  private async splitLocalizedWriteData(
+    collectionName: string,
+    entryData: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<{
+    companionTableName: string;
+    writeLocale: string;
+    companionData: Record<string, unknown>;
+  } | null> {
+    if (!this.localization) return null;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return null;
+
+    // Route to the companion ONLY when it physically exists (the migration has run). Before
+    // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
+    // writes must go there — return null and let the localized values flow to main as today.
+    if (!(await this.companionTableExists(companion.companionTableName))) {
+      return null;
+    }
+
+    const writeLocale = resolveRequestedLocale(this.localization, locale);
+    const companionData: Record<string, unknown> = {};
+    for (const field of companion.localizedFields) {
+      if (Object.prototype.hasOwnProperty.call(entryData, field.column)) {
+        companionData[field.column] = entryData[field.column];
+        delete entryData[field.column]; // migrated main table has no localized columns
+      }
+    }
+    return {
+      companionTableName: companion.companionTableName,
+      writeLocale,
+      companionData,
+    };
   }
 
   /**
@@ -306,6 +370,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5): translatable values are stored for this language. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -632,6 +698,16 @@ export class CollectionMutationService extends BaseService {
         entryData[toSnakeCase(key)] = value;
       }
 
+      // i18n M5: for a localized collection, pull translatable columns out of the main insert
+      // (the migrated main table no longer has them) so they can be written to the companion
+      // row for the write's locale, inside the same transaction. `null` = not localized /
+      // companion not migrated yet (localized cols stay on main — dev path, unchanged).
+      const localizedWrite = await this.splitLocalizedWriteData(
+        params.collectionName,
+        entryData,
+        params.locale
+      );
+
       // Wrap entry insert and component data save in a transaction so that
       // a component save failure rolls back the entry — no partial state.
       const entry: Record<string, unknown> = {};
@@ -646,6 +722,20 @@ export class CollectionMutationService extends BaseService {
           rawEntry as Record<string, unknown>
         )) {
           entry[toCamelCase(key)] = value;
+        }
+
+        // i18n M5: write the translatable values to the companion `_locales` row for the
+        // write's locale (same transaction → rolls back with the main insert).
+        if (localizedWrite) {
+          await tx.insert(
+            localizedWrite.companionTableName,
+            {
+              _parent: entry.id,
+              _locale: localizedWrite.writeLocale,
+              ...localizedWrite.companionData,
+            },
+            {}
+          );
         }
 
         // Save component field data to separate comp_{slug} tables
