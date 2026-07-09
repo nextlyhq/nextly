@@ -41,6 +41,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 
 import {
@@ -68,6 +69,12 @@ export interface RuntimeSchemaResult {
 export interface RuntimeSchemaOptions {
   /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
   status?: boolean;
+  /**
+   * When true, this collection is localized: translatable fields live in the companion
+   * `_locales` table and are omitted from the main runtime table (kept in lockstep with
+   * `buildDesiredTableFromFields`'s `localized` option).
+   */
+  localized?: boolean;
 }
 
 /**
@@ -238,6 +245,11 @@ function buildDrizzleColumnRecord(
   const hasTitleField = fields.some(f => f.name === "title");
   const hasSlugField = fields.some(f => f.name === "slug");
 
+  // Localized fields live in the companion `_locales` table; omit them from the main table.
+  const localizedNames = options.localized
+    ? new Set(resolveLocalizedFieldNames(fields, true))
+    : new Set<string>();
+
   // System columns first (id, created_at, updated_at; conditionally title,
   // slug, and status). Source-of-truth descriptor list lives in
   // field-column-descriptor.ts and stays in lockstep with the diff input.
@@ -252,6 +264,7 @@ function buildDrizzleColumnRecord(
   // User-defined fields. Layout-only field types and unmapped types
   // come back as `null` from getColumnDescriptor and are skipped.
   for (const field of fields) {
+    if (localizedNames.has(field.name)) continue; // companion-owned
     const desc = getColumnDescriptor(field, dialect);
     if (!desc) continue;
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
