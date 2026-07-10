@@ -86,6 +86,12 @@ export interface EntryFormCollection {
    * `dynamic_collections.status` boolean column.
    */
   status?: boolean;
+  /**
+   * Whether the collection has multilingual content enabled (i18n). When `true`, text-like
+   * fields are translatable by default and the entry editor exposes per-language editing.
+   * Backed by the `dynamic_collections.localized` boolean column.
+   */
+  localized?: boolean;
 }
 
 /**

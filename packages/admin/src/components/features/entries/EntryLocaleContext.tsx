@@ -16,15 +16,25 @@ export interface EntryLocaleContextValue {
   locale?: string;
   /** Whether the active locale is written right-to-left. */
   rtl: boolean;
+  /** The collection's master localization switch (drives per-field translatability). */
+  collectionLocalized: boolean;
+  /**
+   * Whether the active locale differs from the app default. Field-level i18n affordances
+   * (the "shared across languages" hint, the inline source-text hint) only apply while
+   * editing a non-default language — editing the default language is the plain path.
+   */
+  isNonDefaultLocale: boolean;
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({
   rtl: false,
+  collectionLocalized: false,
+  isNonDefaultLocale: false,
 });
 
 export const EntryLocaleProvider = EntryLocaleContext.Provider;
 
-/** Read the active content-locale context (defaults to LTR / no locale). */
+/** Read the active content-locale context (defaults to LTR / no locale / non-localized). */
 export function useEntryLocale(): EntryLocaleContextValue {
   return useContext(EntryLocaleContext);
 }

@@ -193,13 +193,20 @@ export function EntryForm({
     onCancel,
   });
 
-  // i18n M7: the active locale's writing direction, provided to field components so their
-  // inputs render right-to-left for RTL languages (Arabic, Hebrew, …). `false` for LTR /
-  // non-localized editors — unchanged.
-  const { getLocale } = useLocalization();
+  // i18n M7: content-locale context for field components — the active locale's writing
+  // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
+  // field can tell whether it is translatable), and whether the active language differs from
+  // the app default (per-field affordances only apply while translating a non-default language).
+  // All inert for LTR / non-localized editors — the plain path is unchanged.
+  const { getLocale, defaultLocale } = useLocalization();
   const localeCtx = useMemo(
-    () => ({ locale, rtl: getLocale(locale)?.rtl ?? false }),
-    [locale, getLocale]
+    () => ({
+      locale,
+      rtl: getLocale(locale)?.rtl ?? false,
+      collectionLocalized: collection.localized === true,
+      isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
+    }),
+    [locale, getLocale, defaultLocale, collection.localized]
   );
 
   // Get all fields. Title and slug are extracted as system fields rendered in

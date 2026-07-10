@@ -1,62 +1,98 @@
 /**
- * FieldWrapper — RTL direction (i18n M7)
+ * FieldWrapper — per-field i18n affordances (M7, design spec §10)
  *
- * The active content locale's writing direction flows into the field wrapper via
- * EntryLocaleContext. When the locale is RTL, the wrapper renders `dir="rtl"` so the
- * input, label, and description mirror. LTR / non-localized editors are unaffected.
+ * Two behaviours, both driven by EntryLocaleContext + the shared `isFieldLocalized` classifier:
+ *  - RTL: a *translatable* field edited in an RTL language renders `dir="rtl"`. Shared fields and
+ *    LTR languages stay LTR.
+ *  - "Shared across languages" affordance: in a multilingual collection, a non-translatable field
+ *    is marked so editors know its value applies to every language (spec §7/§10).
  */
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { EntryLocaleProvider } from "../EntryLocaleContext";
+import {
+  EntryLocaleProvider,
+  type EntryLocaleContextValue,
+} from "../EntryLocaleContext";
 
 import { FieldWrapper } from "./FieldWrapper";
 
 const textField = { name: "title", type: "text", label: "Title" } as never;
+// `number` is a shared-by-default type (not text-like), so it is never translatable.
+const numberField = { name: "price", type: "number", label: "Price" } as never;
 
-function renderWrapper(rtl: boolean, horizontal = false) {
+function ctx(over: Partial<EntryLocaleContextValue>): EntryLocaleContextValue {
+  return {
+    rtl: false,
+    collectionLocalized: false,
+    isNonDefaultLocale: false,
+    ...over,
+  };
+}
+
+function renderField(
+  field: unknown,
+  over: Partial<EntryLocaleContextValue>,
+  horizontal = false
+) {
   return render(
-    <EntryLocaleProvider value={{ locale: rtl ? "ar" : "en", rtl }}>
-      <FieldWrapper field={textField} horizontal={horizontal}>
+    <EntryLocaleProvider value={ctx(over)}>
+      <FieldWrapper field={field as never} horizontal={horizontal}>
         <input data-testid="control" />
       </FieldWrapper>
     </EntryLocaleProvider>
   );
 }
 
+const wrapperOf = () =>
+  screen.getByTestId("control").closest("[data-field]") as HTMLElement;
+
 describe("FieldWrapper RTL direction", () => {
-  it("marks the wrapper dir=rtl when the active locale is right-to-left", () => {
-    renderWrapper(true);
-    expect(screen.getByTestId("control").closest("[data-field]")).toHaveAttribute(
-      "dir",
-      "rtl"
-    );
+  it("flips a translatable field RTL in a right-to-left language", () => {
+    renderField(textField, { locale: "ar", rtl: true, collectionLocalized: true });
+    expect(wrapperOf()).toHaveAttribute("dir", "rtl");
   });
 
   it("leaves dir unset for LTR locales", () => {
-    renderWrapper(false);
-    expect(
-      screen.getByTestId("control").closest("[data-field]")
-    ).not.toHaveAttribute("dir");
+    renderField(textField, { locale: "en", rtl: false, collectionLocalized: true });
+    expect(wrapperOf()).not.toHaveAttribute("dir");
   });
 
-  it("applies dir=rtl in horizontal layout too", () => {
-    renderWrapper(true, true);
-    expect(screen.getByTestId("control").closest("[data-field]")).toHaveAttribute(
-      "dir",
-      "rtl"
-    );
+  it("does NOT flip a shared field even in an RTL language", () => {
+    // `number` is shared → language-neutral → stays LTR.
+    renderField(numberField, { locale: "ar", rtl: true, collectionLocalized: true });
+    expect(wrapperOf()).not.toHaveAttribute("dir");
+  });
+
+  it("applies dir=rtl in horizontal layout for a translatable field", () => {
+    renderField(textField, { locale: "ar", rtl: true, collectionLocalized: true }, true);
+    expect(wrapperOf()).toHaveAttribute("dir", "rtl");
   });
 
   it("defaults to LTR when no EntryLocale provider is present", () => {
     render(
-      <FieldWrapper field={textField}>
+      <FieldWrapper field={textField} horizontal={false}>
         <input data-testid="control" />
       </FieldWrapper>
     );
-    expect(
-      screen.getByTestId("control").closest("[data-field]")
-    ).not.toHaveAttribute("dir");
+    expect(wrapperOf()).not.toHaveAttribute("dir");
+  });
+});
+
+describe("FieldWrapper shared-across-languages affordance", () => {
+  it("marks a shared field in a multilingual collection", () => {
+    renderField(numberField, { collectionLocalized: true });
+    expect(screen.getByText("Shared")).toBeInTheDocument();
+  });
+
+  it("does NOT mark a translatable field", () => {
+    renderField(textField, { collectionLocalized: true });
+    expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+  });
+
+  it("shows no affordance when the collection is not localized", () => {
+    renderField(numberField, { collectionLocalized: false });
+    expect(screen.queryByText("Shared")).not.toBeInTheDocument();
   });
 });

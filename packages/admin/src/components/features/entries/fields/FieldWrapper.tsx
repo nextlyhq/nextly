@@ -11,7 +11,8 @@
  */
 
 import { Label } from "@nextlyhq/ui";
-import type { FieldConfig } from "nextly/config";
+import { Globe } from "lucide-react";
+import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
 import { useId } from "react";
 
@@ -127,6 +128,7 @@ export function FieldWrapper({
   const fieldWithCommonProps = field as {
     label?: string;
     required?: boolean;
+    localized?: boolean;
     admin?: {
       description?: string;
       width?: string;
@@ -142,6 +144,30 @@ export function FieldWrapper({
   const width = fieldWithCommonProps.admin?.width || "100%";
   const isHidden = fieldWithCommonProps.admin?.hidden;
   const _fieldType = field.type as string;
+
+  // i18n M7: is this field translatable (a per-language value) or shared across all languages?
+  // Uses the same classifier as storage generation (nextly/config) so the editor and the DB
+  // agree. For non-localized collections this is always false and everything below is inert.
+  const isLocalizedField = isFieldLocalized(
+    { type: _fieldType, name: fieldName ?? "", localized: fieldWithCommonProps.localized },
+    entryLocale.collectionLocalized
+  );
+  // Flip inputs right-to-left only for translatable fields in an RTL language — a shared field's
+  // value is language-neutral and stays LTR.
+  const rtlField = entryLocale.rtl && isLocalizedField;
+  // Subtle marker on shared fields in a multilingual collection: their value applies to every
+  // language and has no per-language draft state (spec §7), so editing one changes all — surface
+  // it so editors aren't surprised. Only meaningful for real (named) data fields.
+  const sharedHint =
+    entryLocale.collectionLocalized && !isLocalizedField && fieldName != null ? (
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground/70"
+        title="Shared across languages — editing this field changes it for every language."
+      >
+        <Globe className="size-3" aria-hidden="true" />
+        Shared
+      </span>
+    ) : null;
 
   // Don't render if hidden
   if (isHidden) {
@@ -164,15 +190,15 @@ export function FieldWrapper({
         style={fieldWithCommonProps.admin?.style}
         data-field={fieldName}
         data-field-type={field.type}
-        // i18n M7: render the field right-to-left when the active content language is RTL.
-        {...(entryLocale.rtl ? { dir: "rtl" as const } : {})}
+        // i18n M7: render the field right-to-left when a translatable field is edited in an RTL language.
+        {...(rtlField ? { dir: "rtl" as const } : {})}
       >
         <div className="pt-0.5">{children}</div>
         <div className="grid gap-1.5 leading-none">
           <Label
             htmlFor={fieldId}
             className={cn(
-              "text-[11px] font-bold tracking-[0.08em] text-slate-500",
+              "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-slate-500",
               error && "text-destructive"
             )}
           >
@@ -182,6 +208,7 @@ export function FieldWrapper({
                 *
               </span>
             )}
+            {sharedHint}
           </Label>
           {description && (
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -214,15 +241,15 @@ export function FieldWrapper({
       style={fieldWithCommonProps.admin?.style}
       data-field={fieldName}
       data-field-type={field.type}
-      // i18n M7: render the field right-to-left when the active content language is RTL
-      // (Arabic, Hebrew, …). LTR / non-localized editors are unaffected (default `false`).
-      {...(entryLocale.rtl ? { dir: "rtl" as const } : {})}
+      // i18n M7: render the field right-to-left when a translatable field is edited in an RTL
+      // language (Arabic, Hebrew, …). Shared / non-localized editors are unaffected.
+      {...(rtlField ? { dir: "rtl" as const } : {})}
     >
       {/* Label */}
       <Label
         htmlFor={fieldId}
         className={cn(
-          "text-[11px] font-bold tracking-[0.08em] text-slate-500 mb-1",
+          "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-slate-500 mb-1",
           error && "text-destructive"
         )}
       >
@@ -232,6 +259,7 @@ export function FieldWrapper({
             *
           </span>
         )}
+        {sharedHint}
       </Label>
 
       {/* Input (children) */}
