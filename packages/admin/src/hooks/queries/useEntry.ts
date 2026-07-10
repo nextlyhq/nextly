@@ -162,8 +162,13 @@ export function useEntry<T = Entry>({
   queryOptions,
 }: UseEntryOptions<T>) {
   return useQuery<T, Error>({
+    // i18n M7: locale is part of the cache identity — switching languages must refetch the
+    // entry (the localized field values differ per locale), not serve the previous language.
     queryKey: entryId
-      ? entryKeys.detail(collectionSlug, entryId)
+      ? [
+          ...entryKeys.detail(collectionSlug, entryId),
+          { locale: locale ?? null, fallbackLocale: fallbackLocale ?? null },
+        ]
       : entryKeys.detailsByCollection(collectionSlug),
     queryFn: async () => {
       // Safety check: This shouldn't execute due to `enabled` flag,

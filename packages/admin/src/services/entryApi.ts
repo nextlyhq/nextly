@@ -563,10 +563,17 @@ export const entryApi = {
   update: async (
     collectionSlug: string,
     id: string,
-    data: UpdateEntryPayload
+    data: UpdateEntryPayload,
+    options?: Pick<FindParams, "locale" | "fallbackLocale">
   ): Promise<Entry> => {
+    // i18n M7: `?locale=de` updates only the German translatable values for this entry.
+    const query = new URLSearchParams();
+    if (options?.locale) query.set("locale", options.locale);
+    if (options?.fallbackLocale)
+      query.set("fallback-locale", options.fallbackLocale);
+    const qs = query.toString();
     const result = await protectedApi.patch<{ message: string; item: Entry }>(
-      `/collections/${collectionSlug}/entries/${id}`,
+      `/collections/${collectionSlug}/entries/${id}${qs ? `?${qs}` : ""}`,
       data
     );
     return result.item;
