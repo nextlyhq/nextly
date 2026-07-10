@@ -204,6 +204,7 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     required: Boolean(field.validation?.required),
     unique: Boolean(field.advanced?.unique),
     index: Boolean(field.advanced?.index),
+    localized: Boolean(field.advanced?.localized),
     defaultValue: field.defaultValue,
   };
 
@@ -366,6 +367,7 @@ export function convertToBuilderField(
     advanced: {
       unique: field.unique || false,
       index: field.index || false,
+      localized: field.localized || false,
     },
     // Relationship properties
     relationTo: field.relationTo,

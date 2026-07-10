@@ -50,6 +50,7 @@ export interface BuilderFieldInput {
   required?: boolean;
   unique?: boolean;
   index?: boolean;
+  localized?: boolean;
   relationTo?: string | string[];
   hasMany?: boolean;
   options?: Array<{ id?: string; label: string; value: string }>;
@@ -77,6 +78,8 @@ export interface BuilderSettingsInput {
   singularName?: string;
   pluralName?: string;
   status?: boolean;
+  /** i18n: collection has translatable fields (companion `_locales` table). */
+  localized?: boolean;
   useAsTitle?: string;
   defaultColumns?: string[];
   group?: string;
@@ -101,6 +104,7 @@ export interface ManifestField {
   required?: boolean;
   unique?: boolean;
   index?: boolean;
+  localized?: boolean;
   relationTo?: string | string[];
   hasMany?: boolean;
   options?: Array<{ id?: string; label: string; value: string }>;
@@ -129,6 +133,8 @@ export interface ManifestEntity {
   labels?: { singular: string; plural: string };
   admin?: { useAsTitle?: string; defaultColumns?: string[]; group?: string };
   status?: boolean;
+  /** i18n: collection has translatable fields. */
+  localized?: boolean;
   fields: ManifestField[];
 }
 
@@ -138,6 +144,7 @@ const PASSTHROUGH_KEYS = [
   "required",
   "unique",
   "index",
+  "localized",
   "relationTo",
   "hasMany",
   "options",
@@ -191,7 +198,7 @@ export function applyCommonSettings(
   entity: ManifestEntity,
   settings: BuilderSettingsInput
 ): void {
-  const { useAsTitle, defaultColumns, group, status } = settings;
+  const { useAsTitle, defaultColumns, group, status, localized } = settings;
   const admin: NonNullable<ManifestEntity["admin"]> = {};
   if (useAsTitle) admin.useAsTitle = useAsTitle;
   if (defaultColumns && defaultColumns.length > 0) {
@@ -200,6 +207,7 @@ export function applyCommonSettings(
   if (group) admin.group = group;
   if (Object.keys(admin).length > 0) entity.admin = admin;
   if (status !== undefined) entity.status = status;
+  if (localized !== undefined) entity.localized = localized;
 }
 
 export function collectionToManifestEntity(

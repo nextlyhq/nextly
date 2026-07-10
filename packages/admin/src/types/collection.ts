@@ -93,6 +93,11 @@ export interface FieldDefinition {
   unique?: boolean;
   index?: boolean;
   /**
+   * i18n: store a different value per language for this field (companion `_locales` table).
+   * When omitted, text-like fields localize by default once the collection is `localized`.
+   */
+  localized?: boolean;
+  /**
    * Field provenance, serialized by the API from the registry. "plugin" =
    * contributed by a plugin (locked + badged in the Builder, managed in the
    * plugin's code); "ui" / "code" otherwise.
@@ -309,6 +314,8 @@ export interface CreateCollectionPayload {
   useAsTitle?: string;
   /** Whether records carry a Draft/Published status column. Default false. */
   status?: boolean;
+  /** i18n: whether the collection has translatable (per-locale) fields. Default false. */
+  localized?: boolean;
   /** Whether to auto-generate createdAt/updatedAt. Default true. */
   timestamps?: boolean;
   fields: FieldDefinition[];
@@ -329,6 +336,9 @@ export interface UpdateCollectionPayload {
    *  table; toggling off drops it (destructive change, gated by the
    *  schema-change preview). */
   status?: boolean;
+  /** i18n: toggle translatable fields. Toggling on adds the companion `_locales`
+   *  table (migration-gated, via the schema-change preview). */
+  localized?: boolean;
   timestamps?: boolean;
   fields?: FieldDefinition[];
   /** Pre-built hooks configured for this collection */
