@@ -1072,9 +1072,9 @@ export class CollectionMutationService extends BaseService {
             ["published", params.entryId]
           );
         }
-        if (companionPublishable) {
+        if (companion && companionPublishable) {
           await tx.execute(
-            `UPDATE ${q(companion!.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
+            `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
             ["published", params.entryId]
           );
         }
