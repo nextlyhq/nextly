@@ -96,3 +96,41 @@ describe("FieldWrapper shared-across-languages affordance", () => {
     expect(screen.queryByText("Shared")).not.toBeInTheDocument();
   });
 });
+
+describe("FieldWrapper inline default-language source", () => {
+  const translating = {
+    locale: "ar",
+    collectionLocalized: true,
+    isNonDefaultLocale: true,
+    sourceValues: { title: "Hello world", price: 42 },
+  };
+
+  it("shows the default-language value on a translatable field while translating", () => {
+    renderField(textField, translating);
+    expect(screen.getByText("Hello world")).toBeInTheDocument();
+  });
+
+  it("does NOT show a source hint on a shared field", () => {
+    renderField(numberField, translating);
+    // number is shared → no source hint even though sourceValues has `price`.
+    expect(screen.queryByText("42")).not.toBeInTheDocument();
+  });
+
+  it("does NOT show a source hint while editing the default language", () => {
+    renderField(textField, {
+      locale: "en",
+      collectionLocalized: true,
+      isNonDefaultLocale: false,
+      sourceValues: { title: "Hello world" },
+    });
+    expect(screen.queryByText("Hello world")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing when the source value is blank", () => {
+    renderField(textField, {
+      ...translating,
+      sourceValues: { title: "   " },
+    });
+    expect(screen.queryByText("Default:")).not.toBeInTheDocument();
+  });
+});

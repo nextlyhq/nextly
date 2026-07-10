@@ -28,6 +28,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -245,6 +246,21 @@ export default function EditEntryPage({
     locale,
   });
 
+  // i18n M7: while translating a non-default language, also load the default-language entry so
+  // the editor can show the source text inline on each translatable field (spec §10). Gated so
+  // it only fires when actually translating another language; editing the default language reuses
+  // the primary fetch above (same cache key) and needs no source copy.
+  const { defaultLocale } = useLocalization();
+  const isNonDefaultLocale =
+    !!locale && !!defaultLocale && locale !== defaultLocale;
+  const { data: sourceEntry } = useEntry({
+    collectionSlug: slug || "",
+    entryId: id,
+    depth: 2,
+    locale: defaultLocale,
+    enabled: isNonDefaultLocale,
+  });
+
   // Auto-register plugin components when collection is loaded
   // Auto-register plugin components when collection is loaded
   // This ensures custom Edit view components are available before rendering
@@ -437,6 +453,7 @@ export default function EditEntryPage({
           mode="edit"
           locale={locale}
           onLocaleChange={setLocale}
+          sourceValues={sourceEntry}
           onSuccess={handleSuccess}
           onDelete={handleDelete}
           onCancel={handleCancel}

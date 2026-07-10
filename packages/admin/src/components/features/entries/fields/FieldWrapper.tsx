@@ -169,6 +169,29 @@ export function FieldWrapper({
       </span>
     ) : null;
 
+  // i18n M7: while translating a non-default language, show the default-language value inline on
+  // a translatable field so the translator always has the source text (spec §10 — the validated,
+  // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
+  // structural values (relationships, richText objects) are skipped.
+  const rawSource =
+    isLocalizedField && entryLocale.isNonDefaultLocale && fieldName != null
+      ? entryLocale.sourceValues?.[fieldName]
+      : undefined;
+  const sourceText =
+    typeof rawSource === "string" && rawSource.trim() !== ""
+      ? rawSource
+      : typeof rawSource === "number"
+        ? String(rawSource)
+        : null;
+  const sourceHint = sourceText ? (
+    <p
+      dir="auto"
+      className="text-xs leading-relaxed text-muted-foreground/80 border-l-2 border-muted pl-2"
+    >
+      <span className="font-medium">Default:</span> {sourceText}
+    </p>
+  ) : null;
+
   // Don't render if hidden
   if (isHidden) {
     return null;
@@ -264,6 +287,9 @@ export function FieldWrapper({
 
       {/* Input (children) */}
       {children}
+
+      {/* i18n M7: default-language source text, shown while translating another language. */}
+      {sourceHint}
 
       {/* Description / helper text — always visible below the input. Replaces
           the previous tooltip-on-info-icon pattern (Task 5 PR 5 design D3). */}

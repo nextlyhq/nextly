@@ -24,6 +24,11 @@ export interface EntryLocaleContextValue {
    * editing a non-default language — editing the default language is the plain path.
    */
   isNonDefaultLocale: boolean;
+  /**
+   * Default-language field values, keyed by field name (camelCase). Present while translating a
+   * non-default language so a translatable field can show its source text inline (spec §10).
+   */
+  sourceValues?: Record<string, unknown>;
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({

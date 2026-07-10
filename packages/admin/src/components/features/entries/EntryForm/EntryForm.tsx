@@ -72,6 +72,11 @@ export interface EntryFormProps {
   /** Called when the user switches the active content language (i18n M7). */
   onLocaleChange?: (locale: string) => void;
   /**
+   * Default-language field values (i18n M7). Provided while translating a non-default language
+   * so each translatable field can show its source text inline. Keyed by field name (camelCase).
+   */
+  sourceValues?: Record<string, unknown>;
+  /**
    * Embedded mode for use in modals.
    * When true:
    * - Header is hidden (modal provides its own)
@@ -170,6 +175,7 @@ export function EntryForm({
   onCancel,
   locale,
   onLocaleChange,
+  sourceValues,
   embedded = false,
   className,
 }: EntryFormProps) {
@@ -205,8 +211,9 @@ export function EntryForm({
       rtl: getLocale(locale)?.rtl ?? false,
       collectionLocalized: collection.localized === true,
       isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
+      sourceValues,
     }),
-    [locale, getLocale, defaultLocale, collection.localized]
+    [locale, getLocale, defaultLocale, collection.localized, sourceValues]
   );
 
   // Get all fields. Title and slug are extracted as system fields rendered in
