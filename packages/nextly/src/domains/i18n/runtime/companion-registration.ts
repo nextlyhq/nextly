@@ -30,6 +30,8 @@ export interface CompanionRuntimeArgs {
    * (it only affects seeding). Defaults to `"en"`.
    */
   defaultLocale?: string;
+  /** Whether the collection has Draft/Published (i18n M6) → companion has a `_status` column. */
+  status?: boolean;
 }
 
 export interface CompanionRuntimeTable {
@@ -39,8 +41,8 @@ export interface CompanionRuntimeTable {
 
 /**
  * Build the queryable companion `_locales` Drizzle table for a localized entity, or `null`
- * when the entity is not localized / has no localized fields. The companion has no per-locale
- * `_status` yet (deferred to M6) — matching M1's migration DDL, which omits it.
+ * when the entity is not localized / has no localized fields. When the collection has
+ * Draft/Published (`status`), the companion carries a per-locale `_status` column (i18n M6).
  */
 export function buildCompanionRuntimeTable(
   args: CompanionRuntimeArgs
@@ -53,12 +55,14 @@ export function buildCompanionRuntimeTable(
     dialect: args.dialect,
     defaultLocale: args.defaultLocale ?? "en",
     collectionLocalized: true,
+    status: args.status,
   });
   if (!spec) return null;
   const { table } = generateCompanionRuntimeSchema(
     spec.companionTable,
     spec.columns,
-    args.dialect
+    args.dialect,
+    { status: args.status === true }
   );
   return { companionTableName: spec.companionTable, table };
 }

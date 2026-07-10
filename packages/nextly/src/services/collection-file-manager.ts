@@ -54,6 +54,8 @@ export interface CompanionSchema {
    * for camelCase fields (`metaTitle` → `meta_title`).
    */
   localizedFields: LocalizedFieldRef[];
+  /** Whether the companion has a per-locale `_status` column (collection has Draft/Published). */
+  hasStatus: boolean;
 }
 
 export class CollectionFileManager {
@@ -312,7 +314,10 @@ export class CollectionFileManager {
       true
     ).map(name => ({ name, column: toSnakeCase(name) }));
     if (localizedFields.length === 0) return null;
-    if (cached) return { table: cached, companionTableName, localizedFields };
+    const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
+    if (cached) {
+      return { table: cached, companionTableName, localizedFields, hasStatus };
+    }
 
     const companion = buildCompanionRuntimeTable({
       slug: collectionName,
@@ -320,6 +325,7 @@ export class CollectionFileManager {
       fields: metadata.fields,
       dialect: this.adapter.dialect,
       localized: true,
+      status: hasStatus,
     });
     if (!companion) return null;
 
@@ -328,6 +334,7 @@ export class CollectionFileManager {
       table: companion.table,
       companionTableName,
       localizedFields,
+      hasStatus,
     };
   }
 }

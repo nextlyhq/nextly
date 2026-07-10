@@ -321,6 +321,7 @@ function planCompanionMigrations(
       dialect,
       defaultLocale,
       collectionLocalized: true,
+      status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
     if (!spec) continue;
 

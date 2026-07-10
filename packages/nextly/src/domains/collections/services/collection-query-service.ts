@@ -187,7 +187,14 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     localeChain: string[] | null,
-    preloaded?: CompanionSchema | null
+    preloaded?: CompanionSchema | null,
+    /**
+     * Resolved status the read is scoped to (`"published"` / `"draft"`), or `null` for `all`.
+     * When the companion has per-locale status (i18n M6), a companion row whose `_status` differs
+     * is filtered out so a draft translation never leaks — the field falls back to the published
+     * default.
+     */
+    statusFilterValue?: string | null
   ): Promise<void> {
     if (!localeChain || rows.length === 0) return;
     const companion =
@@ -200,6 +207,8 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       localeChain,
+      statusValue:
+        companion.hasStatus && statusFilterValue ? statusFilterValue : undefined,
     });
   }
 
@@ -807,7 +816,8 @@ export class CollectionQueryService extends BaseService {
         params.collectionName,
         entries,
         localeChain,
-        companion
+        companion,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.populateLocalizedAll(
@@ -1464,7 +1474,9 @@ export class CollectionQueryService extends BaseService {
       await this.populateLocalized(
         params.collectionName,
         [entry as Record<string, unknown>],
-        this.resolveLocaleChain(params.locale, params.fallbackLocale)
+        this.resolveLocaleChain(params.locale, params.fallbackLocale),
+        undefined,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.populateLocalizedAll(

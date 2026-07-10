@@ -19,6 +19,8 @@ interface DeriveArgs {
   dialect: SupportedDialect;
   defaultLocale: string;
   collectionLocalized: boolean;
+  /** Whether the collection has Draft/Published (i18n M6) → companion gets a per-locale `_status`. */
+  status?: boolean;
 }
 
 /** Parent-id DDL type must match the main table's `id` column. */
@@ -53,5 +55,6 @@ export function deriveCompanionSpec(
     defaultLocale: args.defaultLocale,
     parentIdType: parentIdType(args.dialect),
     columns,
+    status: args.status === true,
   };
 }

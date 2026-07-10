@@ -67,6 +67,13 @@ export interface PopulateCompanionArgs {
   localeChain: string[];
   /** The main-row primary-key property (defaults to `"id"`). */
   idKey?: string;
+  /**
+   * Per-locale status filter (i18n M6). When set (e.g. `"published"`), only companion rows whose
+   * `_status` matches are considered — a draft translation is filtered out and the field falls
+   * back to the published default, so a draft never leaks to a public read. Undefined = no filter
+   * (admin/`status=all`, or a collection without per-locale status).
+   */
+  statusValue?: string;
 }
 
 /**
@@ -115,9 +122,15 @@ export async function populateCompanionFields(
     return;
   }
 
-  // Index: parentId -> locale -> companion row.
+  // Index: parentId -> locale -> companion row. A row whose `_status` fails the status filter is
+  // dropped here (i18n M6) so it can never be resolved onto a public row — the chain then falls
+  // back to the published default. Undefined `statusValue` keeps every row (admin / no per-locale
+  // status).
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
+    if (args.statusValue !== undefined && cr._status !== args.statusValue) {
+      continue;
+    }
     const parent = cr._parent;
     let perLocale = byParent.get(parent);
     if (!perLocale) {
