@@ -7,6 +7,8 @@ import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
+import { useEntryLocale } from "../../EntryLocaleContext";
+import { LanguageStatusPills } from "../../LanguageStatusPills";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -78,6 +80,12 @@ export function DocumentPanel({
 
   const pill = pillStateFromForm(entry?.status as string | undefined, isDirty);
 
+  // i18n M7: per-language translation-status pills (spec §10). Present only when the entry was
+  // fetched with `?translation-status=1` on a localized collection; inert otherwise.
+  const translations = entry?._translations as
+    | Record<string, { translated: boolean; status?: string }>
+    | undefined;
+
   return (
     <div className="px-5 py-4 border-b border-primary/5">
       <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
@@ -89,6 +97,32 @@ export function DocumentPanel({
         <Separator />
         <TimestampRows entry={entry} />
       </dl>
+      <TranslationsRow translations={translations} />
+    </div>
+  );
+}
+
+/**
+ * Per-language translation-status pills row (i18n M7). Renders nothing when localization is off
+ * or the entry has no `_translations` map, so non-localized documents are unchanged.
+ */
+function TranslationsRow({
+  translations,
+}: {
+  translations?: Record<string, { translated: boolean; status?: string }>;
+}) {
+  const { locale, onLocaleChange } = useEntryLocale();
+  if (!translations) return null;
+  return (
+    <div className="mt-4 pt-4 border-t border-primary/5">
+      <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
+        Languages
+      </p>
+      <LanguageStatusPills
+        translations={translations}
+        activeLocale={locale}
+        onSelect={onLocaleChange}
+      />
     </div>
   );
 }

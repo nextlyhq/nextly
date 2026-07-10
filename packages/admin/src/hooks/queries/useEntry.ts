@@ -44,6 +44,11 @@ export interface UseEntryOptions<T = Entry> {
   locale?: string;
   /** Fallback locale when translation is missing */
   fallbackLocale?: string;
+  /**
+   * i18n M7: request the per-locale `_translations` overview map (which languages are translated
+   * + each one's draft/published status) for the per-language status pills.
+   */
+  translationStatus?: boolean;
   /** Whether to include draft content */
   draft?: boolean;
   /** Additional TanStack Query options */
@@ -159,6 +164,7 @@ export function useEntry<T = Entry>({
   locale,
   fallbackLocale,
   draft,
+  translationStatus,
   queryOptions,
 }: UseEntryOptions<T>) {
   return useQuery<T, Error>({
@@ -167,7 +173,11 @@ export function useEntry<T = Entry>({
     queryKey: entryId
       ? [
           ...entryKeys.detail(collectionSlug, entryId),
-          { locale: locale ?? null, fallbackLocale: fallbackLocale ?? null },
+          {
+            locale: locale ?? null,
+            fallbackLocale: fallbackLocale ?? null,
+            translationStatus: translationStatus ?? false,
+          },
         ]
       : entryKeys.detailsByCollection(collectionSlug),
     queryFn: async () => {
@@ -179,12 +189,13 @@ export function useEntry<T = Entry>({
 
       const options: Pick<
         FindParams,
-        "depth" | "locale" | "fallbackLocale" | "draft"
+        "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
       > = {};
       if (depth !== undefined) options.depth = depth;
       if (locale) options.locale = locale;
       if (fallbackLocale) options.fallbackLocale = fallbackLocale;
       if (draft !== undefined) options.draft = draft;
+      if (translationStatus) options.translationStatus = true;
 
       // Type assertion needed because entryApi.findByID returns Entry
       // but we want to support generic entry types

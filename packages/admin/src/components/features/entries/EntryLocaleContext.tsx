@@ -29,6 +29,8 @@ export interface EntryLocaleContextValue {
    * non-default language so a translatable field can show its source text inline (spec §10).
    */
   sourceValues?: Record<string, unknown>;
+  /** Switch the active editing language — lets in-form surfaces (status pills) change locale. */
+  onLocaleChange?: (code: string) => void;
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({

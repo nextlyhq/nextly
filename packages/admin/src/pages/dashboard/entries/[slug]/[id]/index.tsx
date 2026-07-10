@@ -235,6 +235,10 @@ export default function EditEntryPage({
 
   // Fetch entry data with relationship expansion
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)
+  // i18n M7: on a localized app, request the per-locale translation-status overview so the editor
+  // can show per-language status pills. Inert (param omitted) for non-localized apps.
+  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+
   const {
     data: entry,
     isLoading: isLoadingEntry,
@@ -244,13 +248,13 @@ export default function EditEntryPage({
     entryId: id,
     depth: 2,
     locale,
+    translationStatus: localizationEnabled,
   });
 
   // i18n M7: while translating a non-default language, also load the default-language entry so
   // the editor can show the source text inline on each translatable field (spec §10). Gated so
   // it only fires when actually translating another language; editing the default language reuses
   // the primary fetch above (same cache key) and needs no source copy.
-  const { defaultLocale } = useLocalization();
   const isNonDefaultLocale =
     !!locale && !!defaultLocale && locale !== defaultLocale;
   const { data: sourceEntry } = useEntry({

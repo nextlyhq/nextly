@@ -212,8 +212,16 @@ export function EntryForm({
       collectionLocalized: collection.localized === true,
       isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
+      onLocaleChange,
     }),
-    [locale, getLocale, defaultLocale, collection.localized, sourceValues]
+    [
+      locale,
+      getLocale,
+      defaultLocale,
+      collection.localized,
+      sourceValues,
+      onLocaleChange,
+    ]
   );
 
   // Get all fields. Title and slug are extracted as system fields rendered in
