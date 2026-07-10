@@ -265,7 +265,8 @@ export class CollectionMutationService extends BaseService {
   private async splitLocalizedWriteData(
     collectionName: string,
     entryData: Record<string, unknown>,
-    locale: string | undefined
+    locale: string | undefined,
+    isCreate: boolean
   ): Promise<{
     companionTableName: string;
     writeLocale: string;
@@ -298,6 +299,20 @@ export class CollectionMutationService extends BaseService {
         delete entryData[key]; // migrated main table has no localized columns
       }
     }
+
+    // i18n M6: per-locale draft/publish. The companion `_status` for the write's locale comes
+    // from the write's status value. On create it defaults to 'draft'; on update it changes
+    // ONLY when `status` is explicitly in the patch (so editing German content doesn't
+    // un-publish German). The main table keeps its own `status` column unchanged.
+    if (companion.hasStatus) {
+      const statusVal = entryData.status;
+      if (typeof statusVal === "string") {
+        companionData._status = statusVal;
+      } else if (isCreate) {
+        companionData._status = "draft";
+      }
+    }
+
     return {
       companionTableName: companion.companionTableName,
       writeLocale,
@@ -816,7 +831,8 @@ export class CollectionMutationService extends BaseService {
       const localizedWrite = await this.splitLocalizedWriteData(
         params.collectionName,
         entryData,
-        params.locale
+        params.locale,
+        true
       );
 
       // Wrap entry insert and component data save in a transaction so that
@@ -1335,7 +1351,7 @@ export class CollectionMutationService extends BaseService {
       }
 
       // i18n M5b: server-side per-field validation for the update (only fields present in the
-      // patch are checked; required cannot be blanked). Runs before the split + write.
+      // patch are checked; required cannot be blanked).
       const updateErrors = await this.validateWrite(
         params.collectionName,
         fields,
@@ -1347,14 +1363,14 @@ export class CollectionMutationService extends BaseService {
       if (updateErrors.length > 0) {
         return this.validationFailure(updateErrors);
       }
-
-      // i18n M5: pull translatable values out of the main update (finalData uses camelCase field
-      // keys) so they update the companion `_locales` row for the write's locale instead. `null`
-      // = not localized / companion not migrated yet (values stay on main — dev path, unchanged).
+      // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
+      // keys) so they update the companion `_locales` row for the write's locale instead. `null` =
+      // not localized / companion not migrated yet (values stay on main — dev path, unchanged).
       const localizedUpdate = await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
-        params.locale
+        params.locale,
+        false
       );
 
       // Wrap main update and component data save in a transaction so that
