@@ -40,4 +40,10 @@ export interface CompanionMigrationSpec {
   parentIdType: string;
   /** columns being localized (moved main -> companion). */
   columns: LocalizedColumnSpec[];
+  /**
+   * Whether the collection has Draft/Published enabled (i18n M6). When true, the companion gets a
+   * per-locale `_status` column (`'draft' | 'published'`, default `'draft'`) so each language
+   * publishes independently. On an ENABLE seed, existing rows carry the main row's `status`.
+   */
+  status?: boolean;
 }

@@ -320,6 +320,7 @@ export class CollectionFileManager {
       fields: metadata.fields,
       dialect: this.adapter.dialect,
       localized: true,
+      status: metadata.status === true, // i18n M6: per-locale `_status` column
     });
     if (!companion) return null;
 

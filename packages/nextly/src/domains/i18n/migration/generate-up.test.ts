@@ -64,3 +64,25 @@ describe("buildCompanionCreateOnlySql", () => {
     expect(sql.trimEnd().endsWith(");")).toBe(true);
   });
 });
+
+describe("per-locale _status column (i18n M6)", () => {
+  it("omits _status when the collection has no Draft/Published", () => {
+    expect(buildCompanionCreateOnlySql(spec("sqlite"))).not.toContain(
+      "_status"
+    );
+  });
+
+  it("emits a per-locale _status column when status is enabled", () => {
+    const sql = buildCompanionCreateOnlySql({ ...spec("sqlite"), status: true });
+    expect(sql).toContain(
+      `"_status" VARCHAR(20) NOT NULL DEFAULT 'draft'`
+    );
+  });
+
+  it("carries the main row's status into the seed on an enable transition", () => {
+    const sql = buildLocalizationUpSql({ ...spec("sqlite"), status: true });
+    // both the target _status and the source status column appear in INSERT...SELECT
+    expect(sql).toContain(`"_parent", "_locale", "_status", "title", "body"`);
+    expect(sql).toContain(`SELECT "id", 'en', "status", "title", "body"`);
+  });
+});

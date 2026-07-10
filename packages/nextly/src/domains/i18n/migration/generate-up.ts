@@ -8,10 +8,15 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
   const colDefs = columns
     .map(c => `  ${q(c.name, dialect)} ${ddlType(c, dialect)}`)
     .join(",\n");
+  // i18n M6: per-locale draft/publish status column (only when the collection has Draft/Published).
+  const statusDef = spec.status
+    ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT 'draft',\n`
+    : "";
   return (
     `CREATE TABLE ${q(companionTable, dialect)} (\n` +
     `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
     `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
+    statusDef +
     `${colDefs},\n` +
     `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
@@ -46,10 +51,15 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
 
   const create = buildCompanionCreateStatement(spec);
 
+  // i18n M6: when the collection has Draft/Published, the seeded default-locale rows carry the
+  // existing main row's `status` into the companion `_status` so enabling localization doesn't
+  // silently un-publish live content.
+  const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
+  const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
   const seed =
     `INSERT INTO ${q(companionTable, dialect)} ` +
-    `(${q("_parent", dialect)}, ${q("_locale", dialect)}, ${colNames.join(", ")}) ` +
-    `SELECT ${q("id", dialect)}, '${defaultLocale}', ${colNames.join(", ")} ` +
+    `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}, ${colNames.join(", ")}) ` +
+    `SELECT ${q("id", dialect)}, '${defaultLocale}'${statusSelectCol}, ${colNames.join(", ")} ` +
     `FROM ${q(mainTable, dialect)}`;
 
   const drops = columns.map(
