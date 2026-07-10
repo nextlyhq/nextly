@@ -38,7 +38,10 @@ import type { ApiCollection } from "@admin/types/entities";
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 
 import { EntryEmptyState } from "./EntryEmptyState";
-import { buildEntryWhereFilter } from "./entryFilters";
+import {
+  buildEntryWhereFilter,
+  type TranslationListFilter,
+} from "./entryFilters";
 import {
   EntryTable,
   type EntryTablePagination,
@@ -240,6 +243,9 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
   const [updatedTo, setUpdatedTo] = useState("");
+  // i18n M7: the active language filter (locale + translation state), or null.
+  const [translationFilter, setTranslationFilter] =
+    useState<TranslationListFilter | null>(null);
 
   // Read where parameter from URL for filtering (e.g., from SubmissionsFilter)
   const searchParams = useSearchParams();
@@ -253,8 +259,17 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       createdTo,
       updatedFrom,
       updatedTo,
+      translated: translationFilter,
     });
-  }, [whereParam, status, createdFrom, createdTo, updatedFrom, updatedTo]);
+  }, [
+    whereParam,
+    status,
+    createdFrom,
+    createdTo,
+    updatedFrom,
+    updatedTo,
+    translationFilter,
+  ]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -632,6 +647,8 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           onSelectionChange={handleSelectionChange}
           status={status}
           onStatusChange={handleStatusChange}
+          translationFilter={translationFilter}
+          onTranslationFilterChange={setTranslationFilter}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}

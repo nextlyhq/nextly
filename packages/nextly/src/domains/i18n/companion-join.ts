@@ -267,6 +267,80 @@ export function buildCompanionExists(args: {
   )`;
 }
 
+/** The translation states the list "language filter" can filter on (i18n M7). */
+export type TranslationFilterState =
+  | "missing"
+  | "translated"
+  | "draft"
+  | "published";
+
+export interface TranslationStatusFilter {
+  /** Target locale code. */
+  locale: string;
+  /** Which translation state to keep. */
+  state: TranslationFilterState;
+}
+
+/**
+ * Build a SQL condition for the list "language filter" (i18n M7): keep only entries whose target
+ * locale is in the requested translation state. Returns `undefined` when the filter is a no-op
+ * (e.g. "translated in the default locale" — always true; or a draft/published filter on a
+ * collection without per-locale status), and a always-false `1=0` for "missing in the default
+ * locale" (the default is the fallback source, never missing). Mirrors the read-time
+ * blank=untranslated rule (spec §8): "translated" = a companion row with a non-blank field.
+ */
+export function buildTranslationStatusCondition(args: {
+  companionTableName: string;
+  mainIdColumn: unknown;
+  /** Localized companion columns (snake_case) for the non-blank test. */
+  localizedColumns: string[];
+  /** Whether the companion carries `_status` (draft/published filters need it). */
+  hasStatus: boolean;
+  defaultLocale: string;
+  filter: TranslationStatusFilter;
+}): SQL | undefined {
+  const {
+    companionTableName,
+    mainIdColumn,
+    localizedColumns,
+    hasStatus,
+    defaultLocale,
+    filter,
+  } = args;
+  const t = sql.identifier(companionTableName);
+  const { locale, state } = filter;
+  const isDefault = locale === defaultLocale;
+
+  const nonBlank =
+    localizedColumns.length > 0
+      ? sql.join(
+          localizedColumns.map(c => {
+            const col = sql.identifier(c);
+            return sql`(${t}.${col} IS NOT NULL AND ${t}.${col} <> '')`;
+          }),
+          sql` OR `
+        )
+      : sql`1=0`;
+
+  const rowFor = (cond: SQL) =>
+    sql`SELECT 1 FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${locale} AND (${cond})`;
+
+  switch (state) {
+    case "translated":
+      // Default locale is always translated (fallback source) → no restriction.
+      return isDefault ? undefined : sql`EXISTS (${rowFor(nonBlank)})`;
+    case "missing":
+      // Nothing is missing in the default locale.
+      return isDefault ? sql`1=0` : sql`NOT EXISTS (${rowFor(nonBlank)})`;
+    case "draft":
+    case "published":
+      if (!hasStatus) return undefined;
+      return sql`EXISTS (${rowFor(sql`${t}."_status" = ${state}`)})`;
+    default:
+      return undefined;
+  }
+}
+
 /** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
 export interface LocaleTranslationMeta {
   /**
