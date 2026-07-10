@@ -7,6 +7,7 @@ import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
+import { CopyFromLanguageMenu } from "../../CopyFromLanguageMenu";
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { LanguageStatusPills } from "../../LanguageStatusPills";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
@@ -123,6 +124,9 @@ function TranslationsRow({
         activeLocale={locale}
         onSelect={onLocaleChange}
       />
+      <div className="mt-3">
+        <CopyFromLanguageMenu />
+      </div>
     </div>
   );
 }

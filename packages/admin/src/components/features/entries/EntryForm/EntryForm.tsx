@@ -15,6 +15,7 @@
  * @since 1.0.0
  */
 
+import { resolveLocalizedFieldNames } from "nextly/config";
 import { useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -205,24 +206,36 @@ export function EntryForm({
   // the app default (per-field affordances only apply while translating a non-default language).
   // All inert for LTR / non-localized editors — the plain path is unchanged.
   const { getLocale, defaultLocale } = useLocalization();
-  const localeCtx = useMemo(
-    () => ({
+  const localeCtx = useMemo(() => {
+    const collectionLocalized = collection.localized === true;
+    return {
       locale,
       rtl: getLocale(locale)?.rtl ?? false,
-      collectionLocalized: collection.localized === true,
+      collectionLocalized,
       isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
       onLocaleChange,
-    }),
-    [
-      locale,
-      getLocale,
-      defaultLocale,
-      collection.localized,
-      sourceValues,
-      onLocaleChange,
-    ]
-  );
+      collectionSlug: collection.slug ?? collection.name,
+      entryId: (entry?.id) ?? undefined,
+      // The translatable-field set, for the field-scoped copy-from-language action.
+      localizedFieldNames: resolveLocalizedFieldNames(
+        getCollectionFields(collection).map(f => ({
+          type: (f as { type?: string }).type ?? "",
+          name: (f as { name?: string }).name ?? "",
+          localized: (f as { localized?: boolean }).localized,
+        })),
+        collectionLocalized
+      ),
+    };
+  }, [
+    locale,
+    getLocale,
+    defaultLocale,
+    collection,
+    sourceValues,
+    onLocaleChange,
+    entry?.id,
+  ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in
   // their own header card (this PR keeps the existing title/slug special-case;

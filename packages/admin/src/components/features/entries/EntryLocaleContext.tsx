@@ -31,6 +31,12 @@ export interface EntryLocaleContextValue {
   sourceValues?: Record<string, unknown>;
   /** Switch the active editing language — lets in-form surfaces (status pills) change locale. */
   onLocaleChange?: (code: string) => void;
+  /** Collection slug — lets in-form surfaces (copy-from-language) fetch another locale's values. */
+  collectionSlug?: string;
+  /** The entry's id (edit mode) — the source fetch target for copy-from-language. */
+  entryId?: string;
+  /** Names of this collection's translatable fields — the field-scoped set copy-from-language copies. */
+  localizedFieldNames?: string[];
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({
