@@ -76,9 +76,13 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
+  buildTranslationStatusCondition,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  populateTranslationStatus,
   type LocalizedFieldRef,
+  type TranslationStatusFilter,
+  type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -175,6 +179,96 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
+    });
+  }
+
+  /**
+   * Translation-status overview populate (i18n M7): attach a per-locale `_translations` map
+   * (which languages are translated + each one's draft/published status) to each row, for the
+   * admin's completeness badges / per-language pills / language filter. One batched query over
+   * the page. No-op when localization is off or the collection isn't localized.
+   */
+  private async populateTranslationMeta(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    preloaded?: CompanionSchema | null
+  ): Promise<void> {
+    if (!this.localization || rows.length === 0) return;
+    const companion =
+      preloaded ??
+      (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateTranslationStatus({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows,
+      locales: this.localization.locales.map(l => l.code),
+      defaultLocale: this.localization.defaultLocale,
+      hasStatus: companion.hasStatus,
+    });
+  }
+
+  /**
+   * Pull the reserved `_translated` key (i18n M7 language filter) out of a where object, returning
+   * the validated filter and a cleaned where without it (so the generic where-builder never sees
+   * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
+   */
+  private extractTranslationStatusFilter(where: WhereFilter | undefined): {
+    filter: TranslationStatusFilter | null;
+    cleanedWhere: WhereFilter | undefined;
+  } {
+    if (!where || typeof where !== "object") {
+      return { filter: null, cleanedWhere: where };
+    }
+    const raw = where as Record<string, unknown>;
+    if (!("_translated" in raw)) return { filter: null, cleanedWhere: where };
+    const { _translated, ...rest } = raw;
+    const cleanedWhere =
+      Object.keys(rest).length > 0 ? (rest as WhereFilter) : undefined;
+    const f = _translated as { locale?: unknown; state?: unknown };
+    const states: TranslationFilterState[] = [
+      "missing",
+      "translated",
+      "draft",
+      "published",
+    ];
+    if (
+      typeof f?.locale !== "string" ||
+      typeof f?.state !== "string" ||
+      !states.includes(f.state as TranslationFilterState)
+    ) {
+      return { filter: null, cleanedWhere };
+    }
+    return {
+      filter: { locale: f.locale, state: f.state as TranslationFilterState },
+      cleanedWhere,
+    };
+  }
+
+  /**
+   * Build the SQL condition for a `_translated` filter (i18n M7). Loads the companion (reusing a
+   * preloaded one) and delegates to {@link buildTranslationStatusCondition}. Returns `undefined`
+   * for non-localized collections or no-op filters.
+   */
+  private async buildTranslationStatusFilterCondition(
+    collectionName: string,
+    filter: TranslationStatusFilter,
+    mainIdColumn: unknown,
+    preloaded?: CompanionSchema | null
+  ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
+    if (!this.localization) return undefined;
+    const companion =
+      preloaded ??
+      (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return undefined;
+    return buildTranslationStatusCondition({
+      companionTableName: companion.companionTableName,
+      mainIdColumn,
+      localizedColumns: companion.localizedFields.map(f => f.column),
+      hasStatus: companion.hasStatus,
+      defaultLocale: this.localization.defaultLocale,
+      filter,
     });
   }
 
@@ -449,6 +543,11 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
     /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
     fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to each
+     * row for the admin translation-status overview. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
@@ -484,7 +583,7 @@ export class CollectionQueryService extends BaseService {
         params.fallbackLocale
       );
       const companion =
-        localeChain || params.locale === "all"
+        localeChain || params.locale === "all" || params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
       const localizedCtx = this.buildLocalizedQueryContext(
@@ -627,10 +726,26 @@ export class CollectionQueryService extends BaseService {
       // GEO FILTERING: Extract geo operators for post-query filtering
       // ============================================================
 
+      // i18n M7: pull the reserved `_translated` language filter out FIRST — the geo/component
+      // extractors below drop object-valued keys they don't recognize, so it must be removed
+      // before them and turned into a companion EXISTS/NOT EXISTS condition.
+      const { filter: translationFilter, cleanedWhere: whereAfterTranslation } =
+        this.extractTranslationStatusFilter(listQueryWhere);
+      if (translationFilter) {
+        const translationCondition =
+          await this.buildTranslationStatusFilterCondition(
+            params.collectionName,
+            translationFilter,
+            schema.id,
+            companion
+          );
+        if (translationCondition) whereConditions.push(translationCondition);
+      }
+
       // Extract geo filters (near, within) that must be applied in JS
       // These operators can't be translated to SQL for cross-database support
       const { geoFilters, cleanedWhere: whereAfterGeo } =
-        extractGeoFilters(listQueryWhere);
+        extractGeoFilters(whereAfterTranslation);
       const hasGeoFilters = geoFilters.length > 0;
 
       // ============================================================
@@ -826,6 +941,14 @@ export class CollectionQueryService extends BaseService {
         params.locale,
         companion
       );
+      // i18n M7: per-locale translation-status map for the admin overview (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(
+          params.collectionName,
+          entries,
+          companion
+        );
+      }
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -1219,9 +1342,28 @@ export class CollectionQueryService extends BaseService {
           components?: string[];
         }>;
 
+        // i18n M7: pull the `_translated` language filter out before the component extractor
+        // (which drops unrecognized object keys), for count==list parity.
+        const {
+          filter: countTranslationFilter,
+          cleanedWhere: whereWithoutTranslation,
+        } = this.extractTranslationStatusFilter(params.where);
+        if (countTranslationFilter) {
+          const translationCondition =
+            await this.buildTranslationStatusFilterCondition(
+              params.collectionName,
+              countTranslationFilter,
+              schema.id
+            );
+          if (translationCondition) whereConditions.push(translationCondition);
+        }
+
         // Extract component field conditions (e.g., 'seo.metaTitle')
         const { componentFilters, cleanedWhere } =
-          extractComponentFieldConditions(params.where, fieldsForFilters);
+          extractComponentFieldConditions(
+            whereWithoutTranslation,
+            fieldsForFilters
+          );
 
         // Get the table name for component subqueries
         const tableName = getTableName(params.collectionName);
@@ -1361,6 +1503,11 @@ export class CollectionQueryService extends BaseService {
      * untranslated). Otherwise the configured fallback chain + default locale is used.
      */
     fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to the
+     * entry for the admin translation-status pills. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1484,6 +1631,12 @@ export class CollectionQueryService extends BaseService {
         [entry as Record<string, unknown>],
         params.locale
       );
+      // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(params.collectionName, [
+          entry as Record<string, unknown>,
+        ]);
+      }
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(

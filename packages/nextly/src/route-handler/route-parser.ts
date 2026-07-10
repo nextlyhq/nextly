@@ -499,6 +499,17 @@ function parseCollectionRoutes(
   );
   if (duplicateRoute) return duplicateRoute;
 
+  // i18n M7: publish-all-languages route (more specific than getEntry/updateEntry)
+  const publishAllRoute = parseCollectionEntryPublishAllRoute(
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+  if (publishAllRoute) return publishAllRoute;
+
   // Check for count route (more specific than getEntry)
   const countRoute = parseCollectionEntryCountRoute(
     id,
@@ -688,6 +699,38 @@ function parseCollectionEntryDuplicateRoute(
       service: "collections",
       operation: "create",
       method: "duplicateEntry",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Parse the publish-all-languages route for a collection entry (i18n M7).
+ * POST /api/collections/{slug}/entries/{id}/publish-all
+ */
+function parseCollectionEntryPublishAllRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    additionalParams[0] === "publish-all" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "publishAllLocales",
       routeParams,
     };
   }

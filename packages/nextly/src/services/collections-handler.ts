@@ -365,6 +365,8 @@ export class CollectionsHandler {
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to each row. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -435,6 +437,8 @@ export class CollectionsHandler {
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -500,6 +504,22 @@ export class CollectionsHandler {
       body,
       params.depth
     );
+  }
+
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10). Sets the main status and,
+   * for localized+draft collections, every companion `_status` to published, atomically.
+   */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }) {
+    return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
 
   /**

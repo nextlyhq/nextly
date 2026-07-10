@@ -85,6 +85,10 @@ export interface UseUpdateEntryOptions<
    * When provided, field-level errors from the server will be set on corresponding form fields.
    */
   setError?: UseFormSetError<TFieldValues>;
+  /** Content locale (i18n M7) — the update targets this language's translatable values. */
+  locale?: string;
+  /** Fallback locale when a translation is missing. */
+  fallbackLocale?: string;
 }
 
 /**
@@ -211,12 +215,26 @@ export function useUpdateEntry<
   showToast = true,
   optimistic = true,
   setError,
+  locale,
+  fallbackLocale,
 }: UseUpdateEntryOptions<T, TFieldValues>) {
   const queryClient = useQueryClient();
 
+  // i18n M7: the optimistic cache is keyed by locale (matching useEntry), so the update touches
+  // the currently-viewed language's cached entry — not the default-language one.
+  const localeKey = [
+    ...entryKeys.detail(collectionSlug, entryId),
+    { locale: locale ?? null, fallbackLocale: fallbackLocale ?? null },
+  ] as const;
+
   return useMutation<T, Error, UpdateEntryPayload, UpdateContext<T>>({
     mutationFn: async (data: UpdateEntryPayload) => {
-      const result = await entryApi.update(collectionSlug, entryId, data);
+      const result = await entryApi.update(
+        collectionSlug,
+        entryId,
+        data,
+        locale ? { locale, fallbackLocale } : undefined
+      );
       return result as T;
     },
 
@@ -227,24 +245,17 @@ export function useUpdateEntry<
       }
 
       // Cancel outgoing queries to prevent race conditions
-      await queryClient.cancelQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
+      await queryClient.cancelQueries({ queryKey: localeKey });
 
       // Snapshot previous value for rollback
-      const previousEntry = queryClient.getQueryData<T>(
-        entryKeys.detail(collectionSlug, entryId)
-      );
+      const previousEntry = queryClient.getQueryData<T>(localeKey);
 
       // Optimistically update cache
       if (previousEntry) {
-        queryClient.setQueryData<T>(
-          entryKeys.detail(collectionSlug, entryId),
-          old => {
-            if (!old) return old;
-            return { ...old, ...newData };
-          }
-        );
+        queryClient.setQueryData<T>(localeKey, old => {
+          if (!old) return old;
+          return { ...old, ...newData };
+        });
       }
 
       // Return context for rollback
@@ -255,10 +266,7 @@ export function useUpdateEntry<
     onError: (error: Error, _variables, context) => {
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
-        queryClient.setQueryData(
-          entryKeys.detail(collectionSlug, entryId),
-          context.previousEntry
-        );
+        queryClient.setQueryData(localeKey, context.previousEntry);
       }
 
       // Try to map server errors to form fields

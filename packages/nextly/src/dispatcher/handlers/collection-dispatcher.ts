@@ -76,6 +76,7 @@ import {
   unwrapServiceResult,
 } from "../helpers/service-envelope";
 import {
+  isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
   parseWhereParam,
@@ -730,6 +731,8 @@ const COLLECTIONS_METHODS: Record<
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
 
       type PaginatedShape = {
@@ -827,6 +830,8 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -867,6 +872,35 @@ const COLLECTIONS_METHODS: Record<
         entryId: p.entryId,
       });
       return respondMutation(result.message ?? "Entry updated.", entry);
+    },
+  },
+  publishAllLocales: {
+    // i18n M7: publish every language of an entry at once (spec §10).
+    execute: async (svc, p) => {
+      if (!p.collectionName || !p.entryId) {
+        throw new Error("collectionName and entryId parameters are required");
+      }
+      const result = await svc.publishAllLocales({
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+        userId: p._authenticatedUserId
+          ? String(p._authenticatedUserId)
+          : undefined,
+        userName: p._authenticatedUserName
+          ? String(p._authenticatedUserName)
+          : undefined,
+        userEmail: p._authenticatedUserEmail
+          ? String(p._authenticatedUserEmail)
+          : undefined,
+      });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondMutation(
+        result.message ?? "All languages published.",
+        entry
+      );
     },
   },
   deleteEntry: {

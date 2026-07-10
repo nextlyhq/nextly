@@ -57,6 +57,14 @@ export type {
   SanitizedLocalizationConfig,
 } from "./domains/i18n/config/types";
 
+// Field-localization classifiers — shared by storage generation and the admin UI so both
+// agree on which fields are translatable vs. shared (the smart per-type defaults live here).
+export {
+  isFieldLocalized,
+  defaultLocalizedForType,
+  resolveLocalizedFieldNames,
+} from "./domains/i18n/classify-fields";
+
 // Storage plugin types (for advanced usage)
 export type {
   StoragePlugin,

@@ -63,4 +63,27 @@ describe("buildEntryWhereFilter", () => {
       ])
     );
   });
+
+  it("attaches the language filter as a top-level _translated key (never nested in and)", () => {
+    // Only the language filter → it is the whole where object.
+    const only = buildEntryWhereFilter({
+      status: "all",
+      translated: { locale: "de", state: "missing" },
+    });
+    expect(only).toEqual({ _translated: { locale: "de", state: "missing" } });
+
+    // Combined with a status filter → _translated stays TOP-LEVEL alongside the status filter.
+    const combined = buildEntryWhereFilter({
+      status: "published",
+      translated: { locale: "de", state: "translated" },
+    }) as Record<string, unknown>;
+    expect(combined._translated).toEqual({ locale: "de", state: "translated" });
+    // The status filter is preserved (top-level object with both keys = implicit AND).
+    expect(combined.status).toEqual({ equals: "published" });
+  });
+
+  it("omits _translated when no language filter is active", () => {
+    const where = buildEntryWhereFilter({ status: "all", translated: null });
+    expect(where).toBeUndefined();
+  });
 });

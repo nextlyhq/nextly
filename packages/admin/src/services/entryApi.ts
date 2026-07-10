@@ -50,6 +50,11 @@ export interface FindParams {
   locale?: string;
   /** Fallback locale when translation is missing */
   fallbackLocale?: string;
+  /**
+   * i18n M7: request the per-locale `_translations` overview map on each row (which languages
+   * are translated + each one's draft/published status). Sent as `?translation-status=1`.
+   */
+  translationStatus?: boolean;
 }
 
 /**
@@ -279,6 +284,10 @@ export const buildFindQuery = (params: FindParams): string => {
   if (params.fallbackLocale) {
     query.set("fallbackLocale", params.fallbackLocale);
   }
+  // i18n M7: opt into the per-locale translation-status overview map.
+  if (params.translationStatus) {
+    query.set("translation-status", "1");
+  }
 
   return query.toString();
 };
@@ -428,7 +437,10 @@ export const entryApi = {
   findByID: async (
     collectionSlug: string,
     id: string,
-    options?: Pick<FindParams, "depth" | "locale" | "fallbackLocale" | "draft">
+    options?: Pick<
+      FindParams,
+      "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
+    >
   ): Promise<Entry> => {
     const query = new URLSearchParams();
     if (options?.depth !== undefined) query.set("depth", String(options.depth));
@@ -436,6 +448,8 @@ export const entryApi = {
     if (options?.fallbackLocale)
       query.set("fallbackLocale", options.fallbackLocale);
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
+    // i18n M7: opt into the per-locale translation-status overview map.
+    if (options?.translationStatus) query.set("translation-status", "1");
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Pass `status=all` so the server's default
     // published-only filter doesn't 404 the admin out of its own draft
@@ -563,10 +577,17 @@ export const entryApi = {
   update: async (
     collectionSlug: string,
     id: string,
-    data: UpdateEntryPayload
+    data: UpdateEntryPayload,
+    options?: Pick<FindParams, "locale" | "fallbackLocale">
   ): Promise<Entry> => {
+    // i18n M7: `?locale=de` updates only the German translatable values for this entry.
+    const query = new URLSearchParams();
+    if (options?.locale) query.set("locale", options.locale);
+    if (options?.fallbackLocale)
+      query.set("fallback-locale", options.fallbackLocale);
+    const qs = query.toString();
     const result = await protectedApi.patch<{ message: string; item: Entry }>(
-      `/collections/${collectionSlug}/entries/${id}`,
+      `/collections/${collectionSlug}/entries/${id}${qs ? `?${qs}` : ""}`,
       data
     );
     return result.item;
@@ -726,6 +747,21 @@ export const entryApi = {
       `/collections/${collectionSlug}/entries/${id}/duplicate`,
       overrides ? { overrides } : {}
     );
+    return result.item;
+  },
+
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10).
+   * Hits `POST /api/collections/{slug}/entries/{id}/publish-all`.
+   */
+  publishAllLocales: async (
+    collectionSlug: string,
+    id: string
+  ): Promise<{ id: string; status?: string }> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: { id: string; status?: string };
+    }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
     return result.item;
   },
 

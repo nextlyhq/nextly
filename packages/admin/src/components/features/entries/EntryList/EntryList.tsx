@@ -27,6 +27,7 @@ import {
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useColumnVisibility } from "@admin/hooks/useColumnVisibility";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -37,7 +38,10 @@ import type { ApiCollection } from "@admin/types/entities";
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 
 import { EntryEmptyState } from "./EntryEmptyState";
-import { buildEntryWhereFilter } from "./entryFilters";
+import {
+  buildEntryWhereFilter,
+  type TranslationListFilter,
+} from "./entryFilters";
 import {
   EntryTable,
   type EntryTablePagination,
@@ -113,6 +117,8 @@ function toCollectionForColumns(
          * Unpublish buttons.
          */
         status?: boolean;
+        /** i18n: collection has multilingual content — drives the translation-status column. */
+        localized?: boolean;
       }
     | undefined,
   slug: string
@@ -155,6 +161,9 @@ function toCollectionForColumns(
     // Forward the Draft / Published flag so the bulk-action bar can
     // surface Publish / Unpublish only for collections that opted in.
     status: collection.status === true,
+    // i18n M7: forward the localization flag so the table can render a
+    // per-row translation-completeness column.
+    localized: collection.localized === true,
     admin: {
       useAsTitle: collection.admin?.useAsTitle,
       defaultColumns: [
@@ -234,6 +243,9 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
   const [updatedTo, setUpdatedTo] = useState("");
+  // i18n M7: the active language filter (locale + translation state), or null.
+  const [translationFilter, setTranslationFilter] =
+    useState<TranslationListFilter | null>(null);
 
   // Read where parameter from URL for filtering (e.g., from SubmissionsFilter)
   const searchParams = useSearchParams();
@@ -247,8 +259,17 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       createdTo,
       updatedFrom,
       updatedTo,
+      translated: translationFilter,
     });
-  }, [whereParam, status, createdFrom, createdTo, updatedFrom, updatedTo]);
+  }, [
+    whereParam,
+    status,
+    createdFrom,
+    createdTo,
+    updatedFrom,
+    updatedTo,
+    translationFilter,
+  ]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -269,6 +290,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   );
   usePluginAutoRegistration(collectionsForRegistration);
 
+  // i18n M7: request the per-locale translation-status overview only for localized collections
+  // on a localization-enabled app — drives the list's translation-completeness column.
+  const { enabled: localizationEnabled } = useLocalization();
+  const wantsTranslationStatus =
+    localizationEnabled &&
+    (collection as { localized?: boolean } | undefined)?.localized === true;
+
   // Fetch entries with pagination and filters
   const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
     collectionSlug,
@@ -278,6 +306,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       sort,
       search: search || undefined,
       where: whereFilter,
+      translationStatus: wantsTranslationStatus || undefined,
     },
   });
 
@@ -618,6 +647,8 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           onSelectionChange={handleSelectionChange}
           status={status}
           onStatusChange={handleStatusChange}
+          translationFilter={translationFilter}
+          onTranslationFilterChange={setTranslationFilter}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}

@@ -28,6 +28,8 @@ export function collectionEntityFromSettings(
       singularName: settings.singularName,
       pluralName: settings.pluralName,
       status: settings.status === true,
+      // i18n: the collection-level Internationalization toggle.
+      localized: settings.i18n === true,
     },
     fields,
   });

@@ -234,6 +234,13 @@ export const PATCH = withErrorHandler(
       updateData.status = body.status === true;
     }
 
+    // i18n toggle: forward the localization flag. The registry stores it and the
+    // companion `_locales` table is provisioned/removed on the next migrate
+    // (migration-gated, via the schema-change preview).
+    if (body.localized !== undefined) {
+      updateData.localized = body.localized === true;
+    }
+
     // Admin fields: support both nested admin object and flat top-level
     // fields. The registry's updateCollection expects data.admin as a merged
     // object, so when any admin override is present we fetch the existing

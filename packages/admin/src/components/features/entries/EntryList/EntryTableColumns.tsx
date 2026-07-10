@@ -20,6 +20,7 @@ import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter"
 
 import { EntryTableActions } from "./EntryTableActions";
 import { EntryTableCell } from "./EntryTableCell";
+import { TranslationCompletenessBadge } from "./TranslationCompletenessBadge";
 
 // ============================================================================
 // Types
@@ -50,6 +51,11 @@ export interface CollectionForColumns {
    * when this is true.
    */
   status?: boolean;
+  /**
+   * Whether this collection has multilingual content (i18n). When true, the table can render a
+   * per-row translation-completeness column from each row's `_translations` map.
+   */
+  localized?: boolean;
   /** Admin UI configuration */
   admin?: {
     /** Default columns to display in list view */
@@ -216,6 +222,11 @@ export function getAvailableColumns(
   // These columns are always available as built-ins
   const builtInColumns = ["id", "title", "slug", "createdAt", "updatedAt"];
 
+  // i18n M7: translation-completeness column, only for localized collections.
+  if (collection.localized) {
+    builtInColumns.push("translations");
+  }
+
   if (useAsTitle && !builtInColumns.includes(useAsTitle)) {
     builtInColumns.push(useAsTitle);
   }
@@ -271,6 +282,11 @@ export function getDefaultVisibleColumns(
 
   orderedDataColumns.push("createdAt");
   orderedDataColumns.push("updatedAt");
+
+  // 5. i18n M7: translation-completeness column for localized collections.
+  if (collection.localized) {
+    orderedDataColumns.push("translations");
+  }
 
   // 6. Remaining data columns
   orderedDataColumns = [...orderedDataColumns, ...otherColumns];
@@ -416,6 +432,28 @@ export function generateEntryColumns({
     const field = findFieldByName(collection.fields, columnName);
 
     if (!field) {
+      // i18n M7: translation-completeness column (localized collections only). Renders a compact
+      // "n/total" badge summarising how many languages are translated for the row.
+      if (columnName === "translations") {
+        columns.push({
+          id: "translations",
+          accessorKey: "_translations",
+          header: "Languages",
+          cell: ({ row }) => (
+            <TranslationCompletenessBadge
+              translations={
+                row.original._translations as
+                  | Record<string, { translated: boolean; status?: string }>
+                  | undefined
+              }
+            />
+          ),
+          size: 130,
+          enableSorting: false,
+        });
+        continue;
+      }
+
       // Handle special built-in columns (createdAt, updatedAt, id)
       if (columnName === "createdAt" || columnName === "updatedAt") {
         columns.push({

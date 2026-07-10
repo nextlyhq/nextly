@@ -266,3 +266,184 @@ export function buildCompanionExists(args: {
     AND ${valueCondition}
   )`;
 }
+
+/** The translation states the list "language filter" can filter on (i18n M7). */
+export type TranslationFilterState =
+  | "missing"
+  | "translated"
+  | "draft"
+  | "published";
+
+export interface TranslationStatusFilter {
+  /** Target locale code. */
+  locale: string;
+  /** Which translation state to keep. */
+  state: TranslationFilterState;
+}
+
+/**
+ * Build a SQL condition for the list "language filter" (i18n M7): keep only entries whose target
+ * locale is in the requested translation state. Returns `undefined` when the filter is a no-op
+ * (e.g. "translated in the default locale" — always true; or a draft/published filter on a
+ * collection without per-locale status), and a always-false `1=0` for "missing in the default
+ * locale" (the default is the fallback source, never missing). Mirrors the read-time
+ * blank=untranslated rule (spec §8): "translated" = a companion row with a non-blank field.
+ */
+export function buildTranslationStatusCondition(args: {
+  companionTableName: string;
+  mainIdColumn: unknown;
+  /** Localized companion columns (snake_case) for the non-blank test. */
+  localizedColumns: string[];
+  /** Whether the companion carries `_status` (draft/published filters need it). */
+  hasStatus: boolean;
+  defaultLocale: string;
+  filter: TranslationStatusFilter;
+}): SQL | undefined {
+  const {
+    companionTableName,
+    mainIdColumn,
+    localizedColumns,
+    hasStatus,
+    defaultLocale,
+    filter,
+  } = args;
+  const t = sql.identifier(companionTableName);
+  const { locale, state } = filter;
+  const isDefault = locale === defaultLocale;
+
+  const nonBlank =
+    localizedColumns.length > 0
+      ? sql.join(
+          localizedColumns.map(c => {
+            const col = sql.identifier(c);
+            return sql`(${t}.${col} IS NOT NULL AND ${t}.${col} <> '')`;
+          }),
+          sql` OR `
+        )
+      : sql`1=0`;
+
+  const rowFor = (cond: SQL) =>
+    sql`SELECT 1 FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${locale} AND (${cond})`;
+
+  switch (state) {
+    case "translated":
+      // Default locale is always translated (fallback source) → no restriction.
+      return isDefault ? undefined : sql`EXISTS (${rowFor(nonBlank)})`;
+    case "missing":
+      // Nothing is missing in the default locale.
+      return isDefault ? sql`1=0` : sql`NOT EXISTS (${rowFor(nonBlank)})`;
+    case "draft":
+    case "published":
+      if (!hasStatus) return undefined;
+      return sql`EXISTS (${rowFor(sql`${t}."_status" = ${state}`)})`;
+    default:
+      return undefined;
+  }
+}
+
+/** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
+export interface LocaleTranslationMeta {
+  /**
+   * Whether this locale has meaningful content — a companion row with at least one non-blank
+   * localized field. Mirrors the read-time "blank = untranslated, falls back" rule (spec §8), so a
+   * present-but-all-blank row reads as untranslated. The default locale is always `true` (it is the
+   * fallback source and the entry itself exists in it).
+   */
+  translated: boolean;
+  /**
+   * The locale's draft/published state, from the companion `_status` column. Present only when the
+   * collection has per-locale status (i18n M6) and a companion row exists for the locale.
+   */
+  status?: string;
+}
+
+export interface TranslationStatusArgs {
+  db: SelectableDb;
+  companionTable: unknown;
+  localizedFields: LocalizedFieldRef[];
+  rows: Record<string, unknown>[];
+  /** Every configured locale code to report on. */
+  locales: string[];
+  /** The default locale — always reported as translated (the fallback source). */
+  defaultLocale: string;
+  /** Whether the companion carries a per-locale `_status` column (i18n M6). */
+  hasStatus: boolean;
+  idKey?: string;
+  /** Row key to write the per-locale map under (default `_translations`). */
+  outKey?: string;
+}
+
+/**
+ * Translation-status overview (i18n M7): for each result row, set a per-locale map describing
+ * which languages are translated and, when the collection has drafts, each language's status.
+ * One batched query over the whole page (same cost profile as the other companion populates);
+ * mutates `rows` in place; resilient to a missing companion table (dev-before-migrate).
+ *
+ * Output shape (under `outKey`, default `_translations`):
+ * `{ en: { translated: true, status: "published" }, de: { translated: false } }`
+ */
+export async function populateTranslationStatus(
+  args: TranslationStatusArgs
+): Promise<void> {
+  const {
+    db,
+    companionTable,
+    localizedFields,
+    rows,
+    locales,
+    defaultLocale,
+    hasStatus,
+  } = args;
+  const idKey = args.idKey ?? "id";
+  const outKey = args.outKey ?? "_translations";
+  if (rows.length === 0 || locales.length === 0) return;
+
+  const ids = rows
+    .map(r => r[idKey])
+    .filter((id): id is string | number => id !== null && id !== undefined);
+  if (ids.length === 0) return;
+
+  const table = companionTable as CompanionTable;
+  let companionRows: Record<string, unknown>[];
+  try {
+    companionRows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          inArray(table._parent as never, ids),
+          inArray(table._locale as never, locales)
+        )
+      );
+  } catch {
+    return; // companion table not present yet — leave rows untouched
+  }
+
+  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
+  for (const cr of companionRows) {
+    let perLocale = byParent.get(cr._parent);
+    if (!perLocale) {
+      perLocale = {};
+      byParent.set(cr._parent, perLocale);
+    }
+    perLocale[String(cr._locale)] = cr;
+  }
+
+  for (const row of rows) {
+    const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const meta: Record<string, LocaleTranslationMeta> = {};
+    for (const code of locales) {
+      const cr = perLocaleRows[code];
+      const hasContent =
+        !!cr && localizedFields.some(f => !isBlank(cr[f.column]));
+      const entry: LocaleTranslationMeta = {
+        translated: code === defaultLocale ? true : hasContent,
+      };
+      if (hasStatus && cr && typeof cr._status === "string") {
+        entry.status = cr._status;
+      }
+      meta[code] = entry;
+    }
+    row[outKey] = meta;
+  }
+}

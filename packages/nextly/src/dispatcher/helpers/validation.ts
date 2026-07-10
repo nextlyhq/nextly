@@ -138,3 +138,14 @@ export const parseRichTextFormat = (
   }
   return undefined;
 };
+
+/**
+ * Coerce a boolean-ish query param (`?flag=1`, `?flag=true`) to `true`. Query values arrive as
+ * strings; `1`/`true`/`yes` (any case) are truthy, everything else (including absent) is `false`.
+ */
+export const isTruthyParam = (value?: unknown): boolean => {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  const v = value.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+};

@@ -1,3 +1,9 @@
+/** i18n M7 translation-status list filter: keep entries in a given state for a locale. */
+export interface TranslationListFilter {
+  locale: string;
+  state: "missing" | "translated" | "draft" | "published";
+}
+
 export interface EntryFilterState {
   whereParam?: string | null;
   status?: string;
@@ -5,6 +11,8 @@ export interface EntryFilterState {
   createdTo?: string;
   updatedFrom?: string;
   updatedTo?: string;
+  /** i18n M7: the active language filter, if any. */
+  translated?: TranslationListFilter | null;
 }
 
 const toStartOfDayIso = (value: string): string =>
@@ -34,6 +42,7 @@ export function buildEntryWhereFilter({
   createdTo = "",
   updatedFrom = "",
   updatedTo = "",
+  translated = null,
 }: EntryFilterState): Record<string, unknown> | undefined {
   const filters: Array<Record<string, unknown>> = [];
 
@@ -62,8 +71,16 @@ export function buildEntryWhereFilter({
     filters.push({ updatedAt: updatedRange });
   }
 
-  if (filters.length === 0) return undefined;
-  if (filters.length === 1) return filters[0];
+  let result: Record<string, unknown> | undefined;
+  if (filters.length === 0) result = undefined;
+  else if (filters.length === 1) result = filters[0];
+  else result = { and: filters };
 
-  return { and: filters };
+  // i18n M7: attach the language filter as a TOP-LEVEL reserved `_translated` key (the backend
+  // extractor only reads it at the top level, never nested inside `and`).
+  if (translated) {
+    result = { ...(result ?? {}), _translated: translated };
+  }
+
+  return result;
 }

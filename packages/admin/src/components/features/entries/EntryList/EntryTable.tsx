@@ -46,7 +46,10 @@ import {
   forwardRef,
 } from "react";
 
+import { useLocalization } from "@admin/hooks/useLocalization";
+
 import { BulkActionBar } from "./BulkActionBar";
+import { type TranslationListFilter } from "./entryFilters";
 import {
   generateEntryColumns,
   type CollectionForColumns,
@@ -150,6 +153,10 @@ export interface EntryTableProps {
   status?: string;
   /** Callback when status filter changes */
   onStatusChange?: (status: string) => void;
+  /** i18n M7: active language filter (locale + translation state), or null. */
+  translationFilter?: TranslationListFilter | null;
+  /** i18n M7: callback when the language filter changes. */
+  onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -248,6 +255,8 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       onSelectionChange,
       status = "all",
       onStatusChange,
+      translationFilter = null,
+      onTranslationFilterChange,
       createdFrom = "",
       createdTo = "",
       updatedFrom = "",
@@ -418,14 +427,26 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       !!onUpdatedFromChange ||
       !!onUpdatedToChange;
 
+    // i18n M7: the language filter is available on a localized collection when the app has
+    // localization configured (more than one language).
+    const { enabled: localizationEnabled, locales, defaultLocale } =
+      useLocalization();
+    const hasLanguageFilter =
+      localizationEnabled &&
+      collection.localized === true &&
+      !!onTranslationFilterChange &&
+      locales.length > 1;
+
     const hasAnyActiveFilters =
       status !== "all" ||
       !!createdFrom ||
       !!createdTo ||
       !!updatedFrom ||
-      !!updatedTo;
+      !!updatedTo ||
+      !!translationFilter;
 
-    const showFilterDropdown = hasStatusField || hasDateFilters;
+    const showFilterDropdown =
+      hasStatusField || hasDateFilters || hasLanguageFilter;
 
     const clearDateFilters = () => {
       onCreatedFromChange?.("");
@@ -474,6 +495,39 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
                   >
                     Archived
                   </DropdownMenuCheckboxItem>
+                </>
+              )}
+
+              {hasLanguageFilter && (
+                <>
+                  {hasStatusField && onStatusChange && (
+                    <DropdownMenuSeparator />
+                  )}
+                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {locales
+                    .filter(l => l.code !== defaultLocale)
+                    .flatMap(l =>
+                      (["missing", "translated"] as const).map(state => {
+                        const active =
+                          translationFilter?.locale === l.code &&
+                          translationFilter?.state === state;
+                        return (
+                          <DropdownMenuCheckboxItem
+                            key={`${l.code}-${state}`}
+                            checked={active}
+                            onCheckedChange={() =>
+                              onTranslationFilterChange?.(
+                                active ? null : { locale: l.code, state }
+                              )
+                            }
+                          >
+                            {state === "missing" ? "Missing in" : "Translated in"}{" "}
+                            {l.label}
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })
+                    )}
                 </>
               )}
 

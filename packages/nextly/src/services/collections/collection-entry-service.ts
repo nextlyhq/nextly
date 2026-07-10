@@ -219,6 +219,16 @@ export class CollectionEntryService extends BaseService {
     return this.mutationService.updateEntry(params, body, depth);
   }
 
+  /** i18n M7: publish every language of an entry at once (spec §10). */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }) {
+    return this.mutationService.publishAllLocales(params);
+  }
+
   async deleteEntry(params: {
     collectionName: string;
     entryId: string;

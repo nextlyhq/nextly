@@ -15,15 +15,21 @@
  * @since 1.0.0
  */
 
+import { resolveLocalizedFieldNames } from "nextly/config";
+import { useMemo } from "react";
+
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   takeoverControllerNames,
   takeoverTypesFromBranding,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+
+import { EntryLocaleProvider } from "../EntryLocaleContext";
 
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
@@ -62,6 +68,15 @@ export interface EntryFormProps {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
+  /** Active content locale (i18n M7) — saves target this language. */
+  locale?: string;
+  /** Called when the user switches the active content language (i18n M7). */
+  onLocaleChange?: (locale: string) => void;
+  /**
+   * Default-language field values (i18n M7). Provided while translating a non-default language
+   * so each translatable field can show its source text inline. Keyed by field name (camelCase).
+   */
+  sourceValues?: Record<string, unknown>;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -159,6 +174,9 @@ export function EntryForm({
   onError,
   onDelete,
   onCancel,
+  locale,
+  onLocaleChange,
+  sourceValues,
   embedded = false,
   className,
 }: EntryFormProps) {
@@ -173,6 +191,7 @@ export function EntryForm({
     collection,
     entry,
     mode,
+    locale,
     onSuccess: data => {
       onSuccess?.(data);
     },
@@ -180,6 +199,43 @@ export function EntryForm({
     onDelete,
     onCancel,
   });
+
+  // i18n M7: content-locale context for field components — the active locale's writing
+  // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
+  // field can tell whether it is translatable), and whether the active language differs from
+  // the app default (per-field affordances only apply while translating a non-default language).
+  // All inert for LTR / non-localized editors — the plain path is unchanged.
+  const { getLocale, defaultLocale } = useLocalization();
+  const localeCtx = useMemo(() => {
+    const collectionLocalized = collection.localized === true;
+    return {
+      locale,
+      rtl: getLocale(locale)?.rtl ?? false,
+      collectionLocalized,
+      isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
+      sourceValues,
+      onLocaleChange,
+      collectionSlug: collection.slug ?? collection.name,
+      entryId: (entry?.id) ?? undefined,
+      // The translatable-field set, for the field-scoped copy-from-language action.
+      localizedFieldNames: resolveLocalizedFieldNames(
+        getCollectionFields(collection).map(f => ({
+          type: (f as { type?: string }).type ?? "",
+          name: (f as { name?: string }).name ?? "",
+          localized: (f as { localized?: boolean }).localized,
+        })),
+        collectionLocalized
+      ),
+    };
+  }, [
+    locale,
+    getLocale,
+    defaultLocale,
+    collection,
+    sourceValues,
+    onLocaleChange,
+    entry?.id,
+  ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in
   // their own header card (this PR keeps the existing title/slug special-case;
@@ -287,6 +343,7 @@ export function EntryForm({
   // and (optional) right rail. No breadcrumbs, no DocumentTabs, no separate
   // page title h1; the title input lives inside EntrySystemHeader.
   return (
+    <EntryLocaleProvider value={localeCtx}>
     <EntryFormContextProvider
       entryId={entry?.id}
       collectionSlug={collection.name}
@@ -318,6 +375,8 @@ export function EntryForm({
                 isDirty={isDirty}
                 entry={entry}
                 collectionSlug={collection.name}
+                locale={locale}
+                onLocaleChange={onLocaleChange}
                 toolbarSlot={
                   <EntryFormToolbarSlots
                     context="collection"
@@ -384,5 +443,6 @@ export function EntryForm({
         </EntryFormProvider>
       </div>
     </EntryFormContextProvider>
+    </EntryLocaleProvider>
   );
 }
