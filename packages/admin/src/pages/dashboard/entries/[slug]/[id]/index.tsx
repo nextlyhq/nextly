@@ -14,7 +14,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import Link from "next/link";
 import type React from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   EntryForm,
@@ -220,6 +220,11 @@ export default function EditEntryPage({
   const slug = params?.slug;
   const id = params?.id;
 
+  // i18n M7: active content language for this editor. `undefined` = the app's default locale
+  // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
+  // routes saves to the chosen language (EntryForm → useUpdateEntry).
+  const [locale, setLocale] = useState<string | undefined>(undefined);
+
   // Fetch enriched collection schema (component fields are populated)
   const {
     data: collection,
@@ -237,6 +242,7 @@ export default function EditEntryPage({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
+    locale,
   });
 
   // Auto-register plugin components when collection is loaded
@@ -429,6 +435,8 @@ export default function EditEntryPage({
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          locale={locale}
+          onLocaleChange={setLocale}
           onSuccess={handleSuccess}
           onDelete={handleDelete}
           onCancel={handleCancel}

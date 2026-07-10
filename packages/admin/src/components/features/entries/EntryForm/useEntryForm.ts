@@ -125,6 +125,8 @@ export interface UseEntryFormOptions {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
+  /** Active content locale (i18n M7) — the update targets this language's values. */
+  locale?: string;
 }
 
 /**
@@ -454,6 +456,7 @@ export function useEntryForm({
   onError,
   onDelete,
   onCancel,
+  locale,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -518,6 +521,8 @@ export function useEntryForm({
     entryId: entry?.id ?? "",
     showToast: true,
     setError: form.setError,
+    // i18n M7: route the save to the active content language.
+    locale,
   });
 
   const deleteMutation = useDeleteEntry({

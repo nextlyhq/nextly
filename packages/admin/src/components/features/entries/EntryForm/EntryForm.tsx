@@ -62,6 +62,10 @@ export interface EntryFormProps {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
+  /** Active content locale (i18n M7) — saves target this language. */
+  locale?: string;
+  /** Called when the user switches the active content language (i18n M7). */
+  onLocaleChange?: (locale: string) => void;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -159,6 +163,8 @@ export function EntryForm({
   onError,
   onDelete,
   onCancel,
+  locale,
+  onLocaleChange,
   embedded = false,
   className,
 }: EntryFormProps) {
@@ -173,6 +179,7 @@ export function EntryForm({
     collection,
     entry,
     mode,
+    locale,
     onSuccess: data => {
       onSuccess?.(data);
     },
@@ -318,6 +325,8 @@ export function EntryForm({
                 isDirty={isDirty}
                 entry={entry}
                 collectionSlug={collection.name}
+                locale={locale}
+                onLocaleChange={onLocaleChange}
                 toolbarSlot={
                   <EntryFormToolbarSlots
                     context="collection"
