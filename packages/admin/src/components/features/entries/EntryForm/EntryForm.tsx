@@ -15,15 +15,20 @@
  * @since 1.0.0
  */
 
+import { useMemo } from "react";
+
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   takeoverControllerNames,
   takeoverTypesFromBranding,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+
+import { EntryLocaleProvider } from "../EntryLocaleContext";
 
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
@@ -188,6 +193,15 @@ export function EntryForm({
     onCancel,
   });
 
+  // i18n M7: the active locale's writing direction, provided to field components so their
+  // inputs render right-to-left for RTL languages (Arabic, Hebrew, …). `false` for LTR /
+  // non-localized editors — unchanged.
+  const { getLocale } = useLocalization();
+  const localeCtx = useMemo(
+    () => ({ locale, rtl: getLocale(locale)?.rtl ?? false }),
+    [locale, getLocale]
+  );
+
   // Get all fields. Title and slug are extracted as system fields rendered in
   // their own header card (this PR keeps the existing title/slug special-case;
   // PR 6 of the redesign moves them into the new pinned-headline + rail-slug
@@ -294,6 +308,7 @@ export function EntryForm({
   // and (optional) right rail. No breadcrumbs, no DocumentTabs, no separate
   // page title h1; the title input lives inside EntrySystemHeader.
   return (
+    <EntryLocaleProvider value={localeCtx}>
     <EntryFormContextProvider
       entryId={entry?.id}
       collectionSlug={collection.name}
@@ -393,5 +408,6 @@ export function EntryForm({
         </EntryFormProvider>
       </div>
     </EntryFormContextProvider>
+    </EntryLocaleProvider>
   );
 }

@@ -17,6 +17,8 @@ import { useId } from "react";
 
 import { cn } from "@admin/lib/utils";
 
+import { useEntryLocale } from "../EntryLocaleContext";
+
 // ============================================================
 // Types
 // ============================================================
@@ -112,6 +114,8 @@ export function FieldWrapper({
   fieldPath,
   horizontal = false,
 }: FieldWrapperProps) {
+  // i18n M7: active content-language direction (RTL for Arabic/Hebrew/…).
+  const entryLocale = useEntryLocale();
   // Generate unique IDs for accessibility
   const generatedId = useId();
   // Use type guard to safely access name property (not all fields have it, e.g., TabsFieldConfig)
@@ -160,6 +164,8 @@ export function FieldWrapper({
         style={fieldWithCommonProps.admin?.style}
         data-field={fieldName}
         data-field-type={field.type}
+        // i18n M7: render the field right-to-left when the active content language is RTL.
+        {...(entryLocale.rtl ? { dir: "rtl" as const } : {})}
       >
         <div className="pt-0.5">{children}</div>
         <div className="grid gap-1.5 leading-none">
@@ -208,6 +214,9 @@ export function FieldWrapper({
       style={fieldWithCommonProps.admin?.style}
       data-field={fieldName}
       data-field-type={field.type}
+      // i18n M7: render the field right-to-left when the active content language is RTL
+      // (Arabic, Hebrew, …). LTR / non-localized editors are unaffected (default `false`).
+      {...(entryLocale.rtl ? { dir: "rtl" as const } : {})}
     >
       {/* Label */}
       <Label
