@@ -10,6 +10,7 @@ import { cn } from "@admin/lib/utils";
 import { CopyFromLanguageMenu } from "../../CopyFromLanguageMenu";
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { LanguageStatusPills } from "../../LanguageStatusPills";
+import { PublishAllLanguagesButton } from "../../PublishAllLanguagesButton";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -98,7 +99,7 @@ export function DocumentPanel({
         <Separator />
         <TimestampRows entry={entry} />
       </dl>
-      <TranslationsRow translations={translations} />
+      <TranslationsRow translations={translations} hasStatus={hasStatus} />
     </div>
   );
 }
@@ -109,8 +110,10 @@ export function DocumentPanel({
  */
 function TranslationsRow({
   translations,
+  hasStatus,
 }: {
   translations?: Record<string, { translated: boolean; status?: string }>;
+  hasStatus?: boolean;
 }) {
   const { locale, onLocaleChange } = useEntryLocale();
   if (!translations) return null;
@@ -124,8 +127,9 @@ function TranslationsRow({
         activeLocale={locale}
         onSelect={onLocaleChange}
       />
-      <div className="mt-3">
+      <div className="mt-3 flex flex-wrap gap-2">
         <CopyFromLanguageMenu />
+        <PublishAllLanguagesButton hasStatus={hasStatus} />
       </div>
     </div>
   );

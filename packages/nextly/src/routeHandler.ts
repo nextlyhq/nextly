@@ -423,6 +423,7 @@ const COLLECTION_ENTRY_METHODS = new Set([
   "bulkUpdateByQuery",
   "countEntries",
   "duplicateEntry",
+  "publishAllLocales",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */

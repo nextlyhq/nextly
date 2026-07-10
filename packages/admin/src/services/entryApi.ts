@@ -750,6 +750,21 @@ export const entryApi = {
     return result.item;
   },
 
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10).
+   * Hits `POST /api/collections/{slug}/entries/{id}/publish-all`.
+   */
+  publishAllLocales: async (
+    collectionSlug: string,
+    id: string
+  ): Promise<{ id: string; status?: string }> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: { id: string; status?: string };
+    }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
+    return result.item;
+  },
+
   // ===========================================================================
   // Legacy Methods (for backwards compatibility with internal table components)
   // ===========================================================================

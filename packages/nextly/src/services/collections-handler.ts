@@ -507,6 +507,22 @@ export class CollectionsHandler {
   }
 
   /**
+   * i18n M7: publish every language of an entry at once (spec §10). Sets the main status and,
+   * for localized+draft collections, every companion `_status` to published, atomically.
+   */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }) {
+    return this.entryService.publishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
    * Delete an entry.
    * @param params - Collection name, entry ID, and optional user ID
    */

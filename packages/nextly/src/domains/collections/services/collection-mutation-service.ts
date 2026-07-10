@@ -998,6 +998,107 @@ export class CollectionMutationService extends BaseService {
    * @param body - Update data
    * @returns Updated entry or error
    */
+  /**
+   * Publish ALL languages of an entry at once (i18n M7, spec §10). Atomically sets the main
+   * `status` to 'published' and — when the collection has per-locale status (M6) — every companion
+   * row's `_status` to 'published', in a single transaction. For a non-localized / no-status
+   * collection it is a plain publish of the single row. Only touches status columns (no field
+   * values), so it needs none of the localized-write machinery.
+   */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }): Promise<CollectionServiceResult> {
+    try {
+      const accessUser = params.overrideAccess ? undefined : params.user;
+      const schema = await this.fileManager.loadDynamicSchema(
+        params.collectionName
+      );
+
+      const [existingEntry] = await this.db
+        .select()
+        .from(schema)
+        .where(eq(schema.id, params.entryId))
+        .limit(1);
+      if (!existingEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+
+      const accessDenied = await this.accessService.checkCollectionAccess(
+        params.collectionName,
+        "update",
+        accessUser,
+        params.entryId,
+        existingEntry,
+        params.overrideAccess
+      );
+      if (accessDenied) return accessDenied;
+
+      const hasMainStatus = "status" in schema;
+      const companion = await this.fileManager.loadCompanionSchema(
+        params.collectionName
+      );
+      const companionPublishable =
+        !!companion &&
+        companion.hasStatus &&
+        (await this.companionTableExists(companion.companionTableName));
+
+      if (!hasMainStatus && !companionPublishable) {
+        // Nothing to publish — the collection has no status concept.
+        return {
+          success: true,
+          statusCode: 200,
+          message: "Nothing to publish (collection has no status).",
+          data: { id: params.entryId },
+        };
+      }
+
+      const isMysql = this.dialect === "mysql";
+      const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+      const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
+      const tableName = getTableName(params.collectionName);
+
+      await this.adapter.transaction(async tx => {
+        if (hasMainStatus) {
+          await tx.execute(
+            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
+            ["published", params.entryId]
+          );
+        }
+        if (companionPublishable) {
+          await tx.execute(
+            `UPDATE ${q(companion!.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
+            ["published", params.entryId]
+          );
+        }
+      });
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "All languages published.",
+        data: { id: params.entryId, status: "published" },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        statusCode: 500,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to publish all languages",
+        data: null,
+      };
+    }
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
