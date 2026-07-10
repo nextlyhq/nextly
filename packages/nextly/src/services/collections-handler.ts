@@ -365,6 +365,8 @@ export class CollectionsHandler {
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to each row. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -435,6 +437,8 @@ export class CollectionsHandler {
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {

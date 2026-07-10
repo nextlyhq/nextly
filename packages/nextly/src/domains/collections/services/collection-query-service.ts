@@ -78,6 +78,7 @@ import {
   buildLocalizedOrderExpr,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  populateTranslationStatus,
   type LocalizedFieldRef,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -175,6 +176,33 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
+    });
+  }
+
+  /**
+   * Translation-status overview populate (i18n M7): attach a per-locale `_translations` map
+   * (which languages are translated + each one's draft/published status) to each row, for the
+   * admin's completeness badges / per-language pills / language filter. One batched query over
+   * the page. No-op when localization is off or the collection isn't localized.
+   */
+  private async populateTranslationMeta(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    preloaded?: CompanionSchema | null
+  ): Promise<void> {
+    if (!this.localization || rows.length === 0) return;
+    const companion =
+      preloaded ??
+      (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateTranslationStatus({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows,
+      locales: this.localization.locales.map(l => l.code),
+      defaultLocale: this.localization.defaultLocale,
+      hasStatus: companion.hasStatus,
     });
   }
 
@@ -449,6 +477,11 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
     /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
     fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to each
+     * row for the admin translation-status overview. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
@@ -484,7 +517,7 @@ export class CollectionQueryService extends BaseService {
         params.fallbackLocale
       );
       const companion =
-        localeChain || params.locale === "all"
+        localeChain || params.locale === "all" || params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
       const localizedCtx = this.buildLocalizedQueryContext(
@@ -826,6 +859,14 @@ export class CollectionQueryService extends BaseService {
         params.locale,
         companion
       );
+      // i18n M7: per-locale translation-status map for the admin overview (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(
+          params.collectionName,
+          entries,
+          companion
+        );
+      }
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -1361,6 +1402,11 @@ export class CollectionQueryService extends BaseService {
      * untranslated). Otherwise the configured fallback chain + default locale is used.
      */
     fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to the
+     * entry for the admin translation-status pills. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1484,6 +1530,12 @@ export class CollectionQueryService extends BaseService {
         [entry as Record<string, unknown>],
         params.locale
       );
+      // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(params.collectionName, [
+          entry as Record<string, unknown>,
+        ]);
+      }
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(

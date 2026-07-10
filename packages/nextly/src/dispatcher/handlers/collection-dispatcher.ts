@@ -76,6 +76,7 @@ import {
   unwrapServiceResult,
 } from "../helpers/service-envelope";
 import {
+  isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
   parseWhereParam,
@@ -730,6 +731,8 @@ const COLLECTIONS_METHODS: Record<
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
 
       type PaginatedShape = {
@@ -827,6 +830,8 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

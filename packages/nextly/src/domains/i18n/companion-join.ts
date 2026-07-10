@@ -266,3 +266,110 @@ export function buildCompanionExists(args: {
     AND ${valueCondition}
   )`;
 }
+
+/** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
+export interface LocaleTranslationMeta {
+  /**
+   * Whether this locale has meaningful content — a companion row with at least one non-blank
+   * localized field. Mirrors the read-time "blank = untranslated, falls back" rule (spec §8), so a
+   * present-but-all-blank row reads as untranslated. The default locale is always `true` (it is the
+   * fallback source and the entry itself exists in it).
+   */
+  translated: boolean;
+  /**
+   * The locale's draft/published state, from the companion `_status` column. Present only when the
+   * collection has per-locale status (i18n M6) and a companion row exists for the locale.
+   */
+  status?: string;
+}
+
+export interface TranslationStatusArgs {
+  db: SelectableDb;
+  companionTable: unknown;
+  localizedFields: LocalizedFieldRef[];
+  rows: Record<string, unknown>[];
+  /** Every configured locale code to report on. */
+  locales: string[];
+  /** The default locale — always reported as translated (the fallback source). */
+  defaultLocale: string;
+  /** Whether the companion carries a per-locale `_status` column (i18n M6). */
+  hasStatus: boolean;
+  idKey?: string;
+  /** Row key to write the per-locale map under (default `_translations`). */
+  outKey?: string;
+}
+
+/**
+ * Translation-status overview (i18n M7): for each result row, set a per-locale map describing
+ * which languages are translated and, when the collection has drafts, each language's status.
+ * One batched query over the whole page (same cost profile as the other companion populates);
+ * mutates `rows` in place; resilient to a missing companion table (dev-before-migrate).
+ *
+ * Output shape (under `outKey`, default `_translations`):
+ * `{ en: { translated: true, status: "published" }, de: { translated: false } }`
+ */
+export async function populateTranslationStatus(
+  args: TranslationStatusArgs
+): Promise<void> {
+  const {
+    db,
+    companionTable,
+    localizedFields,
+    rows,
+    locales,
+    defaultLocale,
+    hasStatus,
+  } = args;
+  const idKey = args.idKey ?? "id";
+  const outKey = args.outKey ?? "_translations";
+  if (rows.length === 0 || locales.length === 0) return;
+
+  const ids = rows
+    .map(r => r[idKey])
+    .filter((id): id is string | number => id !== null && id !== undefined);
+  if (ids.length === 0) return;
+
+  const table = companionTable as CompanionTable;
+  let companionRows: Record<string, unknown>[];
+  try {
+    companionRows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          inArray(table._parent as never, ids),
+          inArray(table._locale as never, locales)
+        )
+      );
+  } catch {
+    return; // companion table not present yet — leave rows untouched
+  }
+
+  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
+  for (const cr of companionRows) {
+    let perLocale = byParent.get(cr._parent);
+    if (!perLocale) {
+      perLocale = {};
+      byParent.set(cr._parent, perLocale);
+    }
+    perLocale[String(cr._locale)] = cr;
+  }
+
+  for (const row of rows) {
+    const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const meta: Record<string, LocaleTranslationMeta> = {};
+    for (const code of locales) {
+      const cr = perLocaleRows[code];
+      const hasContent =
+        !!cr && localizedFields.some(f => !isBlank(cr[f.column]));
+      const entry: LocaleTranslationMeta = {
+        translated: code === defaultLocale ? true : hasContent,
+      };
+      if (hasStatus && cr && typeof cr._status === "string") {
+        entry.status = cr._status;
+      }
+      meta[code] = entry;
+    }
+    row[outKey] = meta;
+  }
+}
