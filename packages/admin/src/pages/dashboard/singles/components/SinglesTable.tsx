@@ -1,30 +1,5 @@
 "use client";
 
-/**
- * SinglesTable Component
- *
- * Displays a responsive table/card view of Singles with search, pagination, and CRUD actions.
- * Uses ResponsiveTable for mobile responsiveness and TanStack Query for data fetching.
- *
- * ## Features
- * - Mobile responsive: Card view (< 768px), table view (>= 768px)
- * - Search Singles by label or slug (debounced 300ms)
- * - Filter by source (code, ui, built-in) and migration status
- * - Server-side pagination (10/25/50 rows per page)
- * - Source badges with color coding (code=primary, ui=success, built-in=default)
- * - Locked indicator for code-first Singles
- * - Migration status badges
- * - Field count display
- * - CRUD actions: Edit (smart routing), View Document, Delete
- * - Actions disabled appropriately for locked Singles
- *
- * @example
- * ```tsx
- * <SinglesTable />
- * ```
- */
-
-import type { Column } from "@nextlyhq/ui";
 import {
   Alert,
   Badge,
@@ -32,16 +7,14 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { MoreHorizontal, Pencil, Trash2, FileEdit, Filter } from "lucide-react";
+import { Pencil, Trash2, FileEdit, Filter } from "lucide-react";
 import React, { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -54,10 +27,15 @@ import {
   type LucideIcon,
 } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -78,45 +56,24 @@ import type {
 import { SinglesEmptyState } from "./SinglesEmptyState";
 import { SinglesTableSkeleton } from "./SinglesTableSkeleton";
 
-/**
- * Get the badge variant and label for a Single source
- */
+/** Source badge label + icon. */
 function getSourceBadge(source?: SingleSource): {
-  variant: "default";
   label: string;
   icon: React.ReactNode;
 } {
   switch (source) {
     case "code":
-      return {
-        variant: "default",
-        label: "Code",
-        icon: <Code className="h-3 w-3 mr-1" />,
-      };
+      return { label: "Code", icon: <Code className="mr-1 h-3 w-3" /> };
     case "ui":
-      return {
-        variant: "default",
-        label: "UI",
-        icon: <FileText className="h-3 w-3 mr-1" />,
-      };
+      return { label: "UI", icon: <FileText className="mr-1 h-3 w-3" /> };
     case "built-in":
-      return {
-        variant: "default",
-        label: "Built-in",
-        icon: <Package className="h-3 w-3 mr-1" />,
-      };
+      return { label: "Built-in", icon: <Package className="mr-1 h-3 w-3" /> };
     default:
-      return {
-        variant: "default",
-        label: "Unknown",
-        icon: null,
-      };
+      return { label: "Unknown", icon: null };
   }
 }
 
-/**
- * Get the badge variant and label for a migration status
- */
+/** Migration-status badge variant + label. */
 function getMigrationBadge(status?: string): {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
@@ -143,61 +100,55 @@ interface SinglesTableProps {
 
 const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
+
 /**
- * SinglesTable Component
+ * SinglesTable
+ *
+ * Lists singles with search, source/migration-status filters, server-side
+ * pagination, column visibility, whole-row navigation, per-row actions, and bulk
+ * delete. Locked (code-first) singles cannot be edited, selected, or deleted from
+ * the UI. Data + mutations run through TanStack Query; rendering is delegated to
+ * the unified DataTableView.
  */
 export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state (debounced to reduce API calls)
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
 
-  // Filter state
   const [sourceFilter, setSourceFilter] = useState<SingleSource | "all">("all");
   const [migrationFilter, setMigrationFilter] = useState<
     SingleMigrationStatus | "all"
   >("all");
 
-  // Delete dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [singleToDelete, setSingleToDelete] = useState<{
     id: string;
     slug: string;
     label: string;
   } | null>(null);
-
-  // Bulk delete dialog state
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
-
-  // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
-  // TanStack Query: Fetch Singles with automatic caching
   const { data, isLoading, isFetching, isError, error } = useSingles({
     pagination: { page, pageSize },
     sorting: [],
     filters: { search: debouncedSearch },
   });
 
-  // TanStack Query: Delete mutation with automatic cache invalidation
   const { mutate: deleteSingle, isPending: isDeleting } = useDeleteSingle();
 
-  // Row selection state management
   const {
     selectedIds,
     selectedCount,
@@ -205,24 +156,17 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     selectAllOnPage,
     deselectAllOnPage,
     clearSelection,
-    isSelected,
-    getSelectedCountOnPage,
   } = useRowSelection();
 
-  // Bulk mutation hooks
   const { mutate: bulkDeleteSingles, isPending: isBulkDeleting } =
     useBulkDeleteSingles();
 
-  // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
     if (!data?.items) return [];
-
     return data.items.filter(single => {
-      // Filter by source
       if (sourceFilter !== "all" && single.source !== sourceFilter) {
         return false;
       }
-      // Filter by migration status
       if (
         migrationFilter !== "all" &&
         single.migrationStatus !== migrationFilter
@@ -233,8 +177,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
-  // Action handlers
-  // Smart edit handler: UI Singles go to schema builder, locked Singles show error
   const handleEdit = useCallback(
     (single: ApiSingle) => {
       if (single.locked) {
@@ -247,7 +189,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }));
         return;
       }
-      // Route to schema builder for editing
       navigateTo(
         buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: single.slug })
       );
@@ -255,7 +196,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     [mode]
   );
 
-  // View/edit the document data (content) for this Single
   const handleViewDocument = useCallback((single: ApiSingle) => {
     navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }));
   }, []);
@@ -277,7 +217,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
 
   const handleConfirmDelete = useCallback(() => {
     if (!singleToDelete) return;
-
     deleteSingle(singleToDelete.slug, {
       onSuccess: () => {
         toast.success("Single deleted", {
@@ -295,7 +234,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     });
   }, [singleToDelete, deleteSingle]);
 
-  // Bulk delete handlers
   const handleBulkDelete = useCallback(() => {
     if (selectedCount === 0) {
       toast.error("No Singles selected");
@@ -305,11 +243,9 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
   }, [selectedCount]);
 
   const handleConfirmBulkDelete = useCallback(() => {
-    // Only delete non-locked singles
     const selectedSingleSlugs = filteredData
       .filter(s => selectedIds.includes(s.id) && !s.locked)
       .map(s => s.slug);
-
     void bulkDeleteSingles(selectedSingleSlugs, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
@@ -332,128 +268,55 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     });
   }, [selectedIds, bulkDeleteSingles, clearSelection, filteredData]);
 
-  // Helper: Get page Single IDs for select all
-  const pageSingleIds = useMemo(() => {
-    return filteredData.map(s => s.id) || [];
-  }, [filteredData]);
-
-  // Determine "select all on page" checkbox state
-  const selectedOnPage = getSelectedCountOnPage(pageSingleIds);
-  const selectAllCheckboxState: boolean | "indeterminate" =
-    selectedOnPage === 0
-      ? false
-      : selectedOnPage === pageSingleIds.length
-        ? true
-        : "indeterminate";
-
-  // Handle select all on page toggle
-  const handleToggleSelectAllOnPage = useCallback(() => {
-    const selectedOnPage = getSelectedCountOnPage(pageSingleIds);
-    if (selectedOnPage === pageSingleIds.length) {
-      deselectAllOnPage(pageSingleIds);
-    } else {
-      selectAllOnPage(pageSingleIds);
-    }
-  }, [
-    pageSingleIds,
-    getSelectedCountOnPage,
-    deselectAllOnPage,
-    selectAllOnPage,
-  ]);
-
-  // Format date helper (using centralized utility)
-  const formatDate = useCallback(
-    (dateValue?: string) => formatDateTime(dateValue),
-    []
-  );
-
-  // Get field count from Single
   const getFieldCount = useCallback((single: ApiSingle): number => {
-    if (single.fieldCount !== undefined) {
-      return single.fieldCount;
-    }
+    if (single.fieldCount !== undefined) return single.fieldCount;
     return single.fields?.length || 0;
   }, []);
 
-  const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
-
-  const columnDefs = useMemo<Column<ApiSingle>[]>(
+  const allColumns = useMemo<NextlyColumn<ApiSingle>[]>(
     () => [
-      // Checkbox column for bulk selection
       {
-        key: "select" as keyof ApiSingle,
-        label: (
-          <BulkSelectCheckbox
-            checked={selectAllCheckboxState}
-            onCheckedChange={handleToggleSelectAllOnPage}
-            rowId="select-all"
-            rowLabel="Select all Singles on page"
-          />
-        ),
-        hideLabelOnMobile: true,
-        render: (_value, single) => (
-          <BulkSelectCheckbox
-            checked={isSelected(single.id)}
-            onCheckedChange={() => toggleSelection(single.id)}
-            rowId={single.id}
-            rowLabel={single.label}
-          />
-        ),
-      },
-      {
-        key: "label",
-        label: "SINGLE",
-        hideLabelOnMobile: true,
-        render: (_value, single) => {
-          return (
-            <div className="flex items-center gap-3">
-              <div className="table-row-icon-cover">
-                {React.createElement(
-                  iconMap[single.admin?.icon || ""] || FileText,
-                  { className: "h-4 w-4" }
+        name: "label",
+        header: "SINGLE",
+        cell: ({ row }) => (
+          <div className="flex items-center gap-3">
+            <div className="table-row-icon-cover">
+              {React.createElement(iconMap[row.admin?.icon || ""] || FileText, {
+                className: "h-4 w-4",
+              })}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-sm font-medium text-foreground">
+                  {row.label}
+                </span>
+                {row.locked && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Locked: Cannot be edited or deleted from UI</p>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
               </div>
-              <div className="min-w-0 flex-1 flex flex-col">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      handleEdit(single);
-                    }}
-                    disabled={single.locked}
-                    className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {single.label}
-                  </button>
-                  {single.locked && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Locked: Cannot be edited or deleted from UI</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground truncate">
-                  {single.slug}
-                </div>
-              </div>
+              <span className="truncate text-xs text-muted-foreground">
+                {row.slug}
+              </span>
             </div>
-          );
-        },
+          </div>
+        ),
       },
       {
-        key: "source",
-        label: "SOURCE",
-        render: (_value, single) => {
-          const sourceBadge = getSourceBadge(single.source);
+        name: "source",
+        header: "SOURCE",
+        cell: ({ row }) => {
+          const sourceBadge = getSourceBadge(row.source);
           return (
             <Badge
-              variant={sourceBadge.variant}
-              className="whitespace-nowrap text-muted-foreground font-normal"
+              variant="default"
+              className="whitespace-nowrap font-normal text-muted-foreground"
             >
               {sourceBadge.icon}
               {sourceBadge.label}
@@ -462,10 +325,10 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         },
       },
       {
-        key: "migrationStatus",
-        label: "STATUS",
-        render: (_value, single) => {
-          const migrationBadge = getMigrationBadge(single.migrationStatus);
+        name: "migrationStatus",
+        header: "STATUS",
+        cell: ({ row }) => {
+          const migrationBadge = getMigrationBadge(row.migrationStatus);
           return (
             <Badge variant={migrationBadge.variant}>
               {migrationBadge.label}
@@ -474,108 +337,42 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         },
       },
       {
-        key: "fields",
-        label: "FIELDS",
-        render: (_value, single) => (
-          <span className="text-sm tabular-nums">{getFieldCount(single)}</span>
+        name: "fields",
+        header: "FIELDS",
+        cell: ({ row }) => (
+          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
         ),
       },
       {
-        key: "createdAt",
-        label: "CREATED",
+        name: "createdAt",
+        header: "CREATED",
         hideOnMobile: true,
-        render: createdAt => (
+        cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatDate(createdAt as string | undefined)}
+            {formatDateTime(value as string | undefined)}
           </span>
         ),
       },
-      {
-        key: "actions" as keyof ApiSingle,
-        label: "ACTIONS",
-        render: (_, single) => {
-          const isLocked = single.locked;
-          return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontal className="h-4 w-4" />
-                  <span className="sr-only">Open menu</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation();
-                    handleEdit(single);
-                  }}
-                  className={isLocked ? "opacity-50" : ""}
-                >
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                  {isLocked && (
-                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                  )}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation();
-                    handleViewDocument(single);
-                  }}
-                >
-                  <FileEdit className="h-4 w-4" />
-                  View Document
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation();
-                    handleDelete(single);
-                  }}
-                  disabled={isLocked}
-                  className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                  {isLocked && (
-                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                  )}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          );
-        },
-      },
     ],
-    [
-      selectAllCheckboxState,
-      handleToggleSelectAllOnPage,
-      isSelected,
-      toggleSelection,
-      handleEdit,
-      handleViewDocument,
-      handleDelete,
-      formatDate,
-      getFieldCount,
-    ]
+    [getFieldCount]
   );
 
   const columns = useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
   );
 
-  // Handle page size change (reset to first page)
   const handlePageSizeChange = useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
   }, []);
 
-  // Handle filter changes (reset to first page)
   const handleSourceFilterChange = useCallback((value: string) => {
     setSourceFilter(value as SingleSource | "all");
     setPage(0);
@@ -586,21 +383,56 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     setPage(0);
   }, []);
 
-  // Error state
+  const selection = useMemo<DataTableSelection<ApiSingle>>(
+    () => ({
+      selectedIds,
+      isSelectable: single => !single.locked,
+      onToggle: single => toggleSelection(single.id),
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(r => r.id);
+        if (allSelected) deselectAllOnPage(ids);
+        else selectAllOnPage(ids);
+      },
+    }),
+    [selectedIds, toggleSelection, deselectAllOnPage, selectAllOnPage]
+  );
+
+  const rowActions = useCallback(
+    (single: ApiSingle): RowAction<ApiSingle>[] => [
+      {
+        id: "edit",
+        label: "Edit",
+        icon: <Pencil className="h-4 w-4" />,
+        onSelect: () => handleEdit(single),
+      },
+      {
+        id: "view-document",
+        label: "View Document",
+        icon: <FileEdit className="h-4 w-4" />,
+        onSelect: () => handleViewDocument(single),
+      },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        isDisabled: () => Boolean(single.locked),
+        onSelect: () => handleDelete(single),
+      },
+    ],
+    [handleEdit, handleViewDocument, handleDelete]
+  );
+
   if (isError) {
     return (
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search Singles..."
-              isLoading={false}
-              className="flex-1 max-w-sm"
-            />
-          </div>
-        </div>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search Singles..."
+          isLoading={false}
+          className="max-w-sm flex-1"
+        />
         <Alert variant="destructive">
           {error instanceof Error
             ? error.message
@@ -610,36 +442,28 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     );
   }
 
-  // Loading state (initial load only)
   if ((isLoading || isFetching) && (!data || data.items.length === 0)) {
     return (
       <div className="space-y-4">
         <span className="sr-only">Loading Singles...</span>
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search Singles..."
-              isLoading={true}
-              className="flex-1 max-w-sm"
-            />
-          </div>
-        </div>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search Singles..."
+          isLoading={true}
+          className="max-w-sm flex-1"
+        />
         <SinglesTableSkeleton />
       </div>
     );
   }
 
-  // Render table with data
-  const hasData = filteredData.length > 0;
   const isEmpty = filteredData.length === 0;
   const isSearching = search.trim() !== "";
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
     <div className="space-y-4">
-      {/* Bulk selection toolbar */}
       {selectedCount > 0 && (
         <BulkActionBar
           selectedCount={selectedCount}
@@ -650,143 +474,136 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         />
       )}
 
-      {/* Search and filters */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search Singles..."
-            isLoading={isLoading}
-            className="w-full md:max-w-sm bg-background text-foreground border-border"
-          />
-        </div>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search Singles..."
+          isLoading={isLoading}
+          className="w-full border-border bg-background text-foreground md:max-w-sm"
+        />
 
-        {/* Right: Column visibility & Filters */}
-        <div className="flex items-center justify-between sm:justify-end gap-2 w-full md:w-auto">
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="md"
-                  className="relative bg-background text-foreground border-border hover:bg-accent/10"
-                >
-                  <Filter className="h-4 w-4" />
-                  Filter
-                  {(sourceFilter !== "all" || migrationFilter !== "all") && (
-                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-                <DropdownMenuSeparator />
+        <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="md"
+                className="relative border-border bg-background text-foreground hover:bg-accent/10"
+              >
+                <Filter className="h-4 w-4" />
+                Filter
+                {isFiltering && (
+                  <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-none bg-primary" />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "all"}
+                onCheckedChange={() => handleSourceFilterChange("all")}
+              >
+                All Sources
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "code"}
+                onCheckedChange={() => handleSourceFilterChange("code")}
+              >
+                Code
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "ui"}
+                onCheckedChange={() => handleSourceFilterChange("ui")}
+              >
+                UI
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "built-in"}
+                onCheckedChange={() => handleSourceFilterChange("built-in")}
+              >
+                Built-in
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "all"}
+                onCheckedChange={() => handleMigrationFilterChange("all")}
+              >
+                All Status
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "synced"}
+                onCheckedChange={() => handleMigrationFilterChange("synced")}
+              >
+                Synced
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "pending"}
+                onCheckedChange={() => handleMigrationFilterChange("pending")}
+              >
+                Pending
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "generated"}
+                onCheckedChange={() => handleMigrationFilterChange("generated")}
+              >
+                Generated
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "applied"}
+                onCheckedChange={() => handleMigrationFilterChange("applied")}
+              >
+                Applied
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="md"
+                className="border-border bg-background text-foreground hover:bg-accent/10"
+              >
+                <Icons.Columns className="h-4 w-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {toggleableColumns.map(col => (
                 <DropdownMenuCheckboxItem
-                  checked={sourceFilter === "all"}
-                  onCheckedChange={() => handleSourceFilterChange("all")}
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
                 >
-                  All Sources
+                  {typeof col.header === "string" ? col.header : col.name}
                 </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={sourceFilter === "code"}
-                  onCheckedChange={() => handleSourceFilterChange("code")}
-                >
-                  Code
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={sourceFilter === "ui"}
-                  onCheckedChange={() => handleSourceFilterChange("ui")}
-                >
-                  UI
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={sourceFilter === "built-in"}
-                  onCheckedChange={() => handleSourceFilterChange("built-in")}
-                >
-                  Built-in
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={migrationFilter === "all"}
-                  onCheckedChange={() => handleMigrationFilterChange("all")}
-                >
-                  All Status
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={migrationFilter === "synced"}
-                  onCheckedChange={() => handleMigrationFilterChange("synced")}
-                >
-                  Synced
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={migrationFilter === "pending"}
-                  onCheckedChange={() => handleMigrationFilterChange("pending")}
-                >
-                  Pending
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={migrationFilter === "generated"}
-                  onCheckedChange={() =>
-                    handleMigrationFilterChange("generated")
-                  }
-                >
-                  Generated
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={migrationFilter === "applied"}
-                  onCheckedChange={() => handleMigrationFilterChange("applied")}
-                >
-                  Applied
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="md"
-                  className="bg-background text-foreground border-border hover:bg-accent/10"
-                >
-                  <Icons.Columns className="h-4 w-4" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {toggleableColumns.map(col => (
-                  <DropdownMenuCheckboxItem
-                    key={String(col.key)}
-                    checked={!hiddenColumns.has(String(col.key))}
-                    onCheckedChange={() => toggleColumn(String(col.key))}
-                  >
-                    {typeof col.label === "string"
-                      ? col.label
-                      : String(col.key)}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {/* Empty state */}
       {isEmpty ? (
         <SinglesEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        /* Responsive table */
-        /* Responsive table and Pagination Card */
-        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
-          <ResponsiveTable
-            data={filteredData}
+        <>
+          <DataTableView<ApiSingle>
             columns={columns}
-            emptyMessage="No Singles found. Try adjusting your search or filters."
+            rows={filteredData}
+            onRowClick={single => {
+              // Locked singles are read-only from the UI.
+              if (!single.locked) handleEdit(single);
+            }}
+            primaryColumn="label"
+            selection={selection}
+            rowActions={rowActions}
             ariaLabel="Singles table"
-            tableWrapperClassName="border-0 rounded-none shadow-none"
+            emptyMessage="No Singles found. Try adjusting your search or filters."
           />
-          {hasData && data && (
+          {data && (
             <Pagination
               currentPage={page}
               totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
@@ -798,10 +615,9 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
               totalItems={data.meta.total}
             />
           )}
-        </div>
+        </>
       )}
 
-      {/* Single delete confirmation dialog */}
       <BulkDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -822,19 +638,12 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         isLoading={isDeleting}
       />
 
-      {/* Bulk delete confirmation dialog */}
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
-        items={
-          filteredData
-            .filter(s => selectedIds.includes(s.id) && !s.locked)
-            .map(s => ({
-              id: s.id,
-              name: s.label,
-              secondary: s.slug,
-            })) || []
-        }
+        items={filteredData
+          .filter(s => selectedIds.includes(s.id) && !s.locked)
+          .map(s => ({ id: s.id, name: s.label, secondary: s.slug }))}
         entityType="Single"
         entityTypePlural="Singles"
         onConfirm={handleConfirmBulkDelete}
