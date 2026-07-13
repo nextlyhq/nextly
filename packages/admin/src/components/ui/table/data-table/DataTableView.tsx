@@ -83,6 +83,10 @@ export interface DataTableViewProps<Row extends object> {
   selection?: DataTableSelection<Row>;
   /** Per-row action menu (three-dots). */
   rowActions?: (row: Row) => RowAction<Row>[];
+  /** Current sort (column name + direction). Enables sort indicators on headers. */
+  sort?: { field: string; order: "asc" | "desc" };
+  /** Called when a sortable column header is clicked. Sorting is server-side. */
+  onSortChange?: (field: string, order: "asc" | "desc") => void;
   loading?: boolean;
   error?: string | null;
   emptyMessage?: string;
@@ -107,6 +111,8 @@ export function DataTableView<Row extends object>({
   primaryColumn,
   selection,
   rowActions,
+  sort,
+  onSortChange,
   loading = false,
   error = null,
   emptyMessage = "No results found.",
@@ -336,17 +342,44 @@ export function DataTableView<Row extends object>({
                     />
                   </TableHead>
                 )}
-                {visibleColumns.map(col => (
-                  <TableHead
-                    key={col.name}
-                    className={cn(
-                      col.align === "right" && "text-right",
-                      col.align === "center" && "text-center"
-                    )}
-                  >
-                    {col.header}
-                  </TableHead>
-                ))}
+                {visibleColumns.map(col => {
+                  const canSort = Boolean(col.sortable && onSortChange);
+                  const sorted = sort?.field === col.name ? sort.order : null;
+                  return (
+                    <TableHead
+                      key={col.name}
+                      className={cn(
+                        col.align === "right" && "text-right",
+                        col.align === "center" && "text-center",
+                        canSort && "cursor-pointer select-none"
+                      )}
+                      onClick={
+                        canSort
+                          ? () =>
+                              onSortChange?.(
+                                col.name,
+                                sorted === "asc" ? "desc" : "asc"
+                              )
+                          : undefined
+                      }
+                    >
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1",
+                          col.align === "right" && "flex-row-reverse",
+                          col.align === "center" && "justify-center"
+                        )}
+                      >
+                        {col.header}
+                        {sorted && (
+                          <span className="text-muted-foreground">
+                            {sorted === "asc" ? "↑" : "↓"}
+                          </span>
+                        )}
+                      </span>
+                    </TableHead>
+                  );
+                })}
                 {rowActions && <TableHead className="w-12 text-right" />}
               </TableRow>
             </TableHeader>

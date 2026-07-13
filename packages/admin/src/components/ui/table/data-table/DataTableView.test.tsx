@@ -45,6 +45,42 @@ describe("DataTableView", () => {
     expect(table().getByText("editor")).toBeInTheDocument();
   });
 
+  it("calls onSortChange when a sortable header is clicked, toggling direction", async () => {
+    const onSortChange = vi.fn();
+    const user = userEvent.setup();
+    const sortableColumns: NextlyColumn<Row>[] = [
+      { name: "name", header: "Name", sortable: true },
+      { name: "role", header: "Role" },
+    ];
+    const { rerender } = render(
+      <DataTableView
+        columns={sortableColumns}
+        rows={rows}
+        onSortChange={onSortChange}
+      />
+    );
+    // First click -> ascending.
+    await user.click(table().getByText("Name"));
+    expect(onSortChange).toHaveBeenCalledWith("name", "asc");
+
+    // When already ascending, clicking again requests descending.
+    rerender(
+      <DataTableView
+        columns={sortableColumns}
+        rows={rows}
+        sort={{ field: "name", order: "asc" }}
+        onSortChange={onSortChange}
+      />
+    );
+    await user.click(table().getByText("Name"));
+    expect(onSortChange).toHaveBeenLastCalledWith("name", "desc");
+
+    // A non-sortable header does not trigger sorting.
+    onSortChange.mockClear();
+    await user.click(table().getByText("Role"));
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
   it("shows the empty message when there are no rows", () => {
     render(
       <DataTableView columns={columns} rows={[]} emptyMessage="Nothing here" />
