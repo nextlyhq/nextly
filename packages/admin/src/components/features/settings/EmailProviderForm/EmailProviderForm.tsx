@@ -203,7 +203,7 @@ export function EmailProviderForm({
                           <CardContent className="p-3 flex items-center justify-center">
                             <div className="w-full h-full max-w-[90px] max-h-[36px] flex items-center justify-center">
                               <p.icon
-                                className="max-w-full max-h-full"
+                                className="max-w-full max-h-full text-foreground"
                                 aria-label={`${p.name} logo`}
                               />
                             </div>
