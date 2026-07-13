@@ -1,6 +1,12 @@
 "use client";
 
-import { Button, Sheet, SheetContent } from "@nextlyhq/ui";
+import {
+  Button,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+} from "@nextlyhq/ui";
 import type React from "react";
 import { useState, useEffect } from "react";
 
@@ -44,8 +50,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     <MediaProvider>
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
-          {/* Mobile Header */}
-          <div className="md:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
+          {/* Mobile Header — shown until lg so tablets use the hamburger + drawer
+              (the dual sidebar's sub-panel only becomes in-flow at lg). */}
+          <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
               <Button
                 variant="ghost"
@@ -73,7 +80,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
 
           <div className="flex flex-1 min-h-0 overflow-hidden">
-            <div className="hidden md:flex h-full overflow-hidden shrink-0">
+            <div className="hidden lg:flex h-full overflow-hidden shrink-0">
               <DualSidebar />
             </div>
 
@@ -82,6 +89,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 side="left"
                 className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
               >
+                {/* Visually hidden title + description so the drawer dialog is
+                    labelled and described for screen readers (Radix requires a
+                    DialogTitle and warns without a description). */}
+                <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+                <SheetDescription className="sr-only">
+                  Primary admin navigation
+                </SheetDescription>
                 <DualSidebar isMobile />
               </SheetContent>
             </Sheet>
