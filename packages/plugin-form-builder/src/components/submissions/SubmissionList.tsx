@@ -12,6 +12,12 @@
 
 "use client";
 
+import { DataTableView } from "@nextlyhq/plugin-sdk/admin";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+  RowAction,
+} from "@nextlyhq/plugin-sdk/admin";
 import type React from "react";
 import { useState, useCallback, useMemo } from "react";
 
@@ -94,22 +100,6 @@ function formatDate(date: Date | string): string {
   return d.toLocaleString();
 }
 
-/**
- * Get status badge class name.
- */
-function getStatusBadgeClass(status: string): string {
-  switch (status) {
-    case "new":
-      return "submission-status-badge submission-status-badge--new";
-    case "read":
-      return "submission-status-badge submission-status-badge--read";
-    case "archived":
-      return "submission-status-badge submission-status-badge--archived";
-    default:
-      return "submission-status-badge";
-  }
-}
-
 // ============================================================================
 // Component
 // ============================================================================
@@ -165,12 +155,6 @@ export function SubmissionList({
     return submissions.filter(sub => sub.status === filter);
   }, [submissions, filter]);
 
-  /** Check if all visible submissions are selected */
-  const allSelected =
-    filteredSubmissions.length > 0 &&
-    selectedIds.size === filteredSubmissions.length &&
-    filteredSubmissions.every(s => selectedIds.has(s.id));
-
   /** Check if some submissions are selected */
   const someSelected = selectedIds.size > 0;
 
@@ -190,15 +174,6 @@ export function SubmissionList({
       return next;
     });
   }, []);
-
-  /** Toggle selection for all visible submissions */
-  const toggleSelectAll = useCallback(() => {
-    if (allSelected) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filteredSubmissions.map(s => s.id)));
-    }
-  }, [allSelected, filteredSubmissions]);
 
   /** Handle status change for a single submission */
   const handleStatusChange = useCallback(
@@ -286,13 +261,108 @@ export function SubmissionList({
     [onBulkStatusChange, selectedIds]
   );
 
-  /** Handle row click */
-  const handleRowClick = useCallback(
-    (submission: SubmissionDocument) => {
-      onViewDetail?.(submission);
-    },
-    [onViewDetail]
+  // -------------------------------------------------------------------------
+  // DataTable wiring (columns, selection, row actions)
+  // -------------------------------------------------------------------------
+
+  const columns = useMemo<NextlyColumn<SubmissionDocument>[]>(() => {
+    const base: NextlyColumn<SubmissionDocument>[] = [
+      {
+        name: "id",
+        header: "ID",
+        cell: ({ row }) => (
+          <code className="font-mono text-xs text-muted-foreground">
+            {row.id.slice(0, 8)}...
+          </code>
+        ),
+      },
+      {
+        name: "status",
+        header: "Status",
+        cell: ({ row }) => (
+          <span className="inline-flex items-center rounded-none border border-border bg-muted px-2 py-0.5 text-[11px] font-medium capitalize text-foreground">
+            {row.status}
+          </span>
+        ),
+      },
+      {
+        name: "submittedAt",
+        header: "Submitted",
+        hideOnMobile: true,
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-sm text-muted-foreground">
+            {formatDate(row.submittedAt)}
+          </span>
+        ),
+      },
+    ];
+    const fieldColumns: NextlyColumn<SubmissionDocument>[] = displayFields.map(
+      field => ({
+        name: `field:${field.name}`,
+        header: field.label,
+        hideOnMobile: true,
+        cell: ({ row }) => (
+          <span className="text-sm">{formatValue(row.data[field.name])}</span>
+        ),
+      })
+    );
+    return [...base, ...fieldColumns];
+  }, [displayFields]);
+
+  const selection = useMemo<DataTableSelection<SubmissionDocument>>(
+    () => ({
+      selectedIds: Array.from(selectedIds),
+      onToggle: submission => toggleSelect(submission.id),
+      onToggleAll: (rows, allChecked) => {
+        const ids = rows.map(r => r.id);
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          if (allChecked) ids.forEach(id => next.delete(id));
+          else ids.forEach(id => next.add(id));
+          return next;
+        });
+      },
+    }),
+    [selectedIds, toggleSelect]
   );
+
+  const rowActions = useCallback((): RowAction<SubmissionDocument>[] => {
+    const actions: RowAction<SubmissionDocument>[] = [];
+    if (onStatusChange) {
+      actions.push(
+        {
+          id: "mark-read",
+          label: "Mark Read",
+          isVisible: r => r.status !== "read",
+          isDisabled: r => processingIds.has(r.id),
+          onSelect: r => void handleStatusChange(r.id, "read"),
+        },
+        {
+          id: "archive",
+          label: "Archive",
+          isVisible: r => r.status !== "archived",
+          isDisabled: r => processingIds.has(r.id),
+          onSelect: r => void handleStatusChange(r.id, "archived"),
+        }
+      );
+    }
+    if (onDelete) {
+      actions.push({
+        id: "delete",
+        label: "Delete",
+        destructive: true,
+        isDisabled: r => processingIds.has(r.id),
+        onSelect: r => void handleDelete(r.id),
+      });
+    }
+    return actions;
+  }, [
+    onStatusChange,
+    onDelete,
+    processingIds,
+    handleStatusChange,
+    handleDelete,
+  ]);
 
   // -------------------------------------------------------------------------
   // Render
@@ -382,142 +452,20 @@ export function SubmissionList({
         </div>
       </div>
 
-      {/* Table */}
-      <div className="submission-list__table-container">
-        <table className="submission-list__table">
-          <thead>
-            <tr>
-              <th className="submission-list__th submission-list__th--checkbox">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleSelectAll}
-                  aria-label="Select all submissions"
-                />
-              </th>
-              <th className="submission-list__th">ID</th>
-              <th className="submission-list__th">Status</th>
-              <th className="submission-list__th">Submitted</th>
-              {displayFields.map(field => (
-                <th key={field.name} className="submission-list__th">
-                  {field.label}
-                </th>
-              ))}
-              <th className="submission-list__th submission-list__th--actions">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              <tr>
-                <td
-                  colSpan={5 + displayFields.length}
-                  className="submission-list__loading"
-                >
-                  Loading submissions...
-                </td>
-              </tr>
-            ) : filteredSubmissions.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={5 + displayFields.length}
-                  className="submission-list__empty"
-                >
-                  No submissions found
-                </td>
-              </tr>
-            ) : (
-              filteredSubmissions.map(submission => {
-                const isSelected = selectedIds.has(submission.id);
-                const isProcessing = processingIds.has(submission.id);
-
-                return (
-                  <tr
-                    key={submission.id}
-                    className={`submission-list__row ${
-                      isSelected ? "submission-list__row--selected" : ""
-                    } ${isProcessing ? "submission-list__row--processing" : ""}`}
-                    onClick={() => handleRowClick(submission)}
-                    style={{ cursor: onViewDetail ? "pointer" : "default" }}
-                  >
-                    <td
-                      className="submission-list__td submission-list__td--checkbox"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelect(submission.id)}
-                        disabled={isProcessing}
-                        aria-label={`Select submission ${submission.id}`}
-                      />
-                    </td>
-                    <td className="submission-list__td submission-list__td--id">
-                      <code>{submission.id.slice(0, 8)}...</code>
-                    </td>
-                    <td className="submission-list__td">
-                      <span className={getStatusBadgeClass(submission.status)}>
-                        {submission.status}
-                      </span>
-                    </td>
-                    <td className="submission-list__td">
-                      {formatDate(submission.submittedAt)}
-                    </td>
-                    {displayFields.map(field => (
-                      <td key={field.name} className="submission-list__td">
-                        {formatValue(submission.data[field.name])}
-                      </td>
-                    ))}
-                    <td
-                      className="submission-list__td submission-list__td--actions"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      {onStatusChange && submission.status !== "read" && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleStatusChange(submission.id, "read")
-                          }
-                          disabled={isProcessing}
-                          className="submission-list__row-action"
-                          title="Mark as read"
-                        >
-                          Mark Read
-                        </button>
-                      )}
-                      {onStatusChange && submission.status !== "archived" && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleStatusChange(submission.id, "archived")
-                          }
-                          disabled={isProcessing}
-                          className="submission-list__row-action"
-                          title="Archive"
-                        >
-                          Archive
-                        </button>
-                      )}
-                      {onDelete && (
-                        <button
-                          type="button"
-                          onClick={() => void handleDelete(submission.id)}
-                          disabled={isProcessing}
-                          className="submission-list__row-action submission-list__row-action--danger"
-                          title="Delete"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {/* Table (unified admin DataTable via the plugin SDK) */}
+      <DataTableView<SubmissionDocument>
+        columns={columns}
+        rows={filteredSubmissions}
+        loading={isLoading}
+        selection={selection}
+        rowActions={rowActions}
+        onRowClick={
+          onViewDetail ? submission => onViewDetail(submission) : undefined
+        }
+        registryKey="form-submissions"
+        ariaLabel="Form submissions table"
+        emptyMessage="No submissions found"
+      />
 
       {/* Summary */}
       <div className="submission-list__summary">

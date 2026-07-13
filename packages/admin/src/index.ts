@@ -120,10 +120,12 @@ export {
   type ComponentPath,
 } from "./lib/plugins/component-registry";
 
-// DataTable plugin registries — author surface re-exported by
-// `@nextlyhq/plugin-sdk/admin`. Lets plugins add cell renderers, columns,
-// column transforms, and row/bulk actions to any admin list.
+// Unified DataTable + plugin registries — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`. Plugins can render the shared table and add cell
+// renderers, columns, column transforms, and row/bulk actions to any admin list.
 export {
+  DataTable,
+  DataTableView,
   registerCellRenderer,
   registerColumns,
   transformColumns,
@@ -131,6 +133,9 @@ export {
   registerBulkAction,
 } from "./components/ui/table/data-table";
 export type {
+  DataTableProps,
+  DataTableViewProps,
+  DataTableSelection,
   DataTableTarget,
   DataTableContext,
   ColumnProvider,

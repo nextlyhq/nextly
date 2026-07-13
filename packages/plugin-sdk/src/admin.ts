@@ -16,12 +16,15 @@ export {
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
- * DataTable extension points (@experimental). Contribute cell renderers,
- * columns, column transforms, and row/bulk actions to any admin list. Keyed by
- * a list `target`: a collection slug, a fixed key like `"users"`/`"media"`, or
- * `"*"` for every list.
+ * The unified admin data table + its extension points (@experimental). Render
+ * `DataTable` (batteries-included) or `DataTableView` (controlled) to match the
+ * admin's lists, and contribute cell renderers, columns, column transforms, and
+ * row/bulk actions to any list. Contributions are keyed by a list `target`: a
+ * collection slug, a fixed key like `"users"`/`"media"`, or `"*"` for all lists.
  */
 export {
+  DataTable,
+  DataTableView,
   registerCellRenderer,
   registerColumns,
   transformColumns,
@@ -29,6 +32,9 @@ export {
   registerBulkAction,
 } from "@nextlyhq/admin";
 export type {
+  DataTableProps,
+  DataTableViewProps,
+  DataTableSelection,
   DataTableTarget,
   DataTableContext,
   ColumnProvider,
