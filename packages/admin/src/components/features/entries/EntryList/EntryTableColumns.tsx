@@ -471,7 +471,7 @@ export function generateEntryColumns({
                     e.stopPropagation();
                     onEdit(row.original.id as string);
                   }}
-                  className="font-mono text-xs text-foreground transition-colors text-left w-fit cursor-pointer"
+                  className="font-mono text-xs text-foreground hover:underline transition-colors text-left w-fit cursor-pointer"
                   title={value}
                 >
                   {displayValue}
@@ -510,7 +510,7 @@ export function generateEntryColumns({
                     e.stopPropagation();
                     onEdit(row.original.id as string);
                   }}
-                  className="text-sm font-medium text-foreground transition-colors text-left w-fit cursor-pointer"
+                  className="text-sm font-medium text-foreground hover:underline transition-colors text-left w-fit cursor-pointer"
                 >
                   {value}
                 </button>
