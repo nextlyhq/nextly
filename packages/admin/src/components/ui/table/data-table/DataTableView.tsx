@@ -87,6 +87,8 @@ export interface DataTableViewProps<Row extends object> {
   error?: string | null;
   emptyMessage?: string;
   ariaLabel?: string;
+  /** Draw the desktop table's card border. Disable when a parent supplies one. */
+  bordered?: boolean;
   /** Extra classes for the outer wrapper. */
   className?: string;
 }
@@ -109,6 +111,7 @@ export function DataTableView<Row extends object>({
   error = null,
   emptyMessage = "No results found.",
   ariaLabel = "Data table",
+  bordered = true,
   className,
 }: DataTableViewProps<Row>) {
   const visibleColumns = useMemo(
@@ -310,7 +313,13 @@ export function DataTableView<Row extends object>({
       </div>
 
       {/* Desktop / wide: table view */}
-      <div className="hidden overflow-hidden rounded-none border border-border bg-card text-card-foreground @md/table:block">
+      <div
+        className={cn(
+          "hidden overflow-hidden @md/table:block",
+          bordered &&
+            "rounded-none border border-border bg-card text-card-foreground"
+        )}
+      >
         <div className="overflow-x-auto">
           <Table aria-label={ariaLabel} className="w-full">
             <TableHeader>

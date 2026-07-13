@@ -15,8 +15,6 @@ import {
   AlertTitle,
   Badge,
   Button,
-  ResponsiveTable,
-  type Column,
 } from "@nextlyhq/ui";
 import { useMemo } from "react";
 
@@ -29,7 +27,11 @@ import {
   FileText,
   File,
 } from "@admin/components/icons";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+} from "@admin/components/ui/table/data-table";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
 import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
@@ -109,55 +111,22 @@ export function MediaListView({
   className = "",
   emptyStateMessage,
 }: MediaListViewProps) {
-  const selectAllState: boolean | "indeterminate" = useMemo(() => {
-    if (media.length === 0) return false;
-    const selectedCount = media.filter(m => selectedIds.has(m.id)).length;
-    if (selectedCount === 0) return false;
-    if (selectedCount === media.length) return true;
-    return "indeterminate";
-  }, [media, selectedIds]);
-
-  const columnDefs: Column<Media>[] = useMemo(() => {
-    const allColumns: Column<Media>[] = [
+  const columns = useMemo<NextlyColumn<Media>[]>(() => {
+    const allColumns: NextlyColumn<Media>[] = [
       {
-        key: "id",
-        label: (
-          <BulkSelectCheckbox
-            checked={selectAllState}
-            onCheckedChange={checked => onToggleAll?.(checked === true)}
-            rowId="select-all"
-            rowLabel="Select all media on page"
-          />
-        ),
-        headerClassName: "w-12 px-0 text-center",
-        cellClassName: "w-12 px-0 text-center",
-        render: (_, item) => (
-          <div className="flex justify-center">
-            <BulkSelectCheckbox
-              checked={selectedIds.has(item.id)}
-              onCheckedChange={() => onSelectionChange?.(item.id)}
-              rowId={item.id}
-              rowLabel={item.originalFilename}
-            />
-          </div>
-        ),
-      },
-      {
-        key: "originalFilename",
-        label: "NAME",
-        headerClassName: "text-left pl-0",
-        cellClassName: "text-left pl-0",
-        render: (_, item) => {
+        name: "originalFilename",
+        header: "NAME",
+        cell: ({ row: item }) => {
           const type = getMediaType(item.mimeType);
           const isImage = type === "image";
           return (
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 overflow-hidden bg-card/50 flex items-center justify-center flex-shrink-0 border border-border rounded-none">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-none border border-border bg-card/50">
                 {isImage && (item.thumbnailUrl || item.url) ? (
                   <img
                     src={item.thumbnailUrl ?? item.url}
                     alt={item.altText || item.originalFilename}
-                    className="max-w-full max-h-full block"
+                    className="block max-h-full max-w-full"
                     style={{ objectFit: "contain" }}
                     loading="lazy"
                   />
@@ -165,12 +134,12 @@ export function MediaListView({
                   <MediaTypeIcon mimeType={item.mimeType} />
                 )}
               </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-sm font-medium truncate">
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-medium">
                   {item.originalFilename}
                 </span>
                 {item.altText && (
-                  <span className="text-xs text-muted-foreground truncate">
+                  <span className="truncate text-xs text-muted-foreground">
                     {item.altText}
                   </span>
                 )}
@@ -180,67 +149,66 @@ export function MediaListView({
         },
       },
       {
-        key: "mimeType",
-        label: "TYPE",
-        headerClassName: "text-center",
-        cellClassName: "text-center",
-        render: (_, item) => {
-          const type = getMediaType(item.mimeType);
-          return (
-            <Badge
-              variant="default"
-              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-muted text-foreground border border-border uppercase tracking-tight"
-            >
-              {type}
-            </Badge>
-          );
-        },
+        name: "mimeType",
+        header: "TYPE",
+        align: "center",
+        cell: ({ row: item }) => (
+          <Badge
+            variant="default"
+            className="rounded-none border border-border bg-muted px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-tight text-foreground"
+          >
+            {getMediaType(item.mimeType)}
+          </Badge>
+        ),
       },
       {
-        key: "size",
-        label: "SIZE",
-        headerClassName: "text-right",
-        cellClassName: "text-right font-medium",
-        render: size => (
+        name: "size",
+        header: "SIZE",
+        align: "right",
+        cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatFileSize(Number(size))}
+            {formatFileSize(Number(value))}
           </span>
         ),
       },
       {
-        key: "width",
-        label: "DIMENSIONS",
+        name: "width",
+        header: "DIMENSIONS",
         hideOnMobile: true,
-        headerClassName: "text-right",
-        cellClassName: "text-right",
-        render: (_, item) => (
+        align: "right",
+        cell: ({ row: item }) => (
           <span className="text-sm text-muted-foreground">
             {formatDimensions(item.width, item.height)}
           </span>
         ),
       },
       {
-        key: "uploadedAt",
-        label: "UPLOADED",
+        name: "uploadedAt",
+        header: "UPLOADED",
         hideOnMobile: true,
-        headerClassName: "text-right",
-        cellClassName: "text-right",
-        render: date => (
+        align: "right",
+        cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatDate(date as string | Date)}
+            {formatDate(value as string | Date)}
           </span>
         ),
       },
     ];
 
-    return allColumns.filter(col => !hiddenColumns.has(col.key as string));
-  }, [
-    selectAllState,
-    onToggleAll,
-    selectedIds,
-    onSelectionChange,
-    hiddenColumns,
-  ]);
+    return allColumns.map(col => ({
+      ...col,
+      hidden: hiddenColumns.has(col.name),
+    }));
+  }, [hiddenColumns]);
+
+  const selection = useMemo<DataTableSelection<Media> | undefined>(() => {
+    if (!onSelectionChange) return undefined;
+    return {
+      selectedIds: Array.from(selectedIds),
+      onToggle: item => onSelectionChange(item.id),
+      onToggleAll: (_rows, allSelected) => onToggleAll?.(!allSelected),
+    };
+  }, [selectedIds, onSelectionChange, onToggleAll]);
 
   // Loading state
   if (isLoading) {
@@ -255,13 +223,13 @@ export function MediaListView({
             key={i}
             className="flex items-center gap-4 p-3 rounded-none  border border-border animate-pulse"
           >
-            <div className="w-10 h-10 rounded-none bg-primary/5" />
+            <div className="w-10 h-10 rounded-none bg-muted" />
             <div className="flex-1 space-y-1.5">
-              <div className="h-3.5 w-48 bg-primary/5 rounded-none" />
-              <div className="h-3 w-24 bg-primary/5 rounded-none" />
+              <div className="h-3.5 w-48 bg-muted rounded-none" />
+              <div className="h-3 w-24 bg-muted rounded-none" />
             </div>
-            <div className="h-3 w-16 bg-primary/5 rounded-none" />
-            <div className="h-3 w-20 bg-primary/5 rounded-none" />
+            <div className="h-3 w-16 bg-muted rounded-none" />
+            <div className="h-3 w-20 bg-muted rounded-none" />
           </div>
         ))}
       </div>
@@ -311,12 +279,15 @@ export function MediaListView({
   }
 
   return (
-    <ResponsiveTable
-      data={media}
-      columns={columnDefs}
+    <DataTableView<Media>
+      columns={columns}
+      rows={media}
+      selection={selection}
       onRowClick={onEdit}
+      primaryColumn="originalFilename"
+      bordered={false}
+      ariaLabel="Media files table"
       emptyMessage={emptyStateMessage}
-      tableWrapperClassName="border-0 rounded-none shadow-none"
       className={className}
     />
   );
