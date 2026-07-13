@@ -21,6 +21,7 @@ import { useServerTable } from "@admin/hooks/useServerTable";
 
 import { DataTableView } from "./DataTableView";
 import type { DataTableSelection } from "./DataTableView";
+import { getPluginBulkActions } from "./plugin-registry";
 import type {
   BulkAction,
   DataTableSlots,
@@ -57,6 +58,8 @@ export interface DataTableProps<Row extends object> {
   /** Label shown in the selection bar, e.g. "user". */
   itemLabel?: string;
   emptyMessage?: string;
+  /** List key for plugin contributions (columns, actions). See DataTableView. */
+  registryKey?: string;
 }
 
 const DEFAULT_GET_ROW_ID = (row: object): string => {
@@ -117,6 +120,7 @@ export function DataTable<Row extends object>({
   slots,
   itemLabel = "item",
   emptyMessage,
+  registryKey,
 }: DataTableProps<Row>) {
   const effectiveFetcher = useMemo<DataFetcher<Row>>(
     () => fetcher ?? makeStaticFetcher(data ?? []),
@@ -202,7 +206,10 @@ export function DataTable<Row extends object>({
             {selectedRows.length === 1 ? "" : "s"} selected
           </span>
           <div className="flex items-center gap-2">
-            {bulkActions?.map(action => (
+            {[
+              ...(bulkActions ?? []),
+              ...(registryKey ? getPluginBulkActions<Row>(registryKey) : []),
+            ].map(action => (
               <Button
                 key={action.id}
                 size="sm"
@@ -237,6 +244,7 @@ export function DataTable<Row extends object>({
         primaryColumn={primaryColumn}
         selection={selection}
         rowActions={rowActions}
+        registryKey={registryKey}
         loading={loading}
         error={error}
         emptyMessage={emptyMessage}

@@ -600,6 +600,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
+            registryKey="singles"
             ariaLabel="Singles table"
             emptyMessage="No Singles found. Try adjusting your search or filters."
           />

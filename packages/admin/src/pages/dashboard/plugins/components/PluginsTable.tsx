@@ -250,6 +250,7 @@ export default function PluginsTable() {
         columns={columns}
         rows={paginatedPlugins}
         selection={selection}
+        registryKey="plugins"
         ariaLabel="Installed plugins table"
         emptyMessage={
           debouncedSearch

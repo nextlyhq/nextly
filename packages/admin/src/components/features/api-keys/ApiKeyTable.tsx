@@ -348,6 +348,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
             }}
             primaryColumn="name"
             rowActions={rowActions}
+            registryKey="api-keys"
             ariaLabel="API keys table"
             emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
           />

@@ -298,6 +298,7 @@ function ImageSizesContent({
         }
         primaryColumn="name"
         rowActions={rowActions}
+        registryKey="image-sizes"
         ariaLabel="Image sizes table"
         emptyMessage={
           search

@@ -481,6 +481,7 @@ export default function UserTable() {
           primaryColumn="name"
           selection={selection}
           rowActions={rowActions}
+          registryKey="users"
           ariaLabel="Users table"
           emptyMessage={
             search || roleFilter !== "all"

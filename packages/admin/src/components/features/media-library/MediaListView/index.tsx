@@ -286,6 +286,7 @@ export function MediaListView({
       onRowClick={onEdit}
       primaryColumn="originalFilename"
       bordered={false}
+      registryKey="media"
       ariaLabel="Media files table"
       emptyMessage={emptyStateMessage}
       className={className}

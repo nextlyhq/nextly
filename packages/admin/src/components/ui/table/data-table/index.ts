@@ -14,6 +14,23 @@ export {
   resolveCellRenderer,
   textRenderer,
 } from "./cell-registry";
+export {
+  registerCellRenderer,
+  registerColumns,
+  transformColumns,
+  registerRowAction,
+  registerBulkAction,
+  resolvePluginColumns,
+  getPluginRowActions,
+  getPluginBulkActions,
+  clearDataTablePlugins,
+} from "./plugin-registry";
+export type {
+  DataTableTarget,
+  DataTableContext,
+  ColumnProvider,
+  ColumnTransform,
+} from "./plugin-registry";
 export type {
   NextlyColumn,
   NextlyFieldType,

@@ -15,6 +15,34 @@ export {
 } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
+/**
+ * DataTable extension points (@experimental). Contribute cell renderers,
+ * columns, column transforms, and row/bulk actions to any admin list. Keyed by
+ * a list `target`: a collection slug, a fixed key like `"users"`/`"media"`, or
+ * `"*"` for every list.
+ */
+export {
+  registerCellRenderer,
+  registerColumns,
+  transformColumns,
+  registerRowAction,
+  registerBulkAction,
+} from "@nextlyhq/admin";
+export type {
+  DataTableTarget,
+  DataTableContext,
+  ColumnProvider,
+  ColumnTransform,
+  NextlyColumn,
+  NextlyFieldType,
+  NextlyFieldSchema,
+  CellContext,
+  CellRenderer,
+  CellRendererDefinition,
+  RowAction,
+  BulkAction,
+} from "@nextlyhq/admin";
+
 // The declarative `contributes.admin` contract types (the same ones exported
 // from the package root) for convenience when authoring admin components.
 export type {

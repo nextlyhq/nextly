@@ -409,6 +409,7 @@ export default function RoleTable() {
         primaryColumn="roleName"
         selection={selection}
         rowActions={rowActions}
+        registryKey="roles"
         ariaLabel="Roles table"
         emptyMessage={
           search

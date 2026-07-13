@@ -589,6 +589,7 @@ export default function ComponentTable() {
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
+            registryKey="components"
             ariaLabel="Components table"
             emptyMessage="No components found. Try adjusting your search or filters."
           />

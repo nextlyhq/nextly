@@ -642,6 +642,7 @@ export default function CollectionTable() {
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
+            registryKey="collections"
             ariaLabel="Collections table"
             emptyMessage="No collections found. Try adjusting your search or filters."
           />

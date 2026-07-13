@@ -5,6 +5,11 @@ import { render, screen, within } from "@admin/__tests__/utils";
 
 import { DataTableView } from "./DataTableView";
 import type { DataTableSelection } from "./DataTableView";
+import {
+  registerColumns,
+  registerRowAction,
+  clearDataTablePlugins,
+} from "./plugin-registry";
 import type { NextlyColumn } from "./types";
 
 // Stub navigation so href-driven rows are inspectable without a router.
@@ -151,6 +156,33 @@ describe("DataTableView", () => {
     );
     await user.click(table().getByRole("checkbox", { name: "Select all" }));
     expect(onToggleAll).toHaveBeenCalledWith(rows, false);
+  });
+
+  it("merges plugin-registered columns and row actions via registryKey", async () => {
+    clearDataTablePlugins();
+    registerColumns("probe-list", () => [
+      { name: "extra", header: "Extra", cell: () => "PLUGIN_CELL" },
+    ]);
+    const onSelect = vi.fn();
+    registerRowAction("probe-list", {
+      id: "plugin-action",
+      label: "Plugin Action",
+      onSelect: () => onSelect(),
+    });
+    const user = userEvent.setup();
+    render(
+      <DataTableView columns={columns} rows={rows} registryKey="probe-list" />
+    );
+    // Plugin column header + cell render.
+    expect(table().getByText("Extra")).toBeInTheDocument();
+    expect(table().getAllByText("PLUGIN_CELL").length).toBe(rows.length);
+    // Plugin row action appears in the (otherwise absent) actions menu.
+    await user.click(
+      table().getAllByRole("button", { name: "Row actions" })[0]
+    );
+    await user.click(await screen.findByText("Plugin Action"));
+    expect(onSelect).toHaveBeenCalled();
+    clearDataTablePlugins();
   });
 
   it("does not navigate when the row checkbox is clicked (stopPropagation)", async () => {

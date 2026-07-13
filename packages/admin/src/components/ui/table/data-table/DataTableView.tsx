@@ -46,6 +46,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
 import { resolveCellRenderer } from "./cell-registry";
+import { getPluginRowActions, resolvePluginColumns } from "./plugin-registry";
 import type { CellContext, NextlyColumn, RowAction } from "./types";
 
 /** Controlled selection contract. When supplied, a checkbox column is shown. */
@@ -87,6 +88,12 @@ export interface DataTableViewProps<Row extends object> {
   sort?: { field: string; order: "asc" | "desc" };
   /** Called when a sortable column header is clicked. Sorting is server-side. */
   onSortChange?: (field: string, order: "asc" | "desc") => void;
+  /**
+   * List key for plugin contributions (columns, transforms, row actions).
+   * When set, plugin-registered columns/actions for this key and `"*"` are
+   * merged in. Examples: a collection slug, `"users"`, `"media"`.
+   */
+  registryKey?: string;
   loading?: boolean;
   error?: string | null;
   emptyMessage?: string;
@@ -113,6 +120,7 @@ export function DataTableView<Row extends object>({
   rowActions,
   sort,
   onSortChange,
+  registryKey,
   loading = false,
   error = null,
   emptyMessage = "No results found.",
@@ -120,9 +128,19 @@ export function DataTableView<Row extends object>({
   bordered = true,
   className,
 }: DataTableViewProps<Row>) {
+  // Merge plugin-contributed columns (and transforms) for this list, if any.
+  const resolvedColumns = useMemo(
+    () => (registryKey ? resolvePluginColumns(registryKey, columns) : columns),
+    [registryKey, columns]
+  );
+  const pluginRowActions = useMemo(
+    () => (registryKey ? getPluginRowActions<Row>(registryKey) : []),
+    [registryKey]
+  );
+
   const visibleColumns = useMemo(
-    () => columns.filter(c => !c.hidden),
-    [columns]
+    () => resolvedColumns.filter(c => !c.hidden),
+    [resolvedColumns]
   );
   const mobileColumns = useMemo(
     () => visibleColumns.filter(c => !c.hideOnMobile),
@@ -201,8 +219,10 @@ export function DataTableView<Row extends object>({
     return {};
   };
 
+  const hasRowActions = Boolean(rowActions) || pluginRowActions.length > 0;
+
   const renderRowActions = (row: Row) => {
-    const actions = (rowActions?.(row) ?? []).filter(
+    const actions = [...(rowActions?.(row) ?? []), ...pluginRowActions].filter(
       a => a.isVisible?.(row) ?? true
     );
     if (actions.length === 0) return null;
@@ -231,7 +251,7 @@ export function DataTableView<Row extends object>({
   };
 
   const colSpan =
-    visibleColumns.length + (selection ? 1 : 0) + (rowActions ? 1 : 0);
+    visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
 
   return (
     <div className={cn("@container/table w-full", className)}>
@@ -380,7 +400,7 @@ export function DataTableView<Row extends object>({
                     </TableHead>
                   );
                 })}
-                {rowActions && <TableHead className="w-12 text-right" />}
+                {hasRowActions && <TableHead className="w-12 text-right" />}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -434,7 +454,7 @@ export function DataTableView<Row extends object>({
                           {renderCell(col, row, nav.href)}
                         </TableCell>
                       ))}
-                      {rowActions && (
+                      {hasRowActions && (
                         <TableCell
                           className="w-12 text-right"
                           onClick={e => e.stopPropagation()}

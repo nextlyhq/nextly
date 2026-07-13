@@ -493,6 +493,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
               }
               primaryColumn={titleField}
               bordered={false}
+              registryKey={collection.slug}
               ariaLabel="Entries table"
               emptyMessage={
                 globalFilter

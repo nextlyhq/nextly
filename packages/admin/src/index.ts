@@ -120,6 +120,31 @@ export {
   type ComponentPath,
 } from "./lib/plugins/component-registry";
 
+// DataTable plugin registries — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`. Lets plugins add cell renderers, columns,
+// column transforms, and row/bulk actions to any admin list.
+export {
+  registerCellRenderer,
+  registerColumns,
+  transformColumns,
+  registerRowAction,
+  registerBulkAction,
+} from "./components/ui/table/data-table";
+export type {
+  DataTableTarget,
+  DataTableContext,
+  ColumnProvider,
+  ColumnTransform,
+  NextlyColumn,
+  NextlyFieldType,
+  NextlyFieldSchema,
+  CellContext,
+  CellRenderer,
+  CellRendererDefinition,
+  RowAction,
+  BulkAction,
+} from "./components/ui/table/data-table";
+
 // Error Fallback Components
 export {
   PageErrorFallback,
