@@ -8,6 +8,8 @@
  * @since 0.1.0
  */
 
+import { createRequire } from "node:module";
+
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
@@ -25,6 +27,12 @@ import type {
 } from "./types";
 
 export type NextlyPlugin = PluginDefinition;
+
+// Read the version from package.json so it can never drift from the published
+// package. Node/config-side only (this module is not part of the admin bundle).
+const { version: PLUGIN_VERSION } = createRequire(import.meta.url)(
+  "../package.json"
+) as { version: string };
 
 /** The runtime instance passed to plugin hooks (type extracted from `init`'s parameter). */
 type NextlyInstance = Parameters<NonNullable<NextlyPlugin["init"]>>[0];
@@ -168,8 +176,7 @@ export function formBuilder(
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
-    // Keep in sync with package.json `version` (guarded by package-metadata.test).
-    version: "0.0.2-alpha.24",
+    version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
 
     // Declarative schema: the merged pipeline folds these into the
