@@ -10,6 +10,12 @@ import {
   PageBuilderField,
 } from "@nextlyhq/plugin-page-builder/admin";
 import "@nextlyhq/plugin-page-builder/styles/editor.css";
+// Load the form-builder admin components (side-effect: registerComponents) plus
+// its stylesheets. Without these the Forms collection still lists, but the
+// drag-and-drop builder and the submissions filter fall back to plain inputs.
+import "@nextlyhq/plugin-form-builder/admin";
+import "@nextlyhq/plugin-form-builder/styles/builder.css";
+import "@nextlyhq/plugin-form-builder/styles/submissions-filter.css";
 
 // Reference the exports so the registration side-effect module is retained.
 void PageBuilderEditView;
