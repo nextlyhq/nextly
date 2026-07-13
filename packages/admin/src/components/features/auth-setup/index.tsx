@@ -126,186 +126,188 @@ export function Setup() {
   }
 
   return (
-    <Card
-      className={cn(
-        "transition-all duration-300 ease-in-out border-border dark:border-border shadow-none p-2 sm:p-4 md:p-6",
-        isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
-      )}
-    >
-      <CardHeader className="space-y-1 pb-10 pt-8" noBorder>
-        <div className="flex items-center justify-start mb-10 transition-opacity duration-300">
-          <div className="inline-flex items-center justify-center w-12 h-12 overflow-hidden">
-            <ThemeAwareLogo
-              alt={appName}
-              className="w-full h-full object-contain"
-            />
+    <div className="w-full max-w-[480px] mx-auto">
+      <Card
+        className={cn(
+          "transition-all duration-300 ease-in-out border-border-strong shadow-none p-2 sm:p-4 md:p-6",
+          isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
+        )}
+      >
+        <CardHeader className="space-y-1 pb-10 pt-8" noBorder>
+          <div className="flex items-center justify-start mb-10 transition-opacity duration-300">
+            <div className="inline-flex items-center justify-center w-12 h-12 overflow-hidden">
+              <ThemeAwareLogo
+                alt={appName}
+                className="w-full h-full object-contain"
+              />
+            </div>
           </div>
-        </div>
-        <div>
-          <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
-            Welcome to {appName}
-          </CardTitle>
-          <CardDescription className="text-base text-muted-foreground">
-            Create your first admin account to get started
-          </CardDescription>
-        </div>
-      </CardHeader>
+          <div>
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+              Welcome to {appName}
+            </CardTitle>
+            <CardDescription className="text-base text-muted-foreground">
+              Create your first admin account to get started
+            </CardDescription>
+          </div>
+        </CardHeader>
 
-      <CardContent className="pb-10">
-        <FormProvider {...form}>
-          <form
-            onSubmit={e => {
-              void form.handleSubmit(onSubmit)(e);
-            }}
-            className="space-y-6"
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="fullName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm font-medium text-foreground">
-                      Full Name
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        required
-                        type="text"
-                        autoComplete="name"
-                        placeholder="Enter your full name…"
-                        {...field}
-                        className="h-11 rounded-none border-border dark:border-border"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm font-medium text-foreground">
-                      Email Address
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        required
-                        type="email"
-                        autoComplete="email"
-                        spellCheck={false}
-                        placeholder="Enter your email address…"
-                        {...field}
-                        className="h-11 rounded-none border-border dark:border-border"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm font-medium text-foreground">
-                      Password
-                    </FormLabel>
-                    <div className="relative">
-                      <FormControl>
-                        <Input
-                          required
-                          type={showPassword ? "text" : "password"}
-                          autoComplete="new-password"
-                          placeholder="Create a strong password…"
-                          {...field}
-                          className="pr-10 h-11 rounded-none border-border dark:border-border"
-                        />
-                      </FormControl>
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        tabIndex={-1}
-                        className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showPassword ? (
-                          <EyeOff className="h-5 w-5" />
-                        ) : (
-                          <Eye className="h-5 w-5" />
-                        )}
-                      </button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="confirmPassword"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm font-medium text-foreground">
-                      Confirm Password
-                    </FormLabel>
-                    <div className="relative">
-                      <FormControl>
-                        <Input
-                          required
-                          type={showConfirmPassword ? "text" : "password"}
-                          autoComplete="new-password"
-                          placeholder="Confirm your password…"
-                          {...field}
-                          className="pr-10 h-11 rounded-none border-border dark:border-border"
-                        />
-                      </FormControl>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setShowConfirmPassword(!showConfirmPassword)
-                        }
-                        tabIndex={-1}
-                        className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showConfirmPassword ? (
-                          <EyeOff className="h-5 w-5" />
-                        ) : (
-                          <Eye className="h-5 w-5" />
-                        )}
-                      </button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <PasswordStrengthIndicator password={password} />
-
-            <Button
-              size="md"
-              type="submit"
-              disabled={isLoading}
-              className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+        <CardContent className="pb-10">
+          <FormProvider {...form}>
+            <form
+              onSubmit={e => {
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-6"
             >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin ml-2" />
-              ) : (
-                <>
-                  Create Admin Account
-                  <ArrowRight className="h-4 w-4 ml-2" />
-                </>
-              )}
-            </Button>
-          </form>
-        </FormProvider>
-      </CardContent>
-    </Card>
+              <div className="grid grid-cols-1 gap-6">
+                <FormField
+                  control={form.control}
+                  name="fullName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium text-foreground">
+                        Full Name
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          required
+                          type="text"
+                          autoComplete="name"
+                          placeholder="Enter your full name…"
+                          {...field}
+                          className="h-11 rounded-none border-input"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium text-foreground">
+                        Email Address
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          required
+                          type="email"
+                          autoComplete="email"
+                          spellCheck={false}
+                          placeholder="Enter your email address…"
+                          {...field}
+                          className="h-11 rounded-none border-input"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-6">
+                <FormField
+                  control={form.control}
+                  name="password"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium text-foreground">
+                        Password
+                      </FormLabel>
+                      <div className="relative">
+                        <FormControl>
+                          <Input
+                            required
+                            type={showPassword ? "text" : "password"}
+                            autoComplete="new-password"
+                            placeholder="Create a strong password…"
+                            {...field}
+                            className="pr-10 h-11 rounded-none border-input"
+                          />
+                        </FormControl>
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          tabIndex={-1}
+                          className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-5 w-5" />
+                          ) : (
+                            <Eye className="h-5 w-5" />
+                          )}
+                        </button>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="confirmPassword"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium text-foreground">
+                        Confirm Password
+                      </FormLabel>
+                      <div className="relative">
+                        <FormControl>
+                          <Input
+                            required
+                            type={showConfirmPassword ? "text" : "password"}
+                            autoComplete="new-password"
+                            placeholder="Confirm your password…"
+                            {...field}
+                            className="pr-10 h-11 rounded-none border-input"
+                          />
+                        </FormControl>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowConfirmPassword(!showConfirmPassword)
+                          }
+                          tabIndex={-1}
+                          className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showConfirmPassword ? (
+                            <EyeOff className="h-5 w-5" />
+                          ) : (
+                            <Eye className="h-5 w-5" />
+                          )}
+                        </button>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <PasswordStrengthIndicator password={password} />
+
+              <Button
+                size="md"
+                type="submit"
+                disabled={isLoading}
+                className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin ml-2" />
+                ) : (
+                  <>
+                    Create Admin Account
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </>
+                )}
+              </Button>
+            </form>
+          </FormProvider>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
