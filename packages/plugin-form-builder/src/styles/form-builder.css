@@ -23,10 +23,7 @@
    ============================================================================ */
 
 .form-builder-view {
-  /* Map the builder's local variables onto the Nextly admin design tokens so
-     the whole plugin follows the admin theme (light + dark) and its pure
-     monochrome identity. The admin tokens already flip per theme, so no
-     separate dark-mode block is needed here. */
+  /* Local variables mapped to the admin design tokens. */
   --fb-primary: hsl(var(--primary));
   --fb-primary-hover: hsl(var(--primary) / 0.9);
   --fb-primary-light: hsl(var(--primary) / 0.1);
@@ -45,7 +42,6 @@
   --fb-text-muted: hsl(var(--muted-foreground));
   --fb-text-light: hsl(var(--muted-foreground) / 0.6);
 
-  /* Sharp corners to match the admin's --radius: 0 monochrome identity. */
   --fb-radius-sm: var(--radius);
   --fb-radius-md: var(--radius);
   --fb-radius-lg: var(--radius);
@@ -53,6 +49,23 @@
   --fb-shadow: none;
   --fb-shadow-md: none;
   --fb-shadow-lg: none;
+}
+
+/* Builder two-pane: stack the canvas and panel below the lg breakpoint. */
+.fb-builder-panel {
+  width: 360px;
+}
+
+@media (max-width: 1023px) {
+  .fb-builder-shell {
+    flex-direction: column;
+  }
+
+  .fb-builder-panel {
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid hsl(var(--border));
+  }
 }
 
 /* ============================================================================
@@ -1014,7 +1027,6 @@
   border-radius: var(--fb-radius-md);
   transition: all 0.15s ease;
   appearance: none;
-  /* Chevron uses currentColor so it tracks the select's text color per theme. */
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='currentColor' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;

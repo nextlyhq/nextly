@@ -418,15 +418,14 @@ function FormBuilderViewInner({
         Outer shell — white card with rounded-none border (no shadow).
         Fills available height in the admin page container.
       */}
-      <div className="flex border border-border bg-background overflow-hidden">
+      <div className="fb-builder-shell flex border border-border bg-background overflow-hidden">
         {/* =================================================================
             LEFT — scrollable main content
         ================================================================= */}
         <div className="flex-1 min-w-0">
           <div className="w-full px-8 pt-8 pb-12 space-y-6">
             {/* ── Fixed Metadata & Tab Navigation ── */}
-            {/* -mx-8 lets the divider span the full card width; px-8 re-insets
-                the inputs and tabs so they don't touch the card border. */}
+            {/* -mx-8 + px-8: full-width divider, inset content. */}
             <div className="bg-background -mx-8 px-8 border-b border-border space-y-4">
               <div className="flex flex-wrap gap-4">
                 {/* Form Name */}
@@ -581,10 +580,7 @@ function FormBuilderViewInner({
             Only shown in Builder tab.
         ================================================================= */}
         {activeTab === "builder" && (
-          <div
-            className="shrink-0 border-l border-border bg-background flex flex-col"
-            style={{ width: "360px" }}
-          >
+          <div className="fb-builder-panel shrink-0 border-l border-border bg-background flex flex-col">
             {/* Sidebar tab bar */}
             <div
               className="shrink-0 grid grid-cols-2 gap-1.5 px-3 py-2.5 border-b border-border"
