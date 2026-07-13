@@ -496,8 +496,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-primary/5 text-primary"
-                : "text-primary/50 hover-unified"
+                ? "bg-muted text-primary"
+                : "text-primary/60 hover-unified"
             );
 
             const iconContent = (
