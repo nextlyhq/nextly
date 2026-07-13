@@ -15,7 +15,9 @@ const Checkbox = forwardRef<
     ref={ref}
     data-slot="checkbox"
     className={cn(
-      "peer h-4 w-4 shrink-0 rounded-none border border-primary/5 ring-offset-background focus:!border-primary focus-visible:!border-primary focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:!border-destructive aria-invalid:focus-visible:!border-destructive disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary transition-all duration-200",
+      // Unchecked outline uses primary/40 (clearly visible, monochrome) instead of
+      // primary/5, which rendered at ~5% opacity and was effectively invisible.
+      "peer h-4 w-4 shrink-0 rounded-none border border-primary/40 ring-offset-background focus:!border-primary focus-visible:!border-primary focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:!border-destructive aria-invalid:focus-visible:!border-destructive disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary transition-all duration-200",
       className
     )}
     {...props}
