@@ -1,13 +1,8 @@
 /**
  * Submissions Filter Styles
  *
- * Styles for the SubmissionsFilter component that appears above
- * the form-submissions list table.
- *
- * Colors, borders, and radius are driven entirely by the Nextly admin
- * design tokens (`hsl(var(--token))`) so the filter matches the admin
- * surface in both light and dark themes instead of a fixed light palette.
- * The tokens resolve on the admin root, which wraps this component.
+ * Styles for the SubmissionsFilter component shown above the
+ * form-submissions list table. Colors/borders/radius use the admin tokens.
  */
 
 .submissions-filter {
@@ -41,8 +36,6 @@
   min-width: 200px;
   cursor: pointer;
   appearance: none;
-  /* Neutral chevron via currentColor so it tracks the select's text color
-     in both themes. */
   background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
   background-position: right 0.5rem center;
   background-repeat: no-repeat;

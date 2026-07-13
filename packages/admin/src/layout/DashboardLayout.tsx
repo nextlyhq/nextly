@@ -50,8 +50,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     <MediaProvider>
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
-          {/* Mobile Header — shown until lg so tablets use the hamburger + drawer
-              (the dual sidebar's sub-panel only becomes in-flow at lg). */}
+          {/* Mobile Header */}
           <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
               <Button
@@ -89,9 +88,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 side="left"
                 className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
               >
-                {/* Visually hidden title + description so the drawer dialog is
-                    labelled and described for screen readers (Radix requires a
-                    DialogTitle and warns without a description). */}
+                {/* Screen-reader label for the drawer dialog. */}
                 <SheetTitle className="sr-only">Navigation menu</SheetTitle>
                 <SheetDescription className="sr-only">
                   Primary admin navigation
