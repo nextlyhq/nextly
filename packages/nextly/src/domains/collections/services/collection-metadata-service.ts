@@ -213,15 +213,20 @@ export class CollectionMetadataService extends BaseService {
   private async registerRuntimeSchema(
     tableName: string,
     fields: FieldDefinition[],
-    options?: { hasStatus?: boolean }
+    options?: { hasStatus?: boolean; localized?: boolean }
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
         "../../schema/services/runtime-schema-generator"
       );
       const dialect = this.adapter.getCapabilities().dialect;
+      const localized = options?.localized === true;
       const { table } = generateRuntimeSchema(tableName, fields, dialect, {
         status: options?.hasStatus === true,
+        // i18n: omit translatable columns from the main runtime table (they live in
+        // the companion), so reads/writes in the current process are correct without
+        // a restart — matching the just-created physical table.
+        localized,
       });
       const resolver = (
         this.adapter as unknown as {
@@ -232,6 +237,27 @@ export class CollectionMetadataService extends BaseService {
       ).tableResolver;
       if (resolver && typeof resolver.registerDynamicSchema === "function") {
         resolver.registerDynamicSchema(tableName, table);
+        // i18n: also register the companion `_locales` runtime table so the current
+        // process can resolve it for localized reads/writes before any restart.
+        if (localized) {
+          const { buildCompanionRuntimeTable } = await import(
+            "../../i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: tableName,
+            tableName,
+            fields: fields,
+            dialect,
+            localized: true,
+            status: options?.hasStatus === true,
+          });
+          if (companion) {
+            resolver.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch {
       // Non-fatal: schema will be registered on next server restart
@@ -278,6 +304,8 @@ export class CollectionMetadataService extends BaseService {
     sidebarGroup?: string;
     /** Whether the collection has the Draft/Published status feature enabled. */
     status?: boolean;
+    /** i18n: whether the collection is localized (translatable fields + companion table). */
+    localized?: boolean;
     fields: FieldDefinition[];
     hooks?: Record<string, unknown>[];
     createdBy?: string;
@@ -304,6 +332,9 @@ export class CollectionMetadataService extends BaseService {
             artifacts.metadata.migrationStatus = "applied";
             await this.registerRuntimeSchema(artifacts.tableName, data.fields, {
               hasStatus: data.status === true,
+              // i18n: register the main table without translatable columns and register
+              // the companion, so reads/writes route localized fields correctly.
+              localized: data.localized === true,
             });
           } else {
             artifacts.metadata.migrationStatus = "failed";

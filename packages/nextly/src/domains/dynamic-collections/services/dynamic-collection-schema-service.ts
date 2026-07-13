@@ -23,6 +23,8 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { env } from "../../../shared/lib/env";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
@@ -82,13 +84,28 @@ export class DynamicCollectionSchemaService {
        * lockstep.
        */
       hasStatus?: boolean;
+      /**
+       * i18n: when true, translatable fields are omitted from this (main) table's
+       * CREATE — they live in the companion `<table>_locales` table. Mirrors the
+       * runtime schema generator so the physical DDL and the Drizzle descriptor
+       * stay in lockstep for a UI-created localized collection.
+       */
+      localized?: boolean;
     }
   ): string {
     const constraints: string[] = [];
     const checks: string[] = [];
     const junctionTables: string[] = [];
 
-    const columns = fields
+    // i18n: drop translatable fields from the main table when localized (they go to
+    // the companion). Uses the shared classifier so main/companion agree on the split.
+    const mainFields = _options?.localized
+      ? fields.filter(
+          f => !resolveLocalizedFieldNames([f], true).includes(f.name)
+        )
+      : fields;
+
+    const columns = mainFields
       .map(f => {
         // Skip many-to-many fields as they don't create columns in the main table
         if (
@@ -344,8 +361,10 @@ ${allColumnDefs.join(",\n")}
       }
     });
 
-    // Add manual indexes requested by the user
-    fields.forEach(f => {
+    // Add manual indexes requested by the user. Use mainFields so a localized field
+    // that also requested an index doesn't try to index a column that was relocated
+    // to the companion table (i18n).
+    mainFields.forEach(f => {
       if (f.index && f.type !== "relationship") {
         const col = this.toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;

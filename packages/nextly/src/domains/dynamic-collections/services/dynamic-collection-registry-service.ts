@@ -21,6 +21,12 @@ export interface CollectionMetadata {
    * Draft / Publish split lights up.
    */
   status?: boolean;
+  /**
+   * i18n: whether the collection is localized. Backed by the
+   * `dynamic_collections.localized` boolean column. When true, translatable fields
+   * live in the companion `<table>_locales` table and the admin edits per-language.
+   */
+  localized?: boolean;
   admin?: {
     group?: string;
     icon?: string;
@@ -138,6 +144,10 @@ export class DynamicCollectionRegistryService extends BaseService {
       // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
       // bool on postgres/mysql both accept a JS boolean here.
       status: metadata.status === true,
+      // i18n: persist the localized flag so the read/write path routes translatable
+      // fields to the companion table and the admin shows per-language editing. Without
+      // it, a UI-created localized collection is stored as non-localized (shared).
+      localized: metadata.localized === true,
       configPath: metadata.configPath,
       schemaHash: metadata.schemaHash,
       schemaVersion: metadata.schemaVersion ?? 1,

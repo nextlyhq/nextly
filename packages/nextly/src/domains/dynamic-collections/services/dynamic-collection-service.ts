@@ -11,6 +11,8 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 
 import {
   DynamicCollectionRegistryService,
@@ -41,6 +43,10 @@ export interface CollectionArtifacts {
     };
     source: "code" | "ui" | "built-in";
     locked?: boolean;
+    /** Draft/Published enabled. */
+    status?: boolean;
+    /** i18n: collection is localized (translatable fields + companion table). */
+    localized?: boolean;
     schemaHash: string;
     schemaVersion?: number;
     migrationStatus?: MigrationStatus;
@@ -61,6 +67,11 @@ export interface CreateCollectionInput {
   sidebarGroup?: string;
   /** Whether the collection has the Draft/Published status feature enabled. */
   status?: boolean;
+  /**
+   * i18n: whether the collection is localized. When true, translatable fields are
+   * omitted from the main table and a companion `<table>_locales` table is created.
+   */
+  localized?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -145,8 +156,22 @@ export class DynamicCollectionService extends BaseService {
     const migrationSQL = this.schemaService.generateMigrationSQL(
       tableName,
       userDefinedFields,
-      { hasStatus: data.status === true }
+      // i18n: omit translatable columns from the main table when localized — they
+      // live in the companion `_locales` table created below.
+      { hasStatus: data.status === true, localized: data.localized === true }
     );
+
+    // i18n: for a localized collection, append the companion `<table>_locales`
+    // CREATE to the migration so the UI-create path materializes it (create-only:
+    // fresh collection, no data to seed, no main-table columns to drop). Without
+    // this, a UI-created localized collection has nowhere to store per-language
+    // values and every language shares the main columns.
+    const fullMigrationSQL = data.localized
+      ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
+          fields: userDefinedFields,
+          status: data.status === true,
+        })
+      : migrationSQL;
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
 
@@ -174,6 +199,9 @@ export class DynamicCollectionService extends BaseService {
       // Persist the Draft/Published flag so the entry edit form shows
       // Save Draft / Publish split for new collections that opt in.
       status: data.status === true,
+      // i18n: persist the localized flag so the read/write path routes translatable
+      // fields to the companion table and the admin shows per-language editing.
+      localized: data.localized === true,
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -182,11 +210,36 @@ export class DynamicCollectionService extends BaseService {
     };
 
     return {
-      migrationSQL,
+      migrationSQL: fullMigrationSQL,
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
       tableName,
       metadata,
     };
+  }
+
+  /**
+   * i18n: append the create-only companion `<table>_locales` CREATE statement to a
+   * fresh localized collection's migration. Returns the original SQL unchanged when
+   * the collection has no translatable fields (nothing to store per-locale).
+   */
+  private appendCompanionCreateSQL(
+    migrationSQL: string,
+    slug: string,
+    tableName: string,
+    opts: { fields: FieldDefinition[]; status: boolean }
+  ): string {
+    const spec = deriveCompanionSpec({
+      slug,
+      dbName: tableName,
+      fields: opts.fields,
+      dialect: this.adapter.dialect,
+      // Unused for the create-only statement (no seed) — a placeholder is fine.
+      defaultLocale: "en",
+      collectionLocalized: true,
+      status: opts.status,
+    });
+    if (!spec) return migrationSQL;
+    return `${migrationSQL}\n\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
   private generateSchemaHash(fields: FieldDefinition[]): string {

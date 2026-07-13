@@ -108,6 +108,10 @@ export interface CreateCollectionInput {
   label: string;
   description?: string;
   icon?: string;
+  /** Whether the collection has Draft/Published enabled. */
+  status?: boolean;
+  /** i18n: whether the collection is localized (translatable fields + companion table). */
+  localized?: boolean;
   fields: FieldDefinition[];
 }
 
