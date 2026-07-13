@@ -347,7 +347,7 @@ export function DataTableView<Row extends object>({
         )}
       >
         <div className="overflow-x-auto">
-          <Table aria-label={ariaLabel} className="w-full">
+          <Table aria-label={ariaLabel} className="w-full min-w-max">
             <TableHeader>
               <TableRow>
                 {selection && (

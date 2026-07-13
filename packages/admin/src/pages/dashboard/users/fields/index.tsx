@@ -735,7 +735,7 @@ function UserFieldsTable() {
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <Table aria-label="User fields table">
+            <Table aria-label="User fields table" className="min-w-max">
               <TableHeader className="bg-[hsl(var(--table-header-bg))]">
                 <TableRow>
                   <TableHead className="w-50">Name</TableHead>
