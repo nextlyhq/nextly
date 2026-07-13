@@ -425,7 +425,9 @@ function FormBuilderViewInner({
         <div className="flex-1 min-w-0">
           <div className="w-full px-8 pt-8 pb-12 space-y-6">
             {/* ── Fixed Metadata & Tab Navigation ── */}
-            <div className="bg-background -mx-8 border-b border-border space-y-4">
+            {/* -mx-8 lets the divider span the full card width; px-8 re-insets
+                the inputs and tabs so they don't touch the card border. */}
+            <div className="bg-background -mx-8 px-8 border-b border-border space-y-4">
               <div className="flex flex-wrap gap-4">
                 {/* Form Name */}
                 <div className="flex-1 min-w-[200px] max-w-sm space-y-1.5">
