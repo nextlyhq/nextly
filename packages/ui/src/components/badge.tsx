@@ -36,8 +36,7 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default:
-          "bg-primary/5 text-foreground dark:bg-slate-800 dark:text-slate-100",
+        default: "bg-primary/5 text-foreground dark:text-slate-100",
         primary:
           "bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/90",
         success:

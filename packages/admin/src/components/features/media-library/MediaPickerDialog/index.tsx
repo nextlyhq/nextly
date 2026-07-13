@@ -591,7 +591,7 @@ export function MediaPickerDialog({
                   value={typeFilter}
                   onValueChange={handleTypeFilterChange}
                 >
-                  <SelectTrigger className="w-full sm:w-[140px] hover-unified bg-white text-foreground border-border hover:bg-white/90">
+                  <SelectTrigger className="w-full sm:w-[140px] hover-unified bg-card text-foreground border-border hover:bg-card/90">
                     <SelectValue placeholder="All Types" />
                   </SelectTrigger>
                   <SelectContent>
@@ -607,7 +607,7 @@ export function MediaPickerDialog({
                   value={`${sortBy}-${sortOrder}`}
                   onValueChange={handleSortChange}
                 >
-                  <SelectTrigger className="w-full sm:w-40 hover-unified bg-white text-foreground border-border hover:bg-white/90">
+                  <SelectTrigger className="w-full sm:w-40 hover-unified bg-card text-foreground border-border hover:bg-card/90">
                     <SelectValue placeholder="Sort by..." />
                   </SelectTrigger>
                   <SelectContent>

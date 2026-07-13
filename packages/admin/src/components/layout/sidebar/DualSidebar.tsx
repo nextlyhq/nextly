@@ -530,7 +530,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                 </TooltipTrigger>
                 <TooltipContent
                   side="right"
-                  className="bg-slate-900 border-border text-white"
+                  className="bg-primary border-border text-primary-foreground"
                 >
                   {item.label}
                 </TooltipContent>

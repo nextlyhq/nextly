@@ -83,7 +83,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
           {getStatusBadge(entry.status)}
         </div>
 
-        <div className="p-2 rounded-none  border border-border border-transparent group-hover:border-border group-hover:bg-white group-hover:shadow-sm transition-all duration-500 relative z-10">
+        <div className="p-2 rounded-none  border border-border border-transparent group-hover:border-border group-hover:bg-card group-hover:shadow-sm transition-all duration-500 relative z-10">
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover-unified group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>

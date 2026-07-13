@@ -479,7 +479,7 @@ export function MediaUploadDropzone({
   };
 
   // Background styles — use CSS variables (bg-card) so both light and dark modes resolve correctly.
-  // Avoid bg-white: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
+  // Avoid bg-card: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
   const backgroundStyles = {
     default: "bg-card",
     active: "bg-primary/5 dark:bg-primary/5",

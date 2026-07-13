@@ -10,7 +10,7 @@ export function MaintenancePage() {
   return (
     <div className="flex flex-col items-center justify-center min-h-[80vh] w-full bg-background p-4">
       {/* Container */}
-      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-white ">
+      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-card ">
         {/* 503 Big number */}
         <div className="mb-2 select-none">
           <span className="text-[120px] font-black leading-none tracking-tight text-foreground">

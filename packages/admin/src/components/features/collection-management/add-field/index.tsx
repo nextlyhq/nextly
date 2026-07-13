@@ -81,7 +81,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
                   return (
                     <div
                       key={itemIndex}
-                      className="border border-border shadow rounded-none p-5 cursor-pointer hover:bg-zinc-100"
+                      className="border border-border shadow rounded-none p-5 cursor-pointer hover:bg-muted"
                       onClick={() => {
                         const mappedType =
                           fieldTypeMapping[item.type] || item.type;

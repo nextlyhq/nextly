@@ -235,7 +235,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-1 p-2  border-b border-border dark:border-border bg-primary/5 dark:bg-gray-800/50">
+      <div className="flex flex-wrap items-center gap-1 p-2  border-b border-border dark:border-border bg-primary/5/50">
         {/* Block type selector */}
         <Select
           value={blockType}
@@ -259,7 +259,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
           </SelectContent>
         </Select>
 
-        <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+        <div className="w-px h-6 bg-muted mx-1" />
 
         {/* Basic formatting */}
         {options.basic_formatting && (
@@ -313,7 +313,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
               <Strikethrough className="h-4 w-4" aria-hidden="true" />
             </Button>
 
-            <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <div className="w-px h-6 bg-muted mx-1" />
           </>
         )}
 
@@ -343,7 +343,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
               <ListOrdered className="h-4 w-4" aria-hidden="true" />
             </Button>
 
-            <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <div className="w-px h-6 bg-muted mx-1" />
           </>
         )}
 
@@ -361,7 +361,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             >
               <ImageIcon className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+            <div className="w-px h-6 bg-muted mx-1" />
           </>
         )}
 

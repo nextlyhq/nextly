@@ -354,7 +354,7 @@ function SingleComponentNonRepeatable({
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900 transition-colors  border-b border-border dark:border-border"
+        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5/50/50 hover:bg-primary/5 dark:hover:bg-accent transition-colors  border-b border-border dark:border-border"
       >
         <ChevronDown
           className={cn(

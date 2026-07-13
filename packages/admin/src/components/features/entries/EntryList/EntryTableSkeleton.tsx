@@ -12,7 +12,7 @@ import type React from "react";
 const GrayBar = ({ className }: { className?: string }) => (
   <div
     aria-hidden="true"
-    className={`animate-pulse rounded-none bg-primary/5 dark:bg-gray-400 ${className ?? ""}`}
+    className={`animate-pulse rounded-none bg-primary/5 ${className ?? ""}`}
   />
 );
 

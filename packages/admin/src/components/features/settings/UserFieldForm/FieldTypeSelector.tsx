@@ -105,7 +105,7 @@ export function FieldTypePicker({
             }}
           >
             {isSelected && (
-              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-none bg-primary text-white">
+              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-none bg-primary text-primary-foreground">
                 <Check className="h-3 w-3 text-primary-foreground" />
               </div>
             )}

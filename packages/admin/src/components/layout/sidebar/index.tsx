@@ -557,7 +557,10 @@ const SidebarMenuButton = React.forwardRef<
           align="center"
           hidden={state !== "collapsed"}
           {...tooltip}
-          className={cn("bg-black text-white", tooltip.className)}
+          className={cn(
+            "bg-primary text-primary-foreground",
+            tooltip.className
+          )}
           style={{ backgroundColor: "black", color: "white" }}
         />
       </Tooltip>

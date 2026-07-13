@@ -51,7 +51,7 @@ export const lexicalTheme: EditorThemeClasses = {
   // Text formatting
   text: {
     bold: "font-bold",
-    code: "bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-none text-sm font-mono text-red-600 dark:text-red-400",
+    code: "bg-muted px-1.5 py-0.5 rounded-none text-sm font-mono text-red-600 dark:text-red-400",
     italic: "italic",
     strikethrough: "line-through",
     subscript: "text-xs align-sub",
@@ -61,7 +61,7 @@ export const lexicalTheme: EditorThemeClasses = {
   },
 
   // Code blocks
-  code: "bg-gray-900 dark:bg-gray-950 text-gray-100 p-4 rounded-none font-mono text-sm overflow-x-auto my-4 block",
+  code: "bg-gray-900 text-gray-100 p-4 rounded-none font-mono text-sm overflow-x-auto my-4 block",
   codeHighlight: {
     atrule: "text-purple-400",
     attr: "text-primary",
@@ -102,8 +102,7 @@ export const lexicalTheme: EditorThemeClasses = {
   // Tables (if we add table support later)
   table: "border-collapse w-full my-4",
   tableCell: "border border-border px-3 py-2",
-  tableCellHeader:
-    "border border-border px-3 py-2 font-bold bg-gray-50 dark:bg-gray-800",
+  tableCellHeader: "border border-border px-3 py-2 font-bold bg-muted",
 
   // Layout/spacing
   indent: "ml-6",

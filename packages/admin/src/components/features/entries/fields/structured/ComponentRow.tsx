@@ -247,7 +247,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CardHeader
-          className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900/80 transition-colors"
+          className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5/50/50 hover:bg-primary/5 dark:hover:bg-accent/80 transition-colors"
           noBorder
         >
           <div className="flex items-center gap-2">

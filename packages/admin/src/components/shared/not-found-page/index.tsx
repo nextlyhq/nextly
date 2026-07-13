@@ -11,7 +11,7 @@ export function NotFoundPage() {
   return (
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       {/* Container */}
-      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-white  border border-border">
+      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-card  border border-border">
         {/* 404 Big number */}
         <div className="mb-2 select-none">
           <span className="text-[120px] font-black leading-none tracking-tight text-foreground">
@@ -45,7 +45,7 @@ export function NotFoundPage() {
             Go Back
           </Button>
           <Button
-            className="w-full sm:w-[140px] gap-2 rounded-none font-medium bg-primary hover:bg-primary/90 text-white border-0"
+            className="w-full sm:w-[140px] gap-2 rounded-none font-medium bg-primary hover:bg-primary/90 text-primary-foreground border-0"
             onClick={() => navigateTo(ROUTES.DASHBOARD)}
           >
             <LayoutDashboard className="h-4 w-4" />

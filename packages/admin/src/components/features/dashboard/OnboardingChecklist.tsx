@@ -39,7 +39,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
       {!step.isComplete && (
         <Link
           href={step.href}
-          className="text-[9px] font-black uppercase tracking-[0.2em] text-primary hover:text-white hover:bg-primary px-3 py-1.5 rounded-none ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
+          className="text-[9px] font-black uppercase tracking-[0.2em] text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-none ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
         >
           Execute &rarr;
         </Link>
@@ -95,7 +95,7 @@ export const OnboardingChecklist: React.FC = () => {
         </button>
       </CardHeader>
       <CardContent className="px-6 pb-8">
-        <div className="space-y-1 bg-white/40 dark:bg-slate-950/20 p-2 rounded-none]  border border-border">
+        <div className="space-y-1 bg-card/40/20 p-2 rounded-none]  border border-border">
           {progress.steps.map(step => (
             <StepRow key={step.id} step={step} />
           ))}
