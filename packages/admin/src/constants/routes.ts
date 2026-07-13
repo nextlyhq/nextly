@@ -92,6 +92,7 @@ export const ROUTES = {
   SETTINGS_PERMISSIONS: "/admin/settings/permissions",
   SETTINGS_API_KEYS: "/admin/settings/api-keys",
   SETTINGS_API_KEYS_CREATE: "/admin/settings/api-keys/create",
+  SETTINGS_API_KEYS_EDIT: "/admin/settings/api-keys/edit/[id]",
   SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
   SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
   SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",
