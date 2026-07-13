@@ -47,6 +47,24 @@ export function getRegisteredCellTypes(): NextlyFieldType[] {
   return [...registry.keys()];
 }
 
+/**
+ * Resolve the renderer for a column: explicit `cell` -> registry(fieldType) -> text.
+ *
+ * Registry renderers are stored against the base row shape but only read
+ * `ctx.value`/`ctx.row` generically, so they are runtime-safe for any `Row`.
+ * This helper contains the single, inherent variance bridge for a heterogeneous
+ * field-type -> renderer registry (not `any`), so the DataTable itself stays
+ * assertion-free.
+ */
+export function resolveCellRenderer<Row extends Record<string, unknown>>(
+  cell: CellRenderer<Row> | undefined,
+  fieldType: NextlyFieldType | undefined
+): CellRenderer<Row> {
+  if (cell) return cell;
+  const fromRegistry = fieldType ? registry.get(fieldType) : undefined;
+  return (fromRegistry ?? textRenderer) as CellRenderer<Row>;
+}
+
 // ============================================================================
 // Core renderers
 // ============================================================================
