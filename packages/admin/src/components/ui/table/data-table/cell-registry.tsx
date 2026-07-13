@@ -1,5 +1,5 @@
 /**
- * Field-type -> cell renderer registry (Directus "Displays" model).
+ * Field-type -> cell renderer registry.
  *
  * A renderer advertises the field `types` it can render; the DataTable resolves a
  * column's cell by `column.cell ?? registry(column.fieldType) ?? textRenderer`.

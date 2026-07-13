@@ -5,6 +5,8 @@
 
 export { DataTable } from "./DataTable";
 export type { DataTableProps } from "./DataTable";
+export { DataTableView } from "./DataTableView";
+export type { DataTableViewProps, DataTableSelection } from "./DataTableView";
 export {
   defineCellRenderer,
   getCellRenderer,

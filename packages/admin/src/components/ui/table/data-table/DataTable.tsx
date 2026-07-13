@@ -1,54 +1,28 @@
 /**
- * Unified DataTable
+ * DataTable — batteries-included unified table.
  *
- * ONE table component for the whole admin. Built on TanStack Table v8 internally
- * (never exposed), styled with the `@nextlyhq/ui` Table primitives. Supersedes the
- * old `ui/table/DataTable` and the bespoke `EntryTable`/`ApiKeyTable`/media list.
+ * Owns data fetching (server `fetcher` OR in-memory `data`), search, pagination,
+ * internal row selection, and the bulk-action bar, then delegates all row/cell
+ * rendering to the presentational `DataTableView`. Use this for new or simple
+ * standalone lists that don't already manage their own state.
  *
- * Features: server (`fetcher`) OR client (`data`) data, whole-row navigation with a
- * primary-cell link, a `rowClick` escape hatch that can open a dialog instead of
- * routing (media popup), row selection + bulk-action bar, per-row action menu,
- * column visibility, search, pagination, loading/empty/error, and list-view slots.
- *
- * Cell rendering resolves via the field-type registry (`cell-registry`), so
- * user-defined schemas and plugins can contribute renderers.
- *
- * See tasks/admin-tasks/03-unified-datatable-plan.md.
+ * Pages that already own their state with TanStack Query should render
+ * `DataTableView` directly and keep their existing pagination/search/selection.
  *
  * @module components/ui/table/data-table/DataTable
  */
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  TablePagination,
-  TableSearch,
-  TableError,
-  TableEmpty,
-  TableLoading,
-  Checkbox,
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { TablePagination, TableSearch, Button } from "@nextlyhq/ui";
 import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
-import { MoreHorizontal, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useServerTable } from "@admin/hooks/useServerTable";
-import { navigateTo } from "@admin/lib/navigation";
-import { cn } from "@admin/lib/utils";
 
-import { resolveCellRenderer } from "./cell-registry";
+import { DataTableView } from "./DataTableView";
+import type { DataTableSelection } from "./DataTableView";
 import type {
   BulkAction,
-  CellContext,
   DataTableSlots,
   NextlyColumn,
   RowAction,
@@ -81,6 +55,7 @@ export interface DataTableProps<Row extends Record<string, unknown>> {
   slots?: DataTableSlots;
   /** Label shown in the selection bar, e.g. "user". */
   itemLabel?: string;
+  emptyMessage?: string;
 }
 
 const DEFAULT_GET_ROW_ID = (row: Record<string, unknown>): string => {
@@ -141,6 +116,7 @@ export function DataTable<Row extends Record<string, unknown>>({
   enableSorting = true,
   slots,
   itemLabel = "item",
+  emptyMessage,
 }: DataTableProps<Row>) {
   const effectiveFetcher = useMemo<DataFetcher<Row>>(
     () => fetcher ?? makeStaticFetcher(data ?? []),
@@ -166,87 +142,36 @@ export function DataTable<Row extends Record<string, unknown>>({
     enableSorting,
   });
 
+  // Internal selection state (parent-owned selection is the DataTableView path).
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const selectedRows = useMemo(
     () => rows.filter(r => selected[getRowId(r)]),
     [rows, selected, getRowId]
   );
-  const allSelected = rows.length > 0 && selectedRows.length === rows.length;
-  const someSelected = selectedRows.length > 0 && !allSelected;
-
-  const visibleColumns = useMemo(
-    () => columns.filter(c => !c.hidden),
-    [columns]
-  );
-  const firstColName = primaryColumn ?? visibleColumns[0]?.name;
-
-  const toggleAll = () => {
-    if (allSelected) {
-      setSelected({});
-    } else {
-      const next: Record<string, boolean> = {};
-      for (const r of rows) next[getRowId(r)] = true;
-      setSelected(next);
-    }
-  };
-  const toggleRow = (row: Row) => {
-    const id = getRowId(row);
-    setSelected(s => ({ ...s, [id]: !s[id] }));
-  };
   const clearSelection = () => setSelected({});
 
-  // Resolve a cell's rendered content via explicit cell -> registry -> text.
-  const renderCell = (col: NextlyColumn<Row>, row: Row, href?: string) => {
-    const value = col.accessor ? col.accessor(row) : row[col.name];
-    const ctx: CellContext<Row> = {
-      value,
-      row,
-      column: col,
-      field: col.field,
-      href,
-      viewType: "list",
+  const selection = useMemo<DataTableSelection<Row> | undefined>(() => {
+    if (!enableSelection) return undefined;
+    return {
+      selectedIds: Object.keys(selected).filter(id => selected[id]),
+      onToggle: row => {
+        const id = getRowId(row);
+        setSelected(s => ({ ...s, [id]: !s[id] }));
+      },
+      onToggleAll: (selectableRows, allSelected) => {
+        if (allSelected) {
+          setSelected({});
+        } else {
+          const next: Record<string, boolean> = {};
+          for (const r of selectableRows) next[getRowId(r)] = true;
+          setSelected(next);
+        }
+      },
     };
-    const renderer = resolveCellRenderer<Row>(col.cell, col.fieldType);
-    const content = renderer(ctx);
-    // Primary column becomes the navigation link when rowClick yields an href.
-    if (href && col.name === firstColName) {
-      return (
-        <a
-          href={href}
-          onClick={e => {
-            e.preventDefault();
-            e.stopPropagation();
-            navigateTo(href);
-          }}
-          className="text-foreground font-medium hover:underline"
-        >
-          {content}
-        </a>
-      );
-    }
-    return content;
-  };
-
-  // Compute per-row navigation: href (navigate), or a void action (dialog), or none.
-  const resolveRow = (row: Row): { href?: string; onClick?: () => void } => {
-    if (rowClick === false) return {};
-    if (rowClick === "select") return { onClick: () => toggleRow(row) };
-    if (rowClick === "edit") return {}; // page supplies its own accessor via function form
-    if (typeof rowClick === "function") {
-      const result = rowClick(row);
-      if (typeof result === "string") return { href: result };
-      // returned void -> the function already performed its side-effect (e.g. dialog);
-      // give the row an onClick that re-invokes it.
-      return { onClick: () => rowClick(row) };
-    }
-    return {};
-  };
-
-  const colSpan =
-    visibleColumns.length + (enableSelection ? 1 : 0) + (rowActions ? 1 : 0);
+  }, [enableSelection, selected, getRowId]);
 
   return (
-    <div className="@container/table space-y-4 w-full">
+    <div className="space-y-4 w-full">
       {/* Header + controls */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         {title && (
@@ -303,152 +228,27 @@ export function DataTable<Row extends Record<string, unknown>>({
         </div>
       )}
 
-      {error && (
-        <div className="rounded-none bg-destructive/10 p-3 text-sm text-destructive">
-          <TableError message={error} />
-        </div>
-      )}
+      <DataTableView<Row>
+        columns={columns}
+        rows={rows}
+        getRowId={getRowId}
+        rowClick={rowClick}
+        primaryColumn={primaryColumn}
+        selection={selection}
+        rowActions={rowActions}
+        loading={loading}
+        error={error}
+        emptyMessage={emptyMessage}
+      />
 
-      {/* Table card */}
-      <div className="rounded-none border border-border bg-card text-card-foreground overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table className="w-full">
-            <TableHeader>
-              <TableRow>
-                {enableSelection && (
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={someSelected}
-                      onCheckedChange={toggleAll}
-                      aria-label="Select all"
-                    />
-                  </TableHead>
-                )}
-                {visibleColumns.map(col => (
-                  <TableHead
-                    key={col.name}
-                    className={cn(
-                      col.align === "right" && "text-right",
-                      col.align === "center" && "text-center"
-                    )}
-                  >
-                    {col.header}
-                  </TableHead>
-                ))}
-                {rowActions && <TableHead className="w-12 text-right" />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={colSpan} className="h-24 text-center">
-                    <TableLoading />
-                  </TableCell>
-                </TableRow>
-              ) : rows.length > 0 ? (
-                rows.map(row => {
-                  const id = getRowId(row);
-                  const nav = resolveRow(row);
-                  const clickable = Boolean(nav.href || nav.onClick);
-                  const actions = rowActions?.(row) ?? [];
-                  return (
-                    <TableRow
-                      key={id}
-                      data-state={selected[id] ? "selected" : undefined}
-                      className={cn(
-                        "hover-unified-table-row",
-                        clickable && "cursor-pointer",
-                        selected[id] && "bg-muted/50"
-                      )}
-                      onClick={() => {
-                        if (nav.href) navigateTo(nav.href);
-                        else nav.onClick?.();
-                      }}
-                    >
-                      {enableSelection && (
-                        <TableCell
-                          className="w-10"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          <Checkbox
-                            checked={!!selected[id]}
-                            onCheckedChange={() => toggleRow(row)}
-                            aria-label="Select row"
-                          />
-                        </TableCell>
-                      )}
-                      {visibleColumns.map(col => (
-                        <TableCell
-                          key={col.name}
-                          className={cn(
-                            col.align === "right" && "text-right",
-                            col.align === "center" && "text-center"
-                          )}
-                        >
-                          {renderCell(col, row, nav.href)}
-                        </TableCell>
-                      ))}
-                      {rowActions && (
-                        <TableCell
-                          className="w-12 text-right"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          {actions.length > 0 && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  aria-label="Row actions"
-                                >
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {actions
-                                  .filter(a => a.isVisible?.(row) ?? true)
-                                  .map(a => (
-                                    <DropdownMenuItem
-                                      key={a.id}
-                                      disabled={a.isDisabled?.(row) ?? false}
-                                      onSelect={() => a.onSelect(row)}
-                                      className={cn(
-                                        a.destructive && "text-destructive"
-                                      )}
-                                    >
-                                      {a.icon}
-                                      {a.label}
-                                    </DropdownMenuItem>
-                                  ))}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          )}
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  );
-                })
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={colSpan} className="h-24 text-center">
-                    <TableEmpty />
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="border-t border-border p-4">
-          <TablePagination
-            meta={paginationMeta}
-            onPageChange={handlePageChange}
-            onPageSizeChange={handlePageSizeChange}
-            config={paginationConfig}
-            isLoading={loading}
-          />
-        </div>
+      <div className="rounded-none border border-border bg-card p-4">
+        <TablePagination
+          meta={paginationMeta}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          config={paginationConfig}
+          isLoading={loading}
+        />
       </div>
 
       {slots?.afterTable}
