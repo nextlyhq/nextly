@@ -36,9 +36,10 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary/5 text-foreground dark:text-slate-100",
-        primary:
-          "bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/90",
+        // Clear, legible chip in both modes (was bg-primary/5 at ~5% opacity,
+        // which was nearly invisible on dark backgrounds).
+        default: "bg-muted text-foreground",
+        primary: "bg-primary/10 text-primary dark:bg-primary/20",
         success:
           "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-100",
         warning:

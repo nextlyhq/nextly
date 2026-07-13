@@ -189,7 +189,7 @@ export function MediaListView({
           return (
             <Badge
               variant="default"
-              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-primary/5 text-primary  border border-border uppercase tracking-tight"
+              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-muted text-foreground border border-border uppercase tracking-tight"
             >
               {type}
             </Badge>
