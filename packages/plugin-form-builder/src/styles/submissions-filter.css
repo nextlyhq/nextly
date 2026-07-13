@@ -3,14 +3,19 @@
  *
  * Styles for the SubmissionsFilter component that appears above
  * the form-submissions list table.
+ *
+ * Colors, borders, and radius are driven entirely by the Nextly admin
+ * design tokens (`hsl(var(--token))`) so the filter matches the admin
+ * surface in both light and dark themes instead of a fixed light palette.
+ * The tokens resolve on the admin root, which wraps this component.
  */
 
 .submissions-filter {
   margin-bottom: 1rem;
   padding: 1rem;
-  background: var(--color-bg-secondary, #f9fafb);
-  border: 1px solid var(--color-border, #e5e7eb);
-  border-radius: 0rem;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
 }
 
 .submissions-filter-container {
@@ -23,33 +28,34 @@
 .submissions-filter-label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--color-text-secondary, #6b7280);
+  color: hsl(var(--muted-foreground));
 }
 
 .submissions-filter-select {
   padding: 0.5rem 2rem 0.5rem 0.75rem;
   font-size: 0.875rem;
-  border: 1px solid var(--color-border, #d1d5db);
-  border-radius: 0.375rem;
-  background-color: var(--color-bg-primary, #ffffff);
-  color: var(--color-text-primary, #111827);
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
   min-width: 200px;
   cursor: pointer;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  /* Neutral chevron via currentColor so it tracks the select's text color
+     in both themes. */
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
   background-position: right 0.5rem center;
   background-repeat: no-repeat;
   background-size: 1.5em 1.5em;
 }
 
 .submissions-filter-select:hover {
-  border-color: var(--color-border-hover, #9ca3af);
+  border-color: hsl(var(--border-strong));
 }
 
 .submissions-filter-select:focus {
   outline: none;
-  border-color: var(--color-primary, #3b82f6);
-  /* box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); */
+  border-color: hsl(var(--ring));
 }
 
 .submissions-filter-select:disabled {
@@ -61,15 +67,15 @@
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--color-text-secondary, #6b7280);
-  background: var(--color-bg-primary, #ffffff);
-  border: 1px solid var(--color-border, #d1d5db);
-  border-radius: 0.375rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .submissions-filter-clear:hover {
-  background: var(--color-bg-hover, #f3f4f6);
-  color: var(--color-text-primary, #111827);
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
 }

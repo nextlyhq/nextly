@@ -96,7 +96,7 @@ function GeneralTab({
           className="bg-transparent"
         />
         {hasConditionalReferences && (
-          <p className="text-[11px] text-amber-500 font-medium">
+          <p className="text-[11px] text-warning font-medium">
             ⚠️ Changing this may break conditional logic referencing this field
           </p>
         )}
@@ -197,7 +197,7 @@ function GeneralTab({
             })
           }
         >
-          <SelectTrigger className="w-full bg-transparent border-input dark:bg-slate-900/50">
+          <SelectTrigger className="w-full bg-transparent border-input dark:bg-muted/50">
             <SelectValue placeholder="Select width" />
           </SelectTrigger>
           <SelectContent>
@@ -447,7 +447,7 @@ function OptionsEditor({
       />
 
       {options.length === 0 ? (
-        <div className="p-4 bg-primary/5/30 rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
+        <div className="p-4 bg-muted rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
           No options defined. Add an option to get started.
         </div>
       ) : (
@@ -676,7 +676,7 @@ function ValidationTab({
 
       {/* Info for fields without validation options */}
       {(field.type === "checkbox" || field.type === "hidden") && (
-        <div className="p-3 bg-primary/5/30 rounded-none text-xs text-muted-foreground text-center border border-dashed border-primary/5">
+        <div className="p-3 bg-muted rounded-none text-xs text-muted-foreground text-center border border-dashed border-primary/5">
           No additional validation options for this field type.
         </div>
       )}
@@ -754,7 +754,7 @@ export function FieldEditor({
         onValueChange={setActiveTab}
         className="flex-1 flex flex-col"
       >
-        <div className="border-b bg-primary/5/10 border-primary/5">
+        <div className="border-b bg-muted border-primary/5">
           <TabsList className="w-full justify-start gap-0">
             <TabsTrigger
               value="general"
