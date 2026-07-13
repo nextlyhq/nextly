@@ -329,7 +329,7 @@ function ImageComponent({
         onError={() => setImageError(true)}
       />
       {showCaption && caption && (
-        <figcaption className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center italic">
+        <figcaption className="text-sm text-muted-foreground dark:text-muted-foreground mt-2 text-center italic">
           {caption}
         </figcaption>
       )}

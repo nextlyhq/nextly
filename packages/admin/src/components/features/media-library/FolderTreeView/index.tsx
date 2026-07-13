@@ -89,7 +89,7 @@ export function FolderTreeView({
         <Button
           variant="ghost"
           size="md"
-          className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-slate-400"
+          className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-muted-foreground"
           onClick={() => onCreateFolder()}
           title="Create folder"
         >
@@ -126,7 +126,7 @@ export function FolderTreeView({
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-10">
-            <Loader2 className="h-5 w-5 animate-spin text-slate-400/80" />
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/80" />
           </div>
         )}
 
@@ -279,7 +279,7 @@ function FolderTreeItem({
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-none transition-colors cursor-pointer"
                 tabIndex={-1}
               >
-                <MoreHorizontal className="h-3.5 w-3.5 text-slate-400" />
+                <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -290,21 +290,21 @@ function FolderTreeItem({
                 onClick={() => onCreateSubfolder(folder.id)}
                 className="gap-2"
               >
-                <FolderPlus className="h-4 w-4 text-slate-500" />
+                <FolderPlus className="h-4 w-4 text-muted-foreground" />
                 <span>New subfolder</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onEdit(folder.id)}
                 className="gap-2"
               >
-                <Pencil className="h-4 w-4 text-slate-500" />
+                <Pencil className="h-4 w-4 text-muted-foreground" />
                 <span>Rename</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDelete(folder.id, folder.name)}
                 className="gap-2"
               >
-                <Trash2 className="h-4 w-4 text-slate-500" />
+                <Trash2 className="h-4 w-4 text-muted-foreground" />
                 <span>Delete</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -316,7 +316,7 @@ function FolderTreeItem({
       {isExpanded && (
         <div className="animate-in slide-in-from-top-1 duration-200">
           {!subfolders ? (
-            <div className="py-2 pl-12 text-[10px] text-slate-400 italic">
+            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
               Loading subfolders...
             </div>
           ) : subfolders.length > 0 ? (
@@ -338,7 +338,7 @@ function FolderTreeItem({
               />
             ))
           ) : (
-            <div className="py-2 pl-12 text-[10px] text-slate-400 italic">
+            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
               No subfolders
             </div>
           )}

@@ -37,7 +37,7 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary/5 text-slate-900 dark:bg-slate-800 dark:text-slate-100",
+          "bg-primary/5 text-foreground dark:bg-slate-800 dark:text-slate-100",
         primary:
           "bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/90",
         success:
@@ -47,7 +47,7 @@ const badgeVariants = cva(
         destructive:
           "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-100",
         outline:
-          "border !border-border bg-transparent text-slate-700 dark:text-slate-300 dark:!border-border",
+          "border !border-border bg-transparent text-foreground dark:text-muted-foreground dark:!border-border",
       },
     },
     defaultVariants: {

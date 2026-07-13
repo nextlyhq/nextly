@@ -59,7 +59,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
           </DialogTitle>
           <DialogDescription
             id="delete-dialog-description"
-            className="text-gray-800 text-md"
+            className="text-foreground text-md"
           >
             Choose the type of field you want to add to your field group
           </DialogDescription>
@@ -89,13 +89,13 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
                         onClose?.();
                       }}
                     >
-                      <div className="flex items-center gap-3 text-zinc-600">
+                      <div className="flex items-center gap-3 text-muted-foreground">
                         <IconComponent className="w-5 h-5" />
-                        <span className="text-black text-sm capitalize">
+                        <span className="text-foreground text-sm capitalize">
                           {item.type}
                         </span>
                       </div>
-                      <p className="text-sm mt-3 text-zinc-700">
+                      <p className="text-sm mt-3 text-foreground">
                         {item.description}
                       </p>
                     </div>

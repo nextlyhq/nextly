@@ -783,7 +783,7 @@ export function MediaLibrary({
                               }}
                               className="gap-2"
                             >
-                              <FolderPlus className="h-4 w-4 text-slate-500" />
+                              <FolderPlus className="h-4 w-4 text-muted-foreground" />
                               <span>New subfolder</span>
                             </DropdownMenuItem>
                             <DropdownMenuItem
@@ -794,7 +794,7 @@ export function MediaLibrary({
                               }}
                               className="gap-2"
                             >
-                              <Pencil className="h-4 w-4 text-slate-500" />
+                              <Pencil className="h-4 w-4 text-muted-foreground" />
                               <span>Rename</span>
                             </DropdownMenuItem>
                             <DropdownMenuItem
@@ -806,7 +806,7 @@ export function MediaLibrary({
                               }}
                               className="gap-2"
                             >
-                              <Trash2 className="h-4 w-4 text-slate-500" />
+                              <Trash2 className="h-4 w-4 text-muted-foreground" />
                               <span>Delete</span>
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -896,7 +896,7 @@ export function MediaLibrary({
                                 }}
                                 className="gap-2 cursor-pointer"
                               >
-                                <FolderPlus className="h-4 w-4 text-slate-500" />
+                                <FolderPlus className="h-4 w-4 text-muted-foreground" />
                                 <span>New subfolder</span>
                               </DropdownMenuItem>
                               <DropdownMenuItem
@@ -907,7 +907,7 @@ export function MediaLibrary({
                                 }}
                                 className="gap-2 cursor-pointer"
                               >
-                                <Pencil className="h-4 w-4 text-slate-500" />
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
                                 <span>Rename</span>
                               </DropdownMenuItem>
                               <DropdownMenuItem
@@ -919,7 +919,7 @@ export function MediaLibrary({
                                 }}
                                 className="gap-2 cursor-pointer"
                               >
-                                <Trash2 className="h-4 w-4 text-slate-500" />
+                                <Trash2 className="h-4 w-4 text-muted-foreground" />
                                 <span>Delete</span>
                               </DropdownMenuItem>
                             </DropdownMenuContent>

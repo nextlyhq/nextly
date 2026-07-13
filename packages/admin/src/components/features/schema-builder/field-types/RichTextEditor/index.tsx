@@ -140,7 +140,7 @@ export function RichTextEditor({
               />
             }
             placeholder={
-              <div className="absolute top-3 left-4 text-gray-400 pointer-events-none select-none">
+              <div className="absolute top-3 left-4 text-muted-foreground pointer-events-none select-none">
                 {placeholder}
               </div>
             }

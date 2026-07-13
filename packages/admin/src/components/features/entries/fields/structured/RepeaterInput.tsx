@@ -333,7 +333,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
               ) : (
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               )}
-              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+              <span className="text-sm font-semibold text-foreground dark:text-muted-foreground">
                 {field.label || pluralLabel}
               </span>
               <span className="text-xs text-muted-foreground ml-1">

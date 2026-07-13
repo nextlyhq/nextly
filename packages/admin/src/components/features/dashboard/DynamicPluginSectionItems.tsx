@@ -145,7 +145,7 @@ export function DynamicPluginSectionItems({
             {/* Plugin sub-label */}
             <div className="space-y-1 mt-4">
               <div className="flex items-center gap-2 px-3 mb-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                   {label}
                 </p>
                 {badge && (

@@ -220,16 +220,16 @@ export function MediaCard({
       {/* Information Bar - Integrated at bottom of aspect-square */}
       <div className="bg-primary/5  border-t border-border p-3 shrink-0">
         <div className="flex flex-col gap-1.5">
-          <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
+          <p className="text-[10px] font-bold text-foreground dark:text-muted-foreground truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}
           </p>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+            <span className="text-[9px] font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest">
               {media.width && media.height
                 ? `${media.width}×${media.height}`
                 : "No Size"}
             </span>
-            <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
+            <span className="text-[9px] font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter">
               {formatFileSize(media.size)}
             </span>
           </div>

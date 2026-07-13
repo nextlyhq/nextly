@@ -243,7 +243,7 @@ export function RoleInheritance({
                 <SelectValue placeholder="Select base role (optional)" />
               )}
               {selectedBaseRoleIds.length > 0 && (
-                <span className="ml-1 text-sm text-gray-500">
+                <span className="ml-1 text-sm text-muted-foreground">
                   ({selectedBaseRoleIds.length}{" "}
                   {selectedBaseRoleIds.length === 1 ? "role" : "roles"})
                 </span>

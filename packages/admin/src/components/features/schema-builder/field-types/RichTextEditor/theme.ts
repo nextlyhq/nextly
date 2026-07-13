@@ -21,12 +21,12 @@ export const lexicalTheme: EditorThemeClasses = {
 
   // Headings
   heading: {
-    h1: "text-3xl font-bold mb-4 mt-6 text-gray-900 dark:text-gray-100",
-    h2: "text-2xl font-bold mb-3 mt-5 text-gray-900 dark:text-gray-100",
-    h3: "text-xl font-bold mb-3 mt-4 text-gray-900 dark:text-gray-100",
-    h4: "text-lg font-semibold mb-2 mt-3 text-gray-900 dark:text-gray-100",
-    h5: "text-base font-semibold mb-2 mt-3 text-gray-900 dark:text-gray-100",
-    h6: "text-sm font-semibold mb-2 mt-2 text-gray-700 dark:text-gray-300",
+    h1: "text-3xl font-bold mb-4 mt-6 text-foreground dark:text-gray-100",
+    h2: "text-2xl font-bold mb-3 mt-5 text-foreground dark:text-gray-100",
+    h3: "text-xl font-bold mb-3 mt-4 text-foreground dark:text-gray-100",
+    h4: "text-lg font-semibold mb-2 mt-3 text-foreground dark:text-gray-100",
+    h5: "text-base font-semibold mb-2 mt-3 text-foreground dark:text-gray-100",
+    h6: "text-sm font-semibold mb-2 mt-2 text-foreground dark:text-muted-foreground",
   },
 
   // Lists
@@ -67,14 +67,14 @@ export const lexicalTheme: EditorThemeClasses = {
     attr: "text-primary",
     boolean: "text-orange-400",
     builtin: "text-cyan-400",
-    cdata: "text-gray-500",
+    cdata: "text-muted-foreground",
     char: "text-green-400",
     class: "text-yellow-400",
     "class-name": "text-yellow-400",
-    comment: "text-gray-500 italic",
+    comment: "text-muted-foreground italic",
     constant: "text-orange-400",
     deleted: "text-red-400",
-    doctype: "text-gray-500",
+    doctype: "text-muted-foreground",
     entity: "text-orange-400",
     function: "text-primary",
     important: "text-red-400 font-bold",
@@ -82,10 +82,10 @@ export const lexicalTheme: EditorThemeClasses = {
     keyword: "text-purple-400",
     namespace: "text-primary",
     number: "text-orange-400",
-    operator: "text-gray-300",
-    prolog: "text-gray-500",
+    operator: "text-muted-foreground",
+    prolog: "text-muted-foreground",
     property: "text-primary",
-    punctuation: "text-gray-400",
+    punctuation: "text-muted-foreground",
     regex: "text-green-400",
     selector: "text-green-400",
     string: "text-green-400",
@@ -97,7 +97,7 @@ export const lexicalTheme: EditorThemeClasses = {
 
   // Blockquotes
   quote:
-    "border-l-4 border-border dark:border-primary/30 pl-4 italic text-gray-700 dark:text-gray-300 my-4",
+    "border-l-4 border-border dark:border-primary/30 pl-4 italic text-foreground dark:text-muted-foreground my-4",
 
   // Tables (if we add table support later)
   table: "border-collapse w-full my-4",

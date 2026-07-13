@@ -232,7 +232,7 @@ export function RadioFieldEditor({
                       {options.map((option, index: number) => (
                         <TableRow key={option.id}>
                           <TableCell>
-                            <GripVertical className="h-4 w-4 text-gray-400" />
+                            <GripVertical className="h-4 w-4 text-muted-foreground" />
                           </TableCell>
                           <TableCell>{option.label}</TableCell>
                           <TableCell>{option.value}</TableCell>
