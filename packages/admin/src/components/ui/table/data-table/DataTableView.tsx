@@ -50,7 +50,7 @@ import type { CellContext, NextlyColumn, RowAction, RowClick } from "./types";
 
 /** Controlled selection contract. When supplied, a checkbox column is shown. */
 export interface DataTableSelection<
-  Row extends Record<string, unknown> = Record<string, unknown>,
+  Row extends object = Record<string, unknown>,
 > {
   /** Ids of the currently selected rows (parent-owned). */
   selectedIds: string[];
@@ -62,7 +62,7 @@ export interface DataTableSelection<
   isSelectable?: (row: Row) => boolean;
 }
 
-export interface DataTableViewProps<Row extends Record<string, unknown>> {
+export interface DataTableViewProps<Row extends object> {
   columns: NextlyColumn<Row>[];
   rows: Row[];
   getRowId?: (row: Row) => string;
@@ -82,12 +82,12 @@ export interface DataTableViewProps<Row extends Record<string, unknown>> {
   className?: string;
 }
 
-const DEFAULT_GET_ROW_ID = (row: Record<string, unknown>): string => {
-  const id = row.id;
+const DEFAULT_GET_ROW_ID = (row: object): string => {
+  const id = (row as { id?: unknown }).id;
   return typeof id === "string" || typeof id === "number" ? String(id) : "";
 };
 
-export function DataTableView<Row extends Record<string, unknown>>({
+export function DataTableView<Row extends object>({
   columns,
   rows,
   getRowId = DEFAULT_GET_ROW_ID,
@@ -140,7 +140,9 @@ export function DataTableView<Row extends Record<string, unknown>>({
 
   // Resolve a cell's rendered content: explicit cell -> registry -> text.
   const renderCell = (col: NextlyColumn<Row>, row: Row, href?: string) => {
-    const value = col.accessor ? col.accessor(row) : row[col.name];
+    const value = col.accessor
+      ? col.accessor(row)
+      : (row as Record<string, unknown>)[col.name];
     const ctx: CellContext<Row> = {
       value,
       row,

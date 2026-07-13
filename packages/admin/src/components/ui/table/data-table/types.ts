@@ -24,9 +24,7 @@ export type NextlyFieldType = string;
  * Context handed to every cell renderer. Framework-agnostic on purpose: no
  * TanStack `CellContext` leaks here, so renderers survive an engine change.
  */
-export interface CellContext<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> {
+export interface CellContext<Row extends object = Record<string, unknown>> {
   /** The value for this cell. */
   value: unknown;
   /** The full row record. */
@@ -44,9 +42,9 @@ export interface CellContext<
 }
 
 /** A single cell renderer function. */
-export type CellRenderer<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> = (ctx: CellContext<Row>) => React.ReactNode;
+export type CellRenderer<Row extends object = Record<string, unknown>> = (
+  ctx: CellContext<Row>
+) => React.ReactNode;
 
 /**
  * A cell renderer registration: a renderer advertises
@@ -77,9 +75,7 @@ export interface NextlyFieldSchema {
  * `ColumnDef`. Columns can be hand-authored (config lists) or generated from a
  * collection schema (dynamic content lists), and appended/mutated by plugins.
  */
-export interface NextlyColumn<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> {
+export interface NextlyColumn<Row extends object = Record<string, unknown>> {
   /** Accessor key into the row, or a synthetic id for computed/action columns. */
   name: string;
   /** Column header content. */
@@ -111,9 +107,7 @@ export interface NextlyColumn<
 }
 
 /** A per-row action (rendered into the row's three-dots menu). */
-export interface RowAction<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> {
+export interface RowAction<Row extends object = Record<string, unknown>> {
   id: string;
   label: React.ReactNode;
   icon?: React.ReactNode;
@@ -127,9 +121,7 @@ export interface RowAction<
 }
 
 /** A bulk action (rendered in the selection bar shown when rows are selected). */
-export interface BulkAction<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> {
+export interface BulkAction<Row extends object = Record<string, unknown>> {
   id: string;
   label: React.ReactNode;
   icon?: React.ReactNode;
@@ -146,9 +138,11 @@ export interface BulkAction<
  *             side-effect (e.g. open the media popup). This one variant is why
  *             media rows can open a dialog instead of routing.
  */
-export type RowClick<
-  Row extends Record<string, unknown> = Record<string, unknown>,
-> = "edit" | "select" | false | ((row: Row) => string | void);
+export type RowClick<Row extends object = Record<string, unknown>> =
+  | "edit"
+  | "select"
+  | false
+  | ((row: Row) => string | void);
 
 /** List-view injection slots for non-column UI. */
 export interface DataTableSlots {

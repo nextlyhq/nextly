@@ -29,7 +29,7 @@ import type {
   RowClick,
 } from "./types";
 
-export interface DataTableProps<Row extends Record<string, unknown>> {
+export interface DataTableProps<Row extends object> {
   columns: NextlyColumn<Row>[];
   /** Server mode: a fetcher. */
   fetcher?: DataFetcher<Row>;
@@ -58,15 +58,13 @@ export interface DataTableProps<Row extends Record<string, unknown>> {
   emptyMessage?: string;
 }
 
-const DEFAULT_GET_ROW_ID = (row: Record<string, unknown>): string => {
-  const id = row.id;
+const DEFAULT_GET_ROW_ID = (row: object): string => {
+  const id = (row as { id?: unknown }).id;
   return typeof id === "string" || typeof id === "number" ? String(id) : "";
 };
 
 /** Wrap an in-memory array in a fetcher so client + server modes share one path. */
-function makeStaticFetcher<Row extends Record<string, unknown>>(
-  data: Row[]
-): DataFetcher<Row> {
+function makeStaticFetcher<Row extends object>(data: Row[]): DataFetcher<Row> {
   return params => {
     const search = (params.filters?.search ?? "").toLowerCase();
     let rows = data;
@@ -99,7 +97,7 @@ function makeStaticFetcher<Row extends Record<string, unknown>>(
   };
 }
 
-export function DataTable<Row extends Record<string, unknown>>({
+export function DataTable<Row extends object>({
   columns,
   fetcher,
   data,

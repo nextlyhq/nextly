@@ -56,7 +56,7 @@ export function getRegisteredCellTypes(): NextlyFieldType[] {
  * field-type -> renderer registry (not `any`), so the DataTable itself stays
  * assertion-free.
  */
-export function resolveCellRenderer<Row extends Record<string, unknown>>(
+export function resolveCellRenderer<Row extends object>(
   cell: CellRenderer<Row> | undefined,
   fieldType: NextlyFieldType | undefined
 ): CellRenderer<Row> {

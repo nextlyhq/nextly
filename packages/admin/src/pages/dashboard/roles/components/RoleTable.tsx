@@ -1,6 +1,6 @@
 "use client";
 
-import type { Column, TableParams } from "@nextlyhq/ui";
+import type { TableParams } from "@nextlyhq/ui";
 import {
   Alert,
   Badge,
@@ -11,19 +11,22 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
 } from "@nextlyhq/ui";
-import { Columns, Shield } from "lucide-react";
+import { Columns, Edit, Shield, Trash2 } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { RoleDeleteDialog } from "@admin/components/features/role-management/RoleDeleteDialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useRoles,
@@ -36,108 +39,58 @@ import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { navigateTo } from "@admin/lib/navigation";
 import type { Role } from "@admin/types/entities";
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["roleName"]);
+
 /**
- * RoleTable Component
+ * RoleTable
  *
- * Displays a responsive table/card view of roles with search, pagination, sorting, and CRUD actions.
- * Uses TanStack Query for data fetching and ResponsiveTable for mobile responsiveness.
- *
- * ## Features
- * - Mobile responsive: Card view (< 768px), table view (≥ 768px)
- * - Search roles by name (debounced 300ms)
- * - Server-side pagination (10/25/50 rows per page)
- * - Sorting by name
- * - CRUD actions: View, Edit, Delete
- * - Loading states: Skeleton on initial load, spinner during search
- * - Error states: Alert component for API failures
- * - Empty states: "No roles found" message
- *
- * ## TanStack Query Integration
- * - useRoles: Fetches paginated role list with auto-caching (5 min staleTime)
- * - useDeleteRole: Deletes role with automatic cache invalidation
- * - No manual state management for data (TanStack Query handles it)
- *
- * ## Design System Alignment
- * - Badge variants: System role = outline, Custom role = default, Active = success
- * - Typography: 16px minimum body text (WCAG 2.2 AA)
- * - Touch targets: 44px minimum (WCAG 2.2 AA)
- * - Dark mode: All components support dark mode
- *
- * @example
- * ```tsx
- * <RoleTable />
- * ```
+ * Lists roles with search, server-side pagination, column visibility, whole-row
+ * navigation to the edit page, per-row actions, and bulk delete. System roles
+ * are locked: their selection checkbox is disabled and they are excluded from
+ * bulk deletion. Data + mutations run through TanStack Query; rendering is
+ * delegated to the unified DataTableView.
  */
 export default function RoleTable() {
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state
   const [search, setSearch] = useState("");
-
-  // Filter state
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-
-  // Column visibility
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Debounced search for API calls
-  const debouncedSearch = useDebouncedValue(search, 500);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [roleToDelete, setRoleToDelete] = useState<{
     id: string;
     name: string;
     isSystemRole: boolean;
   } | null>(null);
-
-  // Bulk delete dialog state
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
-  // Row selection state management
   const {
     selectedIds,
     selectedCount,
     toggleSelection,
+    selectAllOnPage,
+    deselectAllOnPage,
     clearSelection,
-    isSelected,
   } = useRowSelection();
 
-  // Bulk mutation hooks
+  const debouncedSearch = useDebouncedValue(search, 500);
   const { mutate: bulkDeleteRoles, isPending: isBulkDeleting } =
     useBulkDeleteRoles();
 
-  // TanStack Query: Fetch roles
   const params: TableParams = {
     pagination: { page, pageSize },
-    sorting: [], // Sorting can be added later if needed
-    filters: { search: debouncedSearch }, // Use debounced search
+    sorting: [],
+    filters: { search: debouncedSearch },
   };
 
   const { data, isLoading } = useRoles(params);
+  const roles = useMemo(() => data?.items ?? [], [data?.items]);
 
-  // Filter data client-side (until API supports these filters)
-  const filteredData = useMemo(() => {
-    if (!data?.items) return [];
-
-    return data.items.filter(role => {
-      // Filter by type
-      if (typeFilter !== "all" && role.type !== typeFilter) {
-        return false;
-      }
-      // Filter by status
-      if (statusFilter !== "all" && role.status !== statusFilter) {
-        return false;
-      }
-      return true;
-    });
-  }, [data?.items, typeFilter, statusFilter]);
-
-  // TanStack Query: Delete role mutation
   const { mutate: deleteRole, isPending: isDeleting } = useDeleteRole();
 
-  // Action handlers
+  const isSystemRole = useCallback((role: Role) => role.type === "System", []);
+
   const handleEdit = useCallback((role: Role) => {
     navigateTo(buildRoute(ROUTES.SECURITY_ROLES_EDIT, { id: role.id }));
   }, []);
@@ -153,7 +106,6 @@ export default function RoleTable() {
 
   const handleConfirmDelete = () => {
     if (!roleToDelete) return;
-
     deleteRole(roleToDelete.id, {
       onSuccess: () => {
         toast.success("Role deleted", {
@@ -171,24 +123,18 @@ export default function RoleTable() {
     });
   };
 
-  // Bulk delete handlers
   const handleBulkDelete = () => {
     if (selectedCount === 0) {
       toast.error("No roles selected");
       return;
     }
-
-    // Filter out system roles from selection
-    const selectedRoles =
-      data?.items.filter(r => selectedIds.includes(r.id)) || [];
+    const selectedRoles = roles.filter(r => selectedIds.includes(r.id));
     const systemRolesSelected = selectedRoles.filter(r => r.type === "System");
-
     if (systemRolesSelected.length > 0) {
       toast.warning("System roles cannot be deleted", {
         description: `${systemRolesSelected.length} system role(s) will be excluded from deletion.`,
       });
     }
-
     const deletableRoles = selectedRoles.filter(r => r.type !== "System");
     if (deletableRoles.length === 0) {
       toast.error("No deletable roles selected", {
@@ -196,24 +142,18 @@ export default function RoleTable() {
       });
       return;
     }
-
     setBulkDeleteDialogOpen(true);
   };
 
   const handleConfirmBulkDelete = () => {
-    // Filter out system roles before deletion
-    const selectedRoles =
-      data?.items.filter(r => selectedIds.includes(r.id)) || [];
-    const deletableRoleIds = selectedRoles
-      .filter(r => r.type !== "System")
+    const deletableRoleIds = roles
+      .filter(r => selectedIds.includes(r.id) && r.type !== "System")
       .map(r => r.id);
-
     if (deletableRoleIds.length === 0) {
       toast.error("No deletable roles selected");
       setBulkDeleteDialogOpen(false);
       return;
     }
-
     void bulkDeleteRoles(deletableRoleIds, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
@@ -238,190 +178,171 @@ export default function RoleTable() {
     });
   };
 
-  // Helper: Check if role is a system role
-  const isSystemRole = useCallback((role: Role) => role.type === "System", []);
+  const systemRoleCount = useMemo(
+    () =>
+      roles.filter(r => selectedIds.includes(r.id) && r.type === "System")
+        .length,
+    [roles, selectedIds]
+  );
 
-  // Helper: Get count of system roles in current selection
-  const systemRoleCount = useMemo(() => {
-    const selectedRoles =
-      filteredData.filter(r => selectedIds.includes(r.id)) || [];
-    return selectedRoles.filter(r => r.type === "System").length;
-  }, [filteredData, selectedIds]);
-
-  // ResponsiveTable columns
-  const columnDefs: Column<Role>[] = useMemo(
-    () => [
-      // Checkbox column for bulk selection (disabled for system roles)
+  const allColumns = useMemo((): NextlyColumn<Role>[] => {
+    return [
       {
-        key: "select" as keyof Role,
-        label: "",
-        hideOnMobile: true,
-        render: (_value, role) => (
-          <BulkSelectCheckbox
-            checked={isSelected(role.id)}
-            onCheckedChange={() => toggleSelection(role.id)}
-            disabled={isSystemRole(role)}
-            rowId={role.id}
-            rowLabel={role.roleName}
-          />
-        ),
-      },
-      {
-        key: "roleName",
-        label: "ROLE NAME",
-        render: (_roleName, role) => (
+        name: "roleName",
+        header: "ROLE NAME",
+        cell: ({ row }) => (
           <div className="flex items-center gap-3">
             <div className="table-row-icon-cover">
               <Shield className="h-4 w-4" />
             </div>
-            <div className="min-w-0 flex-1 flex flex-col">
+            <div className="flex min-w-0 flex-1 flex-col">
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleEdit(role)}
-                  className="font-medium text-sm text-foreground truncate text-left cursor-pointer"
-                >
-                  {role.roleName}
-                </button>
-                {role.type === "System" && (
+                <span className="truncate text-sm font-medium text-foreground">
+                  {row.roleName}
+                </span>
+                {row.type === "System" && (
                   <Badge variant="default" className="text-xs">
                     System
                   </Badge>
                 )}
               </div>
-              {role.subtitle && (
-                <div className="text-xs text-muted-foreground truncate">
-                  {role.subtitle}
-                </div>
+              {row.subtitle && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {row.subtitle}
+                </span>
               )}
             </div>
           </div>
         ),
       },
       {
-        key: "id",
-        label: "ID",
+        name: "id",
+        header: "ID",
         hideOnMobile: true,
-        render: id => (
-          <span
-            className="font-mono text-xs text-muted-foreground"
-            title={id as string}
-          >
-            {(id as string).length > 8
-              ? `${(id as string).slice(0, 8)}...`
-              : (id as string)}
+        cell: ({ value }) => {
+          const id = typeof value === "string" ? value : "";
+          return (
+            <span
+              className="font-mono text-xs text-muted-foreground"
+              title={id}
+            >
+              {id.length > 8 ? `${id.slice(0, 8)}...` : id}
+            </span>
+          );
+        },
+      },
+      {
+        name: "description",
+        header: "Description",
+        hideOnMobile: true,
+        cell: ({ row }) => (
+          <span className="line-clamp-2 text-sm text-muted-foreground">
+            {row.description || "No description"}
           </span>
         ),
       },
       {
-        key: "description",
-        label: "Description",
-        hideOnMobile: true, // Hide on mobile to save space
-        render: description => (
-          <span className="text-sm text-muted-foreground line-clamp-2">
-            {description || "No description"}
-          </span>
-        ),
-      },
-      {
-        key: "permissions",
-        label: "Permissions",
+        name: "permissions",
+        header: "Permissions",
         hideOnMobile: true,
-        render: permissions => (
+        cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
-            {Array.isArray(permissions) ? permissions.length : 0} Permissions
+            {row.permissions.length} Permissions
           </span>
         ),
       },
       {
-        key: "status",
-        label: "Status",
-        render: status => (
-          <Badge variant={status === "Active" ? "success" : "default"}>
-            {status}
+        name: "status",
+        header: "Status",
+        cell: ({ row }) => (
+          <Badge variant={row.status === "Active" ? "success" : "default"}>
+            {row.status}
           </Badge>
         ),
       },
       {
-        key: "created",
-        label: "Created",
-        hideOnMobile: true, // Hide on mobile to save space
-        render: created => (
+        name: "created",
+        header: "Created",
+        hideOnMobile: true,
+        cell: ({ value }) => (
           <span className="text-sm">
             {formatDateWithAdminTimezone(
-              created as string,
-              {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              },
+              value as string,
+              { year: "numeric", month: "short", day: "numeric" },
               "N/A"
             )}
           </span>
         ),
       },
-      {
-        key: "actions" as keyof Role,
-        label: "Actions",
-        render: (_, role) => (
-          <div className="flex justify-end">
-            <ActionColumn
-              item={role}
-              callbacks={{
-                onEdit: handleEdit,
-                onDelete: handleDelete,
-              }}
-            />
-          </div>
-        ),
-      },
-    ],
-    [handleEdit, handleDelete, isSelected, toggleSelection, isSystemRole]
-  );
+    ];
+  }, []);
 
   const columns = useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const ALWAYS_VISIBLE = new Set(["roleName", "actions"]);
-
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
   );
 
   const toggleColumn = useCallback((columnKey: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(columnKey)) {
-        next.delete(columnKey);
-      } else {
-        next.add(columnKey);
-      }
+      if (next.has(columnKey)) next.delete(columnKey);
+      else next.add(columnKey);
       return next;
     });
   }, []);
 
-  // Handle filter changes (reset to first page)
-  // Handle page size change (reset to first page)
   const handlePageSizeChange = useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
   }, []);
 
-  const _handleTypeFilterChange = useCallback((value: string) => {
-    setTypeFilter(value);
-    setPage(0);
-  }, []);
+  const selection = useMemo<DataTableSelection<Role>>(
+    () => ({
+      selectedIds,
+      isSelectable: role => !isSystemRole(role),
+      onToggle: role => toggleSelection(role.id),
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(r => r.id);
+        if (allSelected) deselectAllOnPage(ids);
+        else selectAllOnPage(ids);
+      },
+    }),
+    [
+      selectedIds,
+      isSystemRole,
+      toggleSelection,
+      deselectAllOnPage,
+      selectAllOnPage,
+    ]
+  );
 
-  const _handleStatusFilterChange = useCallback((value: string) => {
-    setStatusFilter(value);
-    setPage(0);
-  }, []);
+  const rowActions = useCallback(
+    (role: Role): RowAction<Role>[] => [
+      {
+        id: "edit",
+        label: "Edit",
+        icon: <Edit className="h-4 w-4" />,
+        onSelect: () => handleEdit(role),
+      },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onSelect: () => handleDelete(role),
+      },
+    ],
+    [handleEdit, handleDelete]
+  );
 
   return (
     <div className="space-y-4">
-      {/* Bulk selection toolbar */}
       {selectedCount > 0 && (
         <>
           <BulkActionBar
@@ -440,27 +361,22 @@ export default function RoleTable() {
         </>
       )}
 
-      {/* Search and filters */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search roles by name"
-            isLoading={isLoading}
-            className="flex-1 max-w-sm bg-background text-foreground border-border"
-          />
-        </div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search roles by name"
+          isLoading={isLoading}
+          className="max-w-sm flex-1 border-border bg-background text-foreground"
+        />
 
-        {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
-          {/* Columns Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
                 size="md"
-                className="bg-background text-foreground border-border hover:bg-accent/10"
+                className="border-border bg-background text-foreground hover:bg-accent/10"
               >
                 <Columns className="h-4 w-4" />
                 Columns
@@ -471,11 +387,11 @@ export default function RoleTable() {
               <DropdownMenuSeparator />
               {toggleableColumns.map(col => (
                 <DropdownMenuCheckboxItem
-                  key={String(col.key)}
-                  checked={!hiddenColumns.has(String(col.key))}
-                  onCheckedChange={() => toggleColumn(String(col.key))}
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
                 >
-                  {typeof col.label === "string" ? col.label : String(col.key)}
+                  {typeof col.header === "string" ? col.header : col.name}
                 </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
@@ -483,34 +399,37 @@ export default function RoleTable() {
         </div>
       </div>
 
-      {/* Responsive table */}
-      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
-        <ResponsiveTable
-          data={filteredData}
-          columns={columns}
-          emptyMessage={
-            search || typeFilter !== "all" || statusFilter !== "all"
-              ? "No roles found. Try adjusting your search or filters."
-              : "No roles available. Create your first role to get started."
-          }
-          ariaLabel="Roles table"
-          tableWrapperClassName="border-0 rounded-none shadow-none"
-        />
-        {data && data.meta.totalPages > 0 && (
-          <Pagination
-            currentPage={page}
-            totalPages={data.meta.totalPages}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            isLoading={isLoading}
-            totalItems={data.meta.total}
-          />
-        )}
-      </div>
+      <DataTableView<Role>
+        columns={columns}
+        rows={roles}
+        loading={isLoading}
+        rowClick={role =>
+          buildRoute(ROUTES.SECURITY_ROLES_EDIT, { id: role.id })
+        }
+        primaryColumn="roleName"
+        selection={selection}
+        rowActions={rowActions}
+        ariaLabel="Roles table"
+        emptyMessage={
+          search
+            ? "No roles found. Try adjusting your search."
+            : "No roles available. Create your first role to get started."
+        }
+      />
 
-      {/* Single delete confirmation dialog */}
+      {data && data.meta.totalPages > 0 && (
+        <Pagination
+          currentPage={page}
+          totalPages={data.meta.totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={[10, 25, 50]}
+          onPageChange={setPage}
+          onPageSizeChange={handlePageSizeChange}
+          isLoading={isLoading}
+          totalItems={data.meta.total}
+        />
+      )}
+
       <RoleDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -519,22 +438,18 @@ export default function RoleTable() {
         isLoading={isDeleting}
       />
 
-      {/* Bulk delete confirmation dialog */}
-      {/* Bulk delete confirmation dialog */}
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
         entityType="Role"
         entityTypePlural="Roles"
-        items={
-          filteredData
-            .filter(r => selectedIds.includes(r.id) && r.type !== "System")
-            .map(r => ({
-              id: r.id,
-              name: r.roleName,
-              secondary: r.description || "No description", // Use description as secondary info
-            })) || []
-        }
+        items={roles
+          .filter(r => selectedIds.includes(r.id) && r.type !== "System")
+          .map(r => ({
+            id: r.id,
+            name: r.roleName,
+            secondary: r.description || "No description",
+          }))}
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />
