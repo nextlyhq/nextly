@@ -50,7 +50,7 @@
  * All Tailwind customizations are defined in this @theme block.
  * This replaces the old tailwind.config.js approach.
  */
-@theme {
+@theme inline {
   /* ============================================
    * ANIMATIONS (Tailwind v4.1)
    * ============================================ */
@@ -174,17 +174,17 @@
   --color-foreground: hsl(var(--foreground));
 
   --color-primary: hsl(var(--primary));
-  --color-primary-50: color-mix(in srgb, var(--color-primary), white 95%);
-  --color-primary-100: color-mix(in srgb, var(--color-primary), white 90%);
-  --color-primary-200: color-mix(in srgb, var(--color-primary), white 70%);
-  --color-primary-300: color-mix(in srgb, var(--color-primary), white 50%);
-  --color-primary-400: color-mix(in srgb, var(--color-primary), white 30%);
-  --color-primary-500: var(--color-primary);
-  --color-primary-600: color-mix(in srgb, var(--color-primary), black 10%);
-  --color-primary-700: color-mix(in srgb, var(--color-primary), black 30%);
-  --color-primary-800: color-mix(in srgb, var(--color-primary), black 50%);
-  --color-primary-900: color-mix(in srgb, var(--color-primary), black 70%);
-  --color-primary-950: color-mix(in srgb, var(--color-primary), black 85%);
+  --color-primary-50: color-mix(in srgb, hsl(var(--primary)), white 95%);
+  --color-primary-100: color-mix(in srgb, hsl(var(--primary)), white 90%);
+  --color-primary-200: color-mix(in srgb, hsl(var(--primary)), white 70%);
+  --color-primary-300: color-mix(in srgb, hsl(var(--primary)), white 50%);
+  --color-primary-400: color-mix(in srgb, hsl(var(--primary)), white 30%);
+  --color-primary-500: hsl(var(--primary));
+  --color-primary-600: color-mix(in srgb, hsl(var(--primary)), black 10%);
+  --color-primary-700: color-mix(in srgb, hsl(var(--primary)), black 30%);
+  --color-primary-800: color-mix(in srgb, hsl(var(--primary)), black 50%);
+  --color-primary-900: color-mix(in srgb, hsl(var(--primary)), black 70%);
+  --color-primary-950: color-mix(in srgb, hsl(var(--primary)), black 85%);
   --color-primary-foreground: hsl(var(--primary-foreground));
 
   --color-secondary: hsl(var(--secondary));
@@ -203,17 +203,17 @@
   --color-muted-foreground: hsl(var(--muted-foreground));
 
   --color-accent: hsl(var(--accent));
-  --color-accent-50: color-mix(in srgb, var(--color-accent), white 95%);
-  --color-accent-100: color-mix(in srgb, var(--color-accent), white 90%);
-  --color-accent-200: color-mix(in srgb, var(--color-accent), white 70%);
-  --color-accent-300: color-mix(in srgb, var(--color-accent), white 50%);
-  --color-accent-400: color-mix(in srgb, var(--color-accent), white 30%);
-  --color-accent-500: var(--color-accent);
-  --color-accent-600: color-mix(in srgb, var(--color-accent), black 10%);
-  --color-accent-700: color-mix(in srgb, var(--color-accent), black 30%);
-  --color-accent-800: color-mix(in srgb, var(--color-accent), black 50%);
-  --color-accent-900: color-mix(in srgb, var(--color-accent), black 70%);
-  --color-accent-950: color-mix(in srgb, var(--color-accent), black 85%);
+  --color-accent-50: color-mix(in srgb, hsl(var(--accent)), white 95%);
+  --color-accent-100: color-mix(in srgb, hsl(var(--accent)), white 90%);
+  --color-accent-200: color-mix(in srgb, hsl(var(--accent)), white 70%);
+  --color-accent-300: color-mix(in srgb, hsl(var(--accent)), white 50%);
+  --color-accent-400: color-mix(in srgb, hsl(var(--accent)), white 30%);
+  --color-accent-500: hsl(var(--accent));
+  --color-accent-600: color-mix(in srgb, hsl(var(--accent)), black 10%);
+  --color-accent-700: color-mix(in srgb, hsl(var(--accent)), black 30%);
+  --color-accent-800: color-mix(in srgb, hsl(var(--accent)), black 50%);
+  --color-accent-900: color-mix(in srgb, hsl(var(--accent)), black 70%);
+  --color-accent-950: color-mix(in srgb, hsl(var(--accent)), black 85%);
   --color-accent-foreground: hsl(var(--accent-foreground));
 
   --color-card: hsl(var(--card));
@@ -711,34 +711,6 @@
   --table-row-hover: 0 0% 98%;
   --table-row-selected: var(--primary);
   --table-border: var(--border);
-
-  /* Fix Tailwind v4 color evaluation with color-mix */
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-success: hsl(var(--success));
-  --color-success-foreground: hsl(var(--success-foreground));
-  --color-warning: hsl(var(--warning));
-  --color-warning-foreground: hsl(var(--warning-foreground));
-  --color-border: hsl(var(--border));
-  --color-border-subtle: hsl(var(--border-subtle));
-  --color-border-strong: hsl(var(--border-strong));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-page-background: hsl(var(--page-background));
 }
 
 /* Dark theme overrides when using class-based theming */
@@ -839,34 +811,6 @@
   --table-row-selected: var(--primary);
   --table-border: var(--border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
-
-  /* Fix Tailwind v4 color evaluation with color-mix */
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-success: hsl(var(--success));
-  --color-success-foreground: hsl(var(--success-foreground));
-  --color-warning: hsl(var(--warning));
-  --color-warning-foreground: hsl(var(--warning-foreground));
-  --color-border: hsl(var(--border));
-  --color-border-subtle: hsl(var(--border-subtle));
-  --color-border-strong: hsl(var(--border-strong));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-page-background: hsl(var(--page-background));
 }
 
 .adminapp {
@@ -1465,7 +1409,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 .adminapp select:-webkit-autofill,
 .adminapp select:-webkit-autofill:hover,
 .adminapp select:-webkit-autofill:focus {
-  -webkit-text-fill-color: var(--color-foreground) !important;
+  -webkit-text-fill-color: hsl(var(--foreground)) !important;
   /* Use a box-shadow inset to effectively "replace" the background color */
   box-shadow: 0 0 0px 1000px white inset !important;
   /* Very long transition delay to prevent the background-color from changing */
