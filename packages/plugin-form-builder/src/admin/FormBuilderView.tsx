@@ -497,7 +497,7 @@ function FormBuilderViewInner({
                 value={activeTab}
                 onValueChange={v => setActiveTab(v as typeof activeTab)}
               >
-                <TabsList className="bg-transparent justify-start gap-0 -mb-px border-b-0">
+                <TabsList className="bg-transparent justify-start gap-0 -mb-px border-b-0 max-w-full overflow-x-auto">
                   {mainTabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}
@@ -508,7 +508,7 @@ function FormBuilderViewInner({
                             ? "hsl(var(--primary))"
                             : "transparent",
                       }}
-                      className="border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       {tab.label}
                       {tab.count !== null && (
