@@ -913,6 +913,9 @@ async function initializeSchemaRegistry(
             fields: fields as { name: string; type: string }[],
             dialect,
             localized: true,
+            // i18n M6: carry `_status` so a Draft/Published localized collection's
+            // DI-registered companion matches loadCompanionSchema (findings M9).
+            status: hasStatus === true,
           });
           if (companion) {
             registry.registerDynamicSchema(
@@ -1023,6 +1026,9 @@ async function registerConfigTablesInResolver(
           fields: fields as { name: string; type: string }[],
           dialect,
           localized: true,
+          // i18n M6: carry `_status` so a Draft/Published localized collection's
+          // DI-registered companion matches loadCompanionSchema (findings M9).
+          status: hasStatus === true,
         });
         if (companion) {
           registry.registerDynamicSchema(

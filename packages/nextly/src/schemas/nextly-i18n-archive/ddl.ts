@@ -51,7 +51,7 @@ export function getI18nArchiveDdl(dialect: Dialect): string[] {
   "locale" TEXT NOT NULL,
   "field" TEXT NOT NULL,
   "value" TEXT,
-  "archived_at" INTEGER NOT NULL DEFAULT 0
+  "archived_at" INTEGER NOT NULL DEFAULT (unixepoch())
 )`,
         `CREATE INDEX IF NOT EXISTS "nextly_i18n_archive_lookup_idx" ON "nextly_i18n_archive" ("collection", "entry_id", "locale")`,
       ];

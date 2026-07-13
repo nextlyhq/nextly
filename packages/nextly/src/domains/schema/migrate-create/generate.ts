@@ -313,6 +313,16 @@ function planCompanionMigrations(
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const c of collections) {
+    // i18n H5 (known limitation): the DISABLE transition (localized `true → false`) is not
+    // auto-migrated here. migrate:create compares the config against the previous committed
+    // snapshot, which — by design — does not record companion `_locales` tables, so a former
+    // companion cannot be reliably detected at this layer. A snapshot-only heuristic would
+    // false-positive on the common "add fields to a non-localized collection" case and block
+    // legitimate migrations, which is worse than the rare disable. Disabling localization
+    // therefore leaves the companion data in place (not restored to main, not archived); the
+    // archive/restore machinery exists (write-migration-file `direction:"disable"` +
+    // buildLocalizationDownSql) and must currently be run manually. Wiring this safely needs the
+    // migration snapshot to carry a per-collection `localized` marker — tracked as follow-up.
     if (c.localized !== true) continue;
     const spec = deriveCompanionSpec({
       slug: c.slug,

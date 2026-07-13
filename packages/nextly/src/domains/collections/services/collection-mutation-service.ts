@@ -44,7 +44,7 @@ import type { RequestContext } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { resolveRequestedLocale } from "../../i18n/resolve-locale";
+import { isValidLocale, resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   validateFields,
   type FieldError,
@@ -188,6 +188,27 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
+  /**
+   * i18n L2: reject an unrecognized write locale with a 400 instead of silently mapping it to
+   * the default locale (which would write the translatable values into the DEFAULT companion
+   * row, potentially overwriting real default content). Returns a 400 result, or null when the
+   * locale is absent/valid or localization is off.
+   */
+  private rejectInvalidWriteLocale(
+    locale: string | undefined
+  ): CollectionServiceResult | null {
+    if (!locale || !this.localization) return null;
+    if (isValidLocale(this.localization, locale)) return null;
+    return {
+      success: false,
+      statusCode: 400,
+      message:
+        `Unknown locale '${locale}'. Configured locales: ` +
+        `${this.localization.locales.map(l => l.code).join(", ")}.`,
+      data: null,
+    };
+  }
+
   /** Build a 400 validation-failure result from field errors. */
   private validationFailure(errors: FieldError[]): CollectionServiceResult {
     return {
@@ -303,13 +324,26 @@ export class CollectionMutationService extends BaseService {
     // i18n M6: per-locale draft/publish. The companion `_status` for the write's locale comes
     // from the write's status value. On create it defaults to 'draft'; on update it changes
     // ONLY when `status` is explicitly in the patch (so editing German content doesn't
-    // un-publish German). The main table keeps its own `status` column unchanged.
+    // un-publish German).
     if (companion.hasStatus) {
       const statusVal = entryData.status;
       if (typeof statusVal === "string") {
         companionData._status = statusVal;
       } else if (isCreate) {
         companionData._status = "draft";
+      }
+
+      // i18n H3: the main table's `status` gates entry-level visibility (the read
+      // path filters rows on it). A per-locale status change for a NON-default
+      // locale must NOT clobber it — otherwise unpublishing e.g. German would
+      // unpublish the whole entry (all locales). Only the default-locale write is
+      // the entry-level status action, so strip `status` from the main payload for
+      // any other locale. `writeLocale` is already resolved/validated above.
+      if (
+        writeLocale !== this.localization.defaultLocale &&
+        Object.prototype.hasOwnProperty.call(entryData, "status")
+      ) {
+        delete entryData.status;
       }
     }
 
@@ -490,6 +524,10 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
+      // i18n L2: reject an unknown write locale before doing anything else.
+      const badLocale = this.rejectInvalidWriteLocale(params.locale);
+      if (badLocale) return badLocale;
+
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       // 1. Check collection-level access FIRST
@@ -1063,12 +1101,21 @@ export class CollectionMutationService extends BaseService {
       const isMysql = this.dialect === "mysql";
       const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
       const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
-      const tableName = getTableName(params.collectionName);
+      // i18n M6: resolve the physical table name via the collection config so a `dbName`
+      // (custom table name) override is honored — `getTableName(slug)` ignores it, targeting
+      // the wrong table and throwing / updating nothing for those collections.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const tableName = this.resolveTableName(collection, params.collectionName);
 
       await this.adapter.transaction(async tx => {
         if (hasMainStatus) {
+          // i18n M7: bump `updated_at` alongside status so caches / revalidation see the
+          // change (a bare status flip left the timestamp stale). CURRENT_TIMESTAMP avoids
+          // dialect-specific Date binding in raw SQL.
           await tx.execute(
-            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
+            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = CURRENT_TIMESTAMP WHERE ${q("id")} = ${ph(2)}`,
             ["published", params.entryId]
           );
         }
@@ -1079,6 +1126,27 @@ export class CollectionMutationService extends BaseService {
           );
         }
       });
+
+      // i18n M7: emit the post-commit "updated" reaction event (D8/D51) so cache
+      // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
+      // reaction failure must not fail the already-committed publish.
+      try {
+        const [updated] = await this.db
+          .select()
+          .from(schema)
+          .where(eq(schema.id, params.entryId))
+          .limit(1);
+        if (updated) {
+          emitCollectionEvent(
+            "updated",
+            params.collectionName,
+            updated as Record<string, unknown>,
+            params.user
+          );
+        }
+      } catch {
+        // Reaction/event emission is non-critical; the publish already committed.
+      }
 
       return {
         success: true,
@@ -1113,6 +1181,10 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
+      // i18n L2: reject an unknown write locale before doing anything else.
+      const badLocale = this.rejectInvalidWriteLocale(params.locale);
+      if (badLocale) return badLocale;
+
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       const schema = await this.fileManager.loadDynamicSchema(

@@ -204,7 +204,12 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     required: Boolean(field.validation?.required),
     unique: Boolean(field.advanced?.unique),
     index: Boolean(field.advanced?.index),
-    localized: Boolean(field.advanced?.localized),
+    // i18n H4: `localized` has a smart per-type default in the backend classifier
+    // (text-like fields localize by default). Coercing an untoggled field to an
+    // explicit `false` defeats that default, so preserve `undefined` — the manifest
+    // passthrough omits undefined and the backend applies the smart default. Only a
+    // deliberate user toggle sends an explicit boolean.
+    localized: field.advanced?.localized,
     defaultValue: field.defaultValue,
   };
 
@@ -367,7 +372,10 @@ export function convertToBuilderField(
     advanced: {
       unique: field.unique || false,
       index: field.index || false,
-      localized: field.localized || false,
+      // i18n H4: preserve `undefined` (don't coerce to false) so a field using the
+      // backend smart default round-trips through edit → save without being pinned
+      // to an explicit `localized: false`.
+      localized: field.localized,
     },
     // Relationship properties
     relationTo: field.relationTo,

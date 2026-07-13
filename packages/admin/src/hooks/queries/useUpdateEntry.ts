@@ -50,6 +50,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   createServerErrorHandler,
   parseServerErrorMessage,
@@ -219,12 +220,22 @@ export function useUpdateEntry<
   fallbackLocale,
 }: UseUpdateEntryOptions<T, TFieldValues>) {
   const queryClient = useQueryClient();
+  const { enabled: localizationEnabled } = useLocalization();
 
-  // i18n M7: the optimistic cache is keyed by locale (matching useEntry), so the update touches
-  // the currently-viewed language's cached entry — not the default-language one.
+  // i18n M4/M7: the optimistic cache is keyed by locale so the update touches the
+  // currently-viewed language's cached entry — not the default-language one. The key MUST
+  // match useEntry's exactly (React Query hashes the object), so it mirrors the same
+  // `translationStatus` and `fallbackLocale` dimensions the entry editor passes to useEntry:
+  // a localized editor requests `translationStatus` and `fallbackLocale: "none"`. Omitting
+  // them (as before) meant the key never matched and the optimistic write / rollback silently
+  // no-oped (findings M4).
   const localeKey = [
     ...entryKeys.detail(collectionSlug, entryId),
-    { locale: locale ?? null, fallbackLocale: fallbackLocale ?? null },
+    {
+      locale: locale ?? null,
+      fallbackLocale: localizationEnabled ? "none" : (fallbackLocale ?? null),
+      translationStatus: localizationEnabled,
+    },
   ] as const;
 
   return useMutation<T, Error, UpdateEntryPayload, UpdateContext<T>>({

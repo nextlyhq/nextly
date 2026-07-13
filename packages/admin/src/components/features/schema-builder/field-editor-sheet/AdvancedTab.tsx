@@ -4,6 +4,7 @@
 // driven by an `isInsideRepeatingAncestor` prop computed at the page
 // level via the helper in lib/builder/is-inside-repeating-ancestor.
 import { Label, Switch } from "@nextlyhq/ui";
+import { defaultLocalizedForType } from "nextly/config";
 
 import type { BuilderField } from "../types";
 
@@ -54,8 +55,11 @@ export function AdvancedTab({
       <SwitchRow
         ariaLabel="Localized"
         label="Localized"
-        help="Store a different value per language. Requires the collection's Internationalization setting and a migration to create the translations table."
-        checked={adv.localized === true}
+        help="Store a different value per language. Text fields localize by default; toggle to override. Requires the collection's Internationalization setting and a migration to create the translations table."
+        // i18n H4: when the author hasn't set this explicitly, reflect the backend
+        // smart default (text-like fields localize by default) so the switch shows
+        // the effective state instead of always reading as off.
+        checked={adv.localized ?? defaultLocalizedForType(field.type)}
         disabled={readOnly}
         onChange={v => setAdv({ localized: v })}
       />

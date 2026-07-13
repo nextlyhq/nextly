@@ -129,7 +129,11 @@ export async function previewDesiredSchema(
       c.tableName,
       c.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
       dialect,
-      { hasStatus: c.status === true }
+      // Forward `localized` so a localized collection's translatable columns are
+      // omitted from the preview's desired snapshot (they live in the companion
+      // `_locales` table); otherwise the diff reports them as missing and the
+      // SchemaChangeDialog tries to re-add them to the main table (findings H2).
+      { hasStatus: c.status === true, localized: c.localized === true }
     )
   );
   const singleTables = Object.values(desired.singles).map(s =>

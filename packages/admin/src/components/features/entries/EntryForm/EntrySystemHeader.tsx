@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import type { FieldConfig } from "nextly/config";
+import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
@@ -27,6 +27,7 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
 import { ShowJSONDialog } from "./ShowJSONDialog";
@@ -158,6 +159,7 @@ export function EntrySystemHeader({
   toolbarSlot,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
+  const entryLocale = useEntryLocale();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
 
@@ -184,6 +186,21 @@ export function EntrySystemHeader({
   const { ref: rhfRef, ...rhfRegister } = form.register(titleName, {
     required: !lockIdentity && titleRequired ? "Title is required" : false,
   });
+
+  // i18n L1: the title input bypasses FieldWrapper, so apply the same per-field RTL rule here —
+  // flip to RTL only when the title is a translatable field AND the active locale is RTL (a
+  // shared/LTR title stays LTR). Uses the same classifier as FieldWrapper for consistency.
+  const titleRtl =
+    entryLocale.rtl &&
+    !!titleField &&
+    isFieldLocalized(
+      {
+        type: (titleField as { type?: string }).type ?? "text",
+        name: titleName,
+        localized: (titleField as { localized?: boolean }).localized,
+      },
+      entryLocale.collectionLocalized
+    );
 
   const showEditMenuItems = mode === "edit" && entry?.id;
 
@@ -215,6 +232,8 @@ export function EntrySystemHeader({
           aria-label={titleLabel}
           disabled={isSubmitting}
           readOnly={lockIdentity}
+          // i18n L1: RTL for a translatable title edited in an RTL language.
+          {...(titleRtl ? { dir: "rtl" as const } : {})}
           className={cn(
             "w-full text-[19px] font-semibold tracking-tight text-foreground",
             "bg-transparent outline-none placeholder:text-muted-foreground/50",

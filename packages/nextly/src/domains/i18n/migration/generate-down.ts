@@ -1,4 +1,4 @@
-import { ddlType, q, castText } from "./ddl-types";
+import { castText, ddlType, lit, q } from "./ddl-types";
 import type { CompanionMigrationSpec } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
@@ -37,7 +37,7 @@ export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
     stmts.push(
       `UPDATE ${main} SET ${col} = (SELECT ${col} FROM ${comp} ` +
         `WHERE ${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
-        `AND ${comp}.${q("_locale", dialect)} = '${defaultLocale}')`
+        `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
     );
   }
 
@@ -47,8 +47,8 @@ export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
     stmts.push(
       `INSERT INTO ${q(ARCHIVE, dialect)} ` +
         `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-        `SELECT '${collection}', ${q("_parent", dialect)}, ${q("_locale", dialect)}, '${c.name}', ${castText(q(c.name, dialect), dialect)} ` +
-        `FROM ${comp} WHERE ${q("_locale", dialect)} <> '${defaultLocale}'`
+        `SELECT ${lit(collection)}, ${q("_parent", dialect)}, ${q("_locale", dialect)}, ${lit(c.name)}, ${castText(q(c.name, dialect), dialect)} ` +
+        `FROM ${comp} WHERE ${q("_locale", dialect)} <> ${lit(defaultLocale)}`
     );
   }
 

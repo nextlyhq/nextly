@@ -187,4 +187,31 @@ describe("loadDynamicTables — fault tolerance", () => {
     // failure is swallowed and doesn't block the rest.
     expect(register).toHaveBeenCalledTimes(2);
   });
+
+  // M8: an existing DB that predates the i18n `localized` column must not lose
+  // all its dynamic tables. The select falls back to one without `localized`
+  // rather than letting the missing column throw into the outer catch.
+  it("falls back to a select without `localized` on a pre-i18n DB", async () => {
+    const calls: string[] = [];
+    const adapter = {
+      executeQuery: vi.fn(async (sql: string) => {
+        calls.push(sql);
+        if (/,\s*localized\s+FROM/.test(sql)) {
+          throw new Error('column "localized" does not exist');
+        }
+        return [{ table_name: "dc_pages", fields: "[]", slug: "pages", status: 1 }];
+      }),
+    } as unknown as Parameters<typeof loadDynamicTables>[0];
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(adapter, "dynamic_collections", register);
+
+    // First (full) select threw; the fallback (no `localized`) succeeded and the
+    // row still registered — with localized defaulting to false.
+    expect(calls[0]).toContain("localized");
+    expect(calls[1]).toBe(
+      "SELECT table_name, fields, slug, status FROM dynamic_collections"
+    );
+    expect(register).toHaveBeenCalledWith("dc_pages", [], true, false);
+  });
 });

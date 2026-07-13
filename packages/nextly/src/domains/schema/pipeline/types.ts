@@ -30,6 +30,13 @@ export interface DesiredCollection {
    * pipeline knows to add it on first enable and drop it on disable.
    */
   status?: boolean;
+  /**
+   * Whether the collection is localized (i18n). When true, translatable fields
+   * are omitted from the main table's desired snapshot because they live in the
+   * companion `_locales` table. Without this the push/HMR/preview diff re-adds
+   * the localized columns to the main table (findings H2).
+   */
+  localized?: boolean;
 }
 
 export interface DesiredSingle {

@@ -125,4 +125,36 @@ describe("publishAllLocales (M7)", () => {
     });
     expect(res.success).toBe(false);
   });
+
+  // M7: publishing bumps the main updated_at so caches / revalidation see the change.
+  it("bumps the main updated_at", async () => {
+    const t = await boot();
+    const created = (await t.nextly.create({
+      collection: "pages",
+      data: { title: "A" },
+    })) as { item: { id: string } };
+    const id = created.item.id;
+    await seedCompanion(t, [
+      { parent: id, locale: "en", status: "draft", heading: "A-en" },
+    ]);
+
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<{ updated_at: unknown }[]>;
+    };
+    // Force an old timestamp so the bump is observable.
+    await adapter.executeQuery(
+      `UPDATE "dc_pages" SET "updated_at" = '2000-01-01 00:00:00' WHERE "id" = '${id}'`
+    );
+
+    await handlerOf(t).publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await adapter.executeQuery(
+      `SELECT "updated_at" FROM "dc_pages" WHERE "id" = '${id}'`
+    );
+    expect(String(rows[0]?.updated_at)).not.toContain("2000-01-01");
+  });
 });

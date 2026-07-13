@@ -515,8 +515,11 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               // Thread the status flag so the diff includes the status system
-              // column when Draft/Published is enabled.
-              { hasStatus: c.status === true }
+              // column when Draft/Published is enabled. Thread `localized` so a
+              // localized collection's translatable columns are omitted from the
+              // main table's desired snapshot (they live in the companion
+              // `_locales` table) rather than being re-added by the diff (H2).
+              { hasStatus: c.status === true, localized: c.localized === true }
             )
           ),
           ...Object.values(desired.singles).map(s =>

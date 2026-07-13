@@ -47,7 +47,12 @@ function handlerOf(t: TestNextly) {
     createEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
-    ) => Promise<{ success: boolean; message?: string; item?: { id: string } }>;
+    ) => Promise<{
+      success: boolean;
+      statusCode?: number;
+      message?: string;
+      item?: { id: string };
+    }>;
     updateEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
@@ -57,6 +62,20 @@ function handlerOf(t: TestNextly) {
     }>;
   };
 }
+
+describe("createEntry — write locale validation (L2)", () => {
+  it("rejects an unknown write locale with a 400 instead of writing to the default", async () => {
+    const t = await boot();
+    await createCompanionTable(t);
+    const res = await handlerOf(t).createEntry(
+      { collectionName: "pages", locale: "xx", overrideAccess: true },
+      { title: "T", heading: "Hallo" }
+    );
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(400);
+    expect(res.message).toMatch(/unknown locale 'xx'/i);
+  });
+});
 
 describe("createEntry — localized write routing (M5a)", () => {
   it("routes the localized value to the companion row for the write locale", async () => {

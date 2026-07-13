@@ -27,8 +27,21 @@ describe("localized flag serialization", () => {
     expect(def.localized).toBe(true);
   });
 
-  it("convertToFieldDefinition defaults localized to false when unset", () => {
+  // H4: an untoggled field must NOT serialize an explicit `localized: false` —
+  // that would override the backend's smart per-type default (text-like fields
+  // localize by default). It must be undefined so the default applies, and the
+  // manifest passthrough (which drops undefined) omits it entirely.
+  it("convertToFieldDefinition leaves localized undefined when the author didn't set it", () => {
     const def = convertToFieldDefinition(field());
+    expect(def.localized).toBeUndefined();
+    const manifest = mapBuilderFieldToManifest(
+      def as unknown as Parameters<typeof mapBuilderFieldToManifest>[0]
+    );
+    expect(manifest.localized).toBeUndefined();
+  });
+
+  it("convertToFieldDefinition keeps an explicit localized:false (author disabled it)", () => {
+    const def = convertToFieldDefinition(field({ advanced: { localized: false } }));
     expect(def.localized).toBe(false);
   });
 

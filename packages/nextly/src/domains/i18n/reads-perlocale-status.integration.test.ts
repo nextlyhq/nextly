@@ -40,6 +40,9 @@ function handlerOf(t: TestNextly) {
     getEntry: (p: Record<string, unknown>) => Promise<{
       data: Record<string, unknown> | null;
     }>;
+    listEntries: (p: Record<string, unknown>) => Promise<{
+      data?: { docs?: Record<string, unknown>[]; totalDocs?: number };
+    }>;
   };
 }
 
@@ -124,5 +127,71 @@ describe("per-locale draft/publish read filter (M6c)", () => {
       overrideAccess: true,
     });
     expect(res.data?.heading).toBe("Entwurf"); // now published → shown
+  });
+});
+
+describe("per-locale draft filter on locale=all / where / search (M1, M2)", () => {
+  // M1: a public locale=all read must project the de draft as null, not leak it.
+  it("public locale=all read projects the de draft as null", async () => {
+    const { t, id } = await setup();
+    const res = await handlerOf(t).getEntry({
+      collectionName: "pages",
+      entryId: id,
+      locale: "all",
+      status: "published",
+      overrideAccess: true,
+    });
+    const heading = res.data?.heading as Record<string, unknown>;
+    expect(heading.en).toBe("Hello");
+    expect(heading.de).toBeNull(); // draft filtered out, not "Entwurf"
+  });
+
+  it("admin locale=all read includes the de draft", async () => {
+    const { t, id } = await setup();
+    const res = await handlerOf(t).getEntry({
+      collectionName: "pages",
+      entryId: id,
+      locale: "all",
+      status: "all",
+      overrideAccess: true,
+    });
+    const heading = res.data?.heading as Record<string, unknown>;
+    expect(heading.de).toBe("Entwurf");
+  });
+
+  // M2: a public where-filter on the de draft value must not match the entry.
+  it("public where on a localized field does not match a draft translation", async () => {
+    const { t } = await setup();
+    const draftMatch = await handlerOf(t).listEntries({
+      collectionName: "pages",
+      locale: "de",
+      status: "published",
+      where: { heading: { equals: "Entwurf" } },
+      overrideAccess: true,
+    });
+    expect(draftMatch.data?.docs?.length ?? 0).toBe(0);
+
+    // Admin (status=all) DOES match the draft.
+    const adminMatch = await handlerOf(t).listEntries({
+      collectionName: "pages",
+      locale: "de",
+      status: "all",
+      where: { heading: { equals: "Entwurf" } },
+      overrideAccess: true,
+    });
+    expect(adminMatch.data?.docs?.length).toBe(1);
+  });
+
+  // M2: a public search must not surface an entry via its draft translation text.
+  it("public search does not surface an entry via a draft translation", async () => {
+    const { t } = await setup();
+    const res = await handlerOf(t).listEntries({
+      collectionName: "pages",
+      locale: "de",
+      status: "published",
+      search: "Entwurf",
+      overrideAccess: true,
+    });
+    expect(res.data?.docs?.length ?? 0).toBe(0);
   });
 });

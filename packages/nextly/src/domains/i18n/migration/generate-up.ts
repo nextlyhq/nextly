@@ -1,4 +1,4 @@
-import { ddlType, q } from "./ddl-types";
+import { ddlType, lit, q } from "./ddl-types";
 import type { CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
@@ -59,7 +59,7 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
   const seed =
     `INSERT INTO ${q(companionTable, dialect)} ` +
     `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}, ${colNames.join(", ")}) ` +
-    `SELECT ${q("id", dialect)}, '${defaultLocale}'${statusSelectCol}, ${colNames.join(", ")} ` +
+    `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}, ${colNames.join(", ")} ` +
     `FROM ${q(mainTable, dialect)}`;
 
   const drops = columns.map(
