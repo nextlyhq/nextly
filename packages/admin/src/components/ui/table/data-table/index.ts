@@ -23,6 +23,5 @@ export type {
   CellRendererDefinition,
   RowAction,
   BulkAction,
-  RowClick,
   DataTableSlots,
 } from "./types";

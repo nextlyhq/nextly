@@ -53,30 +53,30 @@ describe("DataTableView", () => {
     expect(screen.getAllByText("Nothing here").length).toBeGreaterThan(0);
   });
 
-  it("renders the primary column as a navigation link when rowClick yields an href", () => {
+  it("renders the primary column as a navigation link when rowHref yields an href", () => {
     render(
       <DataTableView
         columns={columns}
         rows={rows}
-        rowClick={row => `/admin/users/${row.id}`}
+        rowHref={row => `/admin/users/${row.id}`}
       />
     );
     const link = table().getByRole("link", { name: "Ada" });
     expect(link).toHaveAttribute("href", "/admin/users/1");
   });
 
-  it("invokes a void rowClick as a side-effect instead of navigating", async () => {
+  it("runs onRowClick as a side-effect instead of navigating", async () => {
     const openDialog = vi.fn();
     const user = userEvent.setup();
     render(
       <DataTableView
         columns={columns}
         rows={rows}
-        rowClick={row => {
-          openDialog(row.id);
-        }}
+        onRowClick={row => openDialog(row.id)}
       />
     );
+    // The handler must not fire during render, only on click.
+    expect(openDialog).not.toHaveBeenCalled();
     await user.click(table().getByText("Ada"));
     expect(openDialog).toHaveBeenCalledWith("1");
     expect(navigateTo).not.toHaveBeenCalled();
@@ -117,8 +117,7 @@ describe("DataTableView", () => {
     expect(onToggleAll).toHaveBeenCalledWith(rows, false);
   });
 
-  it("does not trigger rowClick when the row checkbox is clicked (stopPropagation)", async () => {
-    const rowClick = vi.fn(() => "/x");
+  it("does not navigate when the row checkbox is clicked (stopPropagation)", async () => {
     const onToggle = vi.fn();
     const user = userEvent.setup();
     const selection: DataTableSelection<Row> = {
@@ -130,7 +129,7 @@ describe("DataTableView", () => {
       <DataTableView
         columns={columns}
         rows={rows}
-        rowClick={rowClick}
+        rowHref={() => "/x"}
         selection={selection}
       />
     );

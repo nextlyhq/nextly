@@ -403,7 +403,7 @@ export default function RoleTable() {
         columns={columns}
         rows={roles}
         loading={isLoading}
-        rowClick={role =>
+        rowHref={role =>
           buildRoute(ROUTES.SECURITY_ROLES_EDIT, { id: role.id })
         }
         primaryColumn="roleName"

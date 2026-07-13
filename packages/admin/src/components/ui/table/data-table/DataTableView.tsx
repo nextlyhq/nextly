@@ -46,7 +46,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
 import { resolveCellRenderer } from "./cell-registry";
-import type { CellContext, NextlyColumn, RowAction, RowClick } from "./types";
+import type { CellContext, NextlyColumn, RowAction } from "./types";
 
 /** Controlled selection contract. When supplied, a checkbox column is shown. */
 export interface DataTableSelection<
@@ -66,9 +66,18 @@ export interface DataTableViewProps<Row extends object> {
   columns: NextlyColumn<Row>[];
   rows: Row[];
   getRowId?: (row: Row) => string;
-  /** Row-click behavior: navigate (string), dialog/side-effect (void), select, or none. */
-  rowClick?: RowClick<Row>;
-  /** Which column renders as the primary link when `rowClick` yields an href. */
+  /**
+   * Pure resolver for a row's navigation href. When it returns a string, the
+   * whole row navigates there and the primary column renders as a link. Must be
+   * side-effect free (it runs during render).
+   */
+  rowHref?: (row: Row) => string | undefined;
+  /**
+   * Side-effect handler for a row click (e.g. open a dialog). Runs only on click,
+   * and only when `rowHref` did not yield an href for that row.
+   */
+  onRowClick?: (row: Row) => void;
+  /** Which column renders as the primary link when `rowHref` yields an href. */
   primaryColumn?: string;
   /** Controlled selection; omit to disable the checkbox column. */
   selection?: DataTableSelection<Row>;
@@ -91,7 +100,8 @@ export function DataTableView<Row extends object>({
   columns,
   rows,
   getRowId = DEFAULT_GET_ROW_ID,
-  rowClick = false,
+  rowHref,
+  onRowClick,
   primaryColumn,
   selection,
   rowActions,
@@ -172,20 +182,13 @@ export function DataTableView<Row extends object>({
     return content;
   };
 
-  // Per-row navigation: an href (navigate), a void action (dialog), or none.
+  // Per-row navigation: a pure href (navigate + anchor) or a click side-effect.
+  // rowHref runs during render, so it must stay side-effect free; onRowClick only
+  // ever runs on an actual click.
   const resolveRow = (row: Row): { href?: string; onClick?: () => void } => {
-    if (rowClick === false || rowClick === "edit") return {};
-    if (rowClick === "select") {
-      if (!selection) return {};
-      const selectable = selection.isSelectable?.(row) ?? true;
-      return selectable ? { onClick: () => selection.onToggle(row) } : {};
-    }
-    if (typeof rowClick === "function") {
-      const result = rowClick(row);
-      if (typeof result === "string") return { href: result };
-      // returned void -> re-invoke on click (side-effect, e.g. open a dialog).
-      return { onClick: () => rowClick(row) };
-    }
+    const href = rowHref?.(row);
+    if (href) return { href };
+    if (onRowClick) return { onClick: () => onRowClick(row) };
     return {};
   };
 

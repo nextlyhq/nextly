@@ -129,21 +129,6 @@ export interface BulkAction<Row extends object = Record<string, unknown>> {
   onSelect: (selectedRows: Row[]) => void;
 }
 
-/**
- * Row-click behavior union.
- * - "edit"    navigate to the record's edit route (resolved by the page).
- * - "select"  toggle row selection.
- * - false     no row click.
- * - function  RETURN an href string to navigate, OR return void and perform a
- *             side-effect (e.g. open the media popup). This one variant is why
- *             media rows can open a dialog instead of routing.
- */
-export type RowClick<Row extends object = Record<string, unknown>> =
-  | "edit"
-  | "select"
-  | false
-  | ((row: Row) => string | void);
-
 /** List-view injection slots for non-column UI. */
 export interface DataTableSlots {
   beforeTable?: React.ReactNode;

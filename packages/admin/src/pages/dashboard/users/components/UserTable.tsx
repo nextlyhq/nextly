@@ -477,7 +477,7 @@ export default function UserTable() {
           columns={columns}
           rows={filteredData}
           loading={showLoadingSkeleton}
-          rowClick={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
           primaryColumn="name"
           selection={selection}
           rowActions={rowActions}

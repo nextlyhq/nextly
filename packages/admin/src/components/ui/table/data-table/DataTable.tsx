@@ -26,7 +26,6 @@ import type {
   DataTableSlots,
   NextlyColumn,
   RowAction,
-  RowClick,
 } from "./types";
 
 export interface DataTableProps<Row extends object> {
@@ -37,9 +36,11 @@ export interface DataTableProps<Row extends object> {
   data?: Row[];
   /** Stable row id (defaults to `row.id`). */
   getRowId?: (row: Row) => string;
-  /** Row-click behavior: navigate, open a dialog (return void), select, or none. */
-  rowClick?: RowClick<Row>;
-  /** Which column renders as the primary link when `rowClick` yields an href. */
+  /** Pure resolver for a row's navigation href (whole-row nav + primary link). */
+  rowHref?: (row: Row) => string | undefined;
+  /** Side-effect handler for a row click (e.g. open a dialog). */
+  onRowClick?: (row: Row) => void;
+  /** Which column renders as the primary link when `rowHref` yields an href. */
   primaryColumn?: string;
   /** Enable row selection checkboxes + bulk-action bar. */
   enableSelection?: boolean;
@@ -102,7 +103,8 @@ export function DataTable<Row extends object>({
   fetcher,
   data,
   getRowId = DEFAULT_GET_ROW_ID,
-  rowClick = false,
+  rowHref,
+  onRowClick,
   primaryColumn,
   enableSelection = false,
   rowActions,
@@ -230,7 +232,8 @@ export function DataTable<Row extends object>({
         columns={columns}
         rows={rows}
         getRowId={getRowId}
-        rowClick={rowClick}
+        rowHref={rowHref}
+        onRowClick={onRowClick}
         primaryColumn={primaryColumn}
         selection={selection}
         rowActions={rowActions}
