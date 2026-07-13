@@ -166,6 +166,8 @@
 
   /* shadcn/ui semantic colors - reference CSS variables defined below */
   --color-border: hsl(var(--border));
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --color-background: hsl(var(--background));
@@ -659,9 +661,14 @@
   --warning-foreground: 222.2 47.4% 11.2%;
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
-  /* Element colors */
-  --border: 0 0% 0% / 0.05;
-  --input: 240 5% 84%; /* zinc-300, visible field border in light mode */
+  /* Element colors — 3-tier translucent border scale (monochrome).
+   * Was a single --border at 5% black (~1.05:1, effectively invisible).
+   * subtle = decorative dividers/cards; default = tables/groups;
+   * strong = interactive control edges (inputs/checkbox) for prominence. */
+  --border-subtle: 0 0% 0% / 0.08;
+  --border: 0 0% 0% / 0.13;
+  --border-strong: 0 0% 0% / 0.3;
+  --input: 240 5% 68%; /* zinc-400: stronger visible field border (was zinc-300, too faint) */
   --ring: var(--primary);
 
   /* Chart colors for data visualization */
@@ -727,6 +734,8 @@
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-border: hsl(var(--border));
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --color-page-background: hsl(var(--page-background));
@@ -743,8 +752,9 @@
   /* slate-50 */
 
   /* Component colors */
-  --card: 222 51% 4%;
-  /* slate-900 per user request (matches deep background) */
+  --card: 222 33% 9%;
+  /* raised one tonal step above --background (222 47% 4%) so panels/cards
+   * read as distinct surfaces in dark mode instead of merging into the page */
   --card-foreground: 210 40% 98%;
   /* slate-50 */
   --popover: 215.4 16.3% 25.9%;
@@ -786,10 +796,13 @@
   --warning-foreground: 222.2 47.4% 11.2%;
   /* slate-900 */
 
-  /* Element colors */
-  --border: 215.4 16.3% 12%;
-  /* subtle slate-900 */
-  --input: 240 4% 26%; /* zinc-700, visible field border in dark mode */
+  /* Element colors — 3-tier translucent border scale (white-alpha for dark).
+   * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
+   * on the deep background without glowing. Was ~1.2:1 (too faint). */
+  --border-subtle: 0 0% 100% / 0.08;
+  --border: 0 0% 100% / 0.13;
+  --border-strong: 0 0% 100% / 0.34;
+  --input: 240 4% 40%; /* stronger visible field border (was zinc-700, too faint) */
   --ring: var(--primary);
 
   /* Chart colors for data visualization (same as light mode) */
@@ -824,8 +837,8 @@
   --table-row-hover: 217.2 32.6% 17.5%;
   /* slate-800 */
   --table-row-selected: var(--primary);
-  --table-border: 215.4 16.3% 12%;
-  /* subtle slate-900 */
+  --table-border: var(--border);
+  /* inherit the retuned white-alpha border (was a fixed faint slate) */
 
   /* Fix Tailwind v4 color evaluation with color-mix */
   --color-background: hsl(var(--background));
@@ -849,6 +862,8 @@
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-border: hsl(var(--border));
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --color-page-background: hsl(var(--page-background));
