@@ -11,7 +11,10 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { ddlType, q } from "../../i18n/migration/ddl-types";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 
 import {
@@ -242,6 +245,62 @@ export class DynamicCollectionService extends BaseService {
     return `${migrationSQL}\n\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
+  /**
+   * i18n: SQL to evolve the companion `<table>_locales` when a localized collection's
+   * translatable fields change on update. Creates the companion on the first localized
+   * field (it isn't created for a fields-less localized collection), otherwise ADDs
+   * newly-translatable columns and DROPs removed ones. Returns "" when there is nothing
+   * to do (no localized fields yet and none added).
+   */
+  private async buildCompanionUpdateSQL(
+    slug: string,
+    tableName: string,
+    oldLocalized: FieldDefinition[],
+    newLocalized: FieldDefinition[],
+    status: boolean
+  ): Promise<string> {
+    const companionTable = `${tableName}_locales`;
+    const dialect = this.adapter.dialect;
+    const exists = await this.adapter.tableExists(companionTable);
+
+    if (!exists) {
+      const spec = deriveCompanionSpec({
+        slug,
+        dbName: tableName,
+        fields: newLocalized,
+        dialect,
+        defaultLocale: "en", // unused for create-only (no seed)
+        collectionLocalized: true,
+        status,
+      });
+      return spec ? buildCompanionCreateOnlySql(spec) : "";
+    }
+
+    // Companion already exists — diff the localized columns and ADD/DROP.
+    const oldNames = new Set(oldLocalized.map(f => f.name));
+    const newNames = new Set(newLocalized.map(f => f.name));
+    const stmts: string[] = [];
+    for (const f of newLocalized) {
+      if (oldNames.has(f.name)) continue;
+      const col = fieldToLocalizedColumnSpec(f, dialect);
+      if (col) {
+        stmts.push(
+          `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)};`
+        );
+      }
+    }
+    for (const f of oldLocalized) {
+      if (newNames.has(f.name)) continue;
+      const col = fieldToLocalizedColumnSpec(f, dialect);
+      if (col) {
+        stmts.push(
+          `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)};`
+        );
+      }
+    }
+    return stmts.join("\n");
+  }
+
   private generateSchemaHash(fields: FieldDefinition[]): string {
     const fieldsJson = JSON.stringify(fields);
     return createHash("sha256").update(fieldsJson).digest("hex");
@@ -353,12 +412,54 @@ export class DynamicCollectionService extends BaseService {
       const wasStatus = (collection as { status?: boolean }).status === true;
       const hasStatus =
         updates.status !== undefined ? updates.status === true : wasStatus;
-      migrationSQL = this.schemaService.generateAlterTableMigration(
-        collection.tableName,
-        oldUserFields,
-        userDefinedFields,
-        { wasStatus, hasStatus }
-      );
+
+      const isLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      if (isLocalized) {
+        // i18n: a localized collection stores translatable fields in the companion
+        // `_locales` table. The main ALTER must only see SHARED fields; the
+        // translatable field changes are applied to the companion (created on first
+        // use). Without this, fields added through the builder land on the main table
+        // and every language shares one value.
+        const oldLocalizedNames = new Set(
+          resolveLocalizedFieldNames(oldUserFields, true)
+        );
+        const newLocalizedNames = new Set(
+          resolveLocalizedFieldNames(userDefinedFields, true)
+        );
+        const oldShared = oldUserFields.filter(f => !oldLocalizedNames.has(f.name));
+        const newShared = userDefinedFields.filter(
+          f => !newLocalizedNames.has(f.name)
+        );
+        const oldLocalized = oldUserFields.filter(f => oldLocalizedNames.has(f.name));
+        const newLocalized = userDefinedFields.filter(f =>
+          newLocalizedNames.has(f.name)
+        );
+
+        const mainSQL = this.schemaService.generateAlterTableMigration(
+          collection.tableName,
+          oldShared,
+          newShared,
+          { wasStatus, hasStatus }
+        );
+        const companionSQL = await this.buildCompanionUpdateSQL(
+          collectionName,
+          collection.tableName,
+          oldLocalized,
+          newLocalized,
+          hasStatus
+        );
+        migrationSQL = [mainSQL, companionSQL]
+          .filter(sql => sql && sql.trim())
+          .join("\n\n");
+      } else {
+        migrationSQL = this.schemaService.generateAlterTableMigration(
+          collection.tableName,
+          oldUserFields,
+          userDefinedFields,
+          { wasStatus, hasStatus }
+        );
+      }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
       metadataUpdates.fields = userDefinedFields;

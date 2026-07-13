@@ -34,6 +34,10 @@ async function boot(): Promise<TestNextly> {
 function handlerOf(t: TestNextly) {
   return t.getService("collectionsHandler") as unknown as {
     createCollection: (data: Record<string, unknown>) => Promise<unknown>;
+    updateCollection: (
+      params: { collectionName: string },
+      body: Record<string, unknown>
+    ) => Promise<unknown>;
   };
 }
 
@@ -91,5 +95,47 @@ describe("UI-created localized collection (create path)", () => {
       `SELECT localized FROM dynamic_collections WHERE slug='articles'`
     );
     expect(rows[0]?.localized === 1 || rows[0]?.localized === true).toBe(true);
+  });
+
+  // The real builder flow: the wizard creates the collection with NO fields (so no
+  // companion yet), then fields are added via the update path. Adding a translatable
+  // field must create the companion and route the column there (not to main).
+  it("routes fields added AFTER create (update path) to the companion", async () => {
+    const t = await boot();
+    // Wizard create — empty, localized. No companion yet (no translatable fields).
+    await handlerOf(t).createCollection({
+      name: "notes",
+      label: "Note",
+      status: true,
+      localized: true,
+      fields: [],
+    });
+    expect(await tableExists(t, "dc_notes_locales")).toBe(false);
+
+    // Builder canvas save — add a translatable text field.
+    await handlerOf(t).updateCollection(
+      { collectionName: "notes" },
+      { fields: [{ name: "body", type: "text" }] }
+    );
+
+    // Companion now exists with the field; the main table does NOT carry it.
+    expect(await tableExists(t, "dc_notes_locales")).toBe(true);
+    expect(await columns(t, "dc_notes_locales")).toContain("body");
+    expect(await columns(t, "dc_notes")).not.toContain("body");
+
+    // Add a second translatable field — ALTERs the existing companion.
+    await handlerOf(t).updateCollection(
+      { collectionName: "notes" },
+      {
+        fields: [
+          { name: "body", type: "text" },
+          { name: "summary", type: "textarea" },
+        ],
+      }
+    );
+    const compCols = await columns(t, "dc_notes_locales");
+    expect(compCols).toContain("body");
+    expect(compCols).toContain("summary");
+    expect(await columns(t, "dc_notes")).not.toContain("summary");
   });
 });

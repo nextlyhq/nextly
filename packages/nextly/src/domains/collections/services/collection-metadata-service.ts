@@ -687,7 +687,15 @@ export class CollectionMetadataService extends BaseService {
                 await this.registerRuntimeSchema(
                   existingCollection.tableName,
                   body.fields,
-                  { hasStatus }
+                  {
+                    hasStatus,
+                    // i18n: re-register the main table without translatable columns and
+                    // (re)register the companion after the update, so the current process
+                    // resolves them correctly without a restart.
+                    localized:
+                      (existingCollection as { localized?: boolean })
+                        .localized === true,
+                  }
                 );
               }
             } else {
