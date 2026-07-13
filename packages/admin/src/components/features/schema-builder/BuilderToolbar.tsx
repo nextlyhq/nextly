@@ -1,14 +1,12 @@
-// Why: simplified toolbar per feedback Section 2.
-// - Dropped source badge (CollectionSourceBadge) -- code-first awareness
-//   moves to a tooltip on the disabled Save Schema button instead of a
-//   visible chip.
-// - Dropped the icon tile (the first-letter square next to the name).
-// - Dropped the Hooks button
-// - Dropped the unsaved-count badge entirely The
-//   Save Schema button's enabled state is the only unsaved signal now.
-import { Button } from "@nextlyhq/ui";
+// Simplified toolbar: no icon tile, no Hooks button, no unsaved-count badge
+// (the Save button's enabled state is the only unsaved signal).
+//
+// Code-first entities show a "Read-only" badge next to the name. Their Save
+// stays disabled, but Settings stays enabled so the config can be inspected
+// read-only.
+import { Badge, Button } from "@nextlyhq/ui";
 
-import { Save, Settings } from "@admin/components/icons";
+import { Lock, Save, Settings } from "@admin/components/icons";
 
 import type { BuilderConfig } from "./builder-config";
 
@@ -39,13 +37,13 @@ export function BuilderToolbar({
   onSave,
 }: Props) {
   const saveDisabled = unsavedCount === 0 || locked;
-  const lockedTitle = locked
-    ? "This collection is managed in code. Edit fields by updating the config file."
+  const lockedSaveTitle = locked
+    ? `This ${config.kind} is managed in code. Update its definition in code to make changes.`
     : undefined;
 
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-border sticky top-0 z-30 bg-background">
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
         <div className="min-w-0">
           <div className="text-xs text-muted-foreground truncate">
             {KIND_BREADCRUMB[config.kind]} /
@@ -54,25 +52,29 @@ export function BuilderToolbar({
             {name}
           </div>
         </div>
-        {/* Why: unsaved-count badge fully removed
-            Save Schema button enable state is the only signal. */}
+        {locked && (
+          <Badge variant="outline" className="gap-1 shrink-0">
+            <Lock className="h-3 w-3" />
+            Read-only
+          </Badge>
+        )}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        {/* Settings stays enabled when locked so the config can be viewed
+            read-only; only Save is gated. */}
         <Button
           variant="outline"
           size="icon-sm"
-          disabled={locked}
-          title={lockedTitle}
           onClick={onOpenSettings}
-          aria-label="Settings"
+          aria-label={locked ? "View settings" : "Settings"}
         >
           <Settings className="h-4 w-4" />
         </Button>
         <Button
           size="sm"
           disabled={saveDisabled}
-          title={lockedTitle}
+          title={lockedSaveTitle}
           onClick={onSave}
         >
           <Save className="h-4 w-4" />

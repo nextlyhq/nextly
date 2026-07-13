@@ -15,7 +15,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Pencil, Trash2, List, FileCode, Table as Filter } from "lucide-react";
+import {
+  Eye,
+  Pencil,
+  Trash2,
+  List,
+  FileCode,
+  Table as Filter,
+} from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -31,8 +38,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import type { RouteValue } from "@admin/constants/routes";
-import { ROUTES, withQuery, buildRoute } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
   useCollections,
@@ -51,16 +57,6 @@ import type {
 
 import { CollectionsEmptyState } from "./CollectionsEmptyState";
 import { CollectionTableSkeleton } from "./CollectionTableSkeleton";
-
-// Navigate while carrying query params (used for code-first collections).
-const navigateToWithQuery = (
-  route: RouteValue,
-  query: Record<string, string | number | boolean | undefined>
-) => {
-  const routeWithQuery = withQuery(route, query);
-  window.history.pushState(null, "", routeWithQuery);
-  window.dispatchEvent(new Event("locationchange"));
-};
 
 /** Source badge label + icon. */
 function getSourceBadge(source?: CollectionSource): {
@@ -191,16 +187,12 @@ export default function CollectionTable() {
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
+  // Code-first (locked) collections open the same builder route; the builder
+  // renders read-only when the loaded collection is locked.
   const handleEdit = useCallback((collection: ApiCollection) => {
-    if (collection.source === "ui" && !collection.locked) {
-      navigateTo(
-        buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: collection.name })
-      );
-    } else {
-      navigateToWithQuery(ROUTES.BUILDER_COLLECTIONS_EDIT, {
-        name: collection.name,
-      });
-    }
+    navigateTo(
+      buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: collection.name })
+    );
   }, []);
 
   const handleDelete = useCallback((collection: ApiCollection) => {
@@ -434,9 +426,12 @@ export default function CollectionTable() {
     (collection: ApiCollection): RowAction<ApiCollection>[] => [
       {
         id: "edit",
-        label: "Edit",
-        icon: <Pencil className="h-4 w-4" />,
-        isDisabled: () => Boolean(collection.locked),
+        label: collection.locked ? "View" : "Edit",
+        icon: collection.locked ? (
+          <Eye className="h-4 w-4" />
+        ) : (
+          <Pencil className="h-4 w-4" />
+        ),
         onSelect: () => handleEdit(collection),
       },
       {
@@ -635,10 +630,7 @@ export default function CollectionTable() {
           <DataTableView<ApiCollection>
             columns={columns}
             rows={filteredData}
-            onRowClick={collection => {
-              // Locked collections are read-only from the UI.
-              if (!collection.locked) handleEdit(collection);
-            }}
+            onRowClick={collection => handleEdit(collection)}
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}

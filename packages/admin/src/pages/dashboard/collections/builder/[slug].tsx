@@ -31,6 +31,7 @@ import { z } from "zod";
 
 import {
   BuilderFieldList,
+  BuilderReadOnlyNotice,
   BuilderSettingsModal,
   BuilderToolbar,
   FieldEditorSheet,
@@ -597,6 +598,12 @@ export default function CollectionBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        {isLocked && (
+          <BuilderReadOnlyNotice
+            kind="collection"
+            configPath={collection?.configPath}
+          />
+        )}
         <SchemaBuilderSlots
           fields={builder.fields}
           setFields={builder.setFields}
@@ -635,13 +642,14 @@ export default function CollectionBuilderEditPage({
         </DndContext>
       </PageContainer>
 
-      {/* Settings modal — opens for edit (mode="edit") only. */}
+      {/* Settings modal — read-only for code-first collections. */}
       {active.kind === "settings" && (
         <BuilderSettingsModal
           open
           mode="edit"
           config={COLLECTION_BUILDER_CONFIG}
           initialValues={settings}
+          readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onSubmit={next => {
             setSettings(next);

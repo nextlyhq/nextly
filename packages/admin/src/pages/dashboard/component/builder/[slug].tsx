@@ -26,6 +26,7 @@ import { z } from "zod";
 
 import {
   BuilderFieldList,
+  BuilderReadOnlyNotice,
   BuilderSettingsModal,
   BuilderToolbar,
   FieldEditorSheet,
@@ -459,6 +460,12 @@ export default function ComponentBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        {isLocked && (
+          <BuilderReadOnlyNotice
+            kind="component"
+            configPath={component?.configPath}
+          />
+        )}
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}
@@ -492,6 +499,7 @@ export default function ComponentBuilderEditPage({
           mode="edit"
           config={COMPONENT_BUILDER_CONFIG}
           initialValues={settings}
+          readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onSubmit={next => {
             setSettings(next);

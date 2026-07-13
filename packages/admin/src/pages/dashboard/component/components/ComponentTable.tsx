@@ -15,7 +15,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Pencil, Trash2, Filter } from "lucide-react";
+import { Eye, Pencil, Trash2, Filter } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -167,13 +167,9 @@ export default function ComponentTable() {
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
+  // Code-first (locked) components open the same builder route; the builder
+  // renders read-only when the loaded component is locked.
   const handleEdit = useCallback((component: ApiComponent) => {
-    if (component.locked) {
-      toast.error("Cannot edit locked component", {
-        description: "Code-first components cannot be edited from the UI.",
-      });
-      return;
-    }
     navigateTo(
       buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug: component.slug })
     );
@@ -402,8 +398,12 @@ export default function ComponentTable() {
     (component: ApiComponent): RowAction<ApiComponent>[] => [
       {
         id: "edit",
-        label: "Edit",
-        icon: <Pencil className="h-4 w-4" />,
+        label: component.locked ? "View" : "Edit",
+        icon: component.locked ? (
+          <Eye className="h-4 w-4" />
+        ) : (
+          <Pencil className="h-4 w-4" />
+        ),
         onSelect: () => handleEdit(component),
       },
       {
@@ -582,10 +582,7 @@ export default function ComponentTable() {
           <DataTableView<ApiComponent>
             columns={columns}
             rows={filteredData}
-            onRowClick={component => {
-              // Locked components are read-only from the UI.
-              if (!component.locked) handleEdit(component);
-            }}
+            onRowClick={component => handleEdit(component)}
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}

@@ -14,7 +14,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Pencil, Trash2, FileEdit, Filter } from "lucide-react";
+import { Eye, Pencil, Trash2, FileEdit, Filter } from "lucide-react";
 import React, { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -177,14 +177,10 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
+  // Code-first (locked) Singles open the same builder route; the builder
+  // renders read-only when the loaded Single is locked.
   const handleEdit = useCallback(
     (single: ApiSingle) => {
-      if (single.locked) {
-        toast.error("Cannot edit locked Single", {
-          description: "Code-first Singles cannot be modified from the UI.",
-        });
-        return;
-      }
       if (mode === "content") {
         navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }));
         return;
@@ -401,8 +397,12 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     (single: ApiSingle): RowAction<ApiSingle>[] => [
       {
         id: "edit",
-        label: "Edit",
-        icon: <Pencil className="h-4 w-4" />,
+        label: single.locked ? "View" : "Edit",
+        icon: single.locked ? (
+          <Eye className="h-4 w-4" />
+        ) : (
+          <Pencil className="h-4 w-4" />
+        ),
         onSelect: () => handleEdit(single),
       },
       {
@@ -593,10 +593,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           <DataTableView<ApiSingle>
             columns={columns}
             rows={filteredData}
-            onRowClick={single => {
-              // Locked singles are read-only from the UI.
-              if (!single.locked) handleEdit(single);
-            }}
+            onRowClick={single => handleEdit(single)}
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
