@@ -323,9 +323,10 @@ function SortableFieldRow({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "hover-unified-table-row",
+        "hover-unified-table-row cursor-pointer",
         isDragging && "bg-muted opacity-80"
       )}
+      onClick={() => (isCode ? onView(field) : onEdit(field))}
     >
       {/* Drag handle + Name */}
       <TableCell className="whitespace-nowrap text-base">
@@ -337,12 +338,20 @@ function SortableFieldRow({
             tabIndex={0}
             aria-label="Drag to reorder"
             style={{ touchAction: "none" }}
+            onClick={e => e.stopPropagation()}
           >
             <GripVertical className="h-4 w-4" />
           </span>
           <code
             className="text-sm bg-muted px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
-            onClick={() => (isCode ? onView(field) : onEdit(field))}
+            onClick={e => {
+              e.stopPropagation();
+              if (isCode) {
+                onView(field);
+              } else {
+                onEdit(field);
+              }
+            }}
             role="button"
             tabIndex={0}
             onKeyDown={e => {
@@ -409,7 +418,10 @@ function SortableFieldRow({
       </TableCell>
 
       {/* Actions */}
-      <TableCell className="whitespace-nowrap text-sm">
+      <TableCell
+        className="whitespace-nowrap text-sm"
+        onClick={e => e.stopPropagation()}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-sm">
@@ -726,7 +738,7 @@ function UserFieldsTable() {
             <Table aria-label="User fields table">
               <TableHeader className="bg-[hsl(var(--table-header-bg))]">
                 <TableRow>
-                  <TableHead className="w-[200px]">Name</TableHead>
+                  <TableHead className="w-50">Name</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Required</TableHead>
@@ -735,7 +747,7 @@ function UserFieldsTable() {
                   <TableHead className="hidden lg:table-cell">
                     Created
                   </TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
+                  <TableHead className="w-25">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               {/* Static fields (read-only, non-draggable) */}
