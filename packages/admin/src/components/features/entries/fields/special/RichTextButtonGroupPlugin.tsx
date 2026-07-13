@@ -366,7 +366,7 @@ export function RichTextButtonGroupPlugin({
           {buttons.map((button, index) => (
             <div
               key={index}
-              className="space-y-3 p-3 rounded-none  border border-primary/5"
+              className="space-y-3 p-3 rounded-none  border border-border"
             >
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-medium">
@@ -456,7 +456,7 @@ export function RichTextButtonGroupPlugin({
                         onChange={e =>
                           updateButton(index, { bgColor: e.target.value })
                         }
-                        className="h-8 w-8 rounded-none  border border-primary/5 cursor-pointer p-0.5"
+                        className="h-8 w-8 rounded-none  border border-border cursor-pointer p-0.5"
                         title="Background color"
                       />
                     )}
@@ -466,7 +466,7 @@ export function RichTextButtonGroupPlugin({
                       onChange={e =>
                         updateButton(index, { textColor: e.target.value })
                       }
-                      className="h-8 w-8 rounded-none  border border-primary/5 cursor-pointer p-0.5"
+                      className="h-8 w-8 rounded-none  border border-border cursor-pointer p-0.5"
                       title="Text color"
                     />
                   </div>

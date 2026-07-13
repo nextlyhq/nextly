@@ -247,7 +247,7 @@ export function GroupInput({
   return (
     <Card
       className={cn(
-        "shadow-none  border border-primary/5 dark:border-primary/5 overflow-hidden",
+        "shadow-none  border border-border dark:border-border overflow-hidden",
         field.admin?.className
       )}
     >
@@ -255,7 +255,7 @@ export function GroupInput({
         {/* Card Header - Collapsible trigger */}
         {field.label && (
           <CardHeader
-            className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-primary/5 dark:border-primary/5 p-0"
+            className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-border dark:border-border p-0"
             noBorder
           >
             <CollapsibleTrigger asChild>

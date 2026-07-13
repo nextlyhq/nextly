@@ -344,7 +344,7 @@ function VariableEditor({
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="flex items-start gap-2 rounded-none border border-primary/5 bg-primary/5 p-3"
+              className="flex items-start gap-2 rounded-none border border-border bg-primary/5 p-3"
             >
               <div className="grid flex-1 gap-2 sm:grid-cols-[1fr_1.5fr]">
                 <FormField
@@ -411,7 +411,7 @@ function VariableEditor({
           ))}
         </div>
       ) : (
-        <div className="rounded-none border border-primary/5 border-dashed p-4 text-center text-xs text-muted-foreground">
+        <div className="rounded-none border border-border border-dashed p-4 text-center text-xs text-muted-foreground">
           No custom variables defined. Click &quot;Add Variable&quot; to create
           one.
         </div>
@@ -490,7 +490,7 @@ function DefaultAttachmentsSection({
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="flex items-center gap-3 rounded-none border border-primary/5 bg-primary/5 p-3"
+              className="flex items-center gap-3 rounded-none border border-border bg-primary/5 p-3"
             >
               <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="flex-1 min-w-0">
@@ -517,7 +517,7 @@ function DefaultAttachmentsSection({
           ))}
         </div>
       ) : (
-        <div className="rounded-none border border-primary/5 border-dashed p-4 text-center text-xs text-muted-foreground">
+        <div className="rounded-none border border-border border-dashed p-4 text-center text-xs text-muted-foreground">
           No default attachments. Click &quot;Add Attachment&quot; to pick from
           the media library.
         </div>
@@ -548,7 +548,7 @@ function BuiltInVariablesReference() {
       <p className="text-xs text-muted-foreground">
         These variables are always available in every template.
       </p>
-      <div className="rounded-none border border-primary/5 bg-primary/5 p-3">
+      <div className="rounded-none border border-border bg-primary/5 p-3">
         <div className="space-y-2">
           {COMMON_VARIABLES.map(v => (
             <div key={v.name} className="flex items-start gap-2">

@@ -475,7 +475,7 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-background border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-border rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -506,7 +506,7 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-background border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-border rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -579,7 +579,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-background text-foreground border-border hover:bg-accent/10">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -609,7 +609,7 @@ export function MediaLibrary({
                 <Button
                   variant="outline"
                   size="md"
-                  className="hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10 px-4 shrink-0"
+                  className="hover-unified bg-background text-foreground border-border hover:bg-accent/10 px-4 shrink-0"
                 >
                   <Columns className="h-4 w-4 text-muted-foreground" />
                   Columns
@@ -617,7 +617,7 @@ export function MediaLibrary({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="w-48 shadow-none border-primary/5"
+                className="w-48 shadow-none border-border"
               >
                 <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 px-2 py-1.5">
                   Toggle Columns
@@ -685,10 +685,10 @@ export function MediaLibrary({
                   type="button"
                   onClick={() => setActiveFolderId(null)}
                   className={cn(
-                    "group flex items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                    "group flex items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                     !activeFolderId
-                      ? "border-primary/5 bg-primary/5"
-                      : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
+                      ? "border-border bg-primary/5"
+                      : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                   )}
                 >
                   <LayoutDashboard
@@ -720,10 +720,10 @@ export function MediaLibrary({
                         type="button"
                         onClick={() => setActiveFolderId(folder.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                          "flex w-full items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                           isActive
-                            ? "border-primary/5 bg-primary/5 ring-1 ring-primary/20"
-                            : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
+                            ? "border-border bg-primary/5 ring-1 ring-primary/20"
+                            : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                         )}
                       >
                         <FolderIconComponent
@@ -773,7 +773,7 @@ export function MediaLibrary({
                           </DropdownMenuTrigger>
                           <DropdownMenuContent
                             align="end"
-                            className="w-48 shadow-none border-primary/5"
+                            className="w-48 shadow-none border-border"
                           >
                             <DropdownMenuItem
                               onClick={e => {
@@ -820,7 +820,7 @@ export function MediaLibrary({
 
             {/* Subfolders Row (Only shown when inside a folder) */}
             {activeFolderId && hasFoldersToDisplay && (
-              <div className="animate-in fade-in slide-in-from-top-2 duration-300  border-t border-primary/5 pt-4 mt-2">
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300  border-t border-border pt-4 mt-2">
                 <div className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-3 px-1">
                   {activeFolderId ? "Subfolders" : "Folders"}
                 </div>
@@ -833,10 +833,10 @@ export function MediaLibrary({
                           type="button"
                           onClick={() => setActiveFolderId(folder.id)}
                           className={cn(
-                            "flex w-full items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                            "flex w-full items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                             isActive
-                              ? "border-primary/5 bg-primary/5 ring-1 ring-primary/20"
-                              : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
+                              ? "border-border bg-primary/5 ring-1 ring-primary/20"
+                              : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                           )}
                         >
                           <FolderIconComponent
@@ -886,7 +886,7 @@ export function MediaLibrary({
                             </DropdownMenuTrigger>
                             <DropdownMenuContent
                               align="end"
-                              className="w-48 shadow-none border-primary/5"
+                              className="w-48 shadow-none border-border"
                             >
                               <DropdownMenuItem
                                 onClick={e => {
@@ -935,7 +935,7 @@ export function MediaLibrary({
         )}
 
         {/* Media Content - Grid or List view */}
-        <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <div className="rounded-none  border border-border bg-card overflow-hidden">
           {viewMode === "grid" ? (
             <>
               <div className="p-6">

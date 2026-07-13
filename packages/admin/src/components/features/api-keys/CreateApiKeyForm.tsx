@@ -297,9 +297,9 @@ export function CreateApiKeyForm({
           }}
           className="space-y-6"
         >
-          <div className="bg-card  border border-primary/5 rounded-none overflow-hidden">
+          <div className="bg-card  border border-border rounded-none overflow-hidden">
             {/* Page Header */}
-            <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
+            <div className="border-b border-border bg-primary/5 px-6 py-5">
               <div className="flex items-center gap-3">
                 <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary">
                   <Key className="h-4 w-4" />
@@ -504,7 +504,7 @@ export function CreateApiKeyForm({
                     <CollapsibleTrigger asChild>
                       <button
                         type="button"
-                        className="flex w-full items-center justify-between rounded-none  border border-primary/5 px-3 py-2.5 text-sm font-medium transition-colors"
+                        className="flex w-full items-center justify-between rounded-none  border border-border px-3 py-2.5 text-sm font-medium transition-colors"
                       >
                         <span>What can this key access?</span>
                         {accessPreviewOpen ? (
@@ -516,7 +516,7 @@ export function CreateApiKeyForm({
                     </CollapsibleTrigger>
 
                     <CollapsibleContent>
-                      <div className="rounded-none  border border-primary/5 border-t-0 px-3 py-3">
+                      <div className="rounded-none  border border-border border-t-0 px-3 py-3">
                         {tokenType === "read-only" &&
                           (permissionsLoading ? (
                             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -553,7 +553,7 @@ export function CreateApiKeyForm({
             </div>
 
             {/* Form Actions */}
-            <div className="border-t border-primary/5 px-6 py-4 bg-primary/5">
+            <div className="border-t border-border px-6 py-4 bg-primary/5">
               <div className="flex justify-end gap-3">
                 <Link href={ROUTES.SETTINGS_API_KEYS}>
                   <Button type="button" variant="outline" disabled={isPending}>

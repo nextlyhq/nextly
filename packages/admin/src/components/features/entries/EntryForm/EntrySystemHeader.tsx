@@ -192,7 +192,7 @@ export function EntrySystemHeader({
       : ((entry?.slug as string | undefined) ?? null);
 
   return (
-    <div className="px-6 py-3 border-b border-primary/5 flex items-center gap-3 sticky top-0 z-30 bg-white dark:bg-slate-950">
+    <div className="px-6 py-3 border-b border-border flex items-center gap-3 sticky top-0 z-30 bg-white dark:bg-slate-950">
       {/* Title input — borderless, 19px, autofocus on create */}
       <div className="flex-1 min-w-0">
         <input

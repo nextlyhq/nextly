@@ -618,7 +618,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -646,7 +646,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -690,7 +690,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={isLoading}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -717,7 +717,7 @@ function UserFieldsTable() {
           </p>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -767,7 +767,7 @@ function UserFieldsTable() {
           </DndContext>
 
           {/* Pagination inside table wrapper - always show if table is shown */}
-          {/* <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4"> */}
+          {/* <div className="table-footer  border-t border-border bg-[hsl(var(--table-header-bg))] p-4"> */}
           <Pagination
             currentPage={page}
             totalPages={Math.max(1, totalPages)}

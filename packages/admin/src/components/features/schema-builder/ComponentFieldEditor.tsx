@@ -231,11 +231,11 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("single")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-primary/5 transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-primary/5 bg-background hover-subtle-row hover:border-primary/5-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
               }
             `}
           >
@@ -255,11 +255,11 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("multi")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-primary/5 transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-primary/5 bg-background hover-subtle-row hover:border-primary/5-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
               }
             `}
           >
@@ -284,7 +284,7 @@ export function ComponentFieldEditor({
       </div>
 
       {/* Component Selection */}
-      <div className="space-y-2 pt-2  border-t border-primary/5">
+      <div className="space-y-2 pt-2  border-t border-border">
         <Label className="text-xs font-medium">
           {currentMode === "single" ? "Component" : "Available Components"}
         </Label>
@@ -321,7 +321,7 @@ export function ComponentFieldEditor({
           </Select>
         ) : (
           // Multi-component selector (checkboxes)
-          <div className="space-y-2 max-h-48 overflow-y-auto rounded-none  border border-primary/5 p-2">
+          <div className="space-y-2 max-h-48 overflow-y-auto rounded-none  border border-border p-2">
             {availableComponents.map(comp => {
               const isSelected = components?.includes(comp.slug) || false;
               return (
@@ -368,7 +368,7 @@ export function ComponentFieldEditor({
       </div>
 
       {/* Repeatable Toggle */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           Instance Options
         </Label>
@@ -422,7 +422,7 @@ export function ComponentFieldEditor({
       </div>
 
       {/* Admin Options */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>

@@ -253,7 +253,7 @@ export default function PluginsTable() {
           value={search}
           onChange={setSearch}
           placeholder="Search plugins..."
-          className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
+          className="w-full md:max-w-sm bg-background text-foreground border-border"
         />
         <div className="flex items-center gap-2">
           <DropdownMenu>
@@ -261,7 +261,7 @@ export default function PluginsTable() {
               <Button
                 variant="outline"
                 size="md"
-                className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                className="bg-background text-foreground border-border hover:bg-accent/10"
               >
                 <Columns className="h-4 w-4" />
                 Columns
@@ -287,7 +287,7 @@ export default function PluginsTable() {
       </div>
 
       {/* Boxed table and Pagination Card */}
-      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="rounded-none  border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={paginatedPlugins}
           columns={columns}

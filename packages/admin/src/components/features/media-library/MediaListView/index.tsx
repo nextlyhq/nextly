@@ -189,7 +189,7 @@ export function MediaListView({
           return (
             <Badge
               variant="default"
-              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-primary/5 text-primary  border border-primary/5 uppercase tracking-tight"
+              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-primary/5 text-primary  border border-border uppercase tracking-tight"
             >
               {type}
             </Badge>
@@ -253,7 +253,7 @@ export function MediaListView({
         {Array.from({ length: DEFAULT_MEDIA_SKELETON_COUNT }).map((_, i) => (
           <div
             key={i}
-            className="flex items-center gap-4 p-3 rounded-none  border border-primary/5 animate-pulse"
+            className="flex items-center gap-4 p-3 rounded-none  border border-border animate-pulse"
           >
             <div className="w-10 h-10 rounded-none bg-primary/5" />
             <div className="flex-1 space-y-1.5">

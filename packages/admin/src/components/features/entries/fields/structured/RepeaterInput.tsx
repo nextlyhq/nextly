@@ -308,14 +308,14 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <Card
       className={cn(
-        "shadow-none  border border-primary/5 dark:border-primary/5 overflow-hidden",
+        "shadow-none  border border-border dark:border-border overflow-hidden",
         className
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {/* Collapsible Header */}
         <CardHeader
-          className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-primary/5 dark:border-primary/5 p-0"
+          className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-border dark:border-border p-0"
           noBorder
         >
           <CollapsibleTrigger asChild>
@@ -379,7 +379,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
 
             {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground  border border-primary/5 border-dashed rounded-none bg-primary/5">
+              <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-none bg-primary/5">
                 <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
                 {canAdd && (
                   <p className="text-sm">Click the button below to add one.</p>

@@ -199,7 +199,7 @@ export function Login() {
     <div className="w-full max-w-[480px] mx-auto">
       <Card
         className={cn(
-          "transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-2 sm:p-4 md:p-6",
+          "transition-all duration-300 ease-in-out border-border dark:border-border shadow-none p-2 sm:p-4 md:p-6",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
         )}
       >
@@ -243,7 +243,7 @@ export function Login() {
                   className="space-y-6"
                 >
                   {emailNotVerified && (
-                    <div className="flex items-start gap-3 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
+                    <div className="flex items-start gap-3 rounded-none  border border-border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
                       <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
                       <div className="flex-1 text-sm">
                         <p className="font-medium text-amber-800 dark:text-amber-200">
@@ -285,7 +285,7 @@ export function Login() {
                             spellCheck={false}
                             placeholder="Enter your email address…"
                             {...field}
-                            className="h-11 rounded-none border-primary/5 dark:border-primary/5"
+                            className="h-11 rounded-none border-border dark:border-border"
                           />
                         </FormControl>
                         <FormMessage />
@@ -307,7 +307,7 @@ export function Login() {
                               autoComplete="current-password"
                               placeholder="Enter your password…"
                               {...field}
-                              className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
+                              className="pr-10 h-11 rounded-none border-border dark:border-border"
                             />
                           </FormControl>
                           <button

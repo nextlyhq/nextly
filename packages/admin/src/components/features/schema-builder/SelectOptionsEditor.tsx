@@ -171,7 +171,7 @@ function SortableOption({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 p-2 rounded-none  border border-primary/5 bg-background group"
+      className="flex items-center gap-2 p-2 rounded-none  border border-border bg-background group"
     >
       {/* Drag Handle */}
       <button
@@ -413,7 +413,7 @@ export function SelectOptionsEditor({
 
       {/* hasMany Toggle (only for select, not radio) */}
       {fieldType === "select" && onHasManyChange && (
-        <div className="flex items-center justify-between py-2  border-t border-primary/5 mt-3 pt-3">
+        <div className="flex items-center justify-between py-2  border-t border-border mt-3 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
@@ -432,7 +432,7 @@ export function SelectOptionsEditor({
           Stored as field.admin.isClearable and field.admin.placeholder
           via the patchAdmin helper in TypeSpecificEditor. */}
       {fieldType === "select" && onIsClearableChange && (
-        <div className="flex items-center justify-between py-2 border-t border-primary/5 mt-3 pt-3">
+        <div className="flex items-center justify-between py-2 border-t border-border mt-3 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
@@ -466,7 +466,7 @@ export function SelectOptionsEditor({
       {/* PR E3: Radio-only admin knob -- horizontal vs vertical layout.
           Stored as field.admin.layout. */}
       {fieldType === "radio" && onLayoutChange && (
-        <div className="space-y-2 mt-3 border-t border-primary/5 pt-3">
+        <div className="space-y-2 mt-3 border-t border-border pt-3">
           <FormLabelWithTooltip
             className="text-xs font-medium"
             label="Layout"

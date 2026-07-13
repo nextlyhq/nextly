@@ -79,7 +79,7 @@ export function DocumentPanel({
   const pill = pillStateFromForm(entry?.status as string | undefined, isDirty);
 
   return (
-    <div className="px-5 py-4 border-b border-primary/5">
+    <div className="px-5 py-4 border-b border-border">
       <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
         Document
       </p>
@@ -94,7 +94,7 @@ export function DocumentPanel({
 }
 
 function Separator() {
-  return <div className="border-t border-primary/5 -mx-5" aria-hidden="true" />;
+  return <div className="border-t border-border -mx-5" aria-hidden="true" />;
 }
 
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {

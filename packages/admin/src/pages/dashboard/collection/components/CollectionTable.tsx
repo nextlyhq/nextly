@@ -667,7 +667,7 @@ export default function CollectionTable() {
             onChange={setSearch}
             placeholder="Search collections..."
             isLoading={isFetching}
-            className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
+            className="w-full md:max-w-sm bg-background text-foreground border-border"
           />
         </div>
 
@@ -686,7 +686,7 @@ export default function CollectionTable() {
                     <Button
                       variant="outline"
                       size="md"
-                      className="relative bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                      className="relative bg-background text-foreground border-border hover:bg-accent/10"
                     >
                       <Filter className="h-4 w-4" />
                       Filter
@@ -779,7 +779,7 @@ export default function CollectionTable() {
                     <Button
                       variant="outline"
                       size="md"
-                      className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                      className="bg-background text-foreground border-border hover:bg-accent/10"
                     >
                       <Icons.Columns className="h-4 w-4" />
                       Columns
@@ -819,7 +819,7 @@ export default function CollectionTable() {
       ) : isEmpty ? (
         <CollectionsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        <div className="table-wrapper md:rounded-none md :border border-primary/5 md:border-primary/5 md:bg-card overflow-hidden">
+        <div className="table-wrapper md:rounded-none md :border border-border md:border-border md:bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}

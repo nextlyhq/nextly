@@ -281,7 +281,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  className="h-8 w-8 p-0  border border-primary/5"
+                  className="h-8 w-8 p-0  border border-border"
                   disabled={isRevoked}
                   title={
                     isRevoked
@@ -401,13 +401,13 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       {/* Table card */}
       {isLoading && data.length === 0 ? (
-        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
           <div className="p-4 space-y-3">
             <Skeleton className="h-[200px] w-full rounded-none" />
           </div>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
           <div className="space-y-1">
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground pb-2 px-6 pt-4">

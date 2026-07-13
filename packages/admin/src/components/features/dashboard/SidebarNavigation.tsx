@@ -114,7 +114,7 @@ export function SidebarNavigationItem({
           <DropdownMenuContent
             side="right"
             align="start"
-            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-primary/5"
+            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-border"
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
           >
@@ -338,7 +338,7 @@ export function SidebarNavigation({
               placeholder="Search..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-9 bg-background border-primary/5 dark:border-primary/5 text-xs h-9"
+              className="pl-9 bg-background border-border dark:border-border text-xs h-9"
             />
           </div>
         </div>

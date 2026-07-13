@@ -278,7 +278,7 @@ function ImageSizesContent({
       />
 
       {/* Table Wrapper */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
         {isLoading ? (
           <TableSkeleton columns={7} rowCount={pageSize} />
         ) : (

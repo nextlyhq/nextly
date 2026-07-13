@@ -196,7 +196,7 @@ function TemplatePreviewDialog({
             <DialogDescription>Subject: {previewSubject}</DialogDescription>
           )}
         </DialogHeader>
-        <div className="flex-1 overflow-auto  border border-primary/5 rounded-none">
+        <div className="flex-1 overflow-auto  border border-border rounded-none">
           {isLoading ? (
             <div className="flex items-center justify-center h-48">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -450,7 +450,7 @@ function EmailTemplateTable() {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  className="h-8 w-8 p-0  border border-primary/5"
+                  className="h-8 w-8 p-0  border border-border"
                 >
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
@@ -596,7 +596,7 @@ function EmailTemplateTable() {
       />
 
       {/* Table */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={paginatedTemplates}
           columns={columns}

@@ -32,7 +32,7 @@ export function PasswordStrengthIndicator({
 
       <div
         className={cn(
-          "p-3 rounded-none  border border-primary/5 transition-colors duration-100",
+          "p-3 rounded-none  border border-border transition-colors duration-100",
           {
             "bg-red-500/5 border-red-500/20 text-red-900 dark:text-red-200":
               strength.score <= 2,
@@ -58,14 +58,12 @@ export function PasswordStrengthIndicator({
                 <div
                   key={i}
                   className={cn("flex-1", {
-                    "bg-red-500":
-                      strength.score <= 2 && i <= strength.score,
+                    "bg-red-500": strength.score <= 2 && i <= strength.score,
                     "bg-amber-500":
                       strength.score > 2 &&
                       strength.score <= 4 &&
                       i <= strength.score,
-                    "bg-green-500":
-                      strength.score > 4 && i <= strength.score,
+                    "bg-green-500": strength.score > 4 && i <= strength.score,
                     "bg-slate-200 dark:bg-slate-800": i > strength.score,
                   })}
                 />

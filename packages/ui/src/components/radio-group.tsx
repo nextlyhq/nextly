@@ -25,9 +25,9 @@ import { cn } from "../lib/utils";
  *
  * Implementation Notes:
  * - Uses Radix UI primitives for robust accessibility
- * - Visual "checked" state achieved via  border border-primary/5 expansion (border-[5px])
- * - No inner indicator needed -  border border-primary/5 expansion provides clear visual feedback
- * - Hover state changes  border border-primary/5 color for better interactivity
+ * - Visual "checked" state achieved via  border border-border expansion (border-[5px])
+ * - No inner indicator needed -  border border-border expansion provides clear visual feedback
+ * - Hover state changes  border border-border color for better interactivity
  */
 const RadioGroup = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Root>,
@@ -61,7 +61,7 @@ const RadioGroupItem = forwardRef<
       )}
       {...props}
     >
-      {/* No inner indicator needed -  border border-primary/5 expansion provides visual feedback */}
+      {/* No inner indicator needed -  border border-border expansion provides visual feedback */}
       <RadioGroupPrimitive.Indicator />
     </RadioGroupPrimitive.Item>
   );

@@ -193,13 +193,13 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "transition-all shadow-none border-primary/5 dark:border-primary/5 overflow-hidden",
+        "transition-all shadow-none border-border dark:border-border overflow-hidden",
         isDragging && "opacity-50 ring-1 ring-primary z-10"
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CardHeader
-          className="p-0 pl-2 pr-1 border-b border-primary/5 dark:border-primary/5 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900/80 transition-colors"
+          className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900/80 transition-colors"
           noBorder
         >
           <div className="flex items-center gap-2">
@@ -303,7 +303,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                 })()
               ) : (
                 // Default placeholder when no renderField provided
-                <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4  border border-primary/5 border-dashed">
+                <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4  border border-border border-dashed">
                   <p className="font-medium mb-2">Sub-fields:</p>
                   <ul className="list-disc list-inside space-y-1">
                     {field.fields.map((subField, idx) => {

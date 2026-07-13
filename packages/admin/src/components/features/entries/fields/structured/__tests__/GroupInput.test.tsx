@@ -38,9 +38,9 @@ describe("GroupInput — hideGutter knob", () => {
   it("renders Card chrome by default (border + bordered header)", () => {
     const { container } = render(<Harness field={namedGroup} />);
     // The default branch wraps the group in a Card-like element with
-    // border classes — `border-primary/5` is the Card style we drop in
+    // border classes — `border-border` is the Card style we drop in
     // hideGutter mode. Looking for it confirms the chrome is present.
-    const styled = container.querySelector('div[class*="border-primary/5"]');
+    const styled = container.querySelector('div[class*="border-border"]');
     expect(styled).toBeTruthy();
   });
 
@@ -51,9 +51,7 @@ describe("GroupInput — hideGutter knob", () => {
     };
     const { container } = render(<Harness field={flatGroup} />);
     // Same border class should be absent on the flat path.
-    expect(
-      container.querySelector('div[class*="border-primary/5"]')
-    ).toBeNull();
+    expect(container.querySelector('div[class*="border-border"]')).toBeNull();
   });
 
   it("still shows the label + chevron when hideGutter is true", () => {

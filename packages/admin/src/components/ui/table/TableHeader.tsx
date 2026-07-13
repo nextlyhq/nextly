@@ -50,7 +50,7 @@ export function TableHeaderComponent<TData>({
       {table.getHeaderGroups().map(headerGroup => (
         <TableRow
           key={headerGroup.id}
-          className="bg-[hsl(var(--table-header-bg))] border-primary/5"
+          className="bg-[hsl(var(--table-header-bg))] border-border"
         >
           {headerGroup.headers.map(header => (
             <TableHead

@@ -600,7 +600,7 @@ export default function UserTable() {
             onChange={setSearch}
             placeholder="Search users by name or email"
             isLoading={isFetching}
-            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
+            className="flex-1 max-w-sm bg-background text-foreground border-border"
           />
         </div>
 
@@ -618,7 +618,7 @@ export default function UserTable() {
                 <Button
                   variant="outline"
                   size="md"
-                  className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                  className="bg-background text-foreground border-border hover:bg-accent/10"
                 >
                   <Columns className="h-4 w-4" />
                   Columns
@@ -645,7 +645,7 @@ export default function UserTable() {
       </div>
 
       {/* Responsive table and Pagination Card */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
         {isError ? (
           <div className="p-8">
             <Alert variant="destructive">

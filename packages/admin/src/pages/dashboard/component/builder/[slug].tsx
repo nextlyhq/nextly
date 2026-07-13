@@ -418,7 +418,7 @@ export default function ComponentBuilderEditPage({
   if (isLoading || !isInitialized) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <div className="p-6  border-b border-primary/5">
+        <div className="p-6  border-b border-border">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>

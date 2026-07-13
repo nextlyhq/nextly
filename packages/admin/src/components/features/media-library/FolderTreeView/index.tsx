@@ -284,7 +284,7 @@ function FolderTreeItem({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="w-48 shadow-none border-primary/5"
+              className="w-48 shadow-none border-border"
             >
               <DropdownMenuItem
                 onClick={() => onCreateSubfolder(folder.id)}

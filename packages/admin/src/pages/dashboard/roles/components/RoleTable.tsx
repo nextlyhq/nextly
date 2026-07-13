@@ -448,7 +448,7 @@ export default function RoleTable() {
             onChange={setSearch}
             placeholder="Search roles by name"
             isLoading={isLoading}
-            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
+            className="flex-1 max-w-sm bg-background text-foreground border-border"
           />
         </div>
 
@@ -460,7 +460,7 @@ export default function RoleTable() {
               <Button
                 variant="outline"
                 size="md"
-                className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                className="bg-background text-foreground border-border hover:bg-accent/10"
               >
                 <Columns className="h-4 w-4" />
                 Columns
@@ -484,7 +484,7 @@ export default function RoleTable() {
       </div>
 
       {/* Responsive table */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={filteredData}
           columns={columns}

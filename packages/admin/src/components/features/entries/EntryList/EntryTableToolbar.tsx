@@ -138,7 +138,7 @@ export function EntryTableToolbar({
             value={globalFilter}
             onChange={onGlobalFilterChange}
             placeholder={`Search ${collection.label}...`}
-            className="w-full bg-background text-foreground border-primary/5"
+            className="w-full bg-background text-foreground border-border"
             data-entry-search-input
           />
         </div>
@@ -152,7 +152,7 @@ export function EntryTableToolbar({
                 <Button
                   variant="outline"
                   size="md"
-                  className="relative flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                  className="relative flex-1 sm:flex-none hover-unified bg-background text-foreground border-border hover:bg-accent/10"
                 >
                   <Filter className="h-4 w-4" />
                   Filter
@@ -173,7 +173,7 @@ export function EntryTableToolbar({
               <Button
                 variant="outline"
                 size="md"
-                className="flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                className="flex-1 sm:flex-none hover-unified bg-background text-foreground border-border hover:bg-accent/10"
               >
                 <Columns className="h-4 w-4" />
                 Columns

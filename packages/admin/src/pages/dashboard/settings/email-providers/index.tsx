@@ -538,7 +538,7 @@ function EmailProviderTable() {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                className="h-8 w-8 p-0  border border-primary/5"
+                className="h-8 w-8 p-0  border border-border"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
@@ -659,7 +659,7 @@ function EmailProviderTable() {
         }
         filters={
           <Select value={type} onValueChange={handleTypeChange}>
-            <SelectTrigger className="w-[130px] bg-background text-foreground border-primary/5 hover:bg-accent/10">
+            <SelectTrigger className="w-[130px] bg-background text-foreground border-border hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
@@ -696,7 +696,7 @@ function EmailProviderTable() {
       />
 
       {/* Table */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={data?.data || []}
           columns={columns}

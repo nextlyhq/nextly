@@ -29,7 +29,7 @@ import { cn } from "../lib/utils";
  * - success: Light green background
  * - warning: Light amber background
  * - destructive: Light red background
- * - outline: Transparent background with  border border-primary/5
+ * - outline: Transparent background with  border border-border
  */
 const badgeVariants = cva(
   "inline-flex items-center rounded-none px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
@@ -47,7 +47,7 @@ const badgeVariants = cva(
         destructive:
           "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-100",
         outline:
-          "border !border-primary/5 bg-transparent text-slate-700 dark:text-slate-300 dark:!border-primary/5",
+          "border !border-border bg-transparent text-slate-700 dark:text-slate-300 dark:!border-border",
       },
     },
     defaultVariants: {
