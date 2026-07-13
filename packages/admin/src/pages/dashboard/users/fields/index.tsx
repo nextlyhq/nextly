@@ -224,7 +224,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
   const TypeIcon = typeConfig.icon;
 
   return (
-    <TableRow className="bg-primary/5 hover:bg-primary/5">
+    <TableRow>
       {/* Lock icon + Name */}
       <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
@@ -234,7 +234,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm px-1.5 py-0.5 rounded-none font-mono">
+          <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-sm">
             {field.name}
           </code>
         </div>
@@ -324,7 +324,7 @@ function SortableFieldRow({
       style={style}
       className={cn(
         "hover-unified-table-row",
-        isDragging && "bg-primary/5 opacity-80"
+        isDragging && "bg-muted opacity-80"
       )}
     >
       {/* Drag handle + Name */}
@@ -341,7 +341,7 @@ function SortableFieldRow({
             <GripVertical className="h-4 w-4" />
           </span>
           <code
-            className="text-sm bg-primary/5 px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
+            className="text-sm bg-muted px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
             onClick={() => (isCode ? onView(field) : onEdit(field))}
             role="button"
             tabIndex={0}
@@ -665,7 +665,7 @@ function UserFieldsTable() {
           <AlertDescription className="flex items-center justify-between">
             <span>
               Restart the server (
-              <code className="text-xs bg-primary/5 px-1 py-0.5 rounded-none">
+              <code className="text-xs bg-muted px-1 py-0.5 rounded-none">
                 next dev
               </code>
               ) for new fields to take effect in the database.
@@ -706,7 +706,7 @@ function UserFieldsTable() {
       {/* Table with DnD */}
       {filteredStaticFields.length === 0 && paginatedFields.length === 0 ? (
         <div className="border rounded-none p-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-primary/5 mx-auto mb-4">
+          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-muted mx-auto mb-4">
             <Users className="h-7 w-7 text-muted-foreground" />
           </div>
           <h3 className="text-base font-medium mb-1">
@@ -812,7 +812,7 @@ const UserFieldsPage: React.FC = () => {
               <h1 className="text-xl font-semibold tracking-tight">
                 User Fields
               </h1>
-              <p className="text-sm font-normal text-primary/50 mt-1">
+              <p className="text-sm font-normal text-muted-foreground mt-1">
                 Manage custom attributes for user accounts
               </p>
             </div>

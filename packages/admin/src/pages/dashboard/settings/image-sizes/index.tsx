@@ -8,7 +8,6 @@
  * Shows regeneration status when sizes change.
  */
 
-import type { Column } from "@nextlyhq/ui";
 import {
   Badge,
   Button,
@@ -18,8 +17,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
-  TableSkeleton,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -27,14 +24,18 @@ import {
   SettingsLayout,
   SettingsTableToolbar,
 } from "@admin/components/features/settings";
-import { Columns, Info, Plus } from "@admin/components/icons";
+import { Columns, Edit, Info, Plus, Trash2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { Link } from "@admin/components/ui/link";
-import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -151,19 +152,19 @@ function ImageSizesContent({
     navigateTo(buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id }));
   }, []);
 
-  // Columns definition for ResponsiveTable
-  const ALWAYS_VISIBLE = new Set(["id", "name"]);
+  // Columns pinned as always-visible in the column toggle.
+  const ALWAYS_VISIBLE = new Set(["name"]);
 
-  const columnDefs: Column<ImageSize>[] = React.useMemo(
+  const allColumns = React.useMemo<NextlyColumn<ImageSize>[]>(
     () => [
       {
-        key: "name",
-        label: "NAME",
-        render: (value, size) => (
+        name: "name",
+        header: "NAME",
+        cell: ({ row: size }) => (
           <div className="flex items-center gap-2">
-            <span className="font-medium">{String(value)}</span>
+            <span className="font-medium">{size.name}</span>
             {size.isDefault && (
-              <Badge variant="default" className="text-[10px] h-4 px-1">
+              <Badge variant="default" className="h-4 px-1 text-[10px]">
                 Config
               </Badge>
             )}
@@ -171,72 +172,82 @@ function ImageSizesContent({
         ),
       },
       {
-        key: "width",
-        label: "WIDTH",
-        render: value => (
-          <span className="text-muted-foreground">{value ?? "auto"}</span>
+        name: "width",
+        header: "WIDTH",
+        cell: ({ value }) => (
+          <span className="text-muted-foreground">
+            {typeof value === "number" ? value : "auto"}
+          </span>
         ),
       },
       {
-        key: "height",
-        label: "HEIGHT",
-        render: value => (
-          <span className="text-muted-foreground">{value ?? "auto"}</span>
+        name: "height",
+        header: "HEIGHT",
+        cell: ({ value }) => (
+          <span className="text-muted-foreground">
+            {typeof value === "number" ? value : "auto"}
+          </span>
         ),
       },
       {
-        key: "fit",
-        label: "RESIZE",
-        render: value => (
+        name: "fit",
+        header: "RESIZE",
+        cell: ({ value }) => (
           <Badge variant="default" className="font-normal capitalize">
             {getFitShortLabel(String(value))}
           </Badge>
         ),
       },
       {
-        key: "format",
-        label: "FORMAT",
-        render: value => (
-          <span className="uppercase text-xs font-mono">{String(value)}</span>
+        name: "format",
+        header: "FORMAT",
+        cell: ({ value }) => (
+          <span className="font-mono text-xs uppercase">{String(value)}</span>
         ),
       },
       {
-        key: "quality",
-        label: "QUALITY",
-        render: value => (
+        name: "quality",
+        header: "QUALITY",
+        cell: ({ value }) => (
           <span className="text-muted-foreground">{String(value)}%</span>
         ),
       },
-      {
-        key: "id",
-        label: "ACTIONS",
-        render: (_, size) => (
-          <div className="flex justify-start">
-            <ActionColumn
-              item={size}
-              callbacks={{
-                onEdit: handleEdit,
-                onDelete: size.isDefault
-                  ? undefined
-                  : item => {
-                      void handleDelete(item);
-                    },
-              }}
-            />
-          </div>
-        ),
-      },
     ],
-    [handleEdit, handleDelete]
+    []
   );
 
   const columns = React.useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = allColumns.filter(
+    col => !ALWAYS_VISIBLE.has(col.name)
+  );
+
+  const rowActions = React.useCallback(
+    (size: ImageSize): RowAction<ImageSize>[] => {
+      const actions: RowAction<ImageSize>[] = [
+        {
+          id: "edit",
+          label: "Edit",
+          icon: <Edit className="h-4 w-4" />,
+          onSelect: () => handleEdit(size),
+        },
+      ];
+      if (!size.isDefault) {
+        actions.push({
+          id: "delete",
+          label: "Delete",
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => void handleDelete(size),
+        });
+      }
+      return actions;
+    },
+    [handleEdit, handleDelete]
   );
 
   return (
@@ -265,11 +276,11 @@ function ImageSizesContent({
               <DropdownMenuSeparator />
               {toggleableColumns.map(col => (
                 <DropdownMenuCheckboxItem
-                  key={String(col.key)}
-                  checked={!hiddenColumns.has(String(col.key))}
-                  onCheckedChange={() => toggleColumn(String(col.key))}
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
                 >
-                  {typeof col.label === "string" ? col.label : String(col.key)}
+                  {typeof col.header === "string" ? col.header : col.name}
                 </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
@@ -277,40 +288,34 @@ function ImageSizesContent({
         }
       />
 
-      {/* Table Wrapper */}
-      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
-        {isLoading ? (
-          <TableSkeleton columns={7} rowCount={pageSize} />
-        ) : (
-          <ResponsiveTable
-            data={paginatedSizes}
-            columns={columns}
-            emptyMessage={
-              search
-                ? "No image sizes found matching your search."
-                : "No image sizes configured."
-            }
-            ariaLabel="Image sizes table"
-            tableWrapperClassName="border-0 rounded-none shadow-none"
-            footer={
-              (filteredSizes.length > 0 || isLoading) && (
-                <Pagination
-                  currentPage={page}
-                  totalPages={Math.max(
-                    1,
-                    Math.ceil(filteredSizes.length / pageSize)
-                  )}
-                  totalItems={filteredSizes.length}
-                  pageSize={pageSize}
-                  onPageChange={setPage}
-                  onPageSizeChange={setPageSize}
-                  isLoading={isLoading}
-                />
-              )
-            }
-          />
-        )}
-      </div>
+      {/* Table */}
+      <DataTableView<ImageSize>
+        columns={columns}
+        rows={paginatedSizes}
+        loading={isLoading}
+        rowHref={size =>
+          buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
+        }
+        primaryColumn="name"
+        rowActions={rowActions}
+        ariaLabel="Image sizes table"
+        emptyMessage={
+          search
+            ? "No image sizes found matching your search."
+            : "No image sizes configured."
+        }
+      />
+      {filteredSizes.length > 0 && (
+        <Pagination
+          currentPage={page}
+          totalPages={Math.max(1, Math.ceil(filteredSizes.length / pageSize))}
+          totalItems={filteredSizes.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          isLoading={isLoading}
+        />
+      )}
 
       {/* Info note about code-defined sizes */}
       {!isLoading && sizes.some(s => s.isDefault) && (
