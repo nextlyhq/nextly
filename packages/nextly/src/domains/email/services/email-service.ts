@@ -304,7 +304,9 @@ export class EmailService extends BaseService {
       options.attachments
     );
 
-    const { adapter, from } = await this.resolveProvider(options.providerId);
+    const { adapter, from, providerType } = await this.resolveProvider(
+      options.providerId
+    );
 
     const registry = getFilterRegistry();
 
@@ -335,6 +337,7 @@ export class EmailService extends BaseService {
       { providerId: options.providerId }
     );
 
+    const startedAt = Date.now();
     try {
       const result = await adapter.send({
         to: filtered.to,
@@ -359,19 +362,28 @@ export class EmailService extends BaseService {
         { providerId: options.providerId }
       );
 
+      const durationMs = Date.now() - startedAt;
       if (result.success) {
-        this.logger.info("Email sent successfully", {
+        // Stable, greppable send record for terminal / log-aggregator use.
+        this.logger.info("email.sent", {
+          event: "email.sent",
           to: filtered.to,
           subject: filtered.subject,
+          provider: providerType,
           messageId: result.messageId,
+          durationMs,
           cc: options.cc ?? [],
           bcc: options.bcc ?? [],
           attachmentCount: resolvedAttachments?.length ?? 0,
         });
       } else {
-        this.logger.warn("Email send returned unsuccessful", {
+        this.logger.warn("email.failed", {
+          event: "email.failed",
           to: filtered.to,
           subject: filtered.subject,
+          provider: providerType,
+          durationMs,
+          reason: "provider returned unsuccessful",
         });
       }
 
@@ -387,9 +399,12 @@ export class EmailService extends BaseService {
         },
         { providerId: options.providerId }
       );
-      this.logger.error("Failed to send email", {
+      this.logger.error("email.failed", {
+        event: "email.failed",
         to: filtered.to,
         subject: filtered.subject,
+        provider: providerType,
+        durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
       return { success: false };
@@ -507,7 +522,11 @@ export class EmailService extends BaseService {
    */
   private async resolveProvider(
     providerId?: string
-  ): Promise<{ adapter: EmailProviderAdapter; from: string }> {
+  ): Promise<{
+    adapter: EmailProviderAdapter;
+    from: string;
+    providerType: string;
+  }> {
     // 1. Specific provider by ID
     if (providerId) {
       const provider =
@@ -518,6 +537,7 @@ export class EmailService extends BaseService {
           provider.fromName ?? null,
           provider.fromEmail
         ),
+        providerType: provider.type,
       };
     }
 
@@ -532,6 +552,7 @@ export class EmailService extends BaseService {
             defaultProvider.fromName ?? null,
             defaultProvider.fromEmail
           ),
+          providerType: defaultProvider.type,
         };
       }
     } catch (error) {
@@ -549,6 +570,7 @@ export class EmailService extends BaseService {
       return {
         adapter: this.createAdapterFromConfig(this.emailConfig.providerConfig),
         from: this.emailConfig.from,
+        providerType: this.emailConfig.providerConfig.provider,
       };
     }
 
