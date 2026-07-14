@@ -35,11 +35,13 @@ import {
   getLayout,
   updateLayout,
   previewTemplate,
+  sendTestEmail,
   type EmailTemplateRecord,
   type CreateEmailTemplatePayload,
   type UpdateEmailTemplatePayload,
   type EmailLayout,
   type EmailTemplatePreviewResult,
+  type SendTestEmailResult,
 } from "@admin/services/emailTemplateApi";
 
 // ============================================================
@@ -232,5 +234,18 @@ export function usePreviewEmailTemplate() {
     { id: string; sampleData: Record<string, unknown> }
   >({
     mutationFn: ({ id, sampleData }) => previewTemplate(id, sampleData),
+  });
+}
+
+/**
+ * useSendTestEmailTemplate — send a real test email from a saved template.
+ */
+export function useSendTestEmailTemplate() {
+  return useMutation<
+    SendTestEmailResult,
+    Error,
+    { slug: string; to: string; variables: Record<string, unknown> }
+  >({
+    mutationFn: ({ slug, to, variables }) => sendTestEmail(slug, to, variables),
   });
 }

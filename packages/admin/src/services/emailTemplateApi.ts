@@ -193,6 +193,30 @@ export async function previewTemplate(
   );
 }
 
+export interface SendTestEmailResult {
+  success: boolean;
+  messageId?: string;
+}
+
+/**
+ * Send a real test email from a saved template via the shared
+ * send-with-template endpoint. Tests the SAVED template (not unsaved edits).
+ */
+export async function sendTestEmail(
+  slug: string,
+  to: string,
+  variables: Record<string, unknown>
+): Promise<SendTestEmailResult> {
+  return fetcher<SendTestEmailResult>(
+    "/email/send-with-template",
+    {
+      method: "POST",
+      body: JSON.stringify({ to, template: slug, variables }),
+    },
+    true
+  );
+}
+
 export const emailTemplateApi = {
   listTemplates,
   getTemplate,
@@ -202,4 +226,5 @@ export const emailTemplateApi = {
   getLayout,
   updateLayout,
   previewTemplate,
+  sendTestEmail,
 } as const;
