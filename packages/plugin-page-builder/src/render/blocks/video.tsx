@@ -31,10 +31,12 @@ export const video = defineBlock({
       placeholder: "e.g. dQw4w9WgXcQ",
     },
   ],
-  styleControls: [
-    { control: "dimension", styleKey: "maxWidth", label: "Max width" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    dimensions: { maxWidth: true, aspectRatio: true },
+    spacing: true,
+    border: true,
+    shadow: true,
+  },
   render: ({ props, className }) => {
     const provider = String(props.provider ?? "");
     const id = typeof props.videoId === "string" ? props.videoId.trim() : "";

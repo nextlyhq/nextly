@@ -21,11 +21,14 @@ export const grid = defineBlock<GridProps>({
     { name: "columns", type: "number", label: "Columns" },
     { name: "gap", type: "text", label: "Gap", placeholder: "16px" },
   ],
-  styleControls: [
-    { control: "color", styleKey: "backgroundColor", label: "Background" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    color: { background: true },
+    background: true,
+    spacing: true,
+    border: true,
+    shadow: true,
+    dimensions: { minHeight: true },
+  },
   render: ({ props, slots, className }) => {
     const columns =
       typeof props.columns === "number" && props.columns > 0

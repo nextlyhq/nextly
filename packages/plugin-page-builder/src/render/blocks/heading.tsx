@@ -20,13 +20,17 @@ export const heading = defineBlock({
       options: LEVELS.map(l => ({ value: l, label: l.toUpperCase() })),
     },
   ],
-  styleControls: [
-    { control: "color", styleKey: "color", label: "Text color" },
-    { control: "dimension", styleKey: "fontSize", label: "Font size" },
-    { control: "align", styleKey: "textAlign", label: "Align" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    typography: true,
+    color: { text: true },
+    spacing: true,
+    border: true,
+    shadow: true,
+    dimensions: { width: true, maxWidth: true },
+    position: true,
+    opacity: true,
+    interactions: { hover: true },
+  },
   render: ({ props, className }) => {
     const level = LEVELS.includes(String(props.level))
       ? String(props.level)

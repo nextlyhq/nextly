@@ -10,13 +10,14 @@ export const paragraph = defineBlock({
   contentFields: [
     { name: "text", type: "textarea", label: "Text", bindable: true },
   ],
-  styleControls: [
-    { control: "color", styleKey: "color", label: "Text color" },
-    { control: "dimension", styleKey: "fontSize", label: "Font size" },
-    { control: "align", styleKey: "textAlign", label: "Align" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    typography: true,
+    color: { text: true },
+    spacing: true,
+    border: true,
+    shadow: true,
+    interactions: { hover: true },
+  },
   render: ({ props, className }) => (
     <p className={className}>{String(props.text ?? "")}</p>
   ),

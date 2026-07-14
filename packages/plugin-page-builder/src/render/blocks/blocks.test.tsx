@@ -12,6 +12,21 @@ const html = (node: BlockNode) =>
     <RenderNode node={node} registry={defaultBlockRegistry} />
   );
 
+describe("core block supports", () => {
+  it("heading advertises typography + spacing + border style capabilities", () => {
+    const def = defaultBlockRegistry.get("core/heading")!;
+    expect(def.supports?.typography).toBeTruthy();
+    expect(def.supports?.spacing).toBeTruthy();
+    expect(def.supports?.border).toBeTruthy();
+  });
+
+  it("container advertises background + dimensions capabilities", () => {
+    const def = defaultBlockRegistry.get("core/container")!;
+    expect(def.supports?.background).toBeTruthy();
+    expect(def.supports?.dimensions).toBeTruthy();
+  });
+});
+
 describe("core block renderers", () => {
   it("registers all 8 core blocks", () => {
     for (const t of [
@@ -111,7 +126,9 @@ describe("core block renderers", () => {
     for (const def of defaultBlockRegistry.all()) {
       const hasContent = (def.contentFields?.length ?? 0) > 0;
       const hasStyle = (def.styleControls?.length ?? 0) > 0;
-      expect(hasContent || hasStyle).toBe(true);
+      const hasSupports =
+        !!def.supports && Object.keys(def.supports).length > 0;
+      expect(hasContent || hasStyle || hasSupports).toBe(true);
     }
   });
 });

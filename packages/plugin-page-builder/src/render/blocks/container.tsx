@@ -21,13 +21,17 @@ export const container = defineBlock({
       options: TAGS.map(t => ({ value: t, label: t })),
     },
   ],
-  styleControls: [
-    { control: "color", styleKey: "backgroundColor", label: "Background" },
-    { control: "dimension", styleKey: "maxWidth", label: "Max width" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-    { control: "dimension", styleKey: "borderRadius", label: "Radius" },
-  ],
+  supports: {
+    color: { background: true },
+    background: true,
+    spacing: true,
+    border: true,
+    shadow: true,
+    dimensions: { maxWidth: true, minHeight: true, overflow: true },
+    position: true,
+    opacity: true,
+    filters: true,
+  },
   render: ({ props, slots, className }) => {
     const tag = TAGS.includes(String(props.as)) ? String(props.as) : "section";
     return createElement(tag, { className }, slots.default);

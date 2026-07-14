@@ -25,11 +25,20 @@ export const image = defineBlock<ImageProps>({
   contentFields: [
     { name: "media", type: "media", label: "Image", bindable: true },
   ],
-  styleControls: [
-    { control: "dimension", styleKey: "width", label: "Width" },
-    { control: "dimension", styleKey: "borderRadius", label: "Radius" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    dimensions: {
+      width: true,
+      maxWidth: true,
+      objectFit: true,
+      aspectRatio: true,
+    },
+    border: true,
+    shadow: true,
+    spacing: true,
+    filters: true,
+    opacity: true,
+    position: true,
+  },
   render: ({ props, className }) => {
     // `media` may be the editor's media object, or — when bound to a Query Loop item's
     // field — a `{ url }` object or a plain URL string; normalize all three.
