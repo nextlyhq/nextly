@@ -29,6 +29,7 @@ import { useEffect, useState } from "react";
 import { getPath } from "../../core/bindings";
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
+import { normalizeSupports } from "../../core/supports";
 import { findNode } from "../../core/tree";
 import type { Binding, BlockNode, ControlRef } from "../../core/types";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
@@ -41,6 +42,8 @@ import {
   narrowContentFields,
   type ContentField,
 } from "../content/contentFields";
+import { AttributesControl } from "../controls/advanced/AttributesControl";
+import { CustomCssControl } from "../controls/advanced/CustomCssControl";
 import {
   registerDefaultControls,
   renderControl,
@@ -393,8 +396,16 @@ function StyleTab({
   );
 }
 
+const VISIBILITY_BREAKPOINTS: { id: string; label: string }[] = [
+  { id: "base", label: "desktop" },
+  { id: "tablet", label: "tablet" },
+  { id: "mobile", label: "mobile" },
+];
+
 function AdvancedTab({ node }: { node: BlockNode }) {
   const { state, dispatch } = useEditor();
+  const def = defaultBlockRegistry.get(node.type);
+  const sup = normalizeSupports(def?.supports);
   const loc = locateNode(state.document.root, node.id);
   const move = (delta: number) => {
     if (!loc) return;
@@ -456,6 +467,78 @@ function AdvancedTab({ node }: { node: BlockNode }) {
             }),
         })}
       </div>
+
+      {sup.customAttributes ? (
+        <>
+          <div>
+            <SectionLabel>CSS ID</SectionLabel>
+            {renderControl("text", {
+              value: node.cssId ?? "",
+              onChange: value =>
+                dispatch({
+                  type: "SET_CSS_ID",
+                  id: node.id,
+                  cssId: typeof value === "string" ? value : "",
+                }),
+            })}
+          </div>
+          <div>
+            <SectionLabel>Attributes</SectionLabel>
+            <AttributesControl
+              value={node.attributes}
+              onChange={value =>
+                dispatch({
+                  type: "SET_ATTRIBUTES",
+                  id: node.id,
+                  attributes: (value ?? {}) as Record<string, string>,
+                })
+              }
+            />
+          </div>
+        </>
+      ) : null}
+
+      {sup.visibility ? (
+        <div>
+          <SectionLabel>Visibility</SectionLabel>
+          {VISIBILITY_BREAKPOINTS.map(bp => (
+            <label
+              key={bp.id}
+              style={{ display: "flex", gap: 6, alignItems: "center" }}
+            >
+              <input
+                type="checkbox"
+                checked={node.visibility?.[bp.id] === false}
+                onChange={e =>
+                  dispatch({
+                    type: "SET_VISIBILITY",
+                    id: node.id,
+                    breakpoint: bp.id,
+                    visible: !e.target.checked,
+                  })
+                }
+              />
+              Hide on {bp.label}
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      {sup.customCss ? (
+        <div>
+          <SectionLabel>Custom CSS</SectionLabel>
+          <CustomCssControl
+            value={node.customCss}
+            onChange={value =>
+              dispatch({
+                type: "SET_BLOCK_CSS",
+                id: node.id,
+                css: typeof value === "string" ? value : "",
+              })
+            }
+          />
+        </div>
+      ) : null}
 
       <div className="nx-pb-empty">
         Type <code>{node.type}</code>
