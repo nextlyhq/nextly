@@ -117,6 +117,30 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
+   * A layout row must contain exactly one `{{content}}` placeholder: zero
+   * appends the body after the wrapper, and more than one drops the content
+   * after the second marker when the layout is applied. Reject malformed
+   * layouts at write time so rendering can rely on the invariant.
+   */
+  private assertLayoutMarker(kind: string, htmlContent: string): void {
+    if (kind !== "layout") return;
+    const markerCount =
+      htmlContent.split(LAYOUT_CONTENT_PLACEHOLDER).length - 1;
+    if (markerCount !== 1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "htmlContent",
+            code: "INVALID",
+            message: `A layout must contain exactly one ${LAYOUT_CONTENT_PLACEHOLDER} placeholder (found ${markerCount}).`,
+          },
+        ],
+        logContext: { kind, markerCount },
+      });
+    }
+  }
+
+  /**
    * Create a new email template.
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if slug is reserved
@@ -125,6 +149,7 @@ export class EmailTemplateService extends BaseService {
   async createTemplate(
     data: CreateEmailTemplateInput
   ): Promise<EmailTemplateRecord> {
+    this.assertLayoutMarker(data.kind ?? "template", data.htmlContent);
     const id = randomUUID();
     const now = new Date();
 
@@ -231,7 +256,15 @@ export class EmailTemplateService extends BaseService {
     id: string,
     data: UpdateEmailTemplateInput
   ): Promise<EmailTemplateRecord> {
-    await this.getTemplate(id);
+    const existing = await this.getTemplate(id);
+
+    // Validate the effective post-update row (a layout must keep exactly one
+    // `{{content}}` marker). Kind is immutable on update, so use the existing
+    // kind with the incoming html when provided.
+    this.assertLayoutMarker(
+      existing.kind,
+      data.htmlContent ?? existing.htmlContent
+    );
 
     const updateData: Record<string, unknown> = {
       updatedAt: new Date(),
