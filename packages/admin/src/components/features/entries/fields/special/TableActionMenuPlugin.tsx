@@ -45,8 +45,8 @@ const menuStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "2px",
   padding: "3px 4px",
-  backgroundColor: "hsl(var(--background))",
-  border: "1px solid hsl(var(--border))",
+  backgroundColor: "var(--background)",
+  border: "1px solid var(--border)",
   borderRadius: "6px",
   boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
   fontSize: "12px",
@@ -63,7 +63,7 @@ const actionBtnStyle: React.CSSProperties = {
   background: "transparent",
   borderRadius: "4px",
   cursor: "pointer",
-  color: "hsl(var(--muted-foreground))",
+  color: "var(--muted-foreground)",
   fontSize: "11px",
   fontFamily: "inherit",
   whiteSpace: "nowrap",
@@ -77,7 +77,7 @@ const destructiveBtnStyle: React.CSSProperties = {
 const separatorStyle: React.CSSProperties = {
   width: "1px",
   height: "16px",
-  backgroundColor: "hsl(var(--border))",
+  backgroundColor: "var(--border)",
   margin: "0 2px",
   flexShrink: 0,
 };
@@ -105,16 +105,17 @@ function ActionButton({
       title={title}
       onMouseEnter={e => {
         if (destructive) {
-          e.currentTarget.style.backgroundColor = "hsl(var(--destructive)/0.1)";
-          e.currentTarget.style.color = "hsl(var(--destructive))";
+          e.currentTarget.style.backgroundColor =
+            "color-mix(in srgb, var(--destructive) 10%, transparent)";
+          e.currentTarget.style.color = "var(--destructive)";
         } else {
-          e.currentTarget.style.backgroundColor = "hsl(var(--accent))";
-          e.currentTarget.style.color = "hsl(var(--accent-foreground))";
+          e.currentTarget.style.backgroundColor = "var(--accent)";
+          e.currentTarget.style.color = "var(--accent-foreground)";
         }
       }}
       onMouseLeave={e => {
         e.currentTarget.style.backgroundColor = "transparent";
-        e.currentTarget.style.color = "hsl(var(--muted-foreground))";
+        e.currentTarget.style.color = "var(--muted-foreground)";
       }}
     >
       {label}

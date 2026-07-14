@@ -242,7 +242,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
       <div
         ref={ref}
         className={cn(
-          "flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-border bg-[hsl(var(--table-header-bg))]",
+          "flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--table-header-bg)]",
           className
         )}
       >

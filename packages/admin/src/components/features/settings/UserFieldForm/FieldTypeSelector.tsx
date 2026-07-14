@@ -101,7 +101,8 @@ export function FieldTypePicker({
               ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}
             `}
             style={{
-              border: "1px solid hsl(var(--primary) / 0.25)",
+              border:
+                "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
             }}
           >
             {isSelected && (

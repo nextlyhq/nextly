@@ -127,8 +127,8 @@ function ButtonGroupComponent({
               )}
               style={{
                 ...(button.variant === "filled" && {
-                  backgroundColor: button.bgColor || "hsl(var(--primary))",
-                  color: button.textColor || "hsl(var(--primary-foreground))",
+                  backgroundColor: button.bgColor || "var(--primary)",
+                  color: button.textColor || "var(--primary-foreground)",
                 }),
                 ...(button.variant === "outline" &&
                   button.textColor && {
