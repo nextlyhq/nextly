@@ -40,7 +40,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type KeyboardEvent } from "react";
 
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
@@ -224,11 +224,40 @@ export function DataTableView<Row extends object>({
     return {};
   };
 
+  // Activate a mouse-only control from the keyboard (Enter/Space) so clickable
+  // rows/cards and sortable headers are operable without a pointer.
+  const onActivateKey = (fn: () => void) => (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fn();
+    }
+  };
+
+  const activateRow = (nav: { href?: string; onClick?: () => void }) => () => {
+    if (nav.href) navigateTo(nav.href);
+    else nav.onClick?.();
+  };
+
   const hasRowActions = Boolean(rowActions) || pluginRowActions.length > 0;
+
+  // A plugin-provided `isVisible` predicate that throws must not crash the whole
+  // table; isolate each call and hide the action if it throws.
+  const isActionVisible = (action: RowAction<Row>, row: Row): boolean => {
+    if (!action.isVisible) return true;
+    try {
+      return action.isVisible(row);
+    } catch (err) {
+      console.warn(
+        `[DataTableView] row action "${action.id}" isVisible threw; hiding it.`,
+        err
+      );
+      return false;
+    }
+  };
 
   const renderRowActions = (row: Row) => {
     const actions = [...(rowActions?.(row) ?? []), ...pluginRowActions].filter(
-      a => a.isVisible?.(row) ?? true
+      a => isActionVisible(a, row)
     );
     if (actions.length === 0) return null;
     return (
@@ -287,10 +316,12 @@ export function DataTableView<Row extends object>({
                 key={id}
                 variant={clickable ? "interactive" : "default"}
                 className={cn(clickable && "cursor-pointer")}
-                onClick={() => {
-                  if (nav.href) navigateTo(nav.href);
-                  else nav.onClick?.();
-                }}
+                role={clickable ? "button" : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onClick={activateRow(nav)}
+                onKeyDown={
+                  clickable ? onActivateKey(activateRow(nav)) : undefined
+                }
               >
                 <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
                   <CardTitle className="text-base">
@@ -378,6 +409,17 @@ export function DataTableView<Row extends object>({
                         col.align === "center" && "text-center",
                         canSort && "cursor-pointer select-none"
                       )}
+                      role={canSort ? "button" : undefined}
+                      tabIndex={canSort ? 0 : undefined}
+                      aria-sort={
+                        sorted === "asc"
+                          ? "ascending"
+                          : sorted === "desc"
+                            ? "descending"
+                            : canSort
+                              ? "none"
+                              : undefined
+                      }
                       onClick={
                         canSort
                           ? () =>
@@ -385,6 +427,16 @@ export function DataTableView<Row extends object>({
                                 col.name,
                                 sorted === "asc" ? "desc" : "asc"
                               )
+                          : undefined
+                      }
+                      onKeyDown={
+                        canSort
+                          ? onActivateKey(() =>
+                              onSortChange?.(
+                                col.name,
+                                sorted === "asc" ? "desc" : "asc"
+                              )
+                            )
                           : undefined
                       }
                     >
@@ -430,10 +482,12 @@ export function DataTableView<Row extends object>({
                         clickable && "cursor-pointer",
                         selectedSet.has(id) && "bg-muted/50"
                       )}
-                      onClick={() => {
-                        if (nav.href) navigateTo(nav.href);
-                        else nav.onClick?.();
-                      }}
+                      role={clickable ? "button" : undefined}
+                      tabIndex={clickable ? 0 : undefined}
+                      onClick={activateRow(nav)}
+                      onKeyDown={
+                        clickable ? onActivateKey(activateRow(nav)) : undefined
+                      }
                     >
                       {selection && (
                         <TableCell
