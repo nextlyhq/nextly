@@ -52,31 +52,6 @@
   border-color: var(--border);
 }
 
-/* Enhanced Accordion Content Styling */
-[data-slot="accordion-content"] {
-  overflow: hidden;
-  will-change: height;
-  transform: translateZ(0);
-  /* Force hardware acceleration */
-}
-
-/* [data-slot="accordion-content"][data-state="open"] {
-  animation: accordion-down 0.3s cubic-bezier(0.87, 0, 0.13, 1);
-}
-
-[data-slot="accordion-content"][data-state="closed"] {
-  animation: accordion-up 0.3s cubic-bezier(0.87, 0, 0.13, 1);
-} */
-
-/* Smooth accordion trigger animations */
-[data-slot="accordion-trigger"] {
-  will-change: transform;
-}
-
-[data-slot="accordion-trigger"] svg {
-  will-change: transform;
-}
-
 .adminapp {
   background-color: var(--background);
   color: var(--foreground);
