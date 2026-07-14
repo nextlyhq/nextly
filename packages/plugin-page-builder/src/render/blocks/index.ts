@@ -25,3 +25,8 @@ export { iconBox } from "./iconBox";
 export { imageBox } from "./imageBox";
 export { gallery } from "./gallery";
 export { richText } from "./richText";
+export { tabs } from "./tabs";
+export { accordion } from "./accordion";
+export { table } from "./table";
+export { socialIcons } from "./socialIcons";
+export { embed } from "./embed";
