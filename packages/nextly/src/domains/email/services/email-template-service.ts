@@ -16,7 +16,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, desc, isNull } from "drizzle-orm";
+import { and, eq, desc, isNull } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -358,11 +358,20 @@ export class EmailTemplateService extends BaseService {
     body: string,
     variables: Record<string, unknown>
   ): string {
-    const [before, after] = layout.htmlContent.split(
-      LAYOUT_CONTENT_PLACEHOLDER
+    // A well-formed layout has exactly one `{{content}}` marker (enforced on
+    // save). Be defensive for legacy/malformed rows: use the FIRST marker as the
+    // slot and preserve the rest of the wrapper, and if there is no marker at
+    // all, append the body after the wrapper so nothing is silently dropped.
+    const markerIndex = layout.htmlContent.indexOf(LAYOUT_CONTENT_PLACEHOLDER);
+    if (markerIndex === -1) {
+      return interpolateTemplate(layout.htmlContent, variables) + body;
+    }
+    const before = layout.htmlContent.slice(0, markerIndex);
+    const after = layout.htmlContent.slice(
+      markerIndex + LAYOUT_CONTENT_PLACEHOLDER.length
     );
-    const head = interpolateTemplate(before ?? "", variables);
-    const tail = interpolateTemplate(after ?? "", variables);
+    const head = interpolateTemplate(before, variables);
+    const tail = interpolateTemplate(after, variables);
     return head + body + tail;
   }
 
@@ -489,17 +498,22 @@ export class EmailTemplateService extends BaseService {
   /**
    * Get the default layout row, or null if none exists yet.
    *
-   * Resolves the `default-layout` slug first, then falls back to any
-   * `kind = 'layout'` row (in case the default was renamed).
+   * The default layout is uniquely identified by BOTH the `default-layout` slug
+   * and `kind = 'layout'`. Matching the slug alone would let a regular template
+   * named `default-layout` masquerade as the (undeletable) wrapper, and matching
+   * any `kind = 'layout'` row would resolve an arbitrary custom layout as the
+   * default and cause legacy migration to be skipped.
    */
   async getDefaultLayout(): Promise<EmailTemplateRecord | null> {
-    const bySlug = await this.getTemplateBySlug(DEFAULT_LAYOUT_SLUG);
-    if (bySlug) return bySlug;
-
     const rows = await this.db
       .select()
       .from(this.emailTemplates)
-      .where(eq(this.emailTemplates.kind, "layout"))
+      .where(
+        and(
+          eq(this.emailTemplates.slug, DEFAULT_LAYOUT_SLUG),
+          eq(this.emailTemplates.kind, "layout")
+        )
+      )
       .limit(1);
 
     return (rows[0] as EmailTemplateRecord | undefined) ?? null;
@@ -547,36 +561,57 @@ export class EmailTemplateService extends BaseService {
     const wrapper = `${header?.htmlContent ?? ""}${LAYOUT_CONTENT_PLACEHOLDER}${footer?.htmlContent ?? ""}`;
     const now = new Date();
 
-    await this.db.insert(this.emailTemplates).values({
-      id: randomUUID(),
-      name: "Default Layout",
-      slug: DEFAULT_LAYOUT_SLUG,
-      kind: "layout",
-      subject: "",
-      htmlContent: wrapper,
-      plainTextContent: null,
-      preheader: null,
-      layoutId: null,
-      fromOverride: null,
-      replyTo: null,
-      variables: null,
-      useLayout: false,
-      isActive: true,
-      providerId: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    // Create the default layout and remove the legacy rows in a single
+    // transaction so a failure or a concurrent bootstrap can't leave a
+    // half-migrated state (a duplicate layout row, or orphaned legacy rows).
+    await this.db.transaction(async (tx: typeof this.db) => {
+      // Re-check inside the transaction so a concurrent run that already created
+      // the default layout does not insert a duplicate.
+      const existing = await tx
+        .select()
+        .from(this.emailTemplates)
+        .where(
+          and(
+            eq(this.emailTemplates.slug, DEFAULT_LAYOUT_SLUG),
+            eq(this.emailTemplates.kind, "layout")
+          )
+        )
+        .limit(1);
 
-    if (header) {
-      await this.db
-        .delete(this.emailTemplates)
-        .where(eq(this.emailTemplates.id, header.id));
-    }
-    if (footer) {
-      await this.db
-        .delete(this.emailTemplates)
-        .where(eq(this.emailTemplates.id, footer.id));
-    }
+      if (existing.length === 0) {
+        await tx.insert(this.emailTemplates).values({
+          id: randomUUID(),
+          name: "Default Layout",
+          slug: DEFAULT_LAYOUT_SLUG,
+          kind: "layout",
+          subject: "",
+          htmlContent: wrapper,
+          plainTextContent: null,
+          preheader: null,
+          layoutId: null,
+          fromOverride: null,
+          replyTo: null,
+          variables: null,
+          useLayout: false,
+          isActive: true,
+          providerId: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      // Cleanup only after the default layout is confirmed present above.
+      if (header) {
+        await tx
+          .delete(this.emailTemplates)
+          .where(eq(this.emailTemplates.id, header.id));
+      }
+      if (footer) {
+        await tx
+          .delete(this.emailTemplates)
+          .where(eq(this.emailTemplates.id, footer.id));
+      }
+    });
 
     this.logger.info("Migrated legacy email layout rows into default layout.");
   }

@@ -310,6 +310,12 @@ export function createEmailTemplatesNamespace(
         subject: args.data.subject,
         htmlContent: args.data.htmlContent,
         plainTextContent: args.data.textContent,
+        kind: args.data.kind,
+        preheader: args.data.preheader,
+        layoutId: args.data.layoutId,
+        fromOverride: args.data.fromOverride,
+        replyTo: args.data.replyTo,
+        useLayout: args.data.useLayout,
         variables: args.data.variables,
         attachments: args.data.attachments,
       });

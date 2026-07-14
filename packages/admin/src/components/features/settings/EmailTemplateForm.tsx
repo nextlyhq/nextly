@@ -1445,12 +1445,23 @@ export function EmailTemplateForm({
   }, [subject, htmlContent, knownNames]);
 
   const previewHtml = useMemo(() => {
+    // Split a wrapper at its FIRST {{content}} marker, preserving the rest (a
+    // well-formed layout has exactly one). With no marker, the body is appended
+    // after the wrapper so nothing is silently dropped.
+    const CONTENT_MARKER = "{{content}}";
+    const splitLayout = (wrapper: string): [string, string] => {
+      const i = wrapper.indexOf(CONTENT_MARKER);
+      return i === -1
+        ? [wrapper, ""]
+        : [wrapper.slice(0, i), wrapper.slice(i + CONTENT_MARKER.length)];
+    };
+
     // A layout row previews its own wrapper with a stand-in body at the
     // {{content}} placeholder so authors can see where content lands.
     if (isLayoutRow) {
-      const [before, after] = (htmlContent ?? "").split("{{content}}");
-      const head = interpolate(before ?? "", sampleData, false);
-      const tail = interpolate(after ?? "", sampleData, false);
+      const [before, after] = splitLayout(htmlContent ?? "");
+      const head = interpolate(before, sampleData, false);
+      const tail = interpolate(after, sampleData, false);
       const sampleBody =
         '<p style="color:#71717a;font-style:italic;">Your email content appears here.</p>';
       return `${head}${sampleBody}${tail}`;
@@ -1458,9 +1469,9 @@ export function EmailTemplateForm({
 
     const body = interpolate(htmlContent ?? "", sampleData, true);
     if (!useLayout || !activeLayout) return body;
-    const [before, after] = activeLayout.htmlContent.split("{{content}}");
-    const head = interpolate(before ?? "", sampleData, false);
-    const tail = interpolate(after ?? "", sampleData, false);
+    const [before, after] = splitLayout(activeLayout.htmlContent);
+    const head = interpolate(before, sampleData, false);
+    const tail = interpolate(after, sampleData, false);
     return `${head}${body}${tail}`;
   }, [htmlContent, sampleData, useLayout, activeLayout, isLayoutRow]);
 

@@ -59,6 +59,18 @@ export interface EmailTemplateRecord {
   updatedAt: string;
 }
 
+/** Wire shape before normalization: legacy rows may carry a null `kind`. */
+type RawEmailTemplateRecord = Omit<EmailTemplateRecord, "kind"> & {
+  kind: EmailTemplateKind | null;
+};
+
+/** Coerce a null `kind` (legacy rows) to "template" at the API boundary. */
+function normalizeTemplate(
+  record: RawEmailTemplateRecord
+): EmailTemplateRecord {
+  return { ...record, kind: record.kind ?? "template" };
+}
+
 export interface CreateEmailTemplatePayload {
   name: string;
   slug: string;
@@ -110,19 +122,24 @@ export interface EmailTemplatePreviewResult {
  * `templates` to keep the bare-array public signature callers expect.
  */
 export async function listTemplates(): Promise<EmailTemplateRecord[]> {
-  const result = await fetcher<{ templates: EmailTemplateRecord[] }>(
+  const result = await fetcher<{ templates: RawEmailTemplateRecord[] }>(
     "/email-templates",
     {},
     true
   );
-  return result.templates ?? [];
+  return (result.templates ?? []).map(normalizeTemplate);
 }
 
 /**
  * Get a single email template by ID.
  */
 export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
-  return fetcher<EmailTemplateRecord>(`/email-templates/${id}`, {}, true);
+  const record = await fetcher<RawEmailTemplateRecord>(
+    `/email-templates/${id}`,
+    {},
+    true
+  );
+  return normalizeTemplate(record);
 }
 
 /**
@@ -131,12 +148,12 @@ export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
 export async function createTemplate(
   data: CreateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
     "/email-templates",
     { method: "POST", body: JSON.stringify(data) },
     true
   );
-  return result.item;
+  return normalizeTemplate(result.item);
 }
 
 /**
@@ -146,12 +163,12 @@ export async function updateTemplate(
   id: string,
   data: UpdateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
     `/email-templates/${id}`,
     { method: "PATCH", body: JSON.stringify(data) },
     true
   );
-  return result.item;
+  return normalizeTemplate(result.item);
 }
 
 /**

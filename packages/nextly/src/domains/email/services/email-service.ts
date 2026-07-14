@@ -188,6 +188,16 @@ export class EmailService extends BaseService {
       // Interpolate body (HTML escaping for injected values)
       let html = interpolateTemplate(dbTemplate.htmlContent, variables);
 
+      // Plain-text alternative: use the template's own text if authored
+      // (interpolated, no HTML escaping); otherwise derive it from the body
+      // BEFORE the preheader/layout are spliced in, so the hidden preheader div
+      // never leaks into the text mail as duplicated preview text.
+      const plainText = dbTemplate.plainTextContent?.trim()
+        ? interpolateTemplate(dbTemplate.plainTextContent, variables, {
+            escapeHtml: false,
+          })
+        : htmlToText(html);
+
       // Prepend a hidden preheader (inbox preview line) when authored.
       if (dbTemplate.preheader?.trim()) {
         const preheader = interpolateTemplate(dbTemplate.preheader, variables);
@@ -198,15 +208,6 @@ export class EmailService extends BaseService {
       if (dbTemplate.useLayout) {
         html = await this.composeWithLayout(dbTemplate, html, variables);
       }
-
-      // Plain-text alternative: use the template's own text if authored
-      // (interpolated, no HTML escaping); otherwise send() derives it from
-      // the HTML. The layout wrapper is HTML-only, so it is not applied here.
-      const plainText = dbTemplate.plainTextContent?.trim()
-        ? interpolateTemplate(dbTemplate.plainTextContent, variables, {
-            escapeHtml: false,
-          })
-        : undefined;
 
       // Merge template-default attachments with per-send attachments.
       // Dedupe by mediaId — per-send entries win on conflict.
@@ -383,22 +384,20 @@ export class EmailService extends BaseService {
       const durationMs = Date.now() - startedAt;
       if (result.success) {
         // Stable, greppable send record for terminal / log-aggregator use.
+        // Do not log recipient PII (addresses/subject). Counts keep the record
+        // useful for a log aggregator without persisting personal data.
         this.logger.info("email.sent", {
           event: "email.sent",
-          to: filtered.to,
-          subject: filtered.subject,
           provider: providerType,
           messageId: result.messageId,
           durationMs,
-          cc: options.cc ?? [],
-          bcc: options.bcc ?? [],
+          ccCount: options.cc?.length ?? 0,
+          bccCount: options.bcc?.length ?? 0,
           attachmentCount: resolvedAttachments?.length ?? 0,
         });
       } else {
         this.logger.warn("email.failed", {
           event: "email.failed",
-          to: filtered.to,
-          subject: filtered.subject,
           provider: providerType,
           durationMs,
           reason: "provider returned unsuccessful",
@@ -419,8 +418,6 @@ export class EmailService extends BaseService {
       );
       this.logger.error("email.failed", {
         event: "email.failed",
-        to: filtered.to,
-        subject: filtered.subject,
         provider: providerType,
         durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),

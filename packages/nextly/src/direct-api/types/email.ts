@@ -136,6 +136,18 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
     htmlContent: string;
     /** Plain text fallback content */
     textContent?: string;
+    /** Row kind: "template" (default), "layout", or "partial". */
+    kind?: "template" | "layout" | "partial";
+    /** Hidden inbox-preview line rendered before the body. */
+    preheader?: string;
+    /** Layout row that wraps this template at its {{content}} marker. */
+    layoutId?: string;
+    /** Override the provider's From address for this template. */
+    fromOverride?: string;
+    /** Reply-To address for this template. */
+    replyTo?: string;
+    /** Whether to wrap this template in its layout when sending. */
+    useLayout?: boolean;
     /** Specific provider ID to use for this template */
     providerId?: string;
     /** Whether this template is active */
