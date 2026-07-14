@@ -10,6 +10,7 @@
 import * as csstree from "css-tree";
 
 import { sanitizeBlockCss } from "./css-sanitize";
+import { compileMotionCss, MOTION_KEYFRAMES } from "./motion";
 import { walk } from "./tree";
 import type {
   BlockDocument,
@@ -266,6 +267,10 @@ export function compileNodeCss(
   emit(node.style, "");
   emit(node.styleHover, ":hover");
 
+  // Entrance motion.
+  const motionCss = compileMotionCss(node, cls);
+  if (motionCss) blocks.push(motionCss);
+
   // Per-breakpoint visibility → display:none media queries.
   if (node.visibility) {
     if (node.visibility.base === false) {
@@ -294,6 +299,15 @@ export function compileDocumentCss(
     if (css) parts.push(css);
   });
   return parts.join("\n");
+}
+
+/** Emit the shared motion keyframes once, if any node in the document animates. */
+export function compileDocumentMotionCss(doc: BlockDocument): string {
+  let any = false;
+  walk(doc.root, n => {
+    if (n.motion?.entrance && n.motion.entrance !== "none") any = true;
+  });
+  return any ? MOTION_KEYFRAMES : "";
 }
 
 /** Collect every node's sanitized per-block custom CSS for the page <style> (spec §4.4). */

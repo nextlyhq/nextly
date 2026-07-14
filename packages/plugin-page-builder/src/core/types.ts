@@ -8,6 +8,7 @@
  */
 import type { ReactNode } from "react";
 
+import type { MotionConfig } from "./motion";
 import type { BlockSupports } from "./supports";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,8 @@ export interface BlockNode {
   cssId?: string;
   /** Sanitized custom HTML attributes applied to the block root. */
   attributes?: Record<string, string>;
+  /** Entrance motion (spec §5). */
+  motion?: MotionConfig;
 }
 
 // ---------------------------------------------------------------------------

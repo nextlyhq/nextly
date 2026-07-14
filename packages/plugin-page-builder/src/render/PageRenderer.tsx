@@ -11,6 +11,7 @@ import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
   compileDocumentBlockCss,
   compileDocumentCss,
+  compileDocumentMotionCss,
   compileTokensCss,
   type BreakpointDef,
 } from "../core/style-compiler";
@@ -46,6 +47,7 @@ export function PageRenderer({
 
   const css = [
     compileTokensCss(PAGE_ROOT_CLASS, tokens),
+    compileDocumentMotionCss(document),
     compileDocumentCss(document, { breakpoints }),
     compileDocumentBlockCss(document),
     sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS),

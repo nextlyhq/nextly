@@ -44,6 +44,7 @@ import {
 } from "../content/contentFields";
 import { AttributesControl } from "../controls/advanced/AttributesControl";
 import { CustomCssControl } from "../controls/advanced/CustomCssControl";
+import { MotionControl } from "../controls/advanced/MotionControl";
 import {
   registerDefaultControls,
   renderControl,
@@ -521,6 +522,22 @@ function AdvancedTab({ node }: { node: BlockNode }) {
               Hide on {bp.label}
             </label>
           ))}
+        </div>
+      ) : null}
+
+      {sup.motion ? (
+        <div>
+          <SectionLabel>Motion</SectionLabel>
+          <MotionControl
+            value={node.motion}
+            onChange={value =>
+              dispatch({
+                type: "SET_MOTION",
+                id: node.id,
+                motion: value ?? {},
+              })
+            }
+          />
         </div>
       ) : null}
 

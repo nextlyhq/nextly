@@ -3,6 +3,7 @@
  * core tree ops, with bounded undo/redo history. Defaults for new nodes come from the
  * block registry — never a hard-coded list.
  */
+import type { MotionConfig } from "../../core/motion";
 import { defaultBlockRegistry } from "../../core/registry";
 import {
   duplicateNode,
@@ -83,6 +84,7 @@ export type EditorAction =
     }
   | { type: "SET_NAME"; id: string; name: string }
   | { type: "SET_LOCKED"; id: string; locked: boolean }
+  | { type: "SET_MOTION"; id: string; motion: MotionConfig }
   | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
@@ -226,6 +228,12 @@ export function editorReducer(
       return commit(
         state,
         updateNode(root, action.id, { locked: action.locked })
+      );
+
+    case "SET_MOTION":
+      return commit(
+        state,
+        updateNode(root, action.id, { motion: action.motion })
       );
 
     case "SET_PAGE_CUSTOM_CSS":

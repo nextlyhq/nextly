@@ -159,7 +159,7 @@ export function normalizeSupports(s: BlockSupports = {}): NormalizedSupports {
     position: Boolean(s.position),
     opacity: Boolean(s.opacity),
     filters: Boolean(s.filters),
-    motion: Boolean(s.motion),
+    motion: s.motion !== false, // default ON
     visibility: s.visibility !== false, // default ON
     interactions: expand(s.interactions, INTERACT_KEYS),
     customCss: s.customCss !== false, // default ON
