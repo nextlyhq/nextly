@@ -450,57 +450,6 @@
   backdrop-filter: blur(2px);
 }
 
-[data-slot="dialog-content"] {
-  background-color: var(--background) !important;
-  color: var(--foreground) !important;
-  border: 1px solid var(--border);
-  opacity: 1 !important;
-}
-
-/* Ensure dialog overlay is properly dark */
-[data-slot="dialog-overlay"] {
-  background-color: rgba(0, 0, 0, 0.7) !important;
-}
-
-/* Select dropdown background fixes */
-[data-slot="select-content"] {
-  background-color: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-  border: 1px solid var(--border) !important;
-  opacity: 1 !important;
-}
-
-/* Popover content background fixes */
-[data-slot="popover-content"] {
-  background-color: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-  border: 1px solid var(--border) !important;
-  opacity: 1 !important;
-}
-
-/* Ensure all dropdown/overlay components have solid backgrounds */
-[data-radix-popper-content-wrapper] {
-  background-color: transparent !important;
-}
-
-/* Command palette and other dropdown content */
-[data-slot="command-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="context-menu-content"] {
-  background-color: var(--background) !important;
-  color: var(--foreground) !important;
-  border: 1px solid var(--border) !important;
-  opacity: 1 !important;
-}
-
-/* Sheet content background fixes */
-[data-slot="sheet-content"] {
-  background-color: var(--background) !important;
-  color: var(--foreground) !important;
-  border-color: var(--border) !important;
-  opacity: 1 !important;
-}
-
 /* Card enhancements */
 [data-slot="card"] {
   transition: all 0.2s ease;
