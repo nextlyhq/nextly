@@ -9,9 +9,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { Save, Sun, Moon, Monitor } from "lucide-react";
+import { Save } from "lucide-react";
 import type React from "react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -29,7 +29,6 @@ import {
   FormItem,
   FormMessage,
 } from "@admin/components/ui/form";
-import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
   useGeneralSettings,
   useUpdateGeneralSettings,
@@ -138,7 +137,6 @@ const formSchema = z.object({
       "Logo URL must start with http:// or https://"
     )
     .optional(),
-  theme: z.enum(["light", "dark", "system"]).optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -147,59 +145,9 @@ type FormValues = z.infer<typeof formSchema>;
 // Page
 // ============================================================
 
-const THEME_OPTIONS = [
-  {
-    value: "light" as const,
-    label: "Light",
-    icon: Sun,
-    description: "Always use light appearance",
-  },
-  {
-    value: "dark" as const,
-    label: "Dark",
-    icon: Moon,
-    description: "Always use dark appearance",
-  },
-  {
-    value: "system" as const,
-    label: "System",
-    icon: Monitor,
-    description: "Follows your device settings",
-  },
-];
-
-/**
- * Apply a resolved theme ("light" | "dark") to all `.adminapp` containers
- * and to the document root, mirroring what `ThemeSync` does in
- * `ThemeProvider`. We touch both so the preview is visible regardless of
- * which surface the active styles target.
- */
-function applyPreviewTheme(theme: "light" | "dark" | "system") {
-  if (typeof document === "undefined") return;
-  const resolved =
-    theme === "system"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light"
-      : theme;
-
-  const isDark = resolved === "dark";
-  const containers = document.querySelectorAll(".adminapp");
-  containers.forEach(container => {
-    container.classList.toggle("dark", isDark);
-  });
-}
-
 const SettingsGeneralPage: React.FC = () => {
   const { data: settings, isLoading } = useGeneralSettings();
   const { mutate: updateSettings, isPending } = useUpdateGeneralSettings();
-  const { theme: savedTheme, setTheme: persistTheme } = useTheme();
-  const initialThemeRef = useRef<string | undefined>(undefined);
-  // Tracks whether the user has changed the theme tile away from the saved
-  // value. Read by the unmount cleanup hook (form.formState.isDirty cannot
-  // be reliably read inside an effect cleanup because it relies on
-  // subscription proxies that update during render).
-  const themeDirtyRef = useRef(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -211,13 +159,10 @@ const SettingsGeneralPage: React.FC = () => {
       dateFormat: settings?.dateFormat ?? "",
       timeFormat: settings?.timeFormat ?? "",
       logoUrl: settings?.logoUrl ?? "",
-      theme: undefined,
     },
   });
 
   // When settings data arrives or changes, update the form immediately.
-  // Note: theme is intentionally excluded here — it is owned by next-themes,
-  // not the API payload. We initialize it in a separate effect below.
   useEffect(() => {
     if (settings) {
       form.reset({
@@ -228,49 +173,9 @@ const SettingsGeneralPage: React.FC = () => {
         dateFormat: settings.dateFormat ?? "",
         timeFormat: settings.timeFormat ?? "",
         logoUrl: settings.logoUrl ?? "",
-        theme: form.getValues("theme"),
       });
     }
   }, [settings, form]);
-
-  // Initialize the form's theme value once next-themes has resolved the
-  // saved theme. next-themes resolves async on mount so `savedTheme` may be
-  // `undefined` initially.
-  useEffect(() => {
-    if (savedTheme && initialThemeRef.current === undefined) {
-      initialThemeRef.current = savedTheme;
-      form.setValue("theme", savedTheme as "light" | "dark" | "system", {
-        shouldDirty: false,
-      });
-    }
-  }, [savedTheme, form]);
-
-  const previewTheme = (form.watch("theme") ?? savedTheme ?? "system") as
-    | "light"
-    | "dark"
-    | "system";
-
-  const setPreviewTheme = (next: "light" | "dark" | "system") => {
-    form.setValue("theme", next, { shouldDirty: true });
-    themeDirtyRef.current = next !== initialThemeRef.current;
-  };
-
-  // Apply the preview to all `.adminapp` containers whenever previewTheme
-  // changes. This is the "live preview" — it does NOT touch localStorage.
-  useEffect(() => {
-    applyPreviewTheme(previewTheme);
-  }, [previewTheme]);
-
-  // On unmount, if the user has previewed a different theme without saving,
-  // restore the saved theme's class so navigating away from /admin/settings
-  // visually reverts.
-  useEffect(() => {
-    return () => {
-      if (initialThemeRef.current === undefined) return;
-      if (!themeDirtyRef.current) return;
-      applyPreviewTheme(initialThemeRef.current as "light" | "dark" | "system");
-    };
-  }, []);
 
   function onSubmit(values: FormValues) {
     const timezoneToSave = values.timezone?.trim() ? values.timezone : null;
@@ -294,15 +199,7 @@ const SettingsGeneralPage: React.FC = () => {
       },
       {
         onSuccess: () => {
-          // Persist the theme to localStorage via next-themes only after the
-          // API call succeeds.
-          if (values.theme) {
-            persistTheme(values.theme);
-            initialThemeRef.current = values.theme;
-          }
-          themeDirtyRef.current = false;
-          // Reset the form to make it "clean" again so the unmount cleanup
-          // does not trigger a snap-back.
+          // Reset the form to make it "clean" again after a successful save.
           form.reset(values);
           toast.success("Settings saved", {
             description: "General settings have been updated.",
@@ -441,51 +338,6 @@ const SettingsGeneralPage: React.FC = () => {
                       </FormItem>
                     )}
                   />
-                </SettingsSection>
-
-                {/* ── Section: Appearance ── */}
-                <SettingsSection label="Appearance">
-                  <SettingsRow
-                    label="Theme"
-                    description="Choose how the admin panel looks. System follows your device's dark/light mode."
-                  >
-                    <div className="grid grid-cols-3 gap-3">
-                      {THEME_OPTIONS.map(
-                        ({ value, label, icon: Icon, description }) => {
-                          const isActive = previewTheme === value;
-                          return (
-                            <button
-                              key={value}
-                              type="button"
-                              onClick={() => setPreviewTheme(value)}
-                              className={[
-                                "group relative flex flex-col items-center gap-2.5 rounded-md border p-4 text-center transition-all duration-200 cursor-pointer",
-                                isActive
-                                  ? "border-foreground bg-primary/5"
-                                  : "border-input bg-background hover:border-foreground/40 text-muted-foreground hover:text-foreground",
-                              ].join(" ")}
-                            >
-                              <Icon className="h-5 w-5" />
-                              <div>
-                                <p
-                                  className={
-                                    isActive
-                                      ? "text-sm font-semibold text-foreground"
-                                      : "text-sm font-semibold"
-                                  }
-                                >
-                                  {label}
-                                </p>
-                                <p className="mt-0.5 text-[11px] text-muted-foreground leading-tight">
-                                  {description}
-                                </p>
-                              </div>
-                            </button>
-                          );
-                        }
-                      )}
-                    </div>
-                  </SettingsRow>
                 </SettingsSection>
               </div>
             )}

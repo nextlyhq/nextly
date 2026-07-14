@@ -41,13 +41,15 @@ const buttonVariants = cva(
         link: "text-primary border border-transparent underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-10 px-6 py-2",
-        sm: "h-9 px-4 text-[13px]",
-        md: "h-10 px-6 text-sm",
-        lg: "h-11 px-8 text-base",
-        icon: "h-10 w-10 p-0",
-        "icon-sm": "h-9 w-9 p-0",
-        "icon-lg": "h-11 w-11 p-0",
+        default: "h-[var(--control-height)] px-6 py-2",
+        sm: "h-[var(--control-height-md)] px-4 text-[13px]",
+        md: "h-[var(--control-height)] px-6 text-sm",
+        lg: "h-[var(--control-height-lg)] px-8 text-base",
+        icon: "h-[var(--control-height)] w-[var(--control-height)] p-0",
+        "icon-sm":
+          "h-[var(--control-height-md)] w-[var(--control-height-md)] p-0",
+        "icon-lg":
+          "h-[var(--control-height-lg)] w-[var(--control-height-lg)] p-0",
       },
     },
     defaultVariants: {

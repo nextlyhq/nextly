@@ -166,7 +166,7 @@ export function FieldWrapper({
           <Label
             htmlFor={fieldId}
             className={cn(
-              "text-[11px] font-bold tracking-[0.08em] text-slate-500",
+              "text-[11px] font-bold tracking-[0.08em] text-muted-foreground",
               error && "text-destructive"
             )}
           >
@@ -213,7 +213,7 @@ export function FieldWrapper({
       <Label
         htmlFor={fieldId}
         className={cn(
-          "text-[11px] font-bold tracking-[0.08em] text-slate-500 mb-1",
+          "text-[11px] font-bold tracking-[0.08em] text-muted-foreground mb-1",
           error && "text-destructive"
         )}
       >

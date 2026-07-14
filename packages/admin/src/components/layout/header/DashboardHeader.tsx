@@ -1,6 +1,7 @@
 import { NotificationBell } from "@admin/components/features/notifications";
 import { Discord, Github, HelpCircle } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { ThemeToggle } from "@admin/components/shared/theme-toggle";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
@@ -29,7 +30,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
   return (
     <header
       className={cn(
-        "h-16 border-b border-primary/5 bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
+        "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center justify-between px-6",
         className
       )}
@@ -79,6 +80,8 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
         {headerSlots.map(p => (
           <PluginSlot key={p.name} path={p.slot} />
         ))}
+
+        <ThemeToggle />
 
         {/* F10 PR 5: bell renders only for super-admins (component
             self-gates via useCurrentUserPermissions). */}

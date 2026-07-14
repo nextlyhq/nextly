@@ -160,7 +160,7 @@ function PluginsTable({
 
   if (plugins.length === 0) {
     return (
-      <div className="rounded-none  border border-primary/5 border-dashed border-primary/5 bg-card p-12 text-center">
+      <div className="rounded-none  border border-border border-dashed border-border bg-card p-12 text-center">
         <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
         <h3 className="text-sm font-medium text-foreground mb-1">
           No plugins installed
@@ -194,7 +194,7 @@ function PluginsTable({
         </div>
       )}
 
-      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
+      <div className="rounded-none  border border-border bg-card overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow className="bg-primary/5">

@@ -1,6 +1,5 @@
 "use client";
 
-import type { Column } from "@nextlyhq/ui";
 import {
   Badge,
   Button,
@@ -10,19 +9,22 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
 } from "@nextlyhq/ui";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
 import { Columns, Package } from "@admin/components/icons";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+} from "@admin/components/ui/table/data-table";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
@@ -47,11 +49,15 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["name"]);
+
 /**
- * PluginsTable Component
+ * PluginsTable
  *
- * Displays a responsive table/card view of installed plugins with search, selection, and pagination.
- * Follows the standard table pattern used across the admin dashboard.
+ * Lists installed plugins with client-side search, pagination, column
+ * visibility, and selection. Plugins are read-only previews (no row actions or
+ * navigation); bulk operations are not yet available.
  */
 export default function PluginsTable() {
   const { data: branding } = useSuspenseQuery<AdminBranding>({
@@ -62,12 +68,22 @@ export default function PluginsTable() {
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
-
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Reset to the first page when the search term changes so the slice does not
+  // fall out of range against the newly filtered list.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  // Changing the page size can leave the current page index out of range; snap
+  // back to the first page.
+  const handlePageSizeChange = (newPageSize: number) => {
+    setPageSize(newPageSize);
+    setPage(0);
+  };
 
   const pluginsWithId = useMemo(() => {
     return (branding?.plugins ?? []).map(plugin => ({
@@ -77,17 +93,14 @@ export default function PluginsTable() {
   }, [branding?.plugins]);
 
   const filteredPlugins = useMemo(() => {
-    let result = pluginsWithId;
-    if (debouncedSearch) {
-      const query = debouncedSearch.toLowerCase();
-      result = result.filter(
-        plugin =>
-          plugin.name.toLowerCase().includes(query) ||
-          plugin.appearance?.label?.toLowerCase().includes(query) ||
-          plugin.description?.toLowerCase().includes(query)
-      );
-    }
-    return result;
+    if (!debouncedSearch) return pluginsWithId;
+    const query = debouncedSearch.toLowerCase();
+    return pluginsWithId.filter(
+      plugin =>
+        plugin.name.toLowerCase().includes(query) ||
+        plugin.appearance?.label?.toLowerCase().includes(query) ||
+        plugin.description?.toLowerCase().includes(query)
+    );
   }, [pluginsWithId, debouncedSearch]);
 
   const totalCount = filteredPlugins.length;
@@ -98,96 +111,51 @@ export default function PluginsTable() {
   }, [filteredPlugins, page, pageSize]);
 
   const {
+    selectedIds,
     selectedCount,
     toggleSelection,
     selectAllOnPage,
     deselectAllOnPage,
     clearSelection,
-    isSelected,
-    getSelectedCountOnPage,
   } = useRowSelection();
 
   const toggleColumn = useCallback((key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
-
-  const pagePluginIds = useMemo(
-    () => paginatedPlugins.map(p => p.id),
-    [paginatedPlugins]
-  );
-  const selectedOnPage = getSelectedCountOnPage(pagePluginIds);
-  const selectAllCheckboxState: boolean | "indeterminate" =
-    selectedOnPage === 0
-      ? false
-      : selectedOnPage === pagePluginIds.length
-        ? true
-        : "indeterminate";
-
-  const handleToggleSelectAllOnPage = useCallback(() => {
-    if (selectedOnPage === pagePluginIds.length) {
-      deselectAllOnPage(pagePluginIds);
-    } else {
-      selectAllOnPage(pagePluginIds);
-    }
-  }, [selectedOnPage, pagePluginIds, deselectAllOnPage, selectAllOnPage]);
 
   const handleBulkDelete = useCallback(() => {
     toast.info("Bulk delete is not available for plugins yet.");
   }, []);
 
-  const columnDefs: Column<PluginWithId>[] = useMemo(() => {
+  const allColumns = useMemo<NextlyColumn<PluginWithId>[]>(() => {
     const conversion = (v: unknown): string =>
       typeof v === "string" ? v : "—";
 
     return [
       {
-        key: "select" as keyof PluginWithId,
-        label: (
-          <BulkSelectCheckbox
-            checked={selectAllCheckboxState}
-            onCheckedChange={handleToggleSelectAllOnPage}
-            rowId="select-all"
-            rowLabel="Select all plugins on page"
-          />
-        ),
-        hideLabelOnMobile: true,
-        render: (_, plugin) => (
-          <BulkSelectCheckbox
-            checked={isSelected(plugin.id)}
-            onCheckedChange={() => toggleSelection(plugin.id)}
-            rowId={plugin.id}
-            rowLabel={plugin.name}
-          />
-        ),
-      },
-      {
-        key: "name",
-        label: "NAME",
-        render: (_: unknown, plugin: PluginWithId) => {
-          const iconName = plugin.appearance?.icon || "Package";
+        name: "name",
+        header: "NAME",
+        cell: ({ row }) => {
+          const iconName = row.appearance?.icon || "Package";
           const IconComponent =
             (Icons as Record<string, React.ElementType>)[iconName] || Package;
-
           return (
             <div className="flex items-center gap-3">
               <div className="table-row-icon-cover">
                 <IconComponent className="h-4 w-4" />
               </div>
-              <div className="min-w-0 flex-1 flex flex-col">
-                <span className="font-medium text-sm text-foreground truncate text-left cursor-pointer">
-                  {plugin.appearance?.label ?? plugin.name}
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm font-medium text-foreground">
+                  {row.appearance?.label ?? row.name}
                 </span>
-                {plugin.description && (
-                  <span className="text-xs text-muted-foreground truncate">
-                    {plugin.description}
+                {row.description && (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {row.description}
                   </span>
                 )}
               </div>
@@ -196,47 +164,55 @@ export default function PluginsTable() {
         },
       },
       {
-        key: "version",
-        label: "VERSION",
-        render: (version: unknown) => (
-          <span className="text-muted-foreground text-sm font-mono">
-            {conversion(version)}
+        name: "version",
+        header: "VERSION",
+        cell: ({ value }) => (
+          <span className="font-mono text-sm text-muted-foreground">
+            {conversion(value)}
           </span>
         ),
       },
       {
-        key: "placement",
-        label: "PLACEMENT",
-        render: (placement: unknown) => (
+        name: "placement",
+        header: "PLACEMENT",
+        cell: ({ value }) => (
           <Badge
             variant="default"
-            className="text-xs capitalize text-muted-foreground font-normal"
+            className="text-xs font-normal capitalize text-muted-foreground"
           >
-            {PLACEMENT_LABELS[String(placement)] ?? String(placement)}
+            {PLACEMENT_LABELS[String(value)] ?? String(value)}
           </Badge>
         ),
       },
     ];
-  }, [
-    selectAllCheckboxState,
-    handleToggleSelectAllOnPage,
-    isSelected,
-    toggleSelection,
-  ]);
+  }, []);
 
   const columns = useMemo(
     () =>
-      columnDefs.filter(
-        col =>
-          col.key === ("select" as keyof PluginWithId) ||
-          !hiddenColumns.has(String(col.key))
-      ),
-    [columnDefs, hiddenColumns]
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
+  );
+
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
+  );
+
+  const selection = useMemo<DataTableSelection<PluginWithId>>(
+    () => ({
+      selectedIds,
+      onToggle: plugin => toggleSelection(plugin.id),
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(r => r.id);
+        if (allSelected) deselectAllOnPage(ids);
+        else selectAllOnPage(ids);
+      },
+    }),
+    [selectedIds, toggleSelection, deselectAllOnPage, selectAllOnPage]
   );
 
   return (
     <div className="space-y-4">
-      {/* Bulk selection toolbar */}
       {selectedCount > 0 && (
         <BulkActionBar
           selectedCount={selectedCount}
@@ -247,13 +223,12 @@ export default function PluginsTable() {
         />
       )}
 
-      {/* Toolbar */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <SearchBar
           value={search}
           onChange={setSearch}
           placeholder="Search plugins..."
-          className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
+          className="w-full border-border bg-background text-foreground md:max-w-sm"
         />
         <div className="flex items-center gap-2">
           <DropdownMenu>
@@ -261,7 +236,7 @@ export default function PluginsTable() {
               <Button
                 variant="outline"
                 size="md"
-                className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                className="border-border bg-background text-foreground hover:bg-accent/10"
               >
                 <Columns className="h-4 w-4" />
                 Columns
@@ -270,46 +245,42 @@ export default function PluginsTable() {
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {columnDefs
-                .filter(col => col.key !== ("select" as keyof PluginWithId))
-                .map(col => (
-                  <DropdownMenuCheckboxItem
-                    key={String(col.key)}
-                    checked={!hiddenColumns.has(String(col.key))}
-                    onCheckedChange={() => toggleColumn(String(col.key))}
-                  >
-                    {col.label}
-                  </DropdownMenuCheckboxItem>
-                ))}
+              {toggleableColumns.map(col => (
+                <DropdownMenuCheckboxItem
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
+                >
+                  {typeof col.header === "string" ? col.header : col.name}
+                </DropdownMenuCheckboxItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
-      {/* Boxed table and Pagination Card */}
-      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
-        <ResponsiveTable
-          data={paginatedPlugins}
-          columns={columns}
-          emptyMessage={
-            debouncedSearch
-              ? "No plugins found matching your search."
-              : "No plugins installed."
-          }
-          ariaLabel="Installed plugins table"
-          tableWrapperClassName="border-0 rounded-none shadow-none"
+      <DataTableView<PluginWithId>
+        columns={columns}
+        rows={paginatedPlugins}
+        selection={selection}
+        registryKey="plugins"
+        ariaLabel="Installed plugins table"
+        emptyMessage={
+          debouncedSearch
+            ? "No plugins found matching your search."
+            : "No plugins installed."
+        }
+      />
+      {totalCount > 0 && (
+        <Pagination
+          currentPage={page}
+          totalPages={Math.ceil(totalCount / pageSize)}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={handlePageSizeChange}
+          totalItems={totalCount}
         />
-        {totalCount > 0 && (
-          <Pagination
-            currentPage={page}
-            totalPages={Math.ceil(totalCount / pageSize)}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={setPageSize}
-            totalItems={totalCount}
-          />
-        )}
-      </div>
+      )}
     </div>
   );
 }

@@ -163,8 +163,8 @@ export function UserRoleSelector({
                     className={cn(
                       "inline-flex items-center gap-1 rounded-none px-2.5 py-1 text-xs font-medium",
                       isSystem
-                        ? "bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100"
-                        : "bg-primary/5 text-slate-800 dark:bg-slate-800 dark:text-slate-200"
+                        ? "bg-muted text-foreground"
+                        : "bg-primary/5 text-foreground dark:text-muted-foreground"
                     )}
                   >
                     {isSystem && (
@@ -259,10 +259,10 @@ export function UserRoleSelector({
                             {/* Checkbox indicator */}
                             <div
                               className={cn(
-                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-primary/5 transition-colors mt-0.5",
+                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-border transition-colors mt-0.5",
                                 isSelected
                                   ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-primary/5 bg-background"
+                                  : "border-border bg-background"
                               )}
                               aria-hidden="true"
                             >

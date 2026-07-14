@@ -47,10 +47,10 @@ export function RoleStatusSection({
                   <label
                     key={option.id}
                     className={cn(
-                      "group relative flex cursor-pointer items-center rounded-none  border border-primary/5 p-4 transition-all outline-none",
+                      "group relative flex cursor-pointer items-center rounded-none  border border-border p-4 transition-all outline-none",
                       isChecked
                         ? "bg-primary/5 border-primary"
-                        : "border-primary/5 bg-card hover-unified hover:border-primary/25",
+                        : "border-border bg-card hover-unified hover:border-primary/25",
                       isLoading && "opacity-50 cursor-not-allowed"
                     )}
                   >
@@ -69,8 +69,8 @@ export function RoleStatusSection({
                     {/* Custom Radio Circle */}
                     <div
                       className={cn(
-                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-primary/5",
-                        isChecked ? "border-primary" : "border-primary/5"
+                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-border",
+                        isChecked ? "border-primary" : "border-border"
                       )}
                     >
                       {isChecked && (

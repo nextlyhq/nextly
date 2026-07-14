@@ -58,13 +58,13 @@ function SelectValue({
 }
 
 const selectTriggerVariants = cva(
-  "flex w-full items-center justify-between gap-2 rounded-none border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:!border-primary focus-visible:!border-primary focus:outline-none hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:!border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
+  "flex w-full items-center justify-between gap-2 rounded-none border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
   {
     variants: {
       size: {
-        sm: "h-8 text-sm",
-        default: "h-10 text-sm",
-        lg: "h-11 text-base",
+        sm: "h-[var(--control-height-sm)] text-sm",
+        default: "h-[var(--control-height)] text-sm",
+        lg: "h-[var(--control-height-lg)] text-base",
       },
     },
     defaultVariants: {
@@ -111,7 +111,7 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(
-          "bg-popover text-popover-foreground  border border-primary/5 shadow-none rounded-none z-9999 max-h-(--radix-select-content-available-height) min-w-32 overflow-hidden data-[state=open]:animate-zoom-in-95 data-[state=closed]:animate-zoom-out-95 data-[side=bottom]:animate-slide-in-from-top-2 data-[side=left]:animate-slide-in-from-right-2 data-[side=right]:animate-slide-in-from-left-2 data-[side=top]:animate-slide-in-from-bottom-2",
+          "bg-popover text-popover-foreground  border border-border shadow-none rounded-none z-9999 max-h-(--radix-select-content-available-height) min-w-32 overflow-hidden data-[state=open]:animate-zoom-in-95 data-[state=closed]:animate-zoom-out-95 data-[side=bottom]:animate-slide-in-from-top-2 data-[side=left]:animate-slide-in-from-right-2 data-[side=right]:animate-slide-in-from-left-2 data-[side=top]:animate-slide-in-from-bottom-2",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className

@@ -10,15 +10,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./admin": {
       "types": "./dist/admin/index.d.ts",
-      "import": "./dist/admin/index.js"
+      "import": "./dist/admin/index.js",
+      "default": "./dist/admin/index.js"
     },
     "./components": {
       "types": "./dist/components/index.d.ts",
-      "import": "./dist/components/index.js"
+      "import": "./dist/components/index.js",
+      "default": "./dist/components/index.js"
     },
     "./styles/builder.css": "./dist/styles/form-builder.css",
     "./styles/submissions-filter.css": "./dist/styles/submissions-filter.css"

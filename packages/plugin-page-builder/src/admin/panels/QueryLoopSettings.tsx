@@ -105,7 +105,7 @@ export function QueryLoopSettings({ node }: { node: BlockNode }) {
         </SelectContent>
       </Select>
       {error ? (
-        <p className="nx-pb-empty" style={{ color: "hsl(var(--destructive))" }}>
+        <p className="nx-pb-empty" style={{ color: "var(--destructive)" }}>
           Couldn’t load collections: {error}
         </p>
       ) : null}

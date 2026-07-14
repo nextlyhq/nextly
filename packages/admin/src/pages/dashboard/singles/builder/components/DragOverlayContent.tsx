@@ -1,4 +1,3 @@
-
 import type {
   PaletteDragData,
   FieldListDragData,
@@ -48,7 +47,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
   if (data.source === "palette") {
     const IconComponent = iconMap[data.icon] || Icons.FileText;
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-none  border border-primary/5 bg-background shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-2 rounded-none  border border-border bg-background shadow-lg">
         <IconComponent className="h-4 w-4 text-primary shrink-0" />
         <span className="text-xs font-medium text-foreground">
           {data.label}
@@ -65,7 +64,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
 
   return (
     <div
-      className="flex items-center gap-4 py-3 px-4 bg-background  border border-primary/5 rounded-none shadow-lg cursor-grabbing"
+      className="flex items-center gap-4 py-3 px-4 bg-background  border border-border rounded-none shadow-lg cursor-grabbing"
       style={{ minWidth: 320 }}
     >
       {/* Drag handle */}
@@ -85,7 +84,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
             {field.label || field.name || "Unnamed Field"}
           </span>
           {isRequired && (
-            <span className="text-[10px] px-2 py-0 bg-red-50 text-red-600 font-normal rounded-none  border border-primary/5 border-red-200">
+            <span className="text-[10px] px-2 py-0 bg-red-50 text-red-600 font-normal rounded-none  border border-border border-red-200">
               Required
             </span>
           )}

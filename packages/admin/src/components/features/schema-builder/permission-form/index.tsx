@@ -73,7 +73,7 @@ export function PermissionForm({
               aria-invalid={!!errors.name}
               className={
                 errors.name
-                  ? `mt-2 border-[hsl(var(--ring))] ring-2 ring-[hsl(var(--ring))] ring-offset-2`
+                  ? `mt-2 border-[var(--ring)] ring-2 ring-[var(--ring)] ring-offset-2`
                   : `mt-2`
               }
               {...register("name")}
@@ -92,7 +92,7 @@ export function PermissionForm({
               aria-invalid={!!errors.slug}
               className={
                 errors.slug
-                  ? `mt-2 border-[hsl(var(--ring))] ring-2 ring-[hsl(var(--ring))] ring-offset-2`
+                  ? `mt-2 border-[var(--ring)] ring-2 ring-[var(--ring)] ring-offset-2`
                   : `mt-2`
               }
               {...register("slug")}
@@ -111,7 +111,7 @@ export function PermissionForm({
               aria-invalid={!!errors.description}
               className={
                 errors.description
-                  ? `mt-2 border-[hsl(var(--ring))] ring-2 ring-[hsl(var(--ring))] ring-offset-2`
+                  ? `mt-2 border-[var(--ring)] ring-2 ring-[var(--ring)] ring-offset-2`
                   : `mt-2`
               }
               {...register("description")}
@@ -123,7 +123,7 @@ export function PermissionForm({
             )}
           </div>
 
-          <div className="mb-4 rounded-none  border border-primary/5 p-4 flex justify-between items-center">
+          <div className="mb-4 rounded-none  border border-border p-4 flex justify-between items-center">
             <label>
               <div className="text-sm font-medium">System Permission</div>
               <p className="admin-text">

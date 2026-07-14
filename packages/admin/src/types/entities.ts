@@ -149,6 +149,9 @@ export interface ApiCollection {
   /** Whether the collection is locked from UI edits (code-first collections) */
   locked?: boolean;
 
+  /** Source file where a code-first collection is defined (shown in the read-only builder) */
+  configPath?: string | null;
+
   /** Current migration status */
   migrationStatus?: MigrationStatus;
 
@@ -278,6 +281,9 @@ export interface ApiSingle {
   /** Whether the Single is locked from UI edits (code-first Singles) */
   locked?: boolean;
 
+  /** Source file where a code-first Single is defined (shown in the read-only builder) */
+  configPath?: string | null;
+
   /**
    * Whether the Single carries a Draft/Published status column. Default
    * false; users opt in via the Schema Builder modal. See PR 1's backend
@@ -363,6 +369,9 @@ export interface ApiComponent {
 
   /** Whether the Component is locked from UI edits (code-first Components) */
   locked?: boolean;
+
+  /** Source file where a code-first Component is defined (shown in the read-only builder) */
+  configPath?: string | null;
 
   /** Current migration status */
   migrationStatus?: ComponentMigrationStatus;

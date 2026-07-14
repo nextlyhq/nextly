@@ -46,7 +46,11 @@ import { createResendProvider } from "./providers/resend-provider";
 import { createSendLayerProvider } from "./providers/sendlayer-provider";
 import { createSmtpProvider } from "./providers/smtp-provider";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
-import { interpolateTemplate } from "./template-engine";
+import {
+  htmlToText,
+  interpolateTemplate,
+  validateTemplateVariables,
+} from "./template-engine";
 
 /**
  * Dependencies needed to resolve attachments from the media library.
@@ -162,6 +166,20 @@ export class EmailService extends BaseService {
     }
 
     if (dbTemplate && dbTemplate.isActive) {
+      // Surface missing required variables without blocking the send — the
+      // authoring UI validates at edit time, and existing sends must not
+      // start failing on data that previously rendered (blank).
+      const validation = validateTemplateVariables(
+        dbTemplate.variables,
+        variables
+      );
+      if (!validation.valid) {
+        this.logger.warn(
+          "Email template sent with missing required variables — they render blank",
+          { slug: templateSlug, missing: validation.missing }
+        );
+      }
+
       // Interpolate subject (no HTML escaping — plain text)
       const subject = interpolateTemplate(dbTemplate.subject, variables, {
         escapeHtml: false,
@@ -169,6 +187,22 @@ export class EmailService extends BaseService {
 
       // Interpolate body (HTML escaping for injected values)
       let html = interpolateTemplate(dbTemplate.htmlContent, variables);
+
+      // Plain-text alternative: use the template's own text if authored
+      // (interpolated, no HTML escaping); otherwise derive it from the body
+      // BEFORE the preheader/layout are spliced in, so the hidden preheader div
+      // never leaks into the text mail as duplicated preview text.
+      const plainText = dbTemplate.plainTextContent?.trim()
+        ? interpolateTemplate(dbTemplate.plainTextContent, variables, {
+            escapeHtml: false,
+          })
+        : htmlToText(html);
+
+      // Prepend a hidden preheader (inbox preview line) when authored.
+      if (dbTemplate.preheader?.trim()) {
+        const preheader = interpolateTemplate(dbTemplate.preheader, variables);
+        html = `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}</div>${html}`;
+      }
 
       // Compose with layout if enabled
       if (dbTemplate.useLayout) {
@@ -186,6 +220,9 @@ export class EmailService extends BaseService {
         to,
         subject,
         html,
+        plainText,
+        from: dbTemplate.fromOverride ?? undefined,
+        replyTo: dbTemplate.replyTo ?? undefined,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
@@ -262,6 +299,10 @@ export class EmailService extends BaseService {
     subject: string;
     html: string;
     plainText?: string;
+    /** Override the resolved provider From (e.g. a per-template From). */
+    from?: string;
+    /** Reply-To header. Omitted when not set. */
+    replyTo?: string;
     providerId?: string;
     cc?: string[];
     bcc?: string[];
@@ -276,13 +317,27 @@ export class EmailService extends BaseService {
       options.attachments
     );
 
-    const { adapter, from } = await this.resolveProvider(options.providerId);
+    const {
+      adapter,
+      from: resolvedFrom,
+      providerType,
+    } = await this.resolveProvider(options.providerId);
+
+    // A per-template From override wins over the provider's default From.
+    const from = options.from?.trim() ? options.from : resolvedFrom;
 
     const registry = getFilterRegistry();
 
     // D63 seam: let plugins transform the assembled email payload before dispatch.
     // Outside try/catch intentionally — the filter registry isolates per-handler
     // throws and never propagates, so a buggy plugin can't break sending.
+    // Always ship a plain-text alternative (multipart/alternative) — use the
+    // caller-supplied text, else derive one from the HTML. HTML-only mail
+    // hurts deliverability and breaks text-only clients.
+    const plainText = options.plainText?.trim()
+      ? options.plainText
+      : htmlToText(options.html);
+
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
@@ -293,18 +348,22 @@ export class EmailService extends BaseService {
         from,
         subject: options.subject,
         html: options.html,
+        text: plainText,
         cc: options.cc,
         bcc: options.bcc,
       },
       { providerId: options.providerId }
     );
 
+    const startedAt = Date.now();
     try {
       const result = await adapter.send({
         to: filtered.to,
         from: filtered.from,
         subject: filtered.subject,
         html: filtered.html,
+        text: filtered.text,
+        replyTo: options.replyTo,
         cc: filtered.cc,
         bcc: filtered.bcc,
         attachments: resolvedAttachments,
@@ -322,19 +381,26 @@ export class EmailService extends BaseService {
         { providerId: options.providerId }
       );
 
+      const durationMs = Date.now() - startedAt;
       if (result.success) {
-        this.logger.info("Email sent successfully", {
-          to: filtered.to,
-          subject: filtered.subject,
+        // Stable, greppable send record for terminal / log-aggregator use.
+        // Do not log recipient PII (addresses/subject). Counts keep the record
+        // useful for a log aggregator without persisting personal data.
+        this.logger.info("email.sent", {
+          event: "email.sent",
+          provider: providerType,
           messageId: result.messageId,
-          cc: options.cc ?? [],
-          bcc: options.bcc ?? [],
+          durationMs,
+          ccCount: options.cc?.length ?? 0,
+          bccCount: options.bcc?.length ?? 0,
           attachmentCount: resolvedAttachments?.length ?? 0,
         });
       } else {
-        this.logger.warn("Email send returned unsuccessful", {
-          to: filtered.to,
-          subject: filtered.subject,
+        this.logger.warn("email.failed", {
+          event: "email.failed",
+          provider: providerType,
+          durationMs,
+          reason: "provider returned unsuccessful",
         });
       }
 
@@ -350,9 +416,10 @@ export class EmailService extends BaseService {
         },
         { providerId: options.providerId }
       );
-      this.logger.error("Failed to send email", {
-        to: filtered.to,
-        subject: filtered.subject,
+      this.logger.error("email.failed", {
+        event: "email.failed",
+        provider: providerType,
+        durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
       return { success: false };
@@ -468,9 +535,11 @@ export class EmailService extends BaseService {
    * 3. Code-first config from `defineConfig({ email })`
    * 4. Error
    */
-  private async resolveProvider(
-    providerId?: string
-  ): Promise<{ adapter: EmailProviderAdapter; from: string }> {
+  private async resolveProvider(providerId?: string): Promise<{
+    adapter: EmailProviderAdapter;
+    from: string;
+    providerType: string;
+  }> {
     // 1. Specific provider by ID
     if (providerId) {
       const provider =
@@ -481,6 +550,7 @@ export class EmailService extends BaseService {
           provider.fromName ?? null,
           provider.fromEmail
         ),
+        providerType: provider.type,
       };
     }
 
@@ -495,6 +565,7 @@ export class EmailService extends BaseService {
             defaultProvider.fromName ?? null,
             defaultProvider.fromEmail
           ),
+          providerType: defaultProvider.type,
         };
       }
     } catch (error) {
@@ -512,6 +583,7 @@ export class EmailService extends BaseService {
       return {
         adapter: this.createAdapterFromConfig(this.emailConfig.providerConfig),
         from: this.emailConfig.from,
+        providerType: this.emailConfig.providerConfig.provider,
       };
     }
 
@@ -530,19 +602,19 @@ export class EmailService extends BaseService {
   // ============================================================
 
   /**
-   * Compose the final HTML by wrapping the interpolated template body
-   * with the shared header/footer layout.
-   *
-   * Composition: headerHtml + interpolatedBody + footerHtml.
-   * Variable interpolation applies to the header and footer parts
-   * (e.g., `{{year}}`, `{{appName}}` in footer).
+   * Compose the final HTML by injecting the interpolated template body
+   * into its resolved layout at the `{{content}}` placeholder. The
+   * layout's own `{{year}}` / `{{appName}}` placeholders are filled;
+   * the body is spliced in verbatim. Returns the body unchanged when
+   * no layout exists.
    */
   private async composeWithLayout(
-    _template: EmailTemplateRecord,
+    template: EmailTemplateRecord,
     interpolatedBody: string,
     variables: Record<string, unknown>
   ): Promise<string> {
-    const layout = await this.templateService.getLayout();
+    const layout = await this.templateService.getLayoutFor(template);
+    if (!layout) return interpolatedBody;
 
     // Ensure common layout variables are always available
     const layoutVars: Record<string, unknown> = {
@@ -551,10 +623,11 @@ export class EmailService extends BaseService {
       appName: variables.appName ?? this.getAppName(),
     };
 
-    const header = interpolateTemplate(layout.header, layoutVars);
-    const footer = interpolateTemplate(layout.footer, layoutVars);
-
-    return header + interpolatedBody + footer;
+    return this.templateService.renderWithLayout(
+      layout,
+      interpolatedBody,
+      layoutVars
+    );
   }
 
   // ============================================================
@@ -629,7 +702,7 @@ export class EmailService extends BaseService {
    * Get the application name for email templates.
    */
   private getAppName(): string {
-    return "Nextly";
+    return this.emailConfig?.appName ?? "Nextly";
   }
 
   /**

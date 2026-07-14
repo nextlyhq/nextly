@@ -1301,26 +1301,6 @@ function parseEmailTemplateRoutes(
     };
   }
 
-  // GET /api/email-templates/layout → get shared layout (header/footer)
-  if (id === "layout" && !subresource && httpMethod === "GET") {
-    return {
-      service: "emailTemplates",
-      operation: "single",
-      method: "getLayout",
-      routeParams,
-    };
-  }
-
-  // PATCH /api/email-templates/layout → update shared layout
-  if (id === "layout" && !subresource && httpMethod === "PATCH") {
-    return {
-      service: "emailTemplates",
-      operation: "update",
-      method: "updateLayout",
-      routeParams,
-    };
-  }
-
   // POST /api/email-templates/[id]/preview → preview with sample data
   if (id && subresource === "preview" && httpMethod === "POST") {
     routeParams.templateId = id;
@@ -1740,7 +1720,13 @@ export function parseRestRoute(
 
   // Handle Singles endpoints (globals)
   if (resource === "singles") {
-    const result = parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
+    const result = parseSingleRoutes(
+      id,
+      subresource,
+      subId,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 
@@ -1752,7 +1738,13 @@ export function parseRestRoute(
 
   // Handle Components endpoints
   if (resource === "components") {
-    const result = parseComponentRoutes(id, httpMethod, routeParams, subresource, subId);
+    const result = parseComponentRoutes(
+      id,
+      httpMethod,
+      routeParams,
+      subresource,
+      subId
+    );
     if (result) return result;
   }
 

@@ -14,6 +14,8 @@ export interface EmailPayloadFilterValue {
   from: string;
   subject: string;
   html: string;
+  /** Plain-text alternative body (multipart). Auto-generated from `html` when the caller omits it. */
+  text?: string;
   cc?: string[];
   bcc?: string[];
 }

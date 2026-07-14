@@ -1,6 +1,5 @@
 "use client";
 
-import type { Column } from "@nextlyhq/ui";
 import {
   Alert,
   AlertDescription,
@@ -16,12 +15,10 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
-  TableSkeleton,
+  Skeleton,
 } from "@nextlyhq/ui";
 import type React from "react";
 import { useState, useCallback, useEffect, useMemo } from "react";
@@ -37,7 +34,6 @@ import {
   Edit,
   Eye,
   Loader2,
-  MoreHorizontal,
   Plus,
   Trash2,
 } from "@admin/components/icons";
@@ -47,6 +43,11 @@ import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailTemplates,
@@ -57,30 +58,42 @@ import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter"
 import { navigateTo } from "@admin/lib/navigation";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
-// Built-in template slugs that cannot be deleted
+// Built-in template slugs that cannot be deleted.
 const BUILT_IN_SLUGS = new Set([
   "welcome",
   "password-reset",
   "email-verification",
 ]);
-// ============================================================
-// Helper: Format Date
-// ============================================================
+
+// The default layout is the fallback wrapper and cannot be deleted.
+const DEFAULT_LAYOUT_SLUG = "default-layout";
 
 function formatDate(dateValue?: string): string {
   return formatDateWithAdminTimezone(
     dateValue,
-    {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    },
+    { year: "numeric", month: "short", day: "numeric" },
     "N/A"
   );
 }
 
+// Sample data for the list preview — mirrors the workbench values so the
+// preview renders the real variables instead of leaving them blank.
+const PREVIEW_SAMPLE_DATA: Record<string, string> = {
+  appName: "Northwind",
+  year: String(new Date().getFullYear()),
+  userName: "Priya Raman",
+  userEmail: "priya.raman@northwind.io",
+  verifyLink: "https://app.northwind.io/verify?token=8f2c1a",
+  resetLink: "https://app.northwind.io/reset?token=8f2c1a",
+  url: "https://app.northwind.io/action?token=8f2c1a",
+  token: "8f2c1a",
+  expiresIn: "30 minutes",
+  siteName: "Northwind",
+  siteUrl: "https://northwind.io",
+};
+
 // ============================================================
-// Delete Dialog Component
+// Delete Dialog
 // ============================================================
 
 function TemplateDeleteDialog({
@@ -141,7 +154,7 @@ function TemplateDeleteDialog({
 }
 
 // ============================================================
-// Preview Dialog Component
+// Preview Dialog
 // ============================================================
 
 function TemplatePreviewDialog({
@@ -160,16 +173,7 @@ function TemplatePreviewDialog({
   useEffect(() => {
     if (!open || !template) return;
     doPreview(
-      {
-        id: template.id,
-        sampleData: {
-          name: "John Doe",
-          email: "john@example.com",
-          url: "https://example.com",
-          token: "sample-token-123",
-          siteName: "My App",
-        },
-      },
+      { id: template.id, sampleData: PREVIEW_SAMPLE_DATA },
       {
         onSuccess: result => {
           setPreviewSubject(result.subject);
@@ -196,7 +200,7 @@ function TemplatePreviewDialog({
             <DialogDescription>Subject: {previewSubject}</DialogDescription>
           )}
         </DialogHeader>
-        <div className="flex-1 overflow-auto  border border-primary/5 rounded-none">
+        <div className="flex-1 overflow-auto border border-border rounded-none">
           {isLoading ? (
             <div className="flex items-center justify-center h-48">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -221,11 +225,12 @@ function TemplatePreviewDialog({
 }
 
 // ============================================================
-// Template Table Component
+// Template Table (unified DataTableView)
 // ============================================================
 
+const ALWAYS_VISIBLE = new Set(["name"]);
+
 function EmailTemplateTable() {
-  // Fetch all templates via query hook
   const {
     data: templates = [],
     isLoading,
@@ -233,49 +238,37 @@ function EmailTemplateTable() {
     error,
   } = useEmailTemplates();
 
-  // Mutations
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailTemplate();
 
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state
   const [search, setSearch] = useState("");
-
-  // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  const toggleColumn = (key: string) => {
+  const toggleColumn = useCallback((key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
-  };
+  }, []);
 
-  // Delete dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [templateToDelete, setTemplateToDelete] = useState<{
     id: string;
     name: string;
   } | null>(null);
 
-  // Preview dialog state
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [templateToPreview, setTemplateToPreview] = useState<{
     id: string;
     name: string;
   } | null>(null);
 
-  // Client-side filtered + paginated data
   const filteredTemplates = useMemo(() => {
-    if (!search.trim()) return templates;
-    const term = search.toLowerCase();
+    const term = search.trim().toLowerCase();
+    if (!term) return templates;
     return templates.filter(
       t =>
         t.name.toLowerCase().includes(term) ||
@@ -291,12 +284,10 @@ function EmailTemplateTable() {
     [filteredTemplates, page, pageSize]
   );
 
-  // Reset page when search changes
   useEffect(() => {
     setPage(0);
   }, [search]);
 
-  // Action handlers
   const handleEdit = useCallback((template: EmailTemplateRecord) => {
     navigateTo(
       buildRoute(ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT, { id: template.id })
@@ -319,19 +310,13 @@ function EmailTemplateTable() {
         setTemplateToDelete(null);
       },
       onError: err => {
-        // Close dialog even on error as template might already be deleted
         setDeleteDialogOpen(false);
         setTemplateToDelete(null);
-
-        // Only show error if it's not a "not found" error (already deleted)
         const errorMessage =
           err instanceof Error ? err.message : "Unknown error";
         if (!errorMessage.toLowerCase().includes("not found")) {
-          toast.error("Delete failed", {
-            description: errorMessage,
-          });
+          toast.error("Delete failed", { description: errorMessage });
         } else {
-          // Template was already deleted, show success instead
           toast.success("Template deleted", {
             description: `${templateToDelete.name} has been deleted.`,
           });
@@ -346,186 +331,142 @@ function EmailTemplateTable() {
   }, []);
 
   const handleDuplicate = useCallback((template: EmailTemplateRecord) => {
-    // Navigate to create page with template ID as query parameter
     navigateTo(
       `${ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE}?duplicate=${template.id}`
     );
   }, []);
 
-  // Page size change handler
   const handlePageSizeChange = useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
   }, []);
 
-  // Table columns
-  const ALWAYS_VISIBLE = new Set(["id", "name"]);
-
-  const columnDefs = useMemo<Column<EmailTemplateRecord>[]>(
+  const allColumns = useMemo<NextlyColumn<EmailTemplateRecord>[]>(
     () => [
       {
-        key: "name",
-        label: "Name",
-        render: (_value, template) => (
+        name: "name",
+        header: "Name",
+        cell: ({ row }) => (
           <div className="flex items-center gap-2">
-            <span
-              className="font-medium cursor-pointer hover-unified"
-              onClick={() => handleEdit(template)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleEdit(template);
-                }
-              }}
-            >
-              {template.name}
-            </span>
-            {BUILT_IN_SLUGS.has(template.slug) && (
+            <span className="font-medium">{row.name}</span>
+            {row.kind === "layout" && <Badge variant="outline">Layout</Badge>}
+            {BUILT_IN_SLUGS.has(row.slug) && (
               <Badge variant="outline">Built-in</Badge>
             )}
           </div>
         ),
       },
       {
-        key: "slug",
-        label: "Slug",
+        name: "slug",
+        header: "Slug",
         hideOnMobile: true,
-        render: slug => (
-          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
-            {slug as string}
+        cell: ({ row }) => (
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+            {row.slug}
           </code>
         ),
       },
       {
-        key: "subject",
-        label: "Subject",
-        render: subject => (
-          <span className="text-sm truncate max-w-[200px] block">
-            {subject as string}
-          </span>
+        name: "subject",
+        header: "Subject",
+        cell: ({ row }) => (
+          <span className="text-sm truncate max-w-60 block">{row.subject}</span>
         ),
       },
       {
-        key: "providerId",
-        label: "Provider",
+        name: "providerId",
+        header: "Provider",
         hideOnMobile: true,
-        render: providerId => (
-          <Badge variant={providerId ? "primary" : "default"}>
-            {providerId ? "Custom" : "Default"}
-          </Badge>
-        ),
+        cell: ({ row }) =>
+          row.providerId ? (
+            <Badge>Custom</Badge>
+          ) : (
+            <Badge variant="outline">Default</Badge>
+          ),
       },
       {
-        key: "isActive",
-        label: "Status",
+        name: "isActive",
+        header: "Status",
         hideOnMobile: true,
-        render: (_value, template) => (
-          <div className="flex gap-1.5">
-            {template.isActive ? (
-              <Badge variant="success">Active</Badge>
-            ) : (
-              <Badge variant="warning">Inactive</Badge>
-            )}
-          </div>
-        ),
+        cell: ({ row }) =>
+          row.isActive ? (
+            <Badge variant="success">Active</Badge>
+          ) : (
+            <Badge variant="warning">Inactive</Badge>
+          ),
       },
       {
-        key: "createdAt",
-        label: "Created",
+        name: "createdAt",
+        header: "Created",
         hideOnMobile: true,
-        render: createdAt => (
-          <span className="text-sm">{formatDate(createdAt as string)}</span>
+        cell: ({ row }) => (
+          <span className="text-sm">{formatDate(row.createdAt)}</span>
         ),
-      },
-      {
-        key: "id",
-        label: "Actions",
-        render: (_value, template) => {
-          const isBuiltIn = BUILT_IN_SLUGS.has(template.slug);
-
-          return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className="h-8 w-8 p-0  border border-primary/5"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => handleEdit(template)}
-                >
-                  <Edit className="h-4 w-4" />
-                  Edit
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => handlePreview(template)}
-                >
-                  <Eye className="h-4 w-4" />
-                  Preview
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => {
-                    void handleDuplicate(template);
-                  }}
-                >
-                  <Copy className="h-4 w-4" />
-                  Duplicate
-                </DropdownMenuItem>
-                {!isBuiltIn && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="cursor-pointer text-destructive focus:text-destructive"
-                      onClick={() => handleDelete(template)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          );
-        },
       },
     ],
-    [handleEdit, handlePreview, handleDuplicate, handleDelete]
+    []
   );
 
   const columns = useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
   );
 
-  // Error state
+  const rowActions = useCallback(
+    (template: EmailTemplateRecord): RowAction<EmailTemplateRecord>[] => {
+      const actions: RowAction<EmailTemplateRecord>[] = [
+        {
+          id: "edit",
+          label: "Edit",
+          icon: <Edit className="h-4 w-4" />,
+          onSelect: () => handleEdit(template),
+        },
+        {
+          id: "preview",
+          label: "Preview",
+          icon: <Eye className="h-4 w-4" />,
+          onSelect: () => handlePreview(template),
+        },
+        {
+          id: "duplicate",
+          label: "Duplicate",
+          icon: <Copy className="h-4 w-4" />,
+          onSelect: () => handleDuplicate(template),
+        },
+      ];
+      if (
+        !BUILT_IN_SLUGS.has(template.slug) &&
+        template.slug !== DEFAULT_LAYOUT_SLUG
+      ) {
+        actions.push({
+          id: "delete",
+          label: "Delete",
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => handleDelete(template),
+        });
+      }
+      return actions;
+    },
+    [handleEdit, handlePreview, handleDuplicate, handleDelete]
+  );
+
   if (isError) {
     return (
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex-1 max-w-md w-full">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search templates by name, slug, or subject..."
-              isLoading={false}
-              className="w-full bg-background text-foreground border-input"
-            />
-          </div>
-        </div>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search templates by name, slug, or subject..."
+          isLoading={false}
+          className="w-full max-w-md bg-background text-foreground border-input"
+        />
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -534,26 +475,6 @@ function EmailTemplateTable() {
               "Failed to load email templates. Please try again."}
           </AlertDescription>
         </Alert>
-      </div>
-    );
-  }
-
-  // Loading state (initial load only)
-  if (isLoading && templates.length === 0) {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex-1 max-w-md w-full">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search templates by name, slug, or subject..."
-              isLoading={true}
-              className="w-full bg-background text-foreground border-input"
-            />
-          </div>
-        </div>
-        <TableSkeleton columns={7} />
       </div>
     );
   }
@@ -583,11 +504,11 @@ function EmailTemplateTable() {
               <DropdownMenuSeparator />
               {toggleableColumns.map(col => (
                 <DropdownMenuCheckboxItem
-                  key={String(col.key)}
-                  checked={!hiddenColumns.has(String(col.key))}
-                  onCheckedChange={() => toggleColumn(String(col.key))}
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
                 >
-                  {typeof col.label === "string" ? col.label : String(col.key)}
+                  {typeof col.header === "string" ? col.header : col.name}
                 </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
@@ -595,30 +516,37 @@ function EmailTemplateTable() {
         }
       />
 
-      {/* Table */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
-        <ResponsiveTable
-          data={paginatedTemplates}
-          columns={columns}
-          emptyMessage="No email templates found. Add a template to get started."
-          ariaLabel="Email templates table"
-          tableWrapperClassName="border-0 rounded-none shadow-none"
-        />
-        {totalPages > 0 && (
+      {isLoading && templates.length === 0 ? (
+        <div className="rounded-none border border-border bg-card p-4">
+          <Skeleton className="h-50 w-full rounded-none" />
+        </div>
+      ) : (
+        <>
+          <DataTableView<EmailTemplateRecord>
+            columns={columns}
+            rows={paginatedTemplates}
+            loading={isLoading}
+            onRowClick={template => handleEdit(template)}
+            primaryColumn="name"
+            rowActions={rowActions}
+            registryKey="email-templates"
+            ariaLabel="Email templates table"
+            emptyMessage="No email templates found. Create a template to get started."
+          />
+
           <Pagination
             currentPage={page}
-            totalPages={totalPages}
+            totalPages={Math.max(1, totalPages)}
             pageSize={pageSize}
             pageSizeOptions={[10, 25, 50]}
             onPageChange={setPage}
             onPageSizeChange={handlePageSizeChange}
-            isLoading={isLoading}
             totalItems={totalItems}
+            isLoading={isLoading}
           />
-        )}
-      </div>
+        </>
+      )}
 
-      {/* Delete confirmation dialog */}
       <TemplateDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -627,7 +555,6 @@ function EmailTemplateTable() {
         isLoading={isDeleting}
       />
 
-      {/* Preview dialog */}
       <TemplatePreviewDialog
         open={previewDialogOpen}
         onOpenChange={setPreviewDialogOpen}
@@ -638,7 +565,7 @@ function EmailTemplateTable() {
 }
 
 // ============================================================
-// Page Component
+// Page
 // ============================================================
 
 const EmailTemplatesPage: React.FC = () => {

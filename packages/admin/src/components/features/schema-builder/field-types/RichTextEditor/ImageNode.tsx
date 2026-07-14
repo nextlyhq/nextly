@@ -298,7 +298,7 @@ function ImageComponent({
   if (imageError) {
     return (
       <div
-        className="my-4 p-4 bg-red-50 dark:bg-red-900/20  border border-primary/5 border-red-200 dark:border-red-800 rounded-none"
+        className="my-4 p-4 bg-red-50 dark:bg-red-900/20  border border-border border-red-200 dark:border-red-800 rounded-none"
         style={{
           maxWidth: maxWidth ? `${maxWidth}px` : undefined,
         }}
@@ -329,7 +329,7 @@ function ImageComponent({
         onError={() => setImageError(true)}
       />
       {showCaption && caption && (
-        <figcaption className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center italic">
+        <figcaption className="text-sm text-muted-foreground dark:text-muted-foreground mt-2 text-center italic">
           {caption}
         </figcaption>
       )}

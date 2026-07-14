@@ -208,7 +208,7 @@ export function HookConfigForm({
                       <label
                         key={option}
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-none text-xs cursor-pointer  border border-primary/5",
+                          "flex items-center gap-1.5 px-2 py-1 rounded-none text-xs cursor-pointer  border border-border",
                           isChecked
                             ? "bg-primary/5 border-primary text-primary"
                             : "bg-primary/5 border-transparent text-muted-foreground hover:text-foreground"

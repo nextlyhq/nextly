@@ -21,12 +21,12 @@ export const lexicalTheme: EditorThemeClasses = {
 
   // Headings
   heading: {
-    h1: "text-3xl font-bold mb-4 mt-6 text-gray-900 dark:text-gray-100",
-    h2: "text-2xl font-bold mb-3 mt-5 text-gray-900 dark:text-gray-100",
-    h3: "text-xl font-bold mb-3 mt-4 text-gray-900 dark:text-gray-100",
-    h4: "text-lg font-semibold mb-2 mt-3 text-gray-900 dark:text-gray-100",
-    h5: "text-base font-semibold mb-2 mt-3 text-gray-900 dark:text-gray-100",
-    h6: "text-sm font-semibold mb-2 mt-2 text-gray-700 dark:text-gray-300",
+    h1: "text-3xl font-bold mb-4 mt-6 text-foreground dark:text-gray-100",
+    h2: "text-2xl font-bold mb-3 mt-5 text-foreground dark:text-gray-100",
+    h3: "text-xl font-bold mb-3 mt-4 text-foreground dark:text-gray-100",
+    h4: "text-lg font-semibold mb-2 mt-3 text-foreground dark:text-gray-100",
+    h5: "text-base font-semibold mb-2 mt-3 text-foreground dark:text-gray-100",
+    h6: "text-sm font-semibold mb-2 mt-2 text-foreground dark:text-muted-foreground",
   },
 
   // Lists
@@ -51,7 +51,7 @@ export const lexicalTheme: EditorThemeClasses = {
   // Text formatting
   text: {
     bold: "font-bold",
-    code: "bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-none text-sm font-mono text-red-600 dark:text-red-400",
+    code: "bg-muted px-1.5 py-0.5 rounded-none text-sm font-mono text-red-600 dark:text-red-400",
     italic: "italic",
     strikethrough: "line-through",
     subscript: "text-xs align-sub",
@@ -61,49 +61,48 @@ export const lexicalTheme: EditorThemeClasses = {
   },
 
   // Code blocks
-  code: "bg-gray-900 dark:bg-gray-950 text-gray-100 p-4 rounded-none font-mono text-sm overflow-x-auto my-4 block",
+  code: "bg-gray-900 text-gray-100 p-4 rounded-none font-mono text-sm overflow-x-auto my-4 block",
   codeHighlight: {
     atrule: "text-purple-400",
-    attr: "text-primary",
+    attr: "text-blue-400",
     boolean: "text-orange-400",
     builtin: "text-cyan-400",
-    cdata: "text-gray-500",
+    cdata: "text-gray-400",
     char: "text-green-400",
     class: "text-yellow-400",
     "class-name": "text-yellow-400",
-    comment: "text-gray-500 italic",
+    comment: "text-gray-400 italic",
     constant: "text-orange-400",
     deleted: "text-red-400",
-    doctype: "text-gray-500",
+    doctype: "text-gray-400",
     entity: "text-orange-400",
-    function: "text-primary",
+    function: "text-blue-400",
     important: "text-red-400 font-bold",
     inserted: "text-green-400",
     keyword: "text-purple-400",
-    namespace: "text-primary",
+    namespace: "text-blue-400",
     number: "text-orange-400",
-    operator: "text-gray-300",
-    prolog: "text-gray-500",
-    property: "text-primary",
+    operator: "text-gray-400",
+    prolog: "text-gray-400",
+    property: "text-blue-400",
     punctuation: "text-gray-400",
     regex: "text-green-400",
     selector: "text-green-400",
     string: "text-green-400",
     symbol: "text-orange-400",
     tag: "text-red-400",
-    url: "text-primary underline",
+    url: "text-blue-400 underline",
     variable: "text-orange-400",
   },
 
   // Blockquotes
   quote:
-    "border-l-4 border-primary/5 dark:border-primary/30 pl-4 italic text-gray-700 dark:text-gray-300 my-4",
+    "border-l-4 border-border dark:border-primary/30 pl-4 italic text-foreground dark:text-muted-foreground my-4",
 
   // Tables (if we add table support later)
   table: "border-collapse w-full my-4",
-  tableCell: "border border-primary/5 px-3 py-2",
-  tableCellHeader:
-    "border border-primary/5 px-3 py-2 font-bold bg-gray-50 dark:bg-gray-800",
+  tableCell: "border border-border px-3 py-2",
+  tableCellHeader: "border border-border px-3 py-2 font-bold bg-muted",
 
   // Layout/spacing
   indent: "ml-6",

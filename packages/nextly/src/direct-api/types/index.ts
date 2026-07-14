@@ -126,8 +126,6 @@ export type {
   UpdateEmailTemplateArgs,
   DeleteEmailTemplateArgs,
   PreviewEmailTemplateArgs,
-  GetEmailLayoutArgs,
-  UpdateEmailLayoutArgs,
   FindUserFieldsArgs,
   FindUserFieldByIDArgs,
   CreateUserFieldArgs,

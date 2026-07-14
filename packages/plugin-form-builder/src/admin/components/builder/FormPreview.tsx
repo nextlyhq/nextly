@@ -54,7 +54,7 @@ export interface FormPreviewProps {
 export function FormPreview({ fields, formData }: FormPreviewProps) {
   if (fields.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 bg-primary/5/20 rounded-none border-2 border-dashed border-primary/5 text-center">
+      <div className="flex flex-col items-center justify-center p-12 bg-muted rounded-none border-2 border-dashed border-primary/5 text-center">
         <div className="text-4xl mb-3">📝</div>
         <p className="text-sm font-medium text-muted-foreground">
           Add some fields to preview your form
@@ -212,7 +212,7 @@ function renderFieldPreview(field: FormField): React.ReactNode {
 
     case "hidden":
       return (
-        <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground bg-primary/5/20 border-2 border-dashed border-primary/5 rounded-none">
+        <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground bg-muted border-2 border-dashed border-primary/5 rounded-none">
           <span className="text-lg">👁️</span>
           <span>Hidden field</span>
         </div>

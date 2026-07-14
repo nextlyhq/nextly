@@ -92,28 +92,29 @@ export function FieldTypePicker({
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={`
-              relative flex flex-row items-center gap-4 rounded-none  border border-primary/5 p-4 text-left transition-all duration-200
+              relative flex flex-row items-center gap-4 rounded-none  border border-border p-4 text-left transition-all duration-200
               ${
                 isSelected
                   ? "border-primary bg-primary/5"
-                  : "border-primary/5 hover:border-primary/5 hover-unified"
+                  : "border-border hover:border-border hover-unified"
               }
               ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}
             `}
             style={{
-              border: "1px solid hsl(var(--primary) / 0.25)",
+              border:
+                "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
             }}
           >
             {isSelected && (
-              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-none bg-primary text-white">
+              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-none bg-primary text-primary-foreground">
                 <Check className="h-3 w-3 text-primary-foreground" />
               </div>
             )}
             <div
               className={`
                 shrink-0 flex items-center justify-center w-9 h-9 transition-all duration-200
-                bg-primary/5 text-primary  border border-primary/5 border-primary/5 rounded-none]
-                ${isSelected ? "border border-primary/5" : ""}
+                bg-primary/5 text-primary  border border-border rounded-none
+                ${isSelected ? "border border-border" : ""}
               `}
             >
               <Icon className="h-5 w-5" />

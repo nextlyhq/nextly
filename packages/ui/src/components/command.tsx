@@ -142,7 +142,7 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
             // Spacing
             "m-4 sm:m-0", // 16px margin on mobile, no margin on desktop
             // Visual
-            "overflow-hidden rounded-none  border border-primary/5 bg-background shadow-xl",
+            "overflow-hidden rounded-none  border border-border bg-background shadow-xl",
             // Animation
             "duration-200",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
@@ -173,7 +173,7 @@ const CommandInput = forwardRef<
   CommandInputProps
 >(({ className, ...props }, ref) => (
   <div
-    className="flex items-center  border-b border-primary/5 px-4"
+    className="flex items-center  border-b border-border px-4"
     // cmdk-input-wrapper is the attribute the cmdk library targets
     // in its built-in stylesheet to scope wrapper-level styles.
     // Required by the library; not a typo.
@@ -281,7 +281,7 @@ export type CommandSeparatorProps = ComponentPropsWithoutRef<
 
 /**
  * CommandSeparator - Visual divider between command groups.
- * 1px line with  border border-primary/5 color, 8px margin top/bottom.
+ * 1px line with  border border-border color, 8px margin top/bottom.
  */
 const CommandSeparator = forwardRef<
   ElementRef<typeof CommandPrimitive.Separator>,
@@ -353,7 +353,7 @@ const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
           "text-xs font-mono",
           // Visual
           "text-muted-foreground bg-primary/5",
-          "border border-primary/5 rounded-none",
+          "border border-border rounded-none",
           // Spacing
           "px-1.5 py-0.5",
           className

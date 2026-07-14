@@ -1,23 +1,25 @@
 /**
- * Default Email Layout — Header
+ * Default Email Layout
  *
- * Table-based HTML email wrapper (opening tags) that provides the
- * outer structure for all templates with `useLayout: true`. Uses
- * inline CSS for maximum email client compatibility, dark mode
- * meta tags as progressive enhancement, and a centered 600px
- * content area.
+ * Table-based HTML email wrapper (Outlook-safe, inline CSS, dark-mode
+ * meta, centered 600px card). A `kind: "layout"` row whose `{{content}}`
+ * placeholder marks where a template body is injected at send time.
  *
- * Reserved slug: `_email-header`
- *
- * @module services/email/templates/layout-header
+ * @module services/email/templates/default-layout
  * @since 1.0.0
  */
 
 import type { EmailTemplateInsert } from "../../../../schemas/email-templates/types";
 
-export const layoutHeaderTemplate: EmailTemplateInsert = {
-  name: "Email Header",
-  slug: "_email-header",
+export const DEFAULT_LAYOUT_SLUG = "default-layout";
+
+/** Placeholder in a layout's `htmlContent` where the body is injected. */
+export const LAYOUT_CONTENT_PLACEHOLDER = "{{content}}";
+
+export const defaultLayoutTemplate: EmailTemplateInsert = {
+  name: "Default Layout",
+  slug: DEFAULT_LAYOUT_SLUG,
+  kind: "layout",
   subject: "",
   htmlContent: `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -56,10 +58,31 @@ export const layoutHeaderTemplate: EmailTemplateInsert = {
         <!--[if mso]><table role="presentation" border="0" cellspacing="0" cellpadding="0" width="600"><tr><td><![endif]-->
         <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="max-width: 600px;">
           <tr>
-            <td class="email-card" style="background-color: #ffffff; border-radius: 8px; padding: 32px;">`,
+            <td class="email-card" style="background-color: #ffffff; border-radius: 8px; padding: 32px;">{{content}}</td>
+          </tr>
+        </table>
+        <!--[if mso]></td></tr></table><![endif]-->
+        <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="max-width: 600px;">
+          <tr>
+            <td align="center" style="padding: 20px 0;">
+              <p class="email-muted" style="margin: 0; font-size: 12px; line-height: 18px; color: #71717a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">&copy; {{year}} {{appName}}. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
   useLayout: false,
   isActive: true,
   variables: [
+    {
+      name: "content",
+      description: "Template body injected here",
+      required: true,
+    },
+    { name: "year", description: "Current year", required: false },
     { name: "appName", description: "Application name", required: false },
   ],
   plainTextContent: null,
