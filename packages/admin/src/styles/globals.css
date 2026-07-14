@@ -480,53 +480,10 @@ button[data-slot="radio-group-item"][data-state="checked"],
     * 
     * Enhanced text styles with better hierarchy and readability
     */
-.admin-heading {
-  font-weight: 500;
-  line-height: 1.25;
-  color: var(--foreground);
-}
-
-.admin-heading-xl {
-  font-size: 1.5rem;
-  line-height: 2rem;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.admin-heading-lg {
-  font-size: 1.25rem;
-  line-height: 1.75rem;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.admin-heading-md {
-  font-size: 1.125rem;
-  line-height: 1.75rem;
-  font-weight: 500;
-}
-
-.admin-heading-sm {
-  font-size: 1rem;
-  line-height: 1.5rem;
-  font-weight: 500;
-}
 
 .admin-text {
   font-size: 0.875rem;
   line-height: 1.25rem;
-  color: var(--muted-foreground);
-}
-
-.admin-text-sm {
-  font-size: 0.8125rem;
-  line-height: 1.125rem;
-  color: var(--muted-foreground);
-}
-
-.admin-text-xs {
-  font-size: 0.75rem;
-  line-height: 1rem;
   color: var(--muted-foreground);
 }
 
@@ -540,10 +497,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   to {
     transform: rotate(360deg);
   }
-}
-
-.admin-spinner {
-  animation: spin 1s linear infinite;
 }
 
 /**
@@ -787,150 +740,13 @@ button[data-slot="radio-group-item"][data-state="checked"],
     * Consistent spacing scale and layout patterns
     */
 
-/* Admin spacing utilities */
-.admin-space-y-1 > * + * {
-  margin-top: 0.25rem;
-}
-
-.admin-space-y-2 > * + * {
-  margin-top: 0.5rem;
-}
-
-.admin-space-y-3 > * + * {
-  margin-top: 0.75rem;
-}
-
-.admin-space-y-4 > * + * {
-  margin-top: 1rem;
-}
-
-.admin-space-y-6 > * + * {
-  margin-top: 1.5rem;
-}
-
-.admin-space-y-8 > * + * {
-  margin-top: 2rem;
-}
-
-/* Admin gap utilities */
-.admin-gap-2 {
-  gap: 0.5rem;
-}
-
-.admin-gap-3 {
-  gap: 0.75rem;
-}
-
-.admin-gap-4 {
-  gap: 1rem;
-}
-
-.admin-gap-6 {
-  gap: 1.5rem;
-}
-
-/* Admin padding utilities */
-.admin-p-2 {
-  padding: 0.5rem;
-}
-
-.admin-p-3 {
-  padding: 0.75rem;
-}
-
-.admin-p-4 {
-  padding: 1rem;
-}
-
-.admin-p-6 {
-  padding: 1.5rem;
-}
-
-.admin-px-3 {
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
-}
-
-.admin-px-4 {
-  padding-left: 1rem;
-  padding-right: 1rem;
-}
-
-.admin-py-2 {
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-}
-
-.admin-py-3 {
-  padding-top: 0.75rem;
-  padding-bottom: 0.75rem;
-}
-
 /**
     * Responsive & Layout Enhancements
     * 
     * Better responsive behavior and container queries
     */
-.admin-container {
-  width: 100%;
-  margin-left: auto;
-  margin-right: auto;
-  padding-left: 1rem;
-  padding-right: 1rem;
-}
-
-@media (min-width: 640px) {
-  .admin-container {
-    max-width: 640px;
-    padding-left: 1.5rem;
-    padding-right: 1.5rem;
-  }
-}
 
 @media (min-width: 768px) {
-  .admin-container {
-    max-width: 768px;
-  }
-}
-
-@media (min-width: 1024px) {
-  .admin-container {
-    max-width: 1024px;
-  }
-}
-
-@media (min-width: 1280px) {
-  .admin-container {
-    max-width: 1280px;
-  }
-}
-
-/* Admin grid utilities */
-.admin-grid {
-  display: grid;
-}
-
-.admin-grid-cols-1 {
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-
-.admin-grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (min-width: 768px) {
-  .admin-grid-cols-md-2 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .admin-grid-cols-md-3 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .border-input {
     border-color: var(--input);
   }
@@ -1070,27 +886,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 }
 
 /* Destructive Dropdown Item */
-.adminapp .admin-dropdown-item-destructive {
-  border-radius: 0px !important;
-}
 
-.adminapp .admin-dropdown-item-destructive:focus {
-  background-color: #000000 !important;
-  color: #ffffff !important;
-}
-
-.adminapp .admin-dropdown-item-destructive:focus svg {
-  color: #ffffff !important;
-}
-
-.adminapp.dark .admin-dropdown-item-destructive:focus {
-  background-color: #000000 !important;
-  color: #ffffff !important;
-}
-
-.adminapp.dark .admin-dropdown-item-destructive:focus svg {
-  color: #ffffff !important;
-}
 /* Mobile Safe Bottom for FABs and Sticky Actions */
 .mobile-safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 24px);
@@ -1274,10 +1070,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
 .hover-underline-primary:hover svg,
 .hover-transparent-bg:hover svg {
   color: #ffffff !important;
-}
-
-.group-hover-primary {
-  @apply group-hover:bg-black group-hover:text-white;
 }
 
 @media (prefers-color-scheme: dark) {
