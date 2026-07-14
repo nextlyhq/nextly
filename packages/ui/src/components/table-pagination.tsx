@@ -239,7 +239,7 @@ export function TablePagination({
           <button
             onClick={() => onPageChange(meta.page + 1)}
             disabled={meta.page >= meta.totalPages - 1 || isLoading}
-            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none  border-y border-border  border-x border-border sm :border-r border-border bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none  border-y border-border  border-x border-border sm:border-r border-border bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
             aria-label="Next page"
           >
             <ChevronRight className="h-4 w-4" />

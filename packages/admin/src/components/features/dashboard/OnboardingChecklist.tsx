@@ -58,7 +58,7 @@ export const OnboardingChecklist: React.FC = () => {
   const completionPct = (progress.completedCount / progress.totalCount) * 100;
 
   return (
-    <Card className="border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none] transition-all duration-700 hover:border-primary/40 group/card relative">
+    <Card className="border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none transition-all duration-700 hover:border-primary/40 group/card relative">
       <div className="absolute top-0 left-0 w-full h-1 bg-primary/5">
         <div
           className="h-full bg-primary shadow-glow-primary transition-all duration-1000 ease-out"
@@ -95,7 +95,7 @@ export const OnboardingChecklist: React.FC = () => {
         </button>
       </CardHeader>
       <CardContent className="px-6 pb-8">
-        <div className="space-y-1 bg-card/40/20 p-2 rounded-none]  border border-border">
+        <div className="space-y-1 bg-card/40 p-2 rounded-none  border border-border">
           {progress.steps.map(step => (
             <StepRow key={step.id} step={step} />
           ))}

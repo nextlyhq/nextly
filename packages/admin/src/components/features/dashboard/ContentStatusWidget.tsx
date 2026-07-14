@@ -80,7 +80,7 @@ export const ContentStatusWidget: React.FC = () => {
   ];
 
   return (
-    <Card className="border-border bg-card/60 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-border">
+    <Card className="border-border bg-card/60 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -96,13 +96,13 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none]">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>
         ) : total === 0 ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-none] bg-primary/5  border border-border">
+            <div className="p-6 rounded-none bg-primary/5  border border-border">
               <FileText className="h-10 w-10 text-muted-foreground/10" />
             </div>
             <div className="space-y-2">
@@ -137,7 +137,7 @@ export const ContentStatusWidget: React.FC = () => {
               </div>
             </div>
 
-            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none]  border border-border">
+            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none  border border-border">
               <StatusItem
                 label="Published"
                 count={published}

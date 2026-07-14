@@ -159,7 +159,7 @@ export function SchemaChangeDialog({
             {changes.added.map(field => (
               <div
                 key={`add-${field.name}`}
-                className="flex items-center gap-2.5 py-1.5 text-sm [&+&] :border-t border-border [&+&]:border-border"
+                className="flex items-center gap-2.5 py-1.5 text-sm [&+&]:border-t border-border [&+&]:border-border"
               >
                 <Badge variant="success">added</Badge>
                 <span>
@@ -172,7 +172,7 @@ export function SchemaChangeDialog({
             {changes.removed.map(field => (
               <div
                 key={`rm-${field.name}`}
-                className="flex flex-col gap-1 py-1.5 text-sm [&+&] :border-t border-border [&+&]:border-border"
+                className="flex flex-col gap-1 py-1.5 text-sm [&+&]:border-t border-border [&+&]:border-border"
               >
                 <div className="flex items-center gap-2.5">
                   <Badge variant="destructive">removed</Badge>
@@ -194,7 +194,7 @@ export function SchemaChangeDialog({
             {changes.changed.map(field => (
               <div
                 key={`ch-${field.name}`}
-                className="flex flex-col gap-1 py-1.5 text-sm [&+&] :border-t border-border [&+&]:border-border"
+                className="flex flex-col gap-1 py-1.5 text-sm [&+&]:border-t border-border [&+&]:border-border"
               >
                 <div className="flex items-center gap-2.5">
                   <Badge variant="warning">changed</Badge>

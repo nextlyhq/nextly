@@ -75,7 +75,7 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "flex items-center justify-between gap-4 w-full p-3 rounded-none  border border-border border-border bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-none  border border-border bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >

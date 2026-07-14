@@ -112,7 +112,7 @@ export function FieldTypePicker({
             <div
               className={`
                 shrink-0 flex items-center justify-center w-9 h-9 transition-all duration-200
-                bg-primary/5 text-primary  border border-border border-border rounded-none]
+                bg-primary/5 text-primary  border border-border rounded-none
                 ${isSelected ? "border border-border" : ""}
               `}
             >

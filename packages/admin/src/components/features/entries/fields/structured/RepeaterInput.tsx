@@ -315,7 +315,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {/* Collapsible Header */}
         <CardHeader
-          className="bg-primary/5/80/80 border-b border-border dark:border-border p-0"
+          className="bg-primary/5 border-b border-border dark:border-border p-0"
           noBorder
         >
           <CollapsibleTrigger asChild>
