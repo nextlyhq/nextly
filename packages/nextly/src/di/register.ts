@@ -1404,6 +1404,11 @@ async function syncCodeFirstCollections(
         tableName,
         fields: collection.fields ?? [],
         status: (collection as { status?: boolean }).status === true,
+        // i18n: carry the localized flag so the boot-time push pipeline omits translatable
+        // columns from the main table (they live in the companion `_locales` table). Without
+        // this the main table is created WITH the translatable columns and no companion is
+        // ever provisioned — the exact "no _locales table" failure on a fresh boot.
+        localized: (collection as { localized?: boolean }).localized === true,
       };
       slugsAfterFilter.push(collection.slug);
     }
@@ -1458,15 +1463,16 @@ async function syncCodeFirstCollections(
               ? JSON.parse(rows[0].fields)
               : rows[0].fields;
           if (Array.isArray(fields) && fields.length > 0) {
-            // Why: forward the desired status flag so the live runtime
-            // table descriptor includes the system status column —
-            // pulled from the same DesiredCollection entry the pipeline
-            // just applied, so config and runtime stay in lockstep.
+            // Why: forward the desired status + localized flags so the live runtime
+            // table descriptor matches what the pipeline applied — the main table
+            // omits translatable columns (they live in the companion), keeping config
+            // and runtime in lockstep.
+            const localized = desired.localized === true;
             const { table: runtimeTable } = generateRuntimeSchema(
               desired.tableName,
               fields,
               syncDialect,
-              { status: desired.status === true }
+              { status: desired.status === true, localized }
             );
             const resolver = (
               adapter as unknown as {
@@ -1483,6 +1489,38 @@ async function syncCodeFirstCollections(
               typeof resolver.registerDynamicSchema === "function"
             ) {
               resolver.registerDynamicSchema(desired.tableName, runtimeTable);
+              // i18n: the push pipeline excludes companion tables, so create the
+              // localized collection's companion here (idempotent) and register its
+              // runtime table — the fix for "no _locales table" on a fresh code-first boot.
+              if (localized) {
+                const { ensureCompanionTable } = await import(
+                  "../domains/i18n/runtime/companion-io"
+                );
+                await ensureCompanionTable(adapter, {
+                  slug,
+                  tableName: desired.tableName,
+                  fields,
+                  dialect: syncDialect,
+                  status: desired.status === true,
+                });
+                const { buildCompanionRuntimeTable } = await import(
+                  "../domains/i18n/runtime/companion-registration"
+                );
+                const companion = buildCompanionRuntimeTable({
+                  slug,
+                  tableName: desired.tableName,
+                  fields,
+                  dialect: syncDialect,
+                  localized: true,
+                  status: desired.status === true,
+                });
+                if (companion) {
+                  resolver.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
             }
           }
         }
@@ -1597,10 +1635,15 @@ async function syncCodeFirstComponents(
           .replace(/[^a-z0-9]+/g, "_")
           .replace(/^_+|_+$/g, "")}`;
 
+      // i18n: a localized component omits its translatable columns from the main comp_
+      // table and gets a companion `comp_<slug>_locales` (created below).
+      const compLocalized =
+        (compConfig as { localized?: boolean }).localized === true;
       try {
         const migrationSQL = compSchemaService.generateMigrationSQL(
           tableName,
-          compConfig.fields
+          compConfig.fields,
+          { localized: compLocalized }
         );
 
         const statements = migrationSQL
@@ -1629,7 +1672,8 @@ async function syncCodeFirstComponents(
           try {
             const compRuntimeTable = compSchemaService.generateRuntimeSchema(
               tableName,
-              compConfig.fields
+              compConfig.fields,
+              { localized: compLocalized }
             );
             const resolver = (
               adapter as unknown as {
@@ -1646,6 +1690,37 @@ async function syncCodeFirstComponents(
               typeof resolver.registerDynamicSchema === "function"
             ) {
               resolver.registerDynamicSchema(tableName, compRuntimeTable);
+              // i18n: create + register the component's companion (generateMigrationSQL
+              // omits it) so a localized component works on a fresh code-first boot.
+              if (compLocalized) {
+                const { ensureCompanionTable } = await import(
+                  "../domains/i18n/runtime/companion-io"
+                );
+                await ensureCompanionTable(adapter, {
+                  slug,
+                  tableName,
+                  fields: compConfig.fields as { name: string; type: string }[],
+                  dialect,
+                  status: false,
+                });
+                const { buildCompanionRuntimeTable } = await import(
+                  "../domains/i18n/runtime/companion-registration"
+                );
+                const companion = buildCompanionRuntimeTable({
+                  slug,
+                  tableName,
+                  fields: compConfig.fields as { name: string; type: string }[],
+                  dialect,
+                  localized: true,
+                  status: false,
+                });
+                if (companion) {
+                  resolver.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
             }
           } catch {
             // Non-fatal: schema will be registered on next server restart.
@@ -1779,9 +1854,14 @@ async function reconcileSingleTablesForBoot(
         // with `defineSingle({ status: true })` gets a physical table
         // without the system status column on first reconcile.
         let hasStatus = false;
+        // i18n: same for the localized flag — a localized single must omit its
+        // translatable columns from the main table (they live in the companion).
+        let localized = false;
         if (codeFirstConfig) {
           fields = codeFirstConfig.fields as unknown as FieldDefinition[];
           hasStatus = (codeFirstConfig as { status?: boolean }).status === true;
+          localized =
+            (codeFirstConfig as { localized?: boolean }).localized === true;
         } else {
           const record = await singleRegistry.getSingleBySlug(single.slug);
           if (!record) {
@@ -1791,12 +1871,13 @@ async function reconcileSingleTablesForBoot(
           }
           fields = record.fields as unknown as FieldDefinition[];
           hasStatus = record.status === true;
+          localized = (record as { localized?: boolean }).localized === true;
         }
 
         const migrationSQL = schemaService.generateMigrationSQL(
           single.tableName,
           fields,
-          { isSingle: true, hasStatus }
+          { isSingle: true, hasStatus, localized }
         );
 
         const statements = migrationSQL
@@ -1826,11 +1907,12 @@ async function reconcileSingleTablesForBoot(
             const { generateRuntimeSchema: genRt } = await import(
               "../domains/schema/services/runtime-schema-generator"
             );
-            // Why: same status flag we passed to generateMigrationSQL
-            // above — keep the runtime resolver in lockstep with the
-            // physical table just created.
+            // Why: same status + localized flags we passed to generateMigrationSQL
+            // above — keep the runtime resolver in lockstep with the physical table
+            // just created (localized omits translatable columns from main).
             const { table } = genRt(single.tableName, fields, dialect, {
               status: hasStatus,
+              localized,
             });
             const resolver = (
               adapter as unknown as {
@@ -1844,6 +1926,37 @@ async function reconcileSingleTablesForBoot(
               typeof resolver.registerDynamicSchema === "function"
             ) {
               resolver.registerDynamicSchema(single.tableName, table);
+              // i18n: create + register the single's companion `single_<slug>_locales`
+              // (generateMigrationSQL omits it) so a localized single works on a fresh boot.
+              if (localized) {
+                const { ensureCompanionTable } = await import(
+                  "../domains/i18n/runtime/companion-io"
+                );
+                await ensureCompanionTable(adapter, {
+                  slug: single.slug,
+                  tableName: single.tableName,
+                  fields: fields,
+                  dialect,
+                  status: hasStatus,
+                });
+                const { buildCompanionRuntimeTable } = await import(
+                  "../domains/i18n/runtime/companion-registration"
+                );
+                const companion = buildCompanionRuntimeTable({
+                  slug: single.slug,
+                  tableName: single.tableName,
+                  fields: fields,
+                  dialect,
+                  localized: true,
+                  status: hasStatus,
+                });
+                if (companion) {
+                  resolver.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
             }
           } catch {
             // Resolver registration is best-effort; the table itself is

@@ -131,9 +131,25 @@ export class ComponentSchemaService {
   /**
    * Generate SQL migration for creating a new component data table.
    */
-  generateMigrationSQL(tableName: string, fields: FieldConfig[]): string {
+  generateMigrationSQL(
+    tableName: string,
+    fields: FieldConfig[],
+    options: { localized?: boolean } = {}
+  ): string {
     const types = SQL_COLUMN_TYPES[this.dialect];
     const tsDefault = TIMESTAMP_DEFAULT[this.dialect];
+    // i18n: a localized component omits its translatable columns from the main comp_ CREATE
+    // (they live in the companion `comp_<slug>_locales` table, provisioned out-of-band).
+    const localizedNames = options.localized
+      ? new Set(
+          resolveLocalizedFieldNames(
+            fields as unknown as Parameters<
+              typeof resolveLocalizedFieldNames
+            >[0],
+            true
+          )
+        )
+      : new Set<string>();
 
     const lines: string[] = [];
     lines.push(`-- Create component data table: ${tableName}`);
@@ -163,6 +179,10 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
       if (isComponentField(field)) continue;
+      // i18n: translatable columns live in the companion, not the main comp_ table.
+      if ("name" in field && field.name && localizedNames.has(field.name)) {
+        continue;
+      }
 
       const columnSQL = this.generateColumnSQL(field);
       if (columnSQL) {
