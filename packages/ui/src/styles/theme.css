@@ -1,15 +1,17 @@
 /**
  * Nextly design-system theme.
  *
- * Single source of truth for tokens, the Tailwind `@theme inline` mappings,
- * the dark variant, and the base reset. Consumed two ways:
+ * Single source of truth for tokens, the Tailwind `@theme inline` mappings, the
+ * dark variant, and the animation keyframes. It does NOT include a base reset —
+ * that lives in `index.css` and ships in the pre-compiled `styles.css` bundle.
+ * Consumed two ways:
  *   - Source: `@import "@nextlyhq/ui/theme.css"` after `@import "tailwindcss"`
  *     to compile against the token contract (admin, power-user plugins).
  *   - Pre-compiled: `@nextlyhq/ui/styles.css` bundles this behind a Tailwind
  *     build so plugins get styled components with zero setup.
  *
- * Selectors are unscoped (`:root` / `.dark` / `*`); a consumer that embeds the
- * UI in a host page scopes them at build time (admin rewrites to `.adminapp`).
+ * Selectors are unscoped (`:root` / `.dark`); a consumer that embeds the UI in a
+ * host page scopes them at build time (admin rewrites to `.adminapp`).
  */
 
 /**
@@ -206,7 +208,9 @@
 
   /* Font Families */
   --font-sans: var(--font-inter), Inter, sans-serif;
-  --font-mono: var(--font-mono), monospace;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 
   /* Type Scale - Base Size: 16px (1rem) */
   --text-xs: 0.75rem;
@@ -343,7 +347,8 @@
 
   /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
   --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
-  --shadow-glow-success: 0 0 10px rgba(16, 185, 129, 0.1);
+  --shadow-glow-success: 0 0 10px
+    color-mix(in srgb, var(--success) 10%, transparent);
   --shadow-glow-primary: 0 0 15px
     color-mix(in srgb, var(--primary) 50%, transparent);
   --shadow-elevation-primary: 0 8px 20px -8px
