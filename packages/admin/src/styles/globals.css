@@ -655,65 +655,6 @@
   color: var(--primary) !important;
 }
 
-/* Destructive Dropdown Item */
-
-/* Mobile Safe Bottom for FABs and Sticky Actions */
-.mobile-safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 24px);
-}
-
-/* Mobile Sticky Header with Glass Effect */
-.mobile-sticky-header {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  backdrop-filter: blur(12px);
-  background-color: color-mix(in srgb, var(--background) 80%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  transition: all 0.2s ease-in-out;
-}
-
-/* App Container for Standardized Mobile Padding */
-.app-container {
-  padding-left: 1rem;
-  padding-right: 1rem;
-  width: 100%;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-@media (min-width: 768px) {
-  .app-container {
-    padding-left: 1.5rem;
-    padding-right: 1.5rem;
-  }
-}
-
-/* Responsive Grid for Cards */
-.responsive-card-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem;
-}
-
-@media (min-width: 640px) {
-  .responsive-card-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (min-width: 1024px) {
-  .responsive-card-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-@media (min-width: 1536px) {
-  .responsive-card-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
 /* ============================================
  * CENTRALIZED HOVER STATE MANAGEMENT
  * 
