@@ -159,3 +159,81 @@ describe("compileNodeCss — extended scalars", () => {
     expect(compileNodeCss(n)).not.toContain("color:red");
   });
 });
+
+describe("compileNodeCss — structured values", () => {
+  it("emits per-side border + style + color", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            border: {
+              width: { top: "2px", bottom: "2px" },
+              style: "solid",
+              color: "#333",
+            },
+          },
+        }
+      )
+    );
+    expect(css).toContain("border-top-width: 2px");
+    expect(css).toContain("border-bottom-width: 2px");
+    expect(css).toContain("border-style: solid");
+    expect(css).toContain("border-color: #333");
+  });
+
+  it("emits position with offsets and z-index", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            position: { type: "absolute", top: "10px", left: "0", zIndex: "5" },
+          },
+        }
+      )
+    );
+    expect(css).toContain("position: absolute");
+    expect(css).toContain("top: 10px");
+    expect(css).toContain("left: 0");
+    expect(css).toContain("z-index: 5");
+  });
+
+  it("emits background image object + gradient", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            backgroundImageObj: {
+              url: "/x.jpg",
+              position: "center",
+              size: "cover",
+              repeat: "no-repeat",
+            },
+            backgroundGradient: "linear-gradient(90deg, #fff, #000)",
+          },
+        }
+      )
+    );
+    expect(css).toContain('background-image: url("/x.jpg")');
+    expect(css).toContain("background-position: center");
+    expect(css).toContain("background-size: cover");
+    expect(css).toContain("background-repeat: no-repeat");
+    expect(css).toMatch(/background-image: linear-gradient/);
+  });
+
+  it("rejects a javascript: url in the background object", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        { base: { backgroundImageObj: { url: "javascript:alert(1)" } } }
+      )
+    );
+    expect(css).not.toContain("javascript");
+  });
+});
