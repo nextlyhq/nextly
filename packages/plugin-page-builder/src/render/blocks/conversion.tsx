@@ -37,14 +37,18 @@ export const progressBar = defineBlock({
         </div>
         <div
           style={{
-            background: "#e5e7eb",
+            background: "var(--nx-color-border)",
             borderRadius: 9999,
             height: 10,
             overflow: "hidden",
           }}
         >
           <div
-            style={{ width: `${pct}%`, height: "100%", background: "#4f46e5" }}
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: "var(--nx-color-primary)",
+            }}
           />
         </div>
       </div>
@@ -113,7 +117,11 @@ export const rating = defineBlock({
     return (
       <div
         className={className}
-        style={{ display: "inline-flex", gap: 2, color: "#f59e0b" }}
+        style={{
+          display: "inline-flex",
+          gap: 2,
+          color: "var(--nx-color-accent)",
+        }}
         aria-label={`${value} out of ${max}`}
       >
         {Array.from({ length: max }).map((_, i) => (

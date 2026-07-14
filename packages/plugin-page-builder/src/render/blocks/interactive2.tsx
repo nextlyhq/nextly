@@ -31,7 +31,7 @@ export const toggle = defineBlock({
     <details
       className={className}
       open={props.open === true}
-      style={{ borderBottom: "1px solid #e5e7eb" }}
+      style={{ borderBottom: "1px solid var(--nx-color-border)" }}
     >
       <summary
         style={{ cursor: "pointer", padding: "10px 0", fontWeight: 600 }}
@@ -91,7 +91,7 @@ export const offCanvas = defineBlock({
             display: "inline-block",
             padding: "8px 16px",
             borderRadius: 8,
-            background: "#4f46e5",
+            background: "var(--nx-color-primary)",
             color: "#fff",
             cursor: "pointer",
           }}

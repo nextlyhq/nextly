@@ -14,7 +14,7 @@ export const divider = defineBlock({
   defaultProps: {
     lineStyle: "solid",
     weight: "1px",
-    color: "#e5e7eb",
+    color: "var(--nx-color-border)",
     width: "100%",
     align: "center",
   },
@@ -26,7 +26,12 @@ export const divider = defineBlock({
       options: STYLES.map(s => ({ value: s, label: s })),
     },
     { name: "weight", type: "text", label: "Weight", placeholder: "1px" },
-    { name: "color", type: "text", label: "Color", placeholder: "#e5e7eb" },
+    {
+      name: "color",
+      type: "text",
+      label: "Color",
+      placeholder: "var(--nx-color-border)",
+    },
     { name: "width", type: "text", label: "Width", placeholder: "100%" },
     {
       name: "align",
@@ -48,7 +53,7 @@ export const divider = defineBlock({
       ? str(props.lineStyle)
       : "solid";
     const weight = str(props.weight, "1px");
-    const color = str(props.color, "#e5e7eb");
+    const color = str(props.color, "var(--nx-color-border)");
     const width = str(props.width, "100%");
     const align =
       props.align === "left" || props.align === "right"

@@ -8,7 +8,7 @@ const BTN_STYLE: CSSProperties = {
   display: "inline-block",
   padding: "10px 18px",
   borderRadius: "8px",
-  background: "#4f46e5",
+  background: "var(--nx-color-primary)",
   color: "#fff",
   textDecoration: "none",
   border: "none",

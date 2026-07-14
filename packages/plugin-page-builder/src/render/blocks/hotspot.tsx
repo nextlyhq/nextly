@@ -67,7 +67,7 @@ export const hotspot = defineBlock({
                 width: 22,
                 height: 22,
                 borderRadius: "50%",
-                background: "#4f46e5",
+                background: "var(--nx-color-primary)",
                 border: "3px solid #fff",
                 boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
                 cursor: "help",

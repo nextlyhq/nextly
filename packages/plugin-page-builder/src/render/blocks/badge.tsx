@@ -15,8 +15,9 @@ export const badge = defineBlock({
   ],
   defaultStyle: {
     base: {
-      backgroundColor: "#eef2ff",
-      color: "#4f46e5",
+      backgroundColor:
+        "color-mix(in srgb, var(--nx-color-primary) 12%, var(--nx-color-background))",
+      color: "var(--nx-color-primary)",
       padding: { top: "2px", right: "10px", bottom: "2px", left: "10px" },
       borderRadius: "9999px",
       fontSize: "12px",

@@ -73,7 +73,7 @@ export const slides = defineBlock({
                 color: "#fff",
                 background: url
                   ? `linear-gradient(rgba(0,0,0,0.4),rgba(0,0,0,0.4)), url("${url}") center/cover`
-                  : "#334155",
+                  : "var(--nx-color-text)",
               }}
             >
               <h2 style={{ margin: "0 0 8px" }}>{str(it.heading)}</h2>

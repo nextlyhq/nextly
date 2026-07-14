@@ -46,7 +46,7 @@ export const tabs = defineBlock({
       .map(
         (_, i) =>
           `#nx-tab-${id}-${i}:checked~.nx-pb-tab-panels-${id}>div:nth-child(${i + 1}){display:block}` +
-          `#nx-tab-${id}-${i}:checked~.nx-pb-tab-labels-${id}>label:nth-child(${i + 1}){border-bottom-color:#4f46e5;font-weight:600}`
+          `#nx-tab-${id}-${i}:checked~.nx-pb-tab-labels-${id}>label:nth-child(${i + 1}){border-bottom-color:var(--nx-color-primary);font-weight:600}`
       )
       .join("");
     const css = `.nx-pb-tab-panels-${id}>div{display:none}${rules}`;
@@ -69,7 +69,7 @@ export const tabs = defineBlock({
             display: "flex",
             gap: 4,
             flexWrap: "wrap",
-            borderBottom: "1px solid #e5e7eb",
+            borderBottom: "1px solid var(--nx-color-border)",
           }}
         >
           {items.map((raw, i) => (

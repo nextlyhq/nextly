@@ -68,7 +68,8 @@ function colorLiteralIsExempt(line, file) {
     .replace(/\/\*.*?\*\//g, "")
     .replace(/url\([^)]*\)/g, "")
     .replace(/placeholder\s*[:=]\s*["'][^"']*["']/g, "")
-    .replace(/#(?:ffffff|fff|000000|000)\b/gi, "")
+    // black / white, with an optional 2-digit alpha (`#00000033` shadow scrims)
+    .replace(/#(?:ffffff|fff|000000|000)(?:[0-9a-f]{2})?\b/gi, "")
     .replace(/rgba?\(\s*0\s*[,\s]\s*0\s*[,\s]\s*0[^)]*\)/gi, "")
     .replace(/rgba?\(\s*255\s*[,\s]\s*255\s*[,\s]\s*255[^)]*\)/gi, "");
   return !COLOR_LITERAL_RE.test(rest);

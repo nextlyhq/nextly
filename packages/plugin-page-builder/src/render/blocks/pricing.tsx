@@ -8,7 +8,7 @@ const BTN: CSSProperties = {
   display: "inline-block",
   padding: "10px 20px",
   borderRadius: 8,
-  background: "#4f46e5",
+  background: "var(--nx-color-primary)",
   color: "#fff",
   textDecoration: "none",
   marginTop: 8,
@@ -59,7 +59,7 @@ export const pricingTable = defineBlock({
       <div
         className={className}
         style={{
-          border: "1px solid #e5e7eb",
+          border: "1px solid var(--nx-color-border)",
           borderRadius: 12,
           padding: 24,
           textAlign: "center",

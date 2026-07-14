@@ -5,7 +5,7 @@ import { defineBlock } from "../../core/registry";
 import { str } from "./util";
 
 const cell: CSSProperties = {
-  border: "1px solid #e5e7eb",
+  border: "1px solid var(--nx-color-border)",
   padding: "8px 10px",
   textAlign: "left",
 };
@@ -57,7 +57,10 @@ export const table = defineBlock({
           <thead>
             <tr>
               {headers.map((h, i) => (
-                <th key={i} style={{ ...cell, background: "#f8fafc" }}>
+                <th
+                  key={i}
+                  style={{ ...cell, background: "var(--nx-color-surface)" }}
+                >
                   {h}
                 </th>
               ))}

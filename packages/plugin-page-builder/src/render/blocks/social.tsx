@@ -13,7 +13,7 @@ function testimonialCard(it: Record<string, unknown>, key?: number): ReactNode {
       style={{
         margin: 0,
         padding: 20,
-        border: "1px solid #e5e7eb",
+        border: "1px solid var(--nx-color-border)",
         borderRadius: 12,
       }}
     >
@@ -178,7 +178,7 @@ export const reviews = defineBlock({
             <div
               key={i}
               style={{
-                border: "1px solid #e5e7eb",
+                border: "1px solid var(--nx-color-border)",
                 borderRadius: 12,
                 padding: 16,
               }}
@@ -187,7 +187,7 @@ export const reviews = defineBlock({
                 style={{
                   display: "flex",
                   gap: 2,
-                  color: "#f59e0b",
+                  color: "var(--nx-color-accent)",
                   marginBottom: 6,
                 }}
                 aria-label={`${r} out of 5`}

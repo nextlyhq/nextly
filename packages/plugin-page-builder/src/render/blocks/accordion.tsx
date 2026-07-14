@@ -49,7 +49,7 @@ export const accordion = defineBlock({
               key={i}
               open={i === 0}
               name={single ? `acc-${node.id}` : undefined}
-              style={{ borderBottom: "1px solid #e5e7eb" }}
+              style={{ borderBottom: "1px solid var(--nx-color-border)" }}
             >
               <summary
                 style={{

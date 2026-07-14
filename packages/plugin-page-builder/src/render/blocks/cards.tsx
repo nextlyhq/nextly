@@ -24,7 +24,7 @@ export const ctaCard = defineBlock({
   ],
   defaultStyle: {
     base: {
-      backgroundColor: "#f8fafc",
+      backgroundColor: "var(--nx-color-surface)",
       padding: { top: "32px", right: "32px", bottom: "32px", left: "32px" },
       borderRadius: "12px",
       textAlign: "center",
@@ -53,7 +53,7 @@ export const ctaCard = defineBlock({
               display: "inline-block",
               padding: "10px 20px",
               borderRadius: 8,
-              background: "#4f46e5",
+              background: "var(--nx-color-primary)",
               color: "#fff",
               textDecoration: "none",
             }}
@@ -102,7 +102,7 @@ export const flipBox = defineBlock({
 .nx-flip-${id} .nx-flip-inner{position:relative;width:100%;height:${h}px;transition:transform .6s;transform-style:preserve-3d}
 .nx-flip-${id}:hover .nx-flip-inner{transform:rotateY(180deg)}
 .nx-flip-${id} .nx-flip-face{position:absolute;inset:0;backface-visibility:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:12px;padding:20px;text-align:center}
-.nx-flip-${id} .nx-flip-back{transform:rotateY(180deg);background:#4f46e5;color:#fff}`;
+.nx-flip-${id} .nx-flip-back{transform:rotateY(180deg);background:var(--nx-color-primary);color:#fff}`;
     return (
       <div className={`${className} nx-flip-${id}`}>
         <style dangerouslySetInnerHTML={{ __html: css }} />
@@ -112,8 +112,8 @@ export const flipBox = defineBlock({
             style={{
               background: front
                 ? `linear-gradient(rgba(0,0,0,0.25),rgba(0,0,0,0.25)), url("${front}") center/cover`
-                : "#e2e8f0",
-              color: front ? "#fff" : "#111827",
+                : "var(--nx-color-border)",
+              color: front ? "#fff" : "var(--nx-color-text)",
             }}
           >
             <strong>{str(props.frontTitle)}</strong>

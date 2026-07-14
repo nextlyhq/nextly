@@ -10,7 +10,8 @@ interface G {
   c2: string;
   angle: string;
 }
-const DEFAULT: G = { c1: "#4f46e5", c2: "#0ea5e9", angle: "90" };
+// Page-content gradient defaults fed to native <input type="color"> pickers, which require concrete hex.
+const DEFAULT: G = { c1: "#4f46e5", c2: "#0ea5e9", angle: "90" }; // design-lint-ok: color-picker default value
 
 export function buildGradient(g: G): string {
   return `linear-gradient(${g.angle}deg, ${g.c1}, ${g.c2})`;
