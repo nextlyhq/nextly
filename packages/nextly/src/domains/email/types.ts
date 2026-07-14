@@ -316,6 +316,11 @@ export interface EmailProviderAdapter {
      * predate this field keep compiling; built-in adapters forward it.
      */
     text?: string;
+    /**
+     * Reply-To address. Optional so custom adapters that predate this
+     * field keep compiling; built-in adapters forward it when set.
+     */
+    replyTo?: string;
     /** CC email addresses. */
     cc?: string[];
     /** BCC email addresses. */

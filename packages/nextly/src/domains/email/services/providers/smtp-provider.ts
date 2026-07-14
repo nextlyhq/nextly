@@ -90,6 +90,7 @@ export function createSmtpProvider(
           subject: options.subject,
           html: options.html,
           text: options.text,
+          replyTo: options.replyTo,
           cc: options.cc,
           bcc: options.bcc,
           attachments: options.attachments?.map(a => ({

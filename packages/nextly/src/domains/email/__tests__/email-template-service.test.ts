@@ -4,10 +4,9 @@
  * Covers:
  * 1. CRUD operations: create, get, update, delete, list templates
  * 2. Template slug uniqueness — creating duplicate throws
- * 3. Reserved slug protection — cannot create with `_email-header` or `_email-footer`
- * 4. Layout management: getLayout, updateLayout (header/footer)
- * 5. Built-in template bootstrapping: ensureBuiltInTemplates (idempotent)
- * 6. Template preview with variable interpolation
+ * 3. Layout resolution: getDefaultLayout, getLayoutFor, legacy migration
+ * 4. Built-in template bootstrapping: ensureBuiltInTemplates (idempotent)
+ * 5. Template preview with layout composition ({{content}})
  *
  * Uses in-memory SQLite with better-sqlite3, following the pattern
  * from `email-provider-service.test.ts`.
@@ -66,10 +65,15 @@ function createInMemoryDb() {
       subject TEXT NOT NULL,
       html_content TEXT NOT NULL,
       plain_text_content TEXT,
+      preheader TEXT,
+      kind TEXT NOT NULL DEFAULT 'template',
+      layout_id TEXT,
       variables TEXT,
       use_layout INTEGER NOT NULL DEFAULT 1,
       is_active INTEGER NOT NULL DEFAULT 1,
       provider_id TEXT,
+      from_override TEXT,
+      reply_to TEXT,
       attachments TEXT,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
@@ -266,19 +270,40 @@ describe("EmailTemplateService", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("cannot delete layout templates", async () => {
-      await service.updateLayout({ header: "<header>Test</header>" });
+    it("cannot delete the default layout", async () => {
+      const layout = await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<div>{{content}}</div>",
+        useLayout: false,
+      });
 
-      const headerTemplate = await service.getTemplateBySlug("_email-header");
-      expect(headerTemplate).not.toBeNull();
-
-      await expect(service.deleteTemplate(headerTemplate!.id)).rejects.toThrow(
+      await expect(service.deleteTemplate(layout.id)).rejects.toThrow(
         NextlyError
       );
 
-      await expect(
-        service.deleteTemplate(headerTemplate!.id)
-      ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
+      await expect(service.deleteTemplate(layout.id)).rejects.toMatchObject({
+        code: "BUSINESS_RULE_VIOLATION",
+      });
+    });
+
+    it("allows deleting a custom (non-default) layout", async () => {
+      const layout = await service.createTemplate({
+        name: "Promo Layout",
+        slug: "promo-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<div>{{content}}</div>",
+        useLayout: false,
+      });
+
+      await service.deleteTemplate(layout.id);
+
+      await expect(service.getTemplate(layout.id)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
     });
   });
 
@@ -333,24 +358,27 @@ describe("EmailTemplateService", () => {
       expect(list[1].slug).toBe("older");
     });
 
-    it("excludes layout templates from the list", async () => {
+    it("includes layout rows tagged with kind = 'layout'", async () => {
       await service.createTemplate({
         name: "Regular",
         slug: "regular-template",
         subject: "S",
         htmlContent: "<p>body</p>",
       });
-      await service.updateLayout({
-        header: "<header>H</header>",
-        footer: "<footer>F</footer>",
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<div>{{content}}</div>",
+        useLayout: false,
       });
 
       const list = await service.listTemplates();
+      const bySlug = Object.fromEntries(list.map(t => [t.slug, t]));
 
-      const slugs = list.map(t => t.slug);
-      expect(slugs).toContain("regular-template");
-      expect(slugs).not.toContain("_email-header");
-      expect(slugs).not.toContain("_email-footer");
+      expect(bySlug["regular-template"].kind).toBe("template");
+      expect(bySlug["default-layout"].kind).toBe("layout");
     });
   });
 
@@ -379,133 +407,101 @@ describe("EmailTemplateService", () => {
     });
   });
 
-  // ── Reserved Slug Protection ────────────────────────────────────────────
+  // ── Layout Resolution ───────────────────────────────────────────────────
 
-  describe("reserved slug protection", () => {
-    it("rejects creating a template with _email-header slug", async () => {
-      await expect(
-        service.createTemplate({
-          name: "Sneaky Header",
-          slug: "_email-header",
-          subject: "S",
-          htmlContent: "<p>not allowed</p>",
-        })
-      ).rejects.toThrow(NextlyError);
-
-      await expect(
-        service.createTemplate({
-          name: "Sneaky Header",
-          slug: "_email-header",
-          subject: "S",
-          htmlContent: "<p>not allowed</p>",
-        })
-      ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
+  describe("getDefaultLayout()", () => {
+    it("returns null when no layout exists", async () => {
+      expect(await service.getDefaultLayout()).toBeNull();
     });
 
-    it("rejects creating a template with _email-footer slug", async () => {
-      await expect(
-        service.createTemplate({
-          name: "Sneaky Footer",
-          slug: "_email-footer",
-          subject: "S",
-          htmlContent: "<p>not allowed</p>",
-        })
-      ).rejects.toThrow(NextlyError);
+    it("returns the default-layout row when present", async () => {
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<div>{{content}}</div>",
+        useLayout: false,
+      });
 
-      await expect(
-        service.createTemplate({
-          name: "Sneaky Footer",
-          slug: "_email-footer",
-          subject: "S",
-          htmlContent: "<p>not allowed</p>",
-        })
-      ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
+      const layout = await service.getDefaultLayout();
+      expect(layout).not.toBeNull();
+      expect(layout!.slug).toBe("default-layout");
+      expect(layout!.kind).toBe("layout");
     });
   });
 
-  // ── Layout Management ───────────────────────────────────────────────────
-
-  describe("getLayout()", () => {
-    it("returns empty strings when no layout templates exist", async () => {
-      const layout = await service.getLayout();
-
-      expect(layout.header).toBe("");
-      expect(layout.footer).toBe("");
-    });
-
-    it("returns stored header and footer after updateLayout", async () => {
-      await service.updateLayout({
-        header: "<header>My Header</header>",
-        footer: "<footer>My Footer</footer>",
+  describe("getLayoutFor()", () => {
+    it("falls back to the default layout when layoutId is unset", async () => {
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<div>{{content}}</div>",
+        useLayout: false,
+      });
+      const tpl = await service.createTemplate({
+        name: "Body",
+        slug: "body-tpl",
+        subject: "S",
+        htmlContent: "<p>hi</p>",
       });
 
-      const layout = await service.getLayout();
+      const layout = await service.getLayoutFor(tpl);
+      expect(layout!.slug).toBe("default-layout");
+    });
 
-      expect(layout.header).toBe("<header>My Header</header>");
-      expect(layout.footer).toBe("<footer>My Footer</footer>");
+    it("resolves an explicit layoutId", async () => {
+      const custom = await service.createTemplate({
+        name: "Promo Layout",
+        slug: "promo-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<main>{{content}}</main>",
+        useLayout: false,
+      });
+      const tpl = await service.createTemplate({
+        name: "Body",
+        slug: "body-tpl-2",
+        subject: "S",
+        htmlContent: "<p>hi</p>",
+        layoutId: custom.id,
+      });
+
+      const layout = await service.getLayoutFor(tpl);
+      expect(layout!.slug).toBe("promo-layout");
     });
   });
 
-  describe("updateLayout()", () => {
-    it("creates layout templates if they do not exist", async () => {
-      await service.updateLayout({
-        header: "<header>New</header>",
-        footer: "<footer>New</footer>",
+  describe("legacy layout migration", () => {
+    it("folds legacy _email-header/_email-footer rows into the default layout", async () => {
+      // Seed pre-consolidation rows the way older builds stored them.
+      await service.createTemplate({
+        name: "Email Header",
+        slug: "_email-header",
+        subject: "",
+        htmlContent: "<html><body>",
+        useLayout: false,
+      });
+      await service.createTemplate({
+        name: "Email Footer",
+        slug: "_email-footer",
+        subject: "",
+        htmlContent: "</body></html>",
+        useLayout: false,
       });
 
-      const headerTemplate = await service.getTemplateBySlug("_email-header");
-      const footerTemplate = await service.getTemplateBySlug("_email-footer");
+      await service.ensureBuiltInTemplates();
 
-      expect(headerTemplate).not.toBeNull();
-      expect(headerTemplate!.htmlContent).toBe("<header>New</header>");
-      expect(footerTemplate).not.toBeNull();
-      expect(footerTemplate!.htmlContent).toBe("<footer>New</footer>");
-    });
+      const layout = await service.getDefaultLayout();
+      expect(layout).not.toBeNull();
+      expect(layout!.kind).toBe("layout");
+      expect(layout!.htmlContent).toBe("<html><body>{{content}}</body></html>");
 
-    it("updates existing layout templates without creating duplicates", async () => {
-      await service.updateLayout({
-        header: "<header>V1</header>",
-        footer: "<footer>V1</footer>",
-      });
-      await service.updateLayout({
-        header: "<header>V2</header>",
-        footer: "<footer>V2</footer>",
-      });
-
-      const layout = await service.getLayout();
-
-      expect(layout.header).toBe("<header>V2</header>");
-      expect(layout.footer).toBe("<footer>V2</footer>");
-    });
-
-    it("can update header only without touching footer", async () => {
-      await service.updateLayout({
-        header: "<header>H1</header>",
-        footer: "<footer>F1</footer>",
-      });
-      await service.updateLayout({
-        header: "<header>H2</header>",
-      });
-
-      const layout = await service.getLayout();
-
-      expect(layout.header).toBe("<header>H2</header>");
-      expect(layout.footer).toBe("<footer>F1</footer>");
-    });
-
-    it("can update footer only without touching header", async () => {
-      await service.updateLayout({
-        header: "<header>H1</header>",
-        footer: "<footer>F1</footer>",
-      });
-      await service.updateLayout({
-        footer: "<footer>F2</footer>",
-      });
-
-      const layout = await service.getLayout();
-
-      expect(layout.header).toBe("<header>H1</header>");
-      expect(layout.footer).toBe("<footer>F2</footer>");
+      // Legacy rows are removed.
+      expect(await service.getTemplateBySlug("_email-header")).toBeNull();
+      expect(await service.getTemplateBySlug("_email-footer")).toBeNull();
     });
   });
 
@@ -520,14 +516,16 @@ describe("EmailTemplateService", () => {
       const passwordReset = await service.getTemplateBySlug("password-reset");
       const emailVerification =
         await service.getTemplateBySlug("email-verification");
-      const header = await service.getTemplateBySlug("_email-header");
-      const footer = await service.getTemplateBySlug("_email-footer");
+      const layout = await service.getTemplateBySlug("default-layout");
 
       expect(welcome).not.toBeNull();
       expect(passwordReset).not.toBeNull();
       expect(emailVerification).not.toBeNull();
-      expect(header).not.toBeNull();
-      expect(footer).not.toBeNull();
+      expect(layout).not.toBeNull();
+      expect(layout!.kind).toBe("layout");
+      // No legacy magic-slug rows are created.
+      expect(await service.getTemplateBySlug("_email-header")).toBeNull();
+      expect(await service.getTemplateBySlug("_email-footer")).toBeNull();
     });
 
     it("is idempotent — second call does not duplicate templates", async () => {
@@ -618,11 +616,14 @@ describe("EmailTemplateService", () => {
       );
     });
 
-    it("wraps content with layout header/footer when useLayout is true", async () => {
-      // Set up layout
-      await service.updateLayout({
-        header: "<html><body>",
-        footer: "</body></html>",
+    it("injects the body into the layout at {{content}} when useLayout is true", async () => {
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<html><body>{{content}}</body></html>",
+        useLayout: false,
       });
 
       const template = await service.createTemplate({
@@ -638,10 +639,15 @@ describe("EmailTemplateService", () => {
       expect(preview.html).toBe("<html><body><p>Content</p></body></html>");
     });
 
-    it("interpolates variables in layout header and footer too", async () => {
-      await service.updateLayout({
-        header: "<header>{{appName}}</header>",
-        footer: "<footer>{{year}} {{appName}}</footer>",
+    it("interpolates variables in the layout wrapper (not the body)", async () => {
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent:
+          "<header>{{appName}}</header>{{content}}<footer>{{year}} {{appName}}</footer>",
+        useLayout: false,
       });
 
       const template = await service.createTemplate({
@@ -664,9 +670,13 @@ describe("EmailTemplateService", () => {
     });
 
     it("does not wrap with layout when useLayout is false", async () => {
-      await service.updateLayout({
-        header: "<header>H</header>",
-        footer: "<footer>F</footer>",
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "<header>H</header>{{content}}<footer>F</footer>",
+        useLayout: false,
       });
 
       const template = await service.createTemplate({

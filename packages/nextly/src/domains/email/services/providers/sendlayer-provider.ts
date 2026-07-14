@@ -77,6 +77,12 @@ export function createSendLayerProvider(
         body.PlainContent = options.text;
       }
 
+      // Reply-To (SendLayer's documented ReplyTo array-of-address field).
+      if (options.replyTo) {
+        const replyTo = parseFromAddress(options.replyTo);
+        body.ReplyTo = [{ name: replyTo.name, email: replyTo.email }];
+      }
+
       if (options.cc && options.cc.length > 0) {
         body.CC = options.cc.map(email => ({ name: "", email }));
       }

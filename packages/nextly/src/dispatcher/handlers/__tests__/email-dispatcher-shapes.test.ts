@@ -11,10 +11,10 @@
 //   respondAction:   deleteProvider, setDefault, testProvider
 //
 // Template coverage:
-//   respondData:     listTemplates, getLayout, previewTemplate
+//   respondData:     listTemplates, previewTemplate
 //   respondDoc:      getTemplate
 //   respondMutation: createTemplate (201), updateTemplate (200)
-//   respondAction:   deleteTemplate, updateLayout
+//   respondAction:   deleteTemplate
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,8 +49,6 @@ type TemplateService = {
   updateTemplate: ReturnType<typeof vi.fn>;
   deleteTemplate: ReturnType<typeof vi.fn>;
   previewTemplate: ReturnType<typeof vi.fn>;
-  getLayout: ReturnType<typeof vi.fn>;
-  updateLayout: ReturnType<typeof vi.fn>;
 };
 
 function makeProviderService(
@@ -78,8 +76,6 @@ function makeTemplateService(
     updateTemplate: vi.fn(),
     deleteTemplate: vi.fn(),
     previewTemplate: vi.fn(),
-    getLayout: vi.fn(),
-    updateLayout: vi.fn(),
     ...overrides,
   };
 }
@@ -297,21 +293,6 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     expect(body).not.toHaveProperty("items");
   });
 
-  it("getLayout returns bare { header, footer } body", async () => {
-    const fakeLayout = { header: "<h1>Hi</h1>", footer: "<p>Bye</p>" };
-    wireTemplates(
-      makeTemplateService({
-        getLayout: vi.fn().mockResolvedValue(fakeLayout),
-      })
-    );
-
-    const result = await dispatchEmailTemplates("getLayout", {}, undefined);
-
-    const response = result as Response;
-    const body = await response.json();
-    expect(body).toEqual(fakeLayout);
-  });
-
   it("previewTemplate returns bare { subject, html } body", async () => {
     const fakePreview = {
       subject: "Welcome, Alice",
@@ -426,23 +407,5 @@ describe("dispatchEmailTemplates, actions (respondAction)", () => {
       message: "Email template deleted.",
       templateId: "t1",
     });
-  });
-
-  it("updateLayout returns just { message } body and 200 status", async () => {
-    wireTemplates(
-      makeTemplateService({
-        updateLayout: vi.fn().mockResolvedValue(undefined),
-      })
-    );
-
-    const result = await dispatchEmailTemplates(
-      "updateLayout",
-      {},
-      { header: "<h1>Hi</h1>" }
-    );
-
-    const response = result as Response;
-    const body = await response.json();
-    expect(body).toEqual({ message: "Email layout updated." });
   });
 });

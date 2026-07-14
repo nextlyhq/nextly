@@ -3,11 +3,11 @@
  *
  * CRUD operations for managing email templates stored in the
  * `email_templates` table. Supports template variable interpolation,
- * built-in template bootstrapping, and shared email layout
- * (header/footer) management.
+ * built-in template bootstrapping, and layout composition.
  *
- * Layout templates use reserved slugs `_email-header` and
- * `_email-footer` and are stored as regular template rows.
+ * A layout is a first-class row with `kind = 'layout'` whose
+ * `htmlContent` holds a `{{content}}` placeholder where a template
+ * body is injected at send time.
  *
  * @module services/email/email-template-service
  * @since 1.0.0
@@ -34,20 +34,19 @@ import { BaseService } from "../../../shared/base-service";
 import type { EmailAttachmentInput } from "../types";
 
 import { interpolateTemplate } from "./template-engine";
-import { BUILT_IN_TEMPLATES } from "./templates";
+import {
+  BUILT_IN_TEMPLATES,
+  DEFAULT_LAYOUT_SLUG,
+  LAYOUT_CONTENT_PLACEHOLDER,
+} from "./templates";
 
 // ============================================================
 // Constants
 // ============================================================
 
-/** Reserved slug for the shared email header layout. */
-const LAYOUT_HEADER_SLUG = "_email-header";
-
-/** Reserved slug for the shared email footer layout. */
-const LAYOUT_FOOTER_SLUG = "_email-footer";
-
-/** Reserved slugs that cannot be used by user-created templates. */
-const RESERVED_SLUGS = new Set([LAYOUT_HEADER_SLUG, LAYOUT_FOOTER_SLUG]);
+/** Legacy reserved slugs migrated into the unified layout row on boot. */
+const LEGACY_HEADER_SLUG = "_email-header";
+const LEGACY_FOOTER_SLUG = "_email-footer";
 
 // ============================================================
 // Input Types
@@ -69,6 +68,10 @@ export interface UpdateEmailTemplateInput {
   subject?: string;
   htmlContent?: string;
   plainTextContent?: string | null;
+  preheader?: string | null;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
   variables?: EmailTemplateVariable[] | null;
   useLayout?: boolean;
   isActive?: boolean;
@@ -122,18 +125,6 @@ export class EmailTemplateService extends BaseService {
   async createTemplate(
     data: CreateEmailTemplateInput
   ): Promise<EmailTemplateRecord> {
-    if (RESERVED_SLUGS.has(data.slug)) {
-      // Spec §13.8: identifiers (the slug value) belong in logContext, not in
-      // the public message. Public sentence stays generic and ends with a period.
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage:
-          "That slug is reserved for layout templates. Use updateLayout() instead.",
-        statusCode: 422,
-        logContext: { slug: data.slug },
-      });
-    }
-
     const id = randomUUID();
     const now = new Date();
 
@@ -141,9 +132,14 @@ export class EmailTemplateService extends BaseService {
       id,
       name: data.name,
       slug: data.slug,
+      kind: data.kind ?? "template",
       subject: data.subject,
       htmlContent: data.htmlContent,
       plainTextContent: data.plainTextContent ?? null,
+      preheader: data.preheader ?? null,
+      layoutId: data.layoutId ?? null,
+      fromOverride: data.fromOverride ?? null,
+      replyTo: data.replyTo ?? null,
       variables: data.variables ?? null,
       useLayout: data.useLayout ?? true,
       isActive: data.isActive ?? true,
@@ -210,10 +206,10 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
-   * List all email templates, ordered by creation date (newest first).
+   * List email templates, ordered by creation date (newest first).
    *
-   * Excludes layout templates (`_email-header`, `_email-footer`)
-   * from the listing. Use `getLayout()` to access layout templates.
+   * Returns every row including layouts (`kind = 'layout'`); callers
+   * that want only message bodies filter by `kind === 'template'`.
    */
   async listTemplates(): Promise<EmailTemplateRecord[]> {
     const results = await this.db
@@ -221,9 +217,7 @@ export class EmailTemplateService extends BaseService {
       .from(this.emailTemplates)
       .orderBy(desc(this.emailTemplates.createdAt));
 
-    return (results as EmailTemplateRecord[]).filter(
-      row => !RESERVED_SLUGS.has(row.slug)
-    );
+    return results as EmailTemplateRecord[];
   }
 
   /**
@@ -249,6 +243,11 @@ export class EmailTemplateService extends BaseService {
       updateData.htmlContent = data.htmlContent;
     if (data.plainTextContent !== undefined)
       updateData.plainTextContent = data.plainTextContent;
+    if (data.preheader !== undefined) updateData.preheader = data.preheader;
+    if (data.layoutId !== undefined) updateData.layoutId = data.layoutId;
+    if (data.fromOverride !== undefined)
+      updateData.fromOverride = data.fromOverride;
+    if (data.replyTo !== undefined) updateData.replyTo = data.replyTo;
     if (data.variables !== undefined) updateData.variables = data.variables;
     if (data.useLayout !== undefined) updateData.useLayout = data.useLayout;
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
@@ -275,13 +274,14 @@ export class EmailTemplateService extends BaseService {
   /**
    * Delete an email template.
    *
-   * Cannot delete layout templates — use `updateLayout()` to modify them.
-   * Idempotent — returns successfully if template doesn't exist.
+   * The default layout is undeletable (it is the fallback wrapper).
+   * Custom layouts may be deleted — templates referencing them fall
+   * back to the default via the `layoutId` set-null FK. Idempotent —
+   * returns successfully if the template doesn't exist.
    *
-   * @throws NextlyError BUSINESS_RULE_VIOLATION if template is a layout template
+   * @throws NextlyError BUSINESS_RULE_VIOLATION if deleting the default layout
    */
   async deleteTemplate(id: string): Promise<void> {
-    // Check if template exists and validate it's not a layout template
     let template: EmailTemplateRecord | null = null;
     try {
       template = await this.getTemplate(id);
@@ -298,12 +298,11 @@ export class EmailTemplateService extends BaseService {
       throw error;
     }
 
-    if (RESERVED_SLUGS.has(template.slug)) {
+    if (template.slug === DEFAULT_LAYOUT_SLUG) {
       // Spec §13.8: identifiers are operator-only. Public sentence is generic.
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage:
-          "Cannot delete layout templates. Use updateLayout() to modify them.",
+        publicMessage: "Cannot delete the default layout.",
         statusCode: 422,
         logContext: { id, slug: template.slug },
       });
@@ -335,17 +334,36 @@ export class EmailTemplateService extends BaseService {
     const template = await this.getTemplate(id);
 
     const subject = interpolateTemplate(template.subject, sampleData);
-    let html = interpolateTemplate(template.htmlContent, sampleData);
+    const body = interpolateTemplate(template.htmlContent, sampleData);
 
-    // Wrap with layout if enabled
-    if (template.useLayout) {
-      const layout = await this.getLayout();
-      const header = interpolateTemplate(layout.header, sampleData);
-      const footer = interpolateTemplate(layout.footer, sampleData);
-      html = header + html + footer;
+    // Layout rows preview as-is; message bodies wrap in their layout.
+    if (template.kind === "layout" || !template.useLayout) {
+      return { subject, html: body };
     }
 
-    return { subject, html };
+    const layout = await this.getLayoutFor(template);
+    if (!layout) return { subject, html: body };
+
+    return { subject, html: this.renderWithLayout(layout, body, sampleData) };
+  }
+
+  /**
+   * Inject an already-rendered body into a layout wrapper at its
+   * `{{content}}` placeholder. The layout's own `{{variable}}`
+   * placeholders (e.g. `{{year}}`, `{{appName}}`) are interpolated;
+   * the body is spliced in verbatim (never re-escaped).
+   */
+  renderWithLayout(
+    layout: EmailTemplateRecord,
+    body: string,
+    variables: Record<string, unknown>
+  ): string {
+    const [before, after] = layout.htmlContent.split(
+      LAYOUT_CONTENT_PLACEHOLDER
+    );
+    const head = interpolateTemplate(before ?? "", variables);
+    const tail = interpolateTemplate(after ?? "", variables);
+    return head + body + tail;
   }
 
   // ============================================================
@@ -355,11 +373,14 @@ export class EmailTemplateService extends BaseService {
   /**
    * Ensure built-in templates exist in the database.
    *
-   * Auto-creates welcome, password-reset, email-verification templates
-   * and `_email-header` / `_email-footer` layout templates if they
+   * First folds any legacy `_email-header` / `_email-footer` rows into
+   * the unified default layout, then auto-creates the default layout,
+   * welcome, password-reset, and email-verification templates if they
    * don't already exist. Idempotent — skips templates that already exist.
    */
   async ensureBuiltInTemplates(): Promise<void> {
+    await this.migrateLegacyLayout();
+
     for (const template of BUILT_IN_TEMPLATES) {
       const existing = await this.getTemplateBySlug(template.slug);
       if (existing) continue;
@@ -371,9 +392,14 @@ export class EmailTemplateService extends BaseService {
         id,
         name: template.name,
         slug: template.slug,
+        kind: template.kind ?? "template",
         subject: template.subject,
         htmlContent: template.htmlContent,
         plainTextContent: template.plainTextContent ?? null,
+        preheader: template.preheader ?? null,
+        layoutId: template.layoutId ?? null,
+        fromOverride: template.fromOverride ?? null,
+        replyTo: template.replyTo ?? null,
         variables: template.variables ?? null,
         useLayout: template.useLayout ?? true,
         isActive: template.isActive ?? true,
@@ -436,56 +462,58 @@ export class EmailTemplateService extends BaseService {
   }
 
   // ============================================================
-  // Layout Management
+  // Layout Resolution
   // ============================================================
 
   /**
-   * Get the shared email layout (header + footer).
-   *
-   * Returns the `htmlContent` of the `_email-header` and `_email-footer`
-   * reserved template rows. Returns empty strings if layout templates
-   * haven't been created yet.
+   * List all layout rows (`kind = 'layout'`), newest first.
    */
-  async getLayout(): Promise<{ header: string; footer: string }> {
-    const [headerTemplate, footerTemplate] = await Promise.all([
-      this.getTemplateBySlug(LAYOUT_HEADER_SLUG),
-      this.getTemplateBySlug(LAYOUT_FOOTER_SLUG),
-    ]);
+  async listLayouts(): Promise<EmailTemplateRecord[]> {
+    const results = await this.db
+      .select()
+      .from(this.emailTemplates)
+      .where(eq(this.emailTemplates.kind, "layout"))
+      .orderBy(desc(this.emailTemplates.createdAt));
 
-    return {
-      header: headerTemplate?.htmlContent ?? "",
-      footer: footerTemplate?.htmlContent ?? "",
-    };
+    return results as EmailTemplateRecord[];
   }
 
   /**
-   * Update the shared email header or footer.
+   * Get the default layout row, or null if none exists yet.
    *
-   * Creates layout templates if they don't exist yet.
+   * Resolves the `default-layout` slug first, then falls back to any
+   * `kind = 'layout'` row (in case the default was renamed).
    */
-  async updateLayout(data: {
-    header?: string;
-    footer?: string;
-  }): Promise<void> {
-    const now = new Date();
+  async getDefaultLayout(): Promise<EmailTemplateRecord | null> {
+    const bySlug = await this.getTemplateBySlug(DEFAULT_LAYOUT_SLUG);
+    if (bySlug) return bySlug;
 
-    if (data.header !== undefined) {
-      await this.upsertLayoutTemplate(
-        LAYOUT_HEADER_SLUG,
-        "Email Header",
-        data.header,
-        now
-      );
-    }
+    const rows = await this.db
+      .select()
+      .from(this.emailTemplates)
+      .where(eq(this.emailTemplates.kind, "layout"))
+      .limit(1);
 
-    if (data.footer !== undefined) {
-      await this.upsertLayoutTemplate(
-        LAYOUT_FOOTER_SLUG,
-        "Email Footer",
-        data.footer,
-        now
-      );
+    return (rows[0] as EmailTemplateRecord | undefined) ?? null;
+  }
+
+  /**
+   * Resolve the layout that wraps a given template: its explicit
+   * `layoutId` when set and valid, otherwise the default layout.
+   * Returns null when no layout exists at all.
+   */
+  async getLayoutFor(
+    template: EmailTemplateRecord
+  ): Promise<EmailTemplateRecord | null> {
+    if (template.layoutId) {
+      try {
+        const layout = await this.getTemplate(template.layoutId);
+        if (layout.kind === "layout") return layout;
+      } catch (error) {
+        if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
+      }
     }
+    return this.getDefaultLayout();
   }
 
   // ============================================================
@@ -493,38 +521,55 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
-   * Insert or update a layout template by slug.
+   * Fold legacy `_email-header` / `_email-footer` rows into a single
+   * default layout row (`header + {{content}} + footer`), preserving
+   * any operator customisations, then delete the legacy rows.
+   * Idempotent — a no-op once a layout row exists.
    */
-  private async upsertLayoutTemplate(
-    slug: string,
-    name: string,
-    htmlContent: string,
-    now: Date
-  ): Promise<void> {
-    const existing = await this.getTemplateBySlug(slug);
+  private async migrateLegacyLayout(): Promise<void> {
+    const existingLayout = await this.getDefaultLayout();
+    if (existingLayout) return;
 
-    if (existing) {
+    const [header, footer] = await Promise.all([
+      this.getTemplateBySlug(LEGACY_HEADER_SLUG),
+      this.getTemplateBySlug(LEGACY_FOOTER_SLUG),
+    ]);
+    if (!header && !footer) return;
+
+    const wrapper = `${header?.htmlContent ?? ""}${LAYOUT_CONTENT_PLACEHOLDER}${footer?.htmlContent ?? ""}`;
+    const now = new Date();
+
+    await this.db.insert(this.emailTemplates).values({
+      id: randomUUID(),
+      name: "Default Layout",
+      slug: DEFAULT_LAYOUT_SLUG,
+      kind: "layout",
+      subject: "",
+      htmlContent: wrapper,
+      plainTextContent: null,
+      preheader: null,
+      layoutId: null,
+      fromOverride: null,
+      replyTo: null,
+      variables: null,
+      useLayout: false,
+      isActive: true,
+      providerId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    if (header) {
       await this.db
-        .update(this.emailTemplates)
-        .set({ htmlContent, updatedAt: now })
-        .where(eq(this.emailTemplates.id, existing.id));
-    } else {
-      const id = randomUUID();
-
-      await this.db.insert(this.emailTemplates).values({
-        id,
-        name,
-        slug,
-        subject: "",
-        htmlContent,
-        plainTextContent: null,
-        variables: null,
-        useLayout: false,
-        isActive: true,
-        providerId: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+        .delete(this.emailTemplates)
+        .where(eq(this.emailTemplates.id, header.id));
     }
+    if (footer) {
+      await this.db
+        .delete(this.emailTemplates)
+        .where(eq(this.emailTemplates.id, footer.id));
+    }
+
+    this.logger.info("Migrated legacy email layout rows into default layout.");
   }
 }

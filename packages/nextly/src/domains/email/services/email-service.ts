@@ -188,6 +188,12 @@ export class EmailService extends BaseService {
       // Interpolate body (HTML escaping for injected values)
       let html = interpolateTemplate(dbTemplate.htmlContent, variables);
 
+      // Prepend a hidden preheader (inbox preview line) when authored.
+      if (dbTemplate.preheader?.trim()) {
+        const preheader = interpolateTemplate(dbTemplate.preheader, variables);
+        html = `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}</div>${html}`;
+      }
+
       // Compose with layout if enabled
       if (dbTemplate.useLayout) {
         html = await this.composeWithLayout(dbTemplate, html, variables);
@@ -214,6 +220,8 @@ export class EmailService extends BaseService {
         subject,
         html,
         plainText,
+        from: dbTemplate.fromOverride ?? undefined,
+        replyTo: dbTemplate.replyTo ?? undefined,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
@@ -290,6 +298,10 @@ export class EmailService extends BaseService {
     subject: string;
     html: string;
     plainText?: string;
+    /** Override the resolved provider From (e.g. a per-template From). */
+    from?: string;
+    /** Reply-To header. Omitted when not set. */
+    replyTo?: string;
     providerId?: string;
     cc?: string[];
     bcc?: string[];
@@ -304,9 +316,14 @@ export class EmailService extends BaseService {
       options.attachments
     );
 
-    const { adapter, from, providerType } = await this.resolveProvider(
-      options.providerId
-    );
+    const {
+      adapter,
+      from: resolvedFrom,
+      providerType,
+    } = await this.resolveProvider(options.providerId);
+
+    // A per-template From override wins over the provider's default From.
+    const from = options.from?.trim() ? options.from : resolvedFrom;
 
     const registry = getFilterRegistry();
 
@@ -345,6 +362,7 @@ export class EmailService extends BaseService {
         subject: filtered.subject,
         html: filtered.html,
         text: filtered.text,
+        replyTo: options.replyTo,
         cc: filtered.cc,
         bcc: filtered.bcc,
         attachments: resolvedAttachments,
@@ -587,19 +605,19 @@ export class EmailService extends BaseService {
   // ============================================================
 
   /**
-   * Compose the final HTML by wrapping the interpolated template body
-   * with the shared header/footer layout.
-   *
-   * Composition: headerHtml + interpolatedBody + footerHtml.
-   * Variable interpolation applies to the header and footer parts
-   * (e.g., `{{year}}`, `{{appName}}` in footer).
+   * Compose the final HTML by injecting the interpolated template body
+   * into its resolved layout at the `{{content}}` placeholder. The
+   * layout's own `{{year}}` / `{{appName}}` placeholders are filled;
+   * the body is spliced in verbatim. Returns the body unchanged when
+   * no layout exists.
    */
   private async composeWithLayout(
-    _template: EmailTemplateRecord,
+    template: EmailTemplateRecord,
     interpolatedBody: string,
     variables: Record<string, unknown>
   ): Promise<string> {
-    const layout = await this.templateService.getLayout();
+    const layout = await this.templateService.getLayoutFor(template);
+    if (!layout) return interpolatedBody;
 
     // Ensure common layout variables are always available
     const layoutVars: Record<string, unknown> = {
@@ -608,10 +626,11 @@ export class EmailService extends BaseService {
       appName: variables.appName ?? this.getAppName(),
     };
 
-    const header = interpolateTemplate(layout.header, layoutVars);
-    const footer = interpolateTemplate(layout.footer, layoutVars);
-
-    return header + interpolatedBody + footer;
+    return this.templateService.renderWithLayout(
+      layout,
+      interpolatedBody,
+      layoutVars
+    );
   }
 
   // ============================================================

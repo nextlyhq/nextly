@@ -179,24 +179,6 @@ export interface PreviewEmailTemplateArgs extends DirectAPIConfig {
 }
 
 /**
- * Arguments for getting the shared email layout (header/footer).
- */
-export type GetEmailLayoutArgs = DirectAPIConfig;
-
-/**
- * Arguments for updating the shared email layout (header/footer).
- */
-export interface UpdateEmailLayoutArgs extends DirectAPIConfig {
-  /** Layout data */
-  data: {
-    /** Header HTML content */
-    header?: string;
-    /** Footer HTML content */
-    footer?: string;
-  };
-}
-
-/**
  * Arguments for finding user field definitions.
  */
 export interface FindUserFieldsArgs extends DirectAPIConfig {
