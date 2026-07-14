@@ -37,3 +37,7 @@ export { slides, contentCarousel } from "./slides";
 export { hotspot } from "./hotspot";
 export { lottie } from "./lottie";
 export { ctaCard, flipBox } from "./cards";
+export { progressBar, counter, rating } from "./conversion";
+export { countdown } from "./countdown";
+export { pricingTable, priceList } from "./pricing";
+export { form } from "./form";
