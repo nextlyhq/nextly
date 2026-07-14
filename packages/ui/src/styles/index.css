@@ -1,0 +1,12 @@
+/**
+ * Pre-compiled stylesheet entry for `@nextlyhq/ui`.
+ *
+ * Bundles Tailwind + the design-system theme + the utilities emitted by this
+ * package's components into a single `dist/styles.css`. A plugin imports that
+ * file and gets styled, token-driven components with no Tailwind setup.
+ */
+@import "tailwindcss";
+@import "./theme.css";
+
+/* Scan this package's source so the components' utility classes compile. */
+@source "../";

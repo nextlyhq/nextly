@@ -20,13 +20,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./theme.css": "./dist/theme.css",
+    "./styles.css": "./dist/styles.css"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/build-css.mjs",
+    "build:js": "tsup",
+    "build:css": "node scripts/build-css.mjs",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
@@ -48,6 +52,7 @@
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@tailwindcss/cli": "^4.3.2",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
@@ -58,6 +63,7 @@
     "jsdom": "^27.1.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "tailwindcss": "^4.3.2",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

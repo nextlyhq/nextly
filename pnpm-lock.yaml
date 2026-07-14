@@ -1370,6 +1370,9 @@ importers:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      '@tailwindcss/cli':
+        specifier: ^4.3.2
+        version: 4.3.2
       '@types/react':
         specifier: 19.2.0
         version: 19.2.0
@@ -1400,6 +1403,9 @@ importers:
       react-dom:
         specifier: 19.2.0
         version: 19.2.0(react@19.2.0)
+      tailwindcss:
+        specifier: ^4.3.2
+        version: 4.3.2
       tsup:
         specifier: ^8.5.0
         version: 8.5.0(jiti@2.7.0)(postcss@8.5.14)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
