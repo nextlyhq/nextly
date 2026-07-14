@@ -468,6 +468,14 @@
   /* Design tokens */
   --radius: 0px;
 
+  /* Control sizing — derived from a single height knob so control density
+   * scales from one place. Steps map to the control size variants:
+   * sm 32px, md 36px, default 40px, lg 44px. */
+  --control-height: 2.5rem;
+  --control-height-sm: calc(var(--control-height) - 0.5rem);
+  --control-height-md: calc(var(--control-height) - 0.25rem);
+  --control-height-lg: calc(var(--control-height) + 0.25rem);
+
   /* Focus ring colors */
   --focus-ring: var(--primary);
   --focus-ring-offset: oklch(1 0 0);
