@@ -616,79 +616,79 @@
 
 .adminapp {
   /* Base colors - using Slate neutral scale */
-  --background: hsl(0 0% 100%);
+  --background: oklch(1 0 0);
   /* Pure white for weightless aesthetic */
-  --page-background: hsl(0 0% 97.6%);
+  --page-background: oklch(0.9818 0 0);
   /* #f9f9f9 for page content area */
-  --foreground: hsl(222.2 47.4% 11.2%);
+  --foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Component colors */
-  --card: hsl(0 0% 100%);
+  --card: oklch(1 0 0);
   /* pure white for cards to pop on off-white bg */
-  --card-foreground: hsl(222.2 47.4% 11.2%);
+  --card-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --popover: hsl(0 0% 100%);
+  --popover: oklch(1 0 0);
   /* white */
-  --popover-foreground: hsl(222.2 47.4% 11.2%);
+  --popover-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Brand colors - Blue-Cyan Professional Palette */
-  --primary: hsl(0 0% 0%);
+  --primary: oklch(0 0 0);
   /* Black for premium minimalist aesthetic */
-  --primary-foreground: hsl(0 0% 100%);
+  --primary-foreground: oklch(1 0 0);
   /* white */
 
   /* Secondary colors - using slate-100 for subtle backgrounds */
-  --secondary: hsl(210 40% 96.1%);
+  --secondary: oklch(0.9684 0.0068 247.9);
   /* slate-100 */
-  --secondary-foreground: hsl(222.2 47.4% 11.2%);
+  --secondary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Utility colors */
-  --muted: hsl(0 0% 96%);
-  --muted-foreground: hsl(215.4 16.3% 46.9%);
+  --muted: oklch(0.9696 0 0);
+  --muted-foreground: oklch(0.5547 0.0407 257.44);
   /* slate-500 */
-  --accent: hsl(215.4 16.3% 46.9%);
+  --accent: oklch(0.5547 0.0407 257.44);
   /* Slate-500 per user request #64748b */
-  --accent-foreground: hsl(0 0% 100%);
+  --accent-foreground: oklch(1 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant */
-  --destructive: hsl(0 84.2% 60.2%);
+  --destructive: oklch(0.6368 0.2078 25.33);
   /* red-500 (#ef4444) */
-  --destructive-foreground: hsl(0 0% 100%);
+  --destructive-foreground: oklch(1 0 0);
   /* white */
-  --success: hsl(142.1 76.2% 36.3%);
+  --success: oklch(0.6273 0.17 149.2);
   /* green-600 (#16a34a) - AA compliant */
-  --success-foreground: hsl(0 0% 100%);
+  --success-foreground: oklch(1 0 0);
   /* white */
-  --warning: hsl(37.7 92.1% 50.2%);
+  --warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 (#f59e0b) */
-  --warning-foreground: hsl(222.2 47.4% 11.2%);
+  --warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
   /* Element colors — 3-tier translucent border scale (monochrome).
    * Was a single --border at 5% black (~1.05:1, effectively invisible).
    * subtle = decorative dividers/cards; default = tables/groups;
    * strong = interactive control edges (inputs/checkbox) for prominence. */
-  --border-subtle: hsl(0 0% 0% / 0.08);
-  --border: hsl(0 0% 0% / 0.13);
-  --border-strong: hsl(0 0% 0% / 0.3);
-  --input: hsl(
-    240 5% 68%
+  --border-subtle: oklch(0 0 0 / 0.08);
+  --border: oklch(0 0 0 / 0.13);
+  --border-strong: oklch(0 0 0 / 0.3);
+  --input: oklch(
+    0.7384 0.0116 286.11
   ); /* zinc-400: stronger visible field border (was zinc-300, too faint) */
   --ring: var(--primary);
 
   /* Chart colors for data visualization */
   --chart-1: var(--primary);
-  --chart-2: hsl(186.2 100% 42%);
+  --chart-2: oklch(0.7399 0.1277 209.34);
   /* cyan-500 */
-  --chart-3: hsl(142.1 76.2% 36.3%);
+  --chart-3: oklch(0.6273 0.17 149.2);
   /* green-600 */
-  --chart-4: hsl(37.7 92.1% 50.2%);
+  --chart-4: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --chart-5: hsl(0 84.2% 60.2%);
+  --chart-5: oklch(0.6368 0.2078 25.33);
   /* red-500 */
 
   /* Design tokens */
@@ -696,28 +696,28 @@
 
   /* Focus ring colors */
   --focus-ring: var(--primary);
-  --focus-ring-offset: hsl(0 0% 100%);
+  --focus-ring-offset: oklch(1 0 0);
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --sidebar-background: hsl(0 0% 100%);
+  --sidebar-background: oklch(1 0 0);
   /* Pure white for weightless aesthetic */
-  --sidebar-foreground: hsl(215.3 25% 26.7%);
+  --sidebar-foreground: oklch(0.372 0.0392 257.3);
   /* slate-700 */
-  --sidebar-primary: hsl(222.2 47.4% 11.2%);
+  --sidebar-primary: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-primary-foreground: hsl(210 40% 98%);
+  --sidebar-primary-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-accent: hsl(210 40% 96.1%);
+  --sidebar-accent: oklch(0.9684 0.0068 247.9);
   /* slate-100 */
-  --sidebar-accent-foreground: hsl(222.2 47.4% 11.2%);
+  --sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-border: hsl(214.3 31.8% 91.4%);
+  --sidebar-border: oklch(0.929 0.0126 255.53);
   /* slate-200 */
   --sidebar-ring: var(--primary);
 
   /* Data table specific colors */
-  --table-row-hover: hsl(0 0% 98%);
+  --table-row-hover: oklch(0.9848 0 0);
   --table-row-selected: var(--primary);
   --table-border: var(--border);
 }
@@ -725,99 +725,101 @@
 /* Dark theme overrides when using class-based theming */
 .adminapp.dark {
   /* Base colors - using Slate dark scale */
-  --background: hsl(222 47% 4%);
+  --background: oklch(0.1358 0.0163 262.71);
   /* ultra deep dark background (darker than slate-950) */
-  --page-background: hsl(222 47% 4%);
+  --page-background: oklch(0.1358 0.0163 262.71);
   /* Matches background in dark mode */
-  --foreground: hsl(210 40% 98%);
+  --foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Component colors */
-  --card: hsl(222 33% 9%);
+  --card: oklch(0.1916 0.0228 266.36);
   /* raised one tonal step above --background (222 47% 4%) so panels/cards
    * read as distinct surfaces in dark mode instead of merging into the page */
-  --card-foreground: hsl(210 40% 98%);
+  --card-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --popover: hsl(215.4 16.3% 25.9%);
+  --popover: oklch(0.369 0.0249 257.44);
   /* slate-800 */
-  --popover-foreground: hsl(210 40% 98%);
+  --popover-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
-  --primary: hsl(0 0% 100%); /* High contrast White for dark mode */
-  --primary-foreground: hsl(222.2 47.4% 11.2%);
+  --primary: oklch(1 0 0); /* High contrast White for dark mode */
+  --primary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Secondary colors - using slate-800 for dark backgrounds */
-  --secondary: hsl(217.2 32.6% 17.5%);
+  --secondary: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --secondary-foreground: hsl(210 40% 98%);
+  --secondary-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Utility colors */
-  --muted: hsl(217.2 32.6% 17.5%);
+  --muted: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --muted-foreground: hsl(215 20.2% 65.1%);
+  --muted-foreground: oklch(0.7107 0.0351 256.79);
   /* slate-400 */
-  --accent: hsl(215.4 16.3% 46.9%); /* Slate-500 per user request #64748b */
-  --accent-foreground: hsl(0 0% 100%);
+  --accent: oklch(
+    0.5547 0.0407 257.44
+  ); /* Slate-500 per user request #64748b */
+  --accent-foreground: oklch(1 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant (Dark Mode) */
-  --destructive: hsl(0 84.2% 60.2%);
+  --destructive: oklch(0.6368 0.2078 25.33);
   /* red-500 */
-  --destructive-foreground: hsl(0 0% 100%);
+  --destructive-foreground: oklch(1 0 0);
   /* white */
-  --success: hsl(142.1 70.6% 45.3%);
+  --success: oklch(0.7229 0.1921 149.58);
   /* green-500 - brighter for dark mode */
-  --success-foreground: hsl(0 0% 100%);
+  --success-foreground: oklch(1 0 0);
   /* white */
-  --warning: hsl(37.7 92.1% 50.2%);
+  --warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --warning-foreground: hsl(222.2 47.4% 11.2%);
+  --warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Element colors — 3-tier translucent border scale (white-alpha for dark).
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
    * on the deep background without glowing. Was ~1.2:1 (too faint). */
-  --border-subtle: hsl(0 0% 100% / 0.08);
-  --border: hsl(0 0% 100% / 0.13);
-  --border-strong: hsl(0 0% 100% / 0.34);
-  --input: hsl(
-    240 4% 40%
+  --border-subtle: oklch(1 0 0 / 0.08);
+  --border: oklch(1 0 0 / 0.13);
+  --border-strong: oklch(1 0 0 / 0.34);
+  --input: oklch(
+    0.4987 0.0128 285.92
   ); /* stronger visible field border (was zinc-700, too faint) */
   --ring: var(--primary);
 
   /* Chart colors for data visualization (same as light mode) */
   --chart-1: var(--primary);
-  --chart-2: hsl(186.2 100% 42%);
+  --chart-2: oklch(0.7399 0.1277 209.34);
   /* cyan-500 */
-  --chart-3: hsl(142.1 70.6% 45.3%);
+  --chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */
-  --chart-4: hsl(37.7 92.1% 50.2%);
+  --chart-4: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --chart-5: hsl(0 84.2% 60.2%);
+  --chart-5: oklch(0.6368 0.2078 25.33);
   /* red-500 */
 
   /* Sidebar specific colors - dark mode */
-  --sidebar-background: hsl(222.2 47.4% 11.2%);
+  --sidebar-background: oklch(0.2079 0.0399 265.73);
   /* slate-900 (#0f172a) - matches cards for consistent depth */
-  --sidebar-foreground: hsl(210 40% 98%);
+  --sidebar-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-primary: hsl(210 40% 98%);
+  --sidebar-primary: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-primary-foreground: hsl(222.2 47.4% 11.2%);
+  --sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-accent: hsl(217.2 32.6% 17.5%);
+  --sidebar-accent: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --sidebar-accent-foreground: hsl(210 40% 98%);
+  --sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-border: hsl(215.4 16.3% 12%);
+  --sidebar-border: oklch(0.2321 0.0129 257.43);
   /* subtle slate-900 */
   --sidebar-ring: var(--primary);
 
   /* Data table specific colors - dark mode */
-  --table-row-hover: hsl(217.2 32.6% 17.5%);
+  --table-row-hover: oklch(0.28 0.0369 259.97);
   /* slate-800 */
   --table-row-selected: var(--primary);
   --table-border: var(--border);
@@ -834,11 +836,11 @@
  * Table Header & Footer Background + Border System
  */
 .adminapp {
-  --table-header-bg: hsl(0 0% 100%);
+  --table-header-bg: oklch(1 0 0);
 }
 
 .adminapp.dark {
-  --table-header-bg: hsl(222 47% 6%);
+  --table-header-bg: oklch(0.1573 0.0228 265.66);
 }
 
 .adminapp thead {
