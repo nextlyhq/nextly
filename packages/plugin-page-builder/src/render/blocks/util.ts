@@ -14,3 +14,12 @@ export function safeUrl(url: unknown): string | undefined {
   if (/^(javascript|vbscript|data):/.test(scheme)) return undefined;
   return trimmed;
 }
+
+/** Read a string prop with a fallback (avoids `String(unknown)` stringification). */
+export function str(v: unknown, fallback = ""): string {
+  return typeof v === "string"
+    ? v
+    : typeof v === "number"
+      ? String(v)
+      : fallback;
+}

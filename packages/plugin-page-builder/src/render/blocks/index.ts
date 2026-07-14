@@ -11,3 +11,8 @@ export { video } from "./video";
 export { container } from "./container";
 export { grid } from "./grid";
 export { queryLoop } from "./queryLoop";
+export { spacer } from "./spacer";
+export { divider } from "./divider";
+export { anchor } from "./anchor";
+export { badge } from "./badge";
+export { icon } from "./icon";

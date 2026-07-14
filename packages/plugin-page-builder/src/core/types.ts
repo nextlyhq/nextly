@@ -165,7 +165,13 @@ export interface Binding {
 // Block definition + control contracts (spec §7) — the extensibility core
 // ---------------------------------------------------------------------------
 
-export type BlockCategory = "basic" | "layout" | "media" | "dynamic";
+export type BlockCategory =
+  | "basic"
+  | "layout"
+  | "media"
+  | "dynamic"
+  | "content"
+  | "utility";
 
 export interface SlotSpec {
   name: string;
