@@ -304,21 +304,6 @@
   cursor: not-allowed !important;
 }
 
-/* Ensure checkbox and switch components work properly with stronger specificity */
-button[data-slot="checkbox"][data-state="checked"],
-[data-slot="checkbox"][data-state="checked"] {
-  background-color: var(--primary) !important;
-  border-color: var(--primary) !important;
-  color: var(--primary-foreground) !important;
-}
-
-button[data-slot="checkbox"][data-state="indeterminate"],
-[data-slot="checkbox"][data-state="indeterminate"] {
-  background-color: var(--primary) !important;
-  border-color: var(--primary) !important;
-  color: var(--primary-foreground) !important;
-}
-
 /* Switch component fixes */
 button[data-slot="switch"][data-state="checked"],
 [data-slot="switch"][data-state="checked"] {
@@ -336,12 +321,6 @@ button[data-slot="switch"][data-state="unchecked"],
 }
 
 /* Additional fixes for Radix UI state attributes */
-[data-state="checked"][data-slot="checkbox"] {
-  background-color: var(--primary) !important;
-  border-color: var(--primary) !important;
-  color: var(--primary-foreground) !important;
-}
-
 [data-state="checked"][data-slot="switch"] {
   background-color: var(--primary) !important;
 }
@@ -350,21 +329,7 @@ button[data-slot="switch"][data-state="unchecked"],
   background-color: var(--input) !important;
 }
 
-/* Force checkbox indicator visibility */
-[data-slot="checkbox"][data-state="checked"] svg,
-[data-slot="checkbox"][data-state="indeterminate"] svg {
-  color: var(--primary-foreground) !important;
-  opacity: 1 !important;
-}
-
 /* Additional Radix UI state fixes with maximum specificity */
-button[role="checkbox"][data-state="checked"],
-button[role="checkbox"][data-state="indeterminate"] {
-  background-color: var(--primary) !important;
-  border-color: var(--primary) !important;
-  color: var(--primary-foreground) !important;
-}
-
 button[role="switch"][data-state="checked"] {
   background-color: var(--primary) !important;
 }
