@@ -14,7 +14,9 @@ import { ColorControl } from "./ColorControl";
 import { BackgroundControl } from "./composite/BackgroundControl";
 import { BorderControl } from "./composite/BorderControl";
 import { BoxShadowControl } from "./composite/BoxShadowControl";
+import { IconPickerControl } from "./composite/IconPickerControl";
 import { PositionControl } from "./composite/PositionControl";
+import { RepeaterControl } from "./composite/RepeaterControl";
 import { SliderControl } from "./composite/SliderControl";
 import { UnitControl } from "./composite/UnitControl";
 import { MediaControl } from "./MediaControl";
@@ -49,6 +51,8 @@ const CONTROLS: Record<string, ControlComponent> = {
   position: PositionControl,
   slider: SliderControl,
   boxShadow: BoxShadowControl,
+  icon: IconPickerControl,
+  repeater: RepeaterControl,
 };
 
 let registered = false;

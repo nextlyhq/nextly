@@ -16,3 +16,7 @@ export { divider } from "./divider";
 export { anchor } from "./anchor";
 export { badge } from "./badge";
 export { icon } from "./icon";
+export { list } from "./list";
+export { iconList } from "./iconList";
+export { buttonGroup } from "./buttonGroup";
+export { columns } from "./columns";
