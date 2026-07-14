@@ -24,3 +24,4 @@ export { cover } from "./cover";
 export { iconBox } from "./iconBox";
 export { imageBox } from "./imageBox";
 export { gallery } from "./gallery";
+export { richText } from "./richText";
