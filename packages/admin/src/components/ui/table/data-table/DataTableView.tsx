@@ -106,7 +106,12 @@ export interface DataTableViewProps<Row extends object> {
 
 const DEFAULT_GET_ROW_ID = (row: object): string => {
   const id = (row as { id?: unknown }).id;
-  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+  if (typeof id === "string" || typeof id === "number") {
+    return String(id);
+  }
+  // Collapsing ID-less rows to "" produces duplicate React keys and merges their
+  // selection state. Require a real id or an explicit getRowId instead.
+  throw new Error("DataTableView rows require an id or a custom getRowId.");
 };
 
 export function DataTableView<Row extends object>({

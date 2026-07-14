@@ -64,7 +64,12 @@ export interface DataTableProps<Row extends object> {
 
 const DEFAULT_GET_ROW_ID = (row: object): string => {
   const id = (row as { id?: unknown }).id;
-  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+  if (typeof id === "string" || typeof id === "number") {
+    return String(id);
+  }
+  // Collapsing ID-less rows to "" produces duplicate React keys and merges their
+  // selection state. Require a real id or an explicit getRowId instead.
+  throw new Error("DataTable rows require an id or a custom getRowId.");
 };
 
 /** Wrap an in-memory array in a fetcher so client + server modes share one path. */
@@ -91,7 +96,9 @@ function makeStaticFetcher<Row extends object>(data: Row[]): DataFetcher<Row> {
       items: paged,
       meta: {
         total,
-        page,
+        // `page` is a 0-based index here; the pagination controls expect a
+        // 1-based `meta.page`.
+        page: page + 1,
         limit: pageSize,
         totalPages,
         hasNext: page < totalPages - 1,
