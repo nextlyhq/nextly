@@ -23,7 +23,7 @@ import {
   FileCode,
   Table as Filter,
 } from "lucide-react";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
@@ -123,6 +123,12 @@ export default function CollectionTable() {
   const [pageSize, setPageSize] = useState(10);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
+
+  // Reset to the first page when the search term changes so a later page does not
+  // request out-of-range results and show a false empty state.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
 
   const [sourceFilter, setSourceFilter] = useState<CollectionSource | "all">(
     "all"

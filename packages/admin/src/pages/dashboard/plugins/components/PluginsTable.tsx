@@ -12,7 +12,7 @@ import {
 } from "@nextlyhq/ui";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
@@ -71,6 +71,19 @@ export default function PluginsTable() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Reset to the first page when the search term changes so the slice does not
+  // fall out of range against the newly filtered list.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  // Changing the page size can leave the current page index out of range; snap
+  // back to the first page.
+  const handlePageSizeChange = (newPageSize: number) => {
+    setPageSize(newPageSize);
+    setPage(0);
+  };
 
   const pluginsWithId = useMemo(() => {
     return (branding?.plugins ?? []).map(plugin => ({
@@ -264,7 +277,7 @@ export default function PluginsTable() {
           totalPages={Math.ceil(totalCount / pageSize)}
           pageSize={pageSize}
           onPageChange={setPage}
-          onPageSizeChange={setPageSize}
+          onPageSizeChange={handlePageSizeChange}
           totalItems={totalCount}
         />
       )}
