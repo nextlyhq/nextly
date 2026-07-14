@@ -23,3 +23,22 @@ export function str(v: unknown, fallback = ""): string {
       ? String(v)
       : fallback;
 }
+
+/**
+ * Resolve a media prop (raw URL string, `{ url }` object, or a bound value) to a safe URL.
+ */
+export function mediaUrl(v: unknown): string | undefined {
+  if (typeof v === "string") return safeUrl(v);
+  if (v && typeof v === "object" && "url" in v) {
+    return safeUrl((v as { url?: unknown }).url);
+  }
+  return undefined;
+}
+
+/** Read a media prop's alt text if present. */
+export function mediaAlt(v: unknown): string {
+  if (v && typeof v === "object" && "alt" in v) {
+    return str((v as { alt?: unknown }).alt);
+  }
+  return "";
+}

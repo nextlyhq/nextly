@@ -20,3 +20,7 @@ export { list } from "./list";
 export { iconList } from "./iconList";
 export { buttonGroup } from "./buttonGroup";
 export { columns } from "./columns";
+export { cover } from "./cover";
+export { iconBox } from "./iconBox";
+export { imageBox } from "./imageBox";
+export { gallery } from "./gallery";

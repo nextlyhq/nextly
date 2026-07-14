@@ -77,7 +77,7 @@ describe("core block renderers", () => {
     const out = html(
       makeNode("core/video", { provider: "youtube", videoId: "abc" })
     );
-    expect(out).toContain("youtube.com/embed/abc");
+    expect(out).toContain("youtube-nocookie.com/embed/abc");
     expect(out).toContain("<iframe");
   });
 

@@ -84,7 +84,7 @@ describe("seeded page (all 7 blocks)", () => {
     expect(html).toContain("@media (max-width: 640px)"); // responsive override
     expect(html).toContain('src="/hero.jpg"');
     expect(html).toContain('href="/signup"');
-    expect(html).toContain("youtube.com/embed/dQw4w9WgXcQ");
+    expect(html).toContain("youtube-nocookie.com/embed/dQw4w9WgXcQ");
     expect(html).toContain("grid-template-columns: repeat(2, 1fr)");
   });
 });

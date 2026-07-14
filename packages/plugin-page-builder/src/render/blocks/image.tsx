@@ -13,6 +13,8 @@ interface MediaValue {
 interface ImageProps extends MediaValue {
   /** Editor-populated media object (from the media control). */
   media?: MediaValue;
+  caption?: string;
+  link?: { href?: string; target?: string };
 }
 
 export const image = defineBlock<ImageProps>({
@@ -21,9 +23,11 @@ export const image = defineBlock<ImageProps>({
   label: "Image",
   icon: "Image",
   category: "media",
-  defaultProps: { url: "", alt: "" },
+  defaultProps: { url: "", alt: "", caption: "", link: { href: "" } },
   contentFields: [
     { name: "media", type: "media", label: "Image", bindable: true },
+    { name: "caption", type: "text", label: "Caption (optional)" },
+    { name: "link", type: "link", label: "Link (optional)" },
   ],
   supports: {
     dimensions: {
@@ -50,7 +54,53 @@ export const image = defineBlock<ImageProps>({
     const alt = media.alt ?? props.alt;
     const width = media.width ?? props.width;
     const height = media.height ?? props.height;
-    return (
+    const caption = typeof props.caption === "string" ? props.caption : "";
+    const href = safeUrl(props.link?.href);
+    const target = props.link?.target || undefined;
+
+    const img = (
+      <img
+        src={src}
+        alt={typeof alt === "string" ? alt : ""}
+        width={typeof width === "number" ? width : undefined}
+        height={typeof height === "number" ? height : undefined}
+        loading="lazy"
+        style={{ display: "block", maxWidth: "100%" }}
+      />
+    );
+    const linked = href ? (
+      <a
+        href={href}
+        target={target}
+        rel={target === "_blank" ? "noopener noreferrer" : undefined}
+      >
+        {img}
+      </a>
+    ) : (
+      img
+    );
+
+    if (caption) {
+      return (
+        <figure className={className} style={{ margin: 0 }}>
+          {linked}
+          <figcaption style={{ fontSize: "0.875em", opacity: 0.75 }}>
+            {caption}
+          </figcaption>
+        </figure>
+      );
+    }
+    // No caption: apply the scoped class to the outermost element.
+    return href ? (
+      <a
+        className={className}
+        href={href}
+        target={target}
+        rel={target === "_blank" ? "noopener noreferrer" : undefined}
+      >
+        {img}
+      </a>
+    ) : (
       <img
         className={className}
         src={src}
