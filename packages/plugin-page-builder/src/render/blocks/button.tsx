@@ -105,9 +105,14 @@ export const button = defineBlock({
       );
     }
     const target = link.target || undefined;
-    const rel =
-      str(props.rel) ||
-      (target === "_blank" ? "noopener noreferrer" : undefined);
+    // Merge the author's rel tokens with the security-critical noopener/noreferrer
+    // for _blank links, rather than letting a custom rel drop them (reverse tabnabbing).
+    const relTokens = new Set(str(props.rel).split(/\s+/).filter(Boolean));
+    if (target === "_blank") {
+      relTokens.add("noopener");
+      relTokens.add("noreferrer");
+    }
+    const rel = relTokens.size ? Array.from(relTokens).join(" ") : undefined;
     return (
       <a
         className={className}

@@ -94,4 +94,29 @@ describe("sanitizeEmbedHtml", () => {
     expect(out).not.toContain("javascript:");
     expect(out).toContain("hi");
   });
+
+  it("blocks encoded/whitespace-obfuscated dangerous schemes", () => {
+    // Char references and inserted whitespace decode to `javascript:` in the
+    // browser after a raw-text matcher has passed them — the sanitizer must
+    // decode before validating the scheme.
+    const cases = [
+      '<a href="java&#x73;cript:alert(1)">x</a>',
+      '<a href="java&#115;cript:alert(1)">x</a>',
+      "<p>abc<iframe//src=jAva&Tab;script:alert(3)>def</iframe></p>",
+    ];
+    for (const dirty of cases) {
+      const out = sanitizeEmbedHtml(dirty).toLowerCase();
+      expect(out).not.toContain("javascript:");
+      expect(out).not.toMatch(/on\w+=/);
+    }
+  });
+
+  it("forbids iframe srcdoc while allowing a plain iframe", () => {
+    const out = sanitizeEmbedHtml(
+      '<iframe src="https://example.com" srcdoc="<script>alert(1)</script>"></iframe>'
+    );
+    expect(out).not.toContain("srcdoc");
+    expect(out).not.toContain("<script");
+    expect(out).toContain("<iframe");
+  });
 });
