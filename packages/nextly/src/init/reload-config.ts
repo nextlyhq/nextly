@@ -864,13 +864,33 @@ export async function reloadNextlyConfig(opts?: {
         }
       }
       for (const s of Object.values(desiredSingles)) {
+        // i18n: a localized single omits its translatable columns from the main
+        // runtime table and registers the companion `single_<slug>_locales` table —
+        // mirrors the collection branch above.
+        const localized = (s as { localized?: boolean }).localized === true;
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
           dialect,
-          { status: s.status === true }
+          { status: s.status === true, localized }
         );
         singleFreshTables.set(s.tableName, table);
+        if (localized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: s.slug ?? s.tableName,
+            tableName: s.tableName,
+            fields: s.fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: s.status === true,
+          });
+          if (companion) {
+            companionFreshTables.set(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
       // Components must use the component schema generator, NOT the collection/
       // single generateRuntimeSchema. Components link to their parent document
@@ -881,11 +901,31 @@ export async function reloadNextlyConfig(opts?: {
       // _parent_*) after an HMR config reload.
       const componentSchemaService = new ComponentSchemaService(dialect);
       for (const comp of Object.values(desiredComponents)) {
+        // i18n: a localized component omits its translatable columns from the main
+        // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
+        const localized = (comp as { localized?: boolean }).localized === true;
         const table = componentSchemaService.generateRuntimeSchema(
           comp.tableName,
-          comp.fields
+          comp.fields,
+          { localized }
         );
         componentFreshTables.set(comp.tableName, table);
+        if (localized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: comp.slug ?? comp.tableName,
+            tableName: comp.tableName,
+            fields: comp.fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: false,
+          });
+          if (companion) {
+            companionFreshTables.set(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch {
       // Non-fatal: all refresh blocks below will no-op on empty maps.

@@ -57,7 +57,10 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       singleRegistryService,
       hookRegistry ?? createNoOpHookRegistry(),
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      // i18n: forward the normalized localization config so localized singles resolve
+      // and write translatable fields via their companion table (mirrors collections).
+      ctx.config.localization
     );
   });
 }

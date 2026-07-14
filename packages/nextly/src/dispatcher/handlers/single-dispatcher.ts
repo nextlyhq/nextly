@@ -29,6 +29,9 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { buildCompanionReconcileSql } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -814,6 +817,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: single.status === true,
+        // i18n: carry localized so the preview omits translatable columns from the
+        // single's main table (mirrors the apply path).
+        localized: (single as { localized?: boolean }).localized === true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -906,6 +912,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Mirror previewSingleSchemaChanges so apply diffs against the
         // same desired schema.
         status: single.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable columns
+        // from the single's main table (they live in single_<slug>_locales, reconciled
+        // out-of-band below) — mirrors the collection apply path.
+        localized: (single as { localized?: boolean }).localized === true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -943,6 +953,42 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
+      // i18n: the push pipeline excludes companion tables, so reconcile the single's
+      // companion out-of-band — create single_<slug>_locales on the first translatable
+      // field, then ADD/DROP columns as the field set changes (mirrors collections).
+      const isLocalized = (single as { localized?: boolean }).localized === true;
+      if (isLocalized) {
+        try {
+          const oldFields = (single.fields ??
+            []) as unknown as FieldDefinition[];
+          const newFields = fields as unknown as FieldDefinition[];
+          const oldLocalizedNames = new Set(
+            resolveLocalizedFieldNames(oldFields, true)
+          );
+          const newLocalizedNames = new Set(
+            resolveLocalizedFieldNames(newFields, true)
+          );
+          const companionSQL = buildCompanionReconcileSql({
+            slug,
+            tableName,
+            oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
+            newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
+            dialect,
+            status: single.status === true,
+            companionExists: await adapter.tableExists(`${tableName}_locales`),
+          });
+          for (const stmt of companionSQL.split(";")) {
+            const s = stmt.trim();
+            if (s) await adapter.executeQuery(s);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `[applySingleSchemaChanges] Companion reconcile failed for '${slug}': ${msg}.`
+          );
+        }
+      }
+
       // Post-apply: update dynamic_singles fields JSON + schema_hash.
       try {
         await adapter.update(
@@ -962,14 +1008,33 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      // Post-apply: refresh in-memory runtime schema.
+      // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
+      // table omits translatable columns, then register the companion runtime table so
+      // per-language reads/writes resolve in this process without a restart.
       try {
         const { table: freshTable } = generateRuntimeSchema(
           tableName,
           fields as FieldDefinition[],
-          dialect
+          dialect,
+          { localized: isLocalized, status: single.status === true }
         );
         getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
+        if (isLocalized) {
+          const companion = buildCompanionRuntimeTable({
+            slug,
+            tableName,
+            fields: fields as FieldDefinition[],
+            dialect,
+            localized: true,
+            status: single.status === true,
+          });
+          if (companion) {
+            getSchemaRegistryFromDI()?.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(

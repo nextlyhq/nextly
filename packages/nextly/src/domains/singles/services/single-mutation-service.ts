@@ -29,6 +29,13 @@ import type { ComponentDataService } from "../../../services/components/componen
 import { BaseService } from "../../../shared/base-service";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import type { Logger } from "../../../shared/types";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { isValidLocale, resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  buildCompanionSchema,
+  splitLocalizedWrite,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
 import type {
   SingleDocument,
   SingleResult,
@@ -66,7 +73,10 @@ export class SingleMutationService extends BaseService {
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    // i18n: when set and the single is localized, writes route translatable field
+    // values to the companion `single_<slug>_locales` row for the write's locale.
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
     this.queryService = new SingleQueryService(
@@ -75,7 +85,8 @@ export class SingleMutationService extends BaseService {
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      localization
     );
   }
 
@@ -104,6 +115,23 @@ export class SingleMutationService extends BaseService {
           success: false,
           statusCode: 404,
           message: `Single "${slug}" not found`,
+        };
+      }
+
+      // 1.1. i18n L2: reject an unknown write locale rather than silently writing the
+      // translatable values into the DEFAULT companion row (which would overwrite real
+      // default content). Mirrors the collection write path.
+      if (
+        this.localization &&
+        options.locale &&
+        !isValidLocale(this.localization, options.locale)
+      ) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Unknown locale '${options.locale}'. Configured locales: ` +
+            `${this.localization.locales.map(l => l.code).join(", ")}.`,
         };
       }
 
@@ -217,9 +245,25 @@ export class SingleMutationService extends BaseService {
         updated_at: new Date(),
       };
 
+      // 8.5. i18n: for a localized single, split translatable columns out of the main
+      // update — they live on the companion `single_<slug>_locales` row, not the main
+      // table. `companion` is null when the single isn't localized (unchanged path).
+      const companion = this.localization
+        ? buildCompanionSchema({
+            slug,
+            tableName: singleMeta.tableName,
+            fields: singleMeta.fields as { name: string; type: string }[],
+            dialect: this.adapter.dialect,
+            status: (singleMeta as { status?: boolean }).status === true,
+          })
+        : null;
+      const { main: mainPayload, companion: companionData } = companion
+        ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+        : { main: updatePayload, companion: {} as Record<string, unknown> };
+
       const updatedRows = await this.adapter.update<SingleDocument>(
         singleMeta.tableName,
-        updatePayload,
+        mainPayload,
         this.whereEq("id", existingDoc.id),
         { returning: "*" }
       );
@@ -230,6 +274,28 @@ export class SingleMutationService extends BaseService {
           statusCode: 500,
           message: "Failed to update Single document",
         };
+      }
+
+      // 8.6. i18n: upsert the companion row for the write's locale with the translatable
+      // values. Stamps the per-locale `_status` from the (shared) status column when the
+      // single has Draft/Published, so publishing carries into the edited language.
+      if (companion && Object.keys(companionData).length > 0) {
+        const writeLocale = resolveRequestedLocale(
+          this.localization!,
+          options.locale
+        );
+        await upsertCompanionRow(
+          this.adapter,
+          companion.companionTableName,
+          existingDoc.id,
+          writeLocale,
+          companionData,
+          companion.hasStatus
+            ? ((mainPayload as Record<string, unknown>)["status"] as
+                | string
+                | undefined)
+            : undefined
+        );
       }
 
       // 9.5. Save component field data to separate comp_{slug} tables

@@ -39,6 +39,13 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { populateCompanionFields } from "../../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  resolveFallbackChain,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
+import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
 import type {
   GetSingleOptions,
   SingleDocument,
@@ -184,7 +191,10 @@ export class SingleQueryService extends BaseService {
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    // i18n: when set and the single is localized, reads resolve translatable fields
+    // from the companion `single_<slug>_locales` table for the requested locale.
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
   }
@@ -316,6 +326,17 @@ export class SingleQueryService extends BaseService {
         })) as SingleDocument;
       }
 
+      // 7.8. i18n: resolve translatable fields from the companion `_locales` table
+      // for the requested locale (with fallback). No-op when localization is off or
+      // the single isn't localized. Mirrors the collection read path.
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        statusFilter ? statusFilter.value : undefined
+      );
+
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
         const afterContext = buildSingleHookContext({
@@ -345,6 +366,51 @@ export class SingleQueryService extends BaseService {
       this.logger.error("Failed to get Single document", { slug, error });
       return buildSingleErrorResult(error, "Failed to get Single document");
     }
+  }
+
+  /**
+   * i18n: overlay a localized single's translatable fields from its companion
+   * `single_<slug>_locales` row for the resolved locale chain. No-op when localization is
+   * off, the single isn't localized, or it has no translatable fields.
+   */
+  private async populateLocalized(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>,
+    locale: string | undefined,
+    statusFilterValue: string | undefined
+  ): Promise<void> {
+    const localeChain = this.resolveLocaleChain(locale);
+    if (!localeChain) return;
+    const companion = buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+    if (!companion) return;
+    await populateCompanionFields({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [doc],
+      localeChain,
+      idKey: "id",
+      // Public reads pass the published filter so a draft translation never leaks;
+      // admin/status=all passes undefined (no filter). Only meaningful when the
+      // companion carries a per-locale `_status`.
+      statusValue:
+        companion.hasStatus && statusFilterValue ? statusFilterValue : undefined,
+    });
+  }
+
+  /** Build the requested→fallback locale chain, honoring the global `fallback` flag. */
+  private resolveLocaleChain(locale: string | undefined): string[] | null {
+    if (!this.localization || locale === "all") return null;
+    const requested = resolveRequestedLocale(this.localization, locale);
+    if (this.localization.fallback === false) return [requested];
+    return resolveFallbackChain(this.localization, requested);
   }
 
   // ============================================================

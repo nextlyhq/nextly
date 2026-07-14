@@ -904,6 +904,18 @@ async function initializeSchemaRegistry(
         registry.registerDynamicSchema(tableName, table);
         // Register the companion `_locales` table so queries can reach it (M4).
         if (localized) {
+          // i18n: create the companion on boot/db:sync if a migration hasn't already
+          // (idempotent) so code-first localized entities work without a manual migrate.
+          const { ensureCompanionTable } = await import(
+            "../domains/i18n/runtime/companion-io"
+          );
+          await ensureCompanionTable(adapter, {
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            status: hasStatus === true,
+          });
           const { buildCompanionRuntimeTable } = await import(
             "../domains/i18n/runtime/companion-registration"
           );
@@ -927,11 +939,13 @@ async function initializeSchemaRegistry(
       }
     );
 
-    // Step 3: Dynamic singles.
+    // Step 3: Dynamic singles. Localized singles omit their translatable columns
+    // from the main runtime table and register the companion `single_<slug>_locales`
+    // table for reads/writes — mirrors collections (Step 2).
     await loadDynamicTables(
       adapter,
       "dynamic_singles",
-      async (tableName, fields, hasStatus) => {
+      async (tableName, fields, hasStatus, localized) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
@@ -939,9 +953,38 @@ async function initializeSchemaRegistry(
           tableName,
           fields as FieldDefinition[],
           dialect,
-          { status: hasStatus === true }
+          { status: hasStatus === true, localized }
         );
         registry.registerDynamicSchema(tableName, table);
+        if (localized) {
+          const { ensureCompanionTable } = await import(
+            "../domains/i18n/runtime/companion-io"
+          );
+          await ensureCompanionTable(adapter, {
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            status: hasStatus === true,
+          });
+          const { buildCompanionRuntimeTable } = await import(
+            "../domains/i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: hasStatus === true,
+          });
+          if (companion) {
+            registry.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     );
 
