@@ -406,39 +406,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: var(--primary) !important;
 }
 
-/* Ensure dropdown menu content has proper background */
-[data-slot="dropdown-menu-content"],
-[role="menu"] {
-  background-color: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-}
-
-/* Ensure popover content has proper background */
-[data-slot="popover-content"] {
-  background-color: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-}
-
-/* Ensure select content has proper background */
-[data-slot="select-content"],
-[role="listbox"] {
-  background-color: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-}
-
-/* Ensure dialog content has proper background */
-[data-slot="dialog-content"],
-[role="dialog"] {
-  background-color: var(--card) !important;
-  color: var(--card-foreground) !important;
-}
-
-/* Ensure alert dialog content has proper background */
-[role="alertdialog"] {
-  background-color: var(--background) !important;
-  color: var(--foreground) !important;
-}
-
 /* Force background class to work in portals */
 .bg-background {
   background-color: var(--background);
