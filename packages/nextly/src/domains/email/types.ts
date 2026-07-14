@@ -193,6 +193,13 @@ export interface EmailConfig {
   from: string;
 
   /**
+   * Application name injected into templates and the shared layout as the
+   * `{{appName}}` variable. Falls back to "Nextly" when not set.
+   * @example 'Acme'
+   */
+  appName?: string;
+
+  /**
    * Base URL for links in emails (e.g., password reset link).
    * Falls back to `NEXT_PUBLIC_APP_URL` environment variable if not set.
    * @example 'https://example.com'

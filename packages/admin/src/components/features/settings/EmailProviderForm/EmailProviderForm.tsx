@@ -339,6 +339,28 @@ export function EmailProviderForm({
               </FormItem>
             )}
           />
+
+          <FormField
+            control={form.control}
+            name="isActive"
+            render={({ field }) => (
+              <FormItem className="m-0">
+                <SettingsRow
+                  label="Active"
+                  description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
+                >
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isPending}
+                    />
+                  </FormControl>
+                  <FormMessage className="mt-1.5" />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
         </SettingsSection>
       </form>
     </Form>

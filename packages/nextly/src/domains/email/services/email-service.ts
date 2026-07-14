@@ -520,9 +520,7 @@ export class EmailService extends BaseService {
    * 3. Code-first config from `defineConfig({ email })`
    * 4. Error
    */
-  private async resolveProvider(
-    providerId?: string
-  ): Promise<{
+  private async resolveProvider(providerId?: string): Promise<{
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
@@ -688,7 +686,7 @@ export class EmailService extends BaseService {
    * Get the application name for email templates.
    */
   private getAppName(): string {
-    return "Nextly";
+    return this.emailConfig?.appName ?? "Nextly";
   }
 
   /**
