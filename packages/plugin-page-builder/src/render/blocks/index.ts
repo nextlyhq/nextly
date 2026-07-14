@@ -32,3 +32,8 @@ export { table } from "./table";
 export { socialIcons } from "./socialIcons";
 export { embed } from "./embed";
 export { ref } from "./ref";
+export { imageCarousel, logoCarousel } from "./carousels";
+export { slides, contentCarousel } from "./slides";
+export { hotspot } from "./hotspot";
+export { lottie } from "./lottie";
+export { ctaCard, flipBox } from "./cards";
