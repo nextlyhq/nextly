@@ -16,7 +16,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, isNull } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -380,6 +380,14 @@ export class EmailTemplateService extends BaseService {
    */
   async ensureBuiltInTemplates(): Promise<void> {
     await this.migrateLegacyLayout();
+
+    // The `kind` column is added to existing tables as nullable; rows that
+    // predate it come back null. Backfill them to `template` (the default
+    // layout is already tagged `layout` by the migration above).
+    await this.db
+      .update(this.emailTemplates)
+      .set({ kind: "template" })
+      .where(isNull(this.emailTemplates.kind));
 
     for (const template of BUILT_IN_TEMPLATES) {
       const existing = await this.getTemplateBySlug(template.slug);

@@ -35,11 +35,9 @@ import {
   timestamp,
   jsonb,
   index,
-  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
-import { emailProvidersPg } from "../email-providers/postgres";
 
 import type { EmailTemplateVariable } from "./types";
 
@@ -134,18 +132,19 @@ export const emailTemplatesPg = pgTable(
     /**
      * Row kind. `layout` rows are wrappers whose `htmlContent` holds a
      * `{{content}}` placeholder; `template` rows are message bodies;
-     * `partial` rows are reusable fragments.
+     * `partial` rows are reusable fragments. Nullable so it adds cleanly
+     * to existing tables; boot backfills nulls to `template` and a null
+     * kind is treated as `template` on read.
      */
-    kind: varchar("kind", { length: 20 }).default("template").notNull(),
+    kind: varchar("kind", { length: 20 }).default("template"),
 
     /**
      * Layout that wraps this template at send time (`kind = 'layout'` row).
-     * Null uses the default layout. Self-referential FK.
+     * Null uses the default layout. Soft reference to another row's id
+     * (no DB FK — integrity is enforced in the service so the column can
+     * be added to existing tables without a table rebuild).
      */
-    layoutId: uuid("layout_id").references(
-      (): AnyPgColumn => emailTemplatesPg.id,
-      { onDelete: "set null" }
-    ),
+    layoutId: uuid("layout_id"),
 
     /**
      * Available template variables with descriptions.
@@ -168,11 +167,10 @@ export const emailTemplatesPg = pgTable(
     /**
      * Optional provider ID to override the default email provider
      * for this specific template. When null, the system default is used.
-     * FK set-null so deleting a provider clears the override safely.
+     * Soft reference (no DB FK); the send path falls back to the default
+     * provider when this points at a removed provider.
      */
-    providerId: uuid("provider_id").references(() => emailProvidersPg.id, {
-      onDelete: "set null",
-    }),
+    providerId: uuid("provider_id"),
 
     /**
      * Per-template From override (e.g. `Support <help@example.com>`).

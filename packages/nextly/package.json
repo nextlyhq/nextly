@@ -127,10 +127,6 @@
       "types": "./dist/api/email-templates-preview.d.ts",
       "import": "./dist/api/email-templates-preview.mjs"
     },
-    "./api/email-templates-layout": {
-      "types": "./dist/api/email-templates-layout.d.ts",
-      "import": "./dist/api/email-templates-layout.mjs"
-    },
     "./api/email-send": {
       "types": "./dist/api/email-send.d.ts",
       "import": "./dist/api/email-send.mjs"

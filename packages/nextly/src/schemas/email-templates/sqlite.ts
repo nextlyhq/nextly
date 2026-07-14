@@ -26,16 +26,9 @@
  * ```
  */
 
-import {
-  sqliteTable,
-  text,
-  integer,
-  index,
-  type AnySQLiteColumn,
-} from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
-import { emailProvidersSqlite } from "../email-providers/sqlite";
 
 import type { EmailTemplateVariable } from "./types";
 
@@ -132,18 +125,18 @@ export const emailTemplatesSqlite = sqliteTable(
     /**
      * Row kind. `layout` rows are wrappers whose `htmlContent` holds a
      * `{{content}}` placeholder; `template` rows are message bodies;
-     * `partial` rows are reusable fragments.
+     * `partial` rows are reusable fragments. Nullable so it can be added
+     * to existing tables via SQLite's rebuild path; boot backfills nulls
+     * to `template` and a null kind is treated as `template` on read.
      */
-    kind: text("kind").default("template").notNull(),
+    kind: text("kind").default("template"),
 
     /**
      * Layout that wraps this template at send time (`kind = 'layout'` row).
-     * Null uses the default layout. Self-referential FK.
+     * Null uses the default layout. Soft reference (no DB FK) so it adds
+     * to existing tables without a rebuild; the service enforces it.
      */
-    layoutId: text("layout_id").references(
-      (): AnySQLiteColumn => emailTemplatesSqlite.id,
-      { onDelete: "set null" }
-    ),
+    layoutId: text("layout_id"),
 
     /**
      * Available template variables with descriptions.
@@ -170,11 +163,10 @@ export const emailTemplatesSqlite = sqliteTable(
     /**
      * Optional provider ID to override the default email provider
      * for this specific template. When null, the system default is used.
-     * FK set-null so deleting a provider clears the override safely.
+     * Soft reference (no DB FK); the send path falls back to the default
+     * provider when this points at a removed provider.
      */
-    providerId: text("provider_id").references(() => emailProvidersSqlite.id, {
-      onDelete: "set null",
-    }),
+    providerId: text("provider_id"),
 
     /**
      * Per-template From override (e.g. `Support <help@example.com>`).

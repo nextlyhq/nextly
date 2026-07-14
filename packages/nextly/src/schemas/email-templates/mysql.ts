@@ -34,11 +34,9 @@ import {
   datetime,
   json,
   index,
-  type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
-import { emailProvidersMysql } from "../email-providers/mysql";
 
 import type { EmailTemplateVariable } from "./types";
 
@@ -135,18 +133,18 @@ export const emailTemplatesMysql = mysqlTable(
     /**
      * Row kind. `layout` rows are wrappers whose `htmlContent` holds a
      * `{{content}}` placeholder; `template` rows are message bodies;
-     * `partial` rows are reusable fragments.
+     * `partial` rows are reusable fragments. Nullable so it adds cleanly
+     * to existing tables; boot backfills nulls to `template` and a null
+     * kind is treated as `template` on read.
      */
-    kind: varchar("kind", { length: 20 }).default("template").notNull(),
+    kind: varchar("kind", { length: 20 }).default("template"),
 
     /**
      * Layout that wraps this template at send time (`kind = 'layout'` row).
-     * Null uses the default layout. Self-referential FK.
+     * Null uses the default layout. Soft reference (no DB FK) so it adds
+     * to existing tables without a rebuild; the service enforces it.
      */
-    layoutId: varchar("layout_id", { length: 36 }).references(
-      (): AnyMySqlColumn => emailTemplatesMysql.id,
-      { onDelete: "set null" }
-    ),
+    layoutId: varchar("layout_id", { length: 36 }),
 
     /**
      * Available template variables with descriptions.
@@ -169,12 +167,10 @@ export const emailTemplatesMysql = mysqlTable(
     /**
      * Optional provider ID to override the default email provider
      * for this specific template. When null, the system default is used.
-     * FK set-null so deleting a provider clears the override safely.
+     * Soft reference (no DB FK); the send path falls back to the default
+     * provider when this points at a removed provider.
      */
-    providerId: varchar("provider_id", { length: 36 }).references(
-      () => emailProvidersMysql.id,
-      { onDelete: "set null" }
-    ),
+    providerId: varchar("provider_id", { length: 36 }),
 
     /**
      * Per-template From override (e.g. `Support <help@example.com>`).
