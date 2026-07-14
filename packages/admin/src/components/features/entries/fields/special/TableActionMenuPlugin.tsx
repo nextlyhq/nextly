@@ -19,6 +19,7 @@ import {
   $insertTableColumnAtSelection,
   $insertTableRowAtSelection,
 } from "@lexical/table";
+import { usePortalContainer } from "@nextlyhq/ui";
 import { $getSelection, $isRangeSelection } from "lexical";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -115,7 +116,9 @@ function ActionButton({
       }}
       onMouseLeave={e => {
         e.currentTarget.style.backgroundColor = "transparent";
-        e.currentTarget.style.color = "var(--muted-foreground)";
+        e.currentTarget.style.color = destructive
+          ? "var(--destructive)"
+          : "var(--muted-foreground)";
       }}
     >
       {label}
@@ -137,6 +140,9 @@ export function TableActionMenuPlugin({
   const [editor] = useLexicalComposerContext();
   const [isInTable, setIsInTable] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  // Portal into the admin's scoped root so the `.adminapp` CSS variables the menu
+  // styles rely on resolve; `document.body` is outside that scope.
+  const portalContainer = usePortalContainer();
 
   useEffect(() => {
     if (disabled) return;
@@ -294,6 +300,6 @@ export function TableActionMenuPlugin({
         destructive
       />
     </div>,
-    document.body
+    portalContainer ?? document.body
   );
 }

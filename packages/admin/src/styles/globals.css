@@ -306,10 +306,10 @@
     * Better responsive behavior and container queries
     */
 
-@media (min-width: 768px) {
-  .border-input {
-    border-color: var(--input);
-  }
+/* Applies at all widths: `.border-input` is used app-wide, so it must not be
+   gated behind a breakpoint or narrow viewports fall back to the default border. */
+.border-input {
+  border-color: var(--input);
 }
 
 .text-primary {

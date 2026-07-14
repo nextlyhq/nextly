@@ -37,8 +37,8 @@ export function ThemeToggle(): React.ReactElement {
         <button
           type="button"
           className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
-          aria-label="Toggle theme"
-          title="Theme"
+          aria-label="Choose theme"
+          title="Choose theme"
         >
           <TriggerIcon className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
         </button>
