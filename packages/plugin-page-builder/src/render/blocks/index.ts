@@ -41,3 +41,5 @@ export { progressBar, counter, rating } from "./conversion";
 export { countdown } from "./countdown";
 export { pricingTable, priceList } from "./pricing";
 export { form } from "./form";
+export { testimonial, testimonialCarousel, reviews, logoCloud } from "./social";
+export { toggle, offCanvas, map } from "./interactive2";
