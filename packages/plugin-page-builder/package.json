@@ -6,7 +6,11 @@
   "type": "module",
   "sideEffects": [
     "**/*.css",
-    "./dist/admin/index.js"
+    "./dist/admin/index.js",
+    "./src/admin/index.ts",
+    "./src/render/blocks/index.ts",
+    "./src/render/blocks/*.tsx",
+    "./src/admin/controls/registerDefaultControls.tsx"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
