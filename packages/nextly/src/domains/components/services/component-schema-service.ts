@@ -58,6 +58,7 @@ import type {
   DataFieldConfig,
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -394,14 +395,36 @@ export class ComponentSchemaService {
   // Returns an opaque Drizzle table object (PgTable | MySqlTable | SQLiteTable).
   // Typed as `unknown` because the column shape is dynamic at compile time;
   // callers cast at the use site.
-  generateRuntimeSchema(tableName: string, fields: FieldConfig[]): unknown {
+  generateRuntimeSchema(
+    tableName: string,
+    fields: FieldConfig[],
+    options: { localized?: boolean } = {}
+  ): unknown {
+    // i18n: when the component is localized, its translatable fields live in the
+    // companion `comp_<slug>_locales` table and are omitted from the main runtime
+    // table — kept in lockstep with buildDesiredTableFromComponentFields' `localized`
+    // option so the diff and the DDL agree.
+    const localizedNames = options.localized
+      ? new Set(
+          resolveLocalizedFieldNames(
+            fields as unknown as Parameters<
+              typeof resolveLocalizedFieldNames
+            >[0],
+            true
+          )
+        )
+      : new Set<string>();
+    const mainFields = fields.filter(f => {
+      const name = "name" in f ? (f as { name?: string }).name : undefined;
+      return !name || !localizedNames.has(name);
+    });
     switch (this.dialect) {
       case "postgresql":
-        return this.generatePostgresSchema(tableName, fields);
+        return this.generatePostgresSchema(tableName, mainFields);
       case "mysql":
-        return this.generateMySQLSchema(tableName, fields);
+        return this.generateMySQLSchema(tableName, mainFields);
       case "sqlite":
-        return this.generateSQLiteSchema(tableName, fields);
+        return this.generateSQLiteSchema(tableName, mainFields);
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }

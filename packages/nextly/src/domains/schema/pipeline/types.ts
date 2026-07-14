@@ -46,6 +46,9 @@ export interface DesiredSingle {
   indexes?: IndexConfig[];
   /** Same semantics as DesiredCollection.status. */
   status?: boolean;
+  /** Same semantics as DesiredCollection.localized — translatable fields live in
+   *  the companion `single_<slug>_locales` table and are omitted from main. */
+  localized?: boolean;
 }
 
 export interface DesiredComponent {
@@ -53,4 +56,7 @@ export interface DesiredComponent {
   tableName: string;
   fields: FieldConfig[];
   indexes?: IndexConfig[];
+  /** Same semantics as DesiredCollection.localized — translatable fields live in
+   *  the companion `comp_<slug>_locales` table and are omitted from main. */
+  localized?: boolean;
 }

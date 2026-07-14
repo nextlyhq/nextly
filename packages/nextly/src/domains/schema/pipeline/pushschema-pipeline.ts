@@ -529,7 +529,10 @@ export class PushSchemaPipeline {
                 typeof buildDesiredTableFromFields
               >[1],
               dialect,
-              { hasStatus: s.status === true }
+              {
+                hasStatus: s.status === true,
+                localized: (s as { localized?: boolean }).localized === true,
+              }
             )
           ),
           ...Object.values(desired.components).map(c =>
@@ -538,7 +541,8 @@ export class PushSchemaPipeline {
               c.fields as unknown as Parameters<
                 typeof buildDesiredTableFromComponentFields
               >[1],
-              dialect
+              dialect,
+              { localized: (c as { localized?: boolean }).localized === true }
             )
           ),
         ],
@@ -1045,9 +1049,13 @@ export class PushSchemaPipeline {
     // system columns.
     const componentSchemaService = new ComponentSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
+      // i18n: omit a localized component's translatable columns from the main
+      // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
+      // provisioned out-of-band) — same rule as collections/singles above.
       const componentTable = componentSchemaService.generateRuntimeSchema(
         c.tableName,
-        c.fields
+        c.fields,
+        { localized: (c as { localized?: boolean }).localized === true }
       );
       out[c.tableName] = componentTable;
     }
