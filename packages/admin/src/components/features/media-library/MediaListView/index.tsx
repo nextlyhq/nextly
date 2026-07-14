@@ -26,11 +26,16 @@ import {
   FileAudio,
   FileText,
   File,
+  Pencil,
+  Trash2,
+  Copy,
+  Download,
 } from "@admin/components/icons";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
   NextlyColumn,
+  RowAction,
 } from "@admin/components/ui/table/data-table";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
 import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
@@ -106,7 +111,11 @@ export function MediaListView({
   hiddenColumns = new Set(),
   onSelectionChange,
   onToggleAll,
+  onItemClick,
   onEdit,
+  onDelete,
+  onCopyUrl,
+  onDownload,
   onRetry,
   className = "",
   emptyStateMessage,
@@ -210,6 +219,52 @@ export function MediaListView({
     };
   }, [selectedIds, onSelectionChange, onToggleAll]);
 
+  // Per-row action menu (edit / copy URL / download / delete). Each action is
+  // included only when its callback is provided, so the migration no longer
+  // silently drops the media list's interaction handlers.
+  const rowActions = useMemo<
+    ((media: Media) => RowAction<Media>[]) | undefined
+  >(() => {
+    if (!onEdit && !onCopyUrl && !onDownload && !onDelete) return undefined;
+    return () => {
+      const actions: RowAction<Media>[] = [];
+      if (onEdit) {
+        actions.push({
+          id: "edit",
+          label: "Edit",
+          icon: <Pencil className="h-4 w-4" />,
+          onSelect: onEdit,
+        });
+      }
+      if (onCopyUrl) {
+        actions.push({
+          id: "copy-url",
+          label: "Copy URL",
+          icon: <Copy className="h-4 w-4" />,
+          onSelect: media => onCopyUrl(media.url),
+        });
+      }
+      if (onDownload) {
+        actions.push({
+          id: "download",
+          label: "Download",
+          icon: <Download className="h-4 w-4" />,
+          onSelect: onDownload,
+        });
+      }
+      if (onDelete) {
+        actions.push({
+          id: "delete",
+          label: "Delete",
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: onDelete,
+        });
+      }
+      return actions;
+    };
+  }, [onEdit, onCopyUrl, onDownload, onDelete]);
+
   // Loading state
   if (isLoading) {
     return (
@@ -283,7 +338,8 @@ export function MediaListView({
       columns={columns}
       rows={media}
       selection={selection}
-      onRowClick={onEdit}
+      onRowClick={onItemClick ?? onEdit}
+      rowActions={rowActions}
       primaryColumn="originalFilename"
       bordered={false}
       registryKey="media"

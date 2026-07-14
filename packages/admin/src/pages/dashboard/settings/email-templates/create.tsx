@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   EmailTemplateForm,
@@ -23,23 +23,28 @@ export default function CreateEmailTemplatePage() {
   const [duplicateTemplate, setDuplicateTemplate] =
     useState<EmailTemplateRecord | null>(null);
   const [isLoadingDuplicate, setIsLoadingDuplicate] = useState(false);
+  // Which `?duplicate=<id>` we've already attempted. Guards against retrying a
+  // failed load forever: without it, `finally` clears the loading flag and the
+  // effect's condition is satisfied again, re-requesting on every render.
+  const attemptedDuplicateId = useRef<string | null>(null);
 
-  // Support duplicating an existing template via ?duplicate=<id>.
+  // Support duplicating an existing template via ?duplicate=<id>. One-shot: the
+  // URL param doesn't change while this page is mounted.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const duplicateId = params.get("duplicate");
-    if (duplicateId && !duplicateTemplate && !isLoadingDuplicate) {
-      setIsLoadingDuplicate(true);
-      getTemplate(duplicateId)
-        .then(setDuplicateTemplate)
-        .catch(() => {
-          toast.error("Failed to load template", {
-            description: "Could not load the template to duplicate.",
-          });
-        })
-        .finally(() => setIsLoadingDuplicate(false));
-    }
-  }, [duplicateTemplate, isLoadingDuplicate]);
+    if (!duplicateId || attemptedDuplicateId.current === duplicateId) return;
+    attemptedDuplicateId.current = duplicateId;
+    setIsLoadingDuplicate(true);
+    getTemplate(duplicateId)
+      .then(setDuplicateTemplate)
+      .catch(() => {
+        toast.error("Failed to load template", {
+          description: "Could not load the template to duplicate.",
+        });
+      })
+      .finally(() => setIsLoadingDuplicate(false));
+  }, []);
 
   const initialValues = useMemo(() => {
     if (!duplicateTemplate) return undefined;

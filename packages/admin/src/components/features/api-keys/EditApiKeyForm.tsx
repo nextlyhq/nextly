@@ -110,13 +110,15 @@ export function EditApiKeyForm({
     },
   });
 
-  // Keep the form in sync if the loaded key changes (e.g. cache refetch).
+  // Keep the form in sync when the loaded key's values change, but never clobber
+  // unsaved edits: a cache refetch shouldn't discard what the user is typing.
   useEffect(() => {
+    if (form.formState.isDirty) return;
     form.reset({
       name: apiKey.name,
       description: apiKey.description ?? "",
     });
-  }, [apiKey, form]);
+  }, [apiKey.name, apiKey.description, form]);
 
   const tokenTypeLabel =
     apiKey.tokenType === "role-based" && apiKey.role

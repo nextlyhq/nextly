@@ -627,21 +627,18 @@ function formatFieldName(name: string): string {
 export function getEntryTitleField(
   collection: CollectionForColumns
 ): string | undefined {
-  const availableColumns = getAvailableColumns(collection);
+  // Resolve from ACTUAL schema fields. `getAvailableColumns` always injects a
+  // synthetic "title" column, so testing it would always win and leave
+  // collections without a real title field with an empty primary column.
+  const fieldNames = getAllDataFields(collection.fields).map(
+    field => field.name
+  );
+
   return (
     collection.admin?.useAsTitle ||
-    (availableColumns.includes("title")
-      ? "title"
-      : availableColumns.includes("name")
-        ? "name"
-        : availableColumns.includes("label")
-          ? "label"
-          : availableColumns.find(
-              col =>
-                !["select", "id", "actions", "createdAt", "updatedAt"].includes(
-                  col
-                )
-            ))
+    ["title", "name", "label"].find(name => fieldNames.includes(name)) ||
+    fieldNames[0] ||
+    "id"
   );
 }
 
