@@ -72,6 +72,17 @@ export type EditorAction =
     }
   | { type: "SET_BINDING"; id: string; prop: string; binding: Binding | null }
   | { type: "SET_CUSTOM_CLASS"; id: string; customClass: string }
+  | { type: "SET_BLOCK_CSS"; id: string; css: string }
+  | { type: "SET_CSS_ID"; id: string; cssId: string }
+  | { type: "SET_ATTRIBUTES"; id: string; attributes: Record<string, string> }
+  | {
+      type: "SET_VISIBILITY";
+      id: string;
+      breakpoint: string;
+      visible: boolean;
+    }
+  | { type: "SET_NAME"; id: string; name: string }
+  | { type: "SET_LOCKED"; id: string; locked: boolean }
   | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
@@ -180,6 +191,42 @@ export function editorReducer(
       const customClass = action.customClass.trim() || undefined;
       return commit(state, updateNode(root, action.id, { customClass }));
     }
+
+    case "SET_BLOCK_CSS": {
+      const customCss = action.css.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { customCss }));
+    }
+
+    case "SET_CSS_ID": {
+      const cssId = action.cssId.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { cssId }));
+    }
+
+    case "SET_ATTRIBUTES":
+      return commit(
+        state,
+        updateNode(root, action.id, { attributes: action.attributes })
+      );
+
+    case "SET_VISIBILITY": {
+      const node = findNode(root, action.id);
+      const visibility = {
+        ...(node?.visibility ?? {}),
+        [action.breakpoint]: action.visible,
+      };
+      return commit(state, updateNode(root, action.id, { visibility }));
+    }
+
+    case "SET_NAME": {
+      const name = action.name.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { name }));
+    }
+
+    case "SET_LOCKED":
+      return commit(
+        state,
+        updateNode(root, action.id, { locked: action.locked })
+      );
 
     case "SET_PAGE_CUSTOM_CSS":
       return { ...state, customCss: action.customCss, dirty: true };

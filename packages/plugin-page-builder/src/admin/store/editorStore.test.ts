@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { makeNode } from "../../core/tree";
+import { findNode, makeNode } from "../../core/tree";
 import type { BlockDocument } from "../../core/types";
 import "../../render/blocks"; // populate defaultBlockRegistry (block defaults)
 import { editorReducer, initialState } from "./editorStore";
@@ -11,6 +11,45 @@ function baseDoc(): BlockDocument {
     root: makeNode("core/container", {}, undefined, { default: [] }),
   };
 }
+
+function docWithChild(): { doc: BlockDocument; childId: string } {
+  const child = makeNode("core/heading", { text: "Hi" });
+  const root = makeNode("core/container", {}, undefined, { default: [child] });
+  return { doc: { version: 1, root }, childId: child.id };
+}
+
+describe("editorReducer — advanced node fields", () => {
+  it("SET_BLOCK_CSS / SET_CSS_ID / SET_ATTRIBUTES / SET_VISIBILITY update the node", () => {
+    const { doc, childId } = docWithChild();
+    let s = editorReducer(initialState(doc), {
+      type: "SET_BLOCK_CSS",
+      id: childId,
+      css: "selector{color:red}",
+    });
+    expect(findNode(s.document.root, childId)!.customCss).toBe(
+      "selector{color:red}"
+    );
+    s = editorReducer(s, { type: "SET_CSS_ID", id: childId, cssId: "hero" });
+    expect(findNode(s.document.root, childId)!.cssId).toBe("hero");
+    s = editorReducer(s, {
+      type: "SET_ATTRIBUTES",
+      id: childId,
+      attributes: { "data-x": "1" },
+    });
+    expect(findNode(s.document.root, childId)!.attributes).toEqual({
+      "data-x": "1",
+    });
+    s = editorReducer(s, {
+      type: "SET_VISIBILITY",
+      id: childId,
+      breakpoint: "mobile",
+      visible: false,
+    });
+    expect(findNode(s.document.root, childId)!.visibility).toEqual({
+      mobile: false,
+    });
+  });
+});
 
 describe("editorReducer", () => {
   it("SELECT sets selectedId", () => {
