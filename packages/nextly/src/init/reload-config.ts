@@ -715,6 +715,12 @@ export async function reloadNextlyConfig(opts?: {
           // Forward the Draft/Published flag so a code-first toggle reaches
           // syncCodeFirstCollections and persists to dynamic_collections.status.
           status: c.status === true,
+          // i18n: forward the localized master switch too. Without it, config.localized
+          // is undefined here and the sync writes `localized = undefined === true = false`,
+          // flipping a localized collection's flag OFF on every HMR/boot config-reload —
+          // which desyncs the registry from the (correctly localized) physical schema and
+          // breaks companion read/write.
+          localized: (c as { localized?: boolean }).localized === true,
         }));
       await registry.syncCodeFirstCollections(codeFirstConfigs);
 
@@ -763,6 +769,9 @@ export async function reloadNextlyConfig(opts?: {
             admin: s.admin,
             // Forward Draft/Published flag for code-first Singles too.
             status: s.status === true,
+            // i18n: forward the localized master switch (see the collection sync above) —
+            // otherwise the reload flips a localized single's flag OFF every HMR/boot.
+            localized: (s as { localized?: boolean }).localized === true,
           };
         });
       if (codeFirstSingleConfigs.length > 0) {
@@ -810,6 +819,9 @@ export async function reloadNextlyConfig(opts?: {
             fields: c.fields ?? [],
             description: c.description,
             admin: c.admin,
+            // i18n: forward the localized master switch — otherwise the reload flips a
+            // localized component's flag OFF every HMR/boot.
+            localized: (c as { localized?: boolean }).localized === true,
           };
         });
       if (codeFirstComponentConfigs.length > 0) {
