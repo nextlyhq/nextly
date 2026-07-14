@@ -237,3 +237,19 @@ describe("compileNodeCss — structured values", () => {
     expect(css).not.toContain("javascript");
   });
 });
+
+describe("compileNodeCss — visibility", () => {
+  it("hides at a breakpoint via display:none media query", () => {
+    const n = makeNode("core/heading", {});
+    n.visibility = { mobile: false };
+    const css = compileNodeCss(n);
+    expect(css).toContain("@media (max-width: 640px)");
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ \{ display: none; \}/);
+  });
+
+  it("does not emit anything when the breakpoint is visible", () => {
+    const n = makeNode("core/heading", {});
+    n.visibility = { mobile: true };
+    expect(compileNodeCss(n)).toBe("");
+  });
+});

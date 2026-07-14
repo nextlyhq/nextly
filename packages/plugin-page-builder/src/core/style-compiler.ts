@@ -265,6 +265,20 @@ export function compileNodeCss(
   emit(node.style, "");
   emit(node.styleHover, ":hover");
 
+  // Per-breakpoint visibility → display:none media queries.
+  if (node.visibility) {
+    if (node.visibility.base === false) {
+      blocks.push(`.${cls} { display: none; }`);
+    }
+    for (const bp of bps) {
+      if (node.visibility[bp.id] === false) {
+        blocks.push(
+          `@media (max-width: ${bp.maxWidth}px) { .${cls} { display: none; } }`
+        );
+      }
+    }
+  }
+
   return blocks.join("\n");
 }
 
