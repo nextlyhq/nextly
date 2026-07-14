@@ -599,17 +599,3 @@
   --table-border: var(--border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
 }
-
-/**
- * Base reset (shadcn convention).
- * A bare `border` utility defaults to the theme border token instead of
- * currentColor, so an un-tokened border can't slip through; explicit
- * `border-*` utilities still win (this sits in the low-priority base layer).
- */
-@layer base {
-  *,
-  ::before,
-  ::after {
-    border-color: var(--border);
-  }
-}
