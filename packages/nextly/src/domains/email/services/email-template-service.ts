@@ -561,57 +561,45 @@ export class EmailTemplateService extends BaseService {
     const wrapper = `${header?.htmlContent ?? ""}${LAYOUT_CONTENT_PLACEHOLDER}${footer?.htmlContent ?? ""}`;
     const now = new Date();
 
-    // Create the default layout and remove the legacy rows in a single
-    // transaction so a failure or a concurrent bootstrap can't leave a
-    // half-migrated state (a duplicate layout row, or orphaned legacy rows).
-    await this.db.transaction(async (tx: typeof this.db) => {
-      // Re-check inside the transaction so a concurrent run that already created
-      // the default layout does not insert a duplicate.
-      const existing = await tx
-        .select()
-        .from(this.emailTemplates)
-        .where(
-          and(
-            eq(this.emailTemplates.slug, DEFAULT_LAYOUT_SLUG),
-            eq(this.emailTemplates.kind, "layout")
-          )
-        )
-        .limit(1);
+    // Idempotent + ordered: confirm the default layout exists (creating it only
+    // when absent, so re-runs and concurrent bootstraps don't insert duplicates)
+    // BEFORE removing the legacy rows, so a failure can never delete the legacy
+    // content without a replacement layout in place. A single atomic transaction
+    // isn't used because SQLite requires a synchronous transaction callback,
+    // which is incompatible with these async queries across dialects.
+    const existing = await this.getDefaultLayout();
+    if (!existing) {
+      await this.db.insert(this.emailTemplates).values({
+        id: randomUUID(),
+        name: "Default Layout",
+        slug: DEFAULT_LAYOUT_SLUG,
+        kind: "layout",
+        subject: "",
+        htmlContent: wrapper,
+        plainTextContent: null,
+        preheader: null,
+        layoutId: null,
+        fromOverride: null,
+        replyTo: null,
+        variables: null,
+        useLayout: false,
+        isActive: true,
+        providerId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
 
-      if (existing.length === 0) {
-        await tx.insert(this.emailTemplates).values({
-          id: randomUUID(),
-          name: "Default Layout",
-          slug: DEFAULT_LAYOUT_SLUG,
-          kind: "layout",
-          subject: "",
-          htmlContent: wrapper,
-          plainTextContent: null,
-          preheader: null,
-          layoutId: null,
-          fromOverride: null,
-          replyTo: null,
-          variables: null,
-          useLayout: false,
-          isActive: true,
-          providerId: null,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-
-      // Cleanup only after the default layout is confirmed present above.
-      if (header) {
-        await tx
-          .delete(this.emailTemplates)
-          .where(eq(this.emailTemplates.id, header.id));
-      }
-      if (footer) {
-        await tx
-          .delete(this.emailTemplates)
-          .where(eq(this.emailTemplates.id, footer.id));
-      }
-    });
+    if (header) {
+      await this.db
+        .delete(this.emailTemplates)
+        .where(eq(this.emailTemplates.id, header.id));
+    }
+    if (footer) {
+      await this.db
+        .delete(this.emailTemplates)
+        .where(eq(this.emailTemplates.id, footer.id));
+    }
 
     this.logger.info("Migrated legacy email layout rows into default layout.");
   }
