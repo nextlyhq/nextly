@@ -98,11 +98,10 @@ export interface MinimalConfigEntity {
    */
   status?: boolean;
   /**
-   * Whether content-localization is enabled for this collection/single
-   * (`defineCollection({ localized: true })`). When true, fields resolved as
-   * translatable are omitted from the main-table desired snapshot and relocated
-   * to the migration-owned companion `_locales` table (i18n Option B). Ignored
-   * for components (not localizable in M3b).
+   * Whether content-localization is enabled for this collection, single, OR component
+   * (`defineCollection({ localized: true })` / `defineSingle` / `defineComponent`). When
+   * true, fields resolved as translatable are omitted from the main-table desired snapshot
+   * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
   localized?: boolean;
 }
@@ -185,10 +184,12 @@ export async function generateMigration(
     args.dialect
   );
 
-  // 2a. Plan companion `_locales` migrations for localized collections (i18n
-  //     Option B: companions are migration-owned, emitted as snapshot-less .sql).
+  // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
+  //     components (i18n Option B: companions are migration-owned, emitted as
+  //     snapshot-less .sql). All three derive their companion the same way — from the
+  //     entity's table name — so a single planner call over the merged list covers them.
   const companionPlans = planCompanionMigrations(
-    args.collections,
+    [...args.collections, ...args.singles, ...args.components],
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en"
@@ -296,23 +297,25 @@ interface CompanionPlanEntry {
 }
 
 /**
- * Plan the companion `_locales` migration for every localized collection, comparing the
- * previous committed snapshot's main table against the new localized spec.
+ * Plan the companion `_locales` migration for every localized entity (collection, single, OR
+ * component), comparing the previous committed snapshot's main table against the new localized
+ * spec. All three share the same shape — a main table with an `id` PK — so the companion
+ * (`<table>_locales`, FK → main.id) is derived identically from the entity's table name.
  *
  * The transition is derived purely from the previous snapshot (companions are NOT stored in
  * snapshots — they are migration-owned):
- *   - previous main table absent           → fresh collection → create-only companion.
- *   - previous main table HELD the columns → enabling now      → create + seed + drop.
+ *   - previous main table absent           → fresh entity  → create-only companion.
+ *   - previous main table HELD the columns → enabling now  → create + seed + drop.
  *   - previous main table lacked them      → already localized → none (companion exists).
  */
 function planCompanionMigrations(
-  collections: MinimalConfigEntity[],
+  entities: MinimalConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
-  for (const c of collections) {
+  for (const c of entities) {
     // i18n H5 (known limitation): the DISABLE transition (localized `true → false`) is not
     // auto-migrated here. migrate:create compares the config against the previous committed
     // snapshot, which — by design — does not record companion `_locales` tables, so a former
@@ -414,14 +417,14 @@ export function buildDesiredSnapshotFromConfig(
     );
   }
   for (const c of singles) {
-    // NOTE (i18n M3b-2): singles localization is deferred — `deriveCompanionSpec`
-    // is collection-shaped (dc_ naming) and singles' single-row semantics need
-    // their own companion design. Omitting localized cols here without emitting a
-    // companion would drop data with nowhere to go, so singles keep all columns on
-    // the main table until singles localization lands.
+    // i18n: singles localize identically to collections — the companion is
+    // `single_<slug>_locales` (deriveCompanionSpec derives it from the table name).
+    // Omit translatable columns from the main table; the companion (planned below)
+    // holds them.
     tables.push(
       buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
         hasStatus: c.status === true,
+        localized: c.localized === true,
       })
     );
   }
@@ -431,8 +434,12 @@ export function buildDesiredSnapshotFromConfig(
     // collection slug/title), matching what the apply pipeline builds. Using
     // the collection builder here produced a snapshot that diverged from the
     // real component table and broke `migrate:resolve --applied`.
+    // i18n: a localized component omits its translatable columns too — they live
+    // in the companion `comp_<slug>_locales` (planned below).
     tables.push(
-      buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect)
+      buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
+        localized: c.localized === true,
+      })
     );
   }
   return { tables };

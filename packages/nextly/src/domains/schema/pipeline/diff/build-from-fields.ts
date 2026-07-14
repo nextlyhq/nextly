@@ -197,9 +197,17 @@ export function buildDesiredTableFromFields(
 export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: { localized?: boolean } = {}
 ): TableSpec {
   const columns: ColumnSpec[] = [];
+
+  // i18n: when the component is localized, its translatable fields live in the
+  // companion `comp_<slug>_locales` table (migration-owned) and MUST be omitted
+  // from the main component table's desired columns — same rule as collections.
+  const localizedNames = options.localized
+    ? new Set(resolveLocalizedFieldNames(fields, true))
+    : new Set<string>();
 
   // Component system columns — mirrors component-schema-service.ts DDL.
   if (dialect === "postgresql") {
@@ -318,6 +326,7 @@ export function buildDesiredTableFromComponentFields(
 
   // User-defined fields.
   for (const field of fields) {
+    if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
       dialect
