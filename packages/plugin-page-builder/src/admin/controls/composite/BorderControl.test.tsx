@@ -11,11 +11,11 @@ describe("BorderControl", () => {
     expect(html).toContain("Border style");
     expect(html).toContain("solid");
     expect(html).toContain("dashed");
-    expect(html).toContain('aria-label="Border top"');
+    expect(html).toContain('aria-label="Border top width"');
     expect(html).toContain('aria-label="Border color"');
   });
 
-  it("reflects an existing border value", () => {
+  it("reflects an existing border value, preserving the width unit", () => {
     const html = renderToStaticMarkup(
       <BorderControl
         label="Border"
@@ -23,7 +23,19 @@ describe("BorderControl", () => {
         onChange={() => {}}
       />
     );
-    // selected style option + top width reflected (as the number, px stripped)
-    expect(html).toContain('value="3"');
+    // The width is shown verbatim (unit preserved) rather than px-stripped.
+    expect(html).toContain('value="3px"');
+  });
+
+  it("preserves a non-pixel / token width value", () => {
+    const html = renderToStaticMarkup(
+      <BorderControl
+        label="Border"
+        value={{ width: { top: "1rem" }, color: "var(--nx-color-border)" }}
+        onChange={() => {}}
+      />
+    );
+    expect(html).toContain('value="1rem"');
+    expect(html).toContain('value="var(--nx-color-border)"');
   });
 });

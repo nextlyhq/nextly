@@ -61,6 +61,17 @@ export function BackgroundControl({ value, onChange, label }: ControlProps) {
             </option>
           ))}
         </select>
+        <select
+          aria-label="Background attachment"
+          value={bg.attachment ?? "scroll"}
+          onChange={e => set({ attachment: e.target.value })}
+        >
+          {["scroll", "fixed", "local"].map(x => (
+            <option key={x} value={x}>
+              {x}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );

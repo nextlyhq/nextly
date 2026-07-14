@@ -17,9 +17,10 @@ const STYLES = ["none", "solid", "dashed", "dotted", "double"];
 export function BorderControl({ value, onChange, label }: ControlProps) {
   const b = (value as Border | undefined) ?? {};
   const set = (patch: Partial<Border>) => onChange({ ...b, ...patch });
+  // Store the raw value so any CSS length (`2px`, `1rem`, `var(--w)`) round-trips
+  // instead of being coerced to `px` and lost on the next edit.
   const setWidth = (side: "top" | "right" | "bottom" | "left", v: string) =>
-    set({ width: { ...(b.width ?? {}), [side]: v ? `${v}px` : undefined } });
-  const num = (s?: string) => (s ? s.replace("px", "") : "");
+    set({ width: { ...(b.width ?? {}), [side]: v || undefined } });
 
   return (
     <div style={{ display: "grid", gap: 6 }}>
@@ -39,18 +40,28 @@ export function BorderControl({ value, onChange, label }: ControlProps) {
         <input
           aria-label="Border color"
           type="color"
-          value={b.color ?? "#000000"}
+          value={/^#[0-9a-fA-F]{6}$/.test(b.color ?? "") ? b.color : "#000000"}
           onChange={e => set({ color: e.target.value })}
+        />
+        {/* Free-text so token/`var()`/rgba() colors round-trip; the picker only
+            handles 6-digit hex. */}
+        <input
+          aria-label="Border color value"
+          type="text"
+          placeholder="#000000 or var(--…)"
+          value={b.color ?? ""}
+          onChange={e => set({ color: e.target.value || undefined })}
+          style={{ flex: 1 }}
         />
       </div>
       <div style={{ display: "flex", gap: 4 }}>
         {(["top", "right", "bottom", "left"] as const).map(side => (
           <input
             key={side}
-            aria-label={`Border ${side}`}
-            type="number"
+            aria-label={`Border ${side} width`}
+            type="text"
             placeholder={side[0].toUpperCase()}
-            value={num(b.width?.[side])}
+            value={b.width?.[side] ?? ""}
             onChange={e => setWidth(side, e.target.value)}
           />
         ))}

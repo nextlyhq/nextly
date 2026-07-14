@@ -1,7 +1,7 @@
 "use client";
 
 /** Two-stop linear-gradient picker → writes a `linear-gradient(...)` string. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ControlProps } from "../types";
 
@@ -13,12 +13,28 @@ interface G {
 // Page-content gradient defaults fed to native <input type="color"> pickers, which require concrete hex.
 const DEFAULT: G = { c1: "#4f46e5", c2: "#0ea5e9", angle: "90" }; // design-lint-ok: color-picker default value
 
+const GRADIENT_RE = /linear-gradient\((\d+)deg,\s*([^,]+),\s*([^)]+)\)/;
+
+/** Parse a stored `linear-gradient(...)` string back into stops, or fall back to DEFAULT. */
+function parseGradient(value: unknown): G {
+  if (typeof value === "string") {
+    const m = value.match(GRADIENT_RE);
+    if (m) return { angle: m[1], c1: m[2].trim(), c2: m[3].trim() };
+  }
+  return DEFAULT;
+}
+
 export function buildGradient(g: G): string {
   return `linear-gradient(${g.angle}deg, ${g.c1}, ${g.c2})`;
 }
 
 export function GradientControl({ value, onChange, label }: ControlProps) {
-  const [g, setG] = useState<G>(DEFAULT);
+  const [g, setG] = useState<G>(() => parseGradient(value));
+  // Resync when a different block/value loads, so editing an existing gradient
+  // starts from the saved stops rather than the defaults.
+  useEffect(() => {
+    setG(parseGradient(value));
+  }, [value]);
   const emit = (next: G) => {
     setG(next);
     onChange(buildGradient(next));

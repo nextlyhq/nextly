@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { BackgroundControl } from "./BackgroundControl";
-import { BoxShadowControl, buildShadow } from "./BoxShadowControl";
+import { BoxShadowControl, buildShadow, parseShadow } from "./BoxShadowControl";
 import { PositionControl } from "./PositionControl";
 import { SliderControl } from "./SliderControl";
 
@@ -31,6 +31,39 @@ describe("buildShadow", () => {
         inset: true,
       })
     ).toBe("inset 1px 1px 2px 3px #111");
+  });
+});
+
+describe("parseShadow (preserves a stored shadow instead of resetting to defaults)", () => {
+  it("round-trips a stored shadow, keeping 8-digit alpha", () => {
+    const parts = parseShadow("2px 6px 12px 1px #11223344");
+    expect(parts).toEqual({
+      inset: false,
+      x: "2",
+      y: "6",
+      blur: "12",
+      spread: "1",
+      color: "#11223344",
+    });
+    expect(buildShadow(parts)).toBe("2px 6px 12px 1px #11223344");
+  });
+
+  it("parses inset and falls back to defaults for junk", () => {
+    expect(parseShadow("inset 0px 0px 0px 0px #000").inset).toBe(true);
+    expect(parseShadow("not a shadow").x).toBe("0");
+  });
+});
+
+describe("BoxShadowControl preloads the stored value", () => {
+  it("reflects the incoming shadow in its inputs", () => {
+    const out = renderToStaticMarkup(
+      <BoxShadowControl value="3px 5px 9px 2px #abcdef" onChange={() => {}} />
+    );
+    // x/y/blur/spread come from the stored value, not the defaults (0/4/8/0).
+    expect(out).toContain('value="3"');
+    expect(out).toContain('value="5"');
+    expect(out).toContain('value="9"');
+    expect(out).toContain('value="#abcdef"');
   });
 });
 
