@@ -46,8 +46,11 @@ export const DEFAULT_TOKENS: Record<string, string> = {
   "color.secondary": "#0ea5e9",
   "color.accent": "#f59e0b",
   "color.text": "#111827",
+  "color.heading": "#0f172a",
   "color.muted": "#6b7280",
   "color.surface": "#f8fafc",
+  "color.background": "#ffffff",
+  "color.border": "#e5e7eb",
 };
 
 /** Emit the token palette as CSS custom properties on the page root. */

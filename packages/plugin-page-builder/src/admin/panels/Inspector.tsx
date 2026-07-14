@@ -30,6 +30,7 @@ import { getPath } from "../../core/bindings";
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
 import { normalizeSupports } from "../../core/supports";
+import { tokenSwatches } from "../../core/tokens";
 import { findNode } from "../../core/tree";
 import type { Binding, BlockNode, ControlRef } from "../../core/types";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
@@ -334,6 +335,7 @@ function StyleTab({
       {renderControl(ref.control, {
         label: ref.label,
         value: readStyleValue(tree, ref.styleKey, bp),
+        tokens: ref.control === "color" ? tokenSwatches() : undefined,
         onChange: value =>
           dispatch({
             type: "UPDATE_STYLE",
