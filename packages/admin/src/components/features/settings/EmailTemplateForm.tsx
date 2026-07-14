@@ -453,26 +453,42 @@ function PreviewPane({
   html,
   text,
   subject,
+  format,
 }: {
   html: string;
   text: string;
   subject: string;
+  /** Driven by the editor tab so the preview always mirrors what's edited. */
+  format: PreviewFormat;
 }) {
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [theme, setTheme] = useState<PreviewTheme>("light");
-  const [format, setFormat] = useState<PreviewFormat>("html");
 
   const srcDoc = useMemo(() => {
+    const dark = theme === "dark";
     if (format === "text") {
       return `<!doctype html><html><body style="margin:0;padding:16px;font-family:ui-monospace,monospace;font-size:13px;white-space:pre-wrap;color:${
-        theme === "dark" ? "#e5e7eb" : "#111827"
+        dark ? "#e5e7eb" : "#111827"
       };background:${
-        theme === "dark" ? "#0b0b0f" : "#ffffff"
+        dark ? "#0b0b0f" : "#ffffff"
       }">${escapeHtmlValue(text || "(no plain-text content)")}</body></html>`;
     }
-    const pageBg = theme === "dark" ? "#0b0b0f" : "#f3f4f6";
-    return `<!doctype html><html><head><meta name="color-scheme" content="light dark"><style>html,body{margin:0}body{background:${pageBg};padding:16px}</style></head><body>${
-      html ||
+    const pageBg = dark ? "#0b0b0f" : "#f3f4f6";
+    // A <meta color-scheme> can't drive `@media (prefers-color-scheme: dark)`
+    // (that follows the OS), so rewrite the email's own dark-mode query to
+    // force it on/off deterministically with the toggle. Emails without a
+    // dark variant are unaffected either way.
+    const darkQuery = /@media\s*\(\s*prefers-color-scheme:\s*dark\s*\)/gi;
+    const themedHtml = (html || "").replace(
+      darkQuery,
+      dark
+        ? "@media all"
+        : "@media (prefers-color-scheme: dark) and (min-width:100000px)"
+    );
+    return `<!doctype html><html><head><meta name="color-scheme" content="${
+      dark ? "dark" : "light"
+    }"><style>html,body{margin:0}body{background:${pageBg};padding:16px}</style></head><body>${
+      themedHtml ||
       "<p style='font-family:sans-serif;color:#9ca3af'>Nothing to preview yet.</p>"
     }</body></html>`;
   }, [html, text, theme, format]);
@@ -483,15 +499,10 @@ function PreviewPane({
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Preview
         </span>
+        <span className="rounded-none border border-input px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+          {format === "text" ? "Plain text" : "HTML"}
+        </span>
         <div className="ml-auto flex items-center gap-2">
-          <Segmented<PreviewFormat>
-            value={format}
-            onChange={setFormat}
-            options={[
-              { value: "html", label: "HTML", title: "HTML preview" },
-              { value: "text", label: "Text", title: "Plain-text preview" },
-            ]}
-          />
           <Segmented<PreviewDevice>
             value={device}
             onChange={setDevice}
@@ -538,6 +549,9 @@ function PreviewPane({
 
       <div className="flex min-h-0 flex-1 justify-center overflow-auto bg-muted/40 p-4">
         <iframe
+          // Remount on format/theme change so the sandboxed srcDoc always
+          // re-renders (some browsers don't reload srcDoc in place).
+          key={`${format}-${theme}`}
           title="Email preview"
           sandbox=""
           srcDoc={srcDoc}
@@ -1695,6 +1709,11 @@ export function EmailTemplateForm({
             >
               {editorTab === "html" ? (
                 <FormField
+                  // Distinct key so React mounts a fresh Controller per tab.
+                  // Without it, one Controller's `name` would flip between
+                  // htmlContent/plainTextContent on toggle and react-hook-form
+                  // leaks/blanks the values after repeated switches.
+                  key="editor-html"
                   control={form.control}
                   name="htmlContent"
                   render={({ field }) => (
@@ -1717,11 +1736,13 @@ export function EmailTemplateForm({
                 />
               ) : (
                 <FormField
+                  key="editor-text"
                   control={form.control}
                   name="plainTextContent"
                   render={({ field }) => (
                     <textarea
                       {...field}
+                      value={field.value ?? ""}
                       disabled={isPending}
                       placeholder="Plain-text fallback sent alongside the HTML…"
                       className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50 xl:min-h-full"
@@ -1739,6 +1760,7 @@ export function EmailTemplateForm({
                 html={previewHtml}
                 text={previewText}
                 subject={previewSubject}
+                format={editorTab}
               />
             </div>
           </section>
