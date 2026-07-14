@@ -15,7 +15,7 @@ import {
   compileTokensCss,
   type BreakpointDef,
 } from "../core/style-compiler";
-import type { BlockDocument } from "../core/types";
+import type { BlockDocument, BlockNode } from "../core/types";
 
 import type { DataProvider } from "./dataProvider";
 import { DEFAULT_QUERY_BUDGET } from "./query/types";
@@ -33,6 +33,8 @@ export interface PageRendererProps {
   tokens?: Record<string, string>;
   /** Reserved (i18n, spec §13) — threaded through but ignored in the MVP. */
   locale?: string;
+  /** Reusable-block library: refId → stored subtree, resolved by `core/ref` nodes. */
+  refs?: Record<string, BlockNode>;
 }
 
 export function PageRenderer({
@@ -42,6 +44,7 @@ export function PageRenderer({
   customCss,
   breakpoints,
   tokens,
+  refs,
 }: PageRendererProps): ReactNode {
   if (!document?.root) return null;
 
@@ -63,6 +66,7 @@ export function PageRenderer({
         registry={registry}
         dataProvider={dataProvider}
         budget={{ n: DEFAULT_QUERY_BUDGET }}
+        refs={refs}
       />
     </div>
   );

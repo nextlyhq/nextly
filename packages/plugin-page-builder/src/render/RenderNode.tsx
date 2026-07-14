@@ -49,7 +49,13 @@ export interface RenderNodeProps {
   item?: Record<string, unknown>;
   /** Remaining query budget shared across nested loops on this page render. */
   budget?: QueryBudget;
+  /** Reusable-block library: refId → stored subtree (spec §H). */
+  refs?: Record<string, BlockNode>;
+  /** Visited ref ids on the current path — guards against reference cycles. */
+  refStack?: string[];
 }
+
+const REF_TYPE = "core/ref";
 
 export function RenderNode({
   node,
@@ -57,11 +63,34 @@ export function RenderNode({
   dataProvider,
   item,
   budget,
+  refs,
+  refStack,
 }: RenderNodeProps): ReactNode {
-  const def = registry.get(node.type);
   const className = [nodeClass(node.id), node.customClass]
     .filter(Boolean)
     .join(" ");
+
+  // Reusable block: resolve the referenced subtree (cycle-guarded).
+  if (node.type === REF_TYPE) {
+    const refId = typeof node.props.refId === "string" ? node.props.refId : "";
+    const target = refId ? refs?.[refId] : undefined;
+    if (!target || (refStack ?? []).includes(refId)) {
+      return <div data-nx-ref-missing={refId || "?"} className={className} />;
+    }
+    return (
+      <RenderNode
+        node={target}
+        registry={registry}
+        dataProvider={dataProvider}
+        item={item}
+        budget={budget}
+        refs={refs}
+        refStack={[...(refStack ?? []), refId]}
+      />
+    );
+  }
+
+  const def = registry.get(node.type);
 
   if (!def) {
     // Preserve, don't crash: a placeholder that keeps the page rendering.
@@ -94,6 +123,8 @@ export function RenderNode({
           dataProvider={dataProvider}
           item={item}
           budget={budget}
+          refs={refs}
+          refStack={refStack}
         />
       ));
     }

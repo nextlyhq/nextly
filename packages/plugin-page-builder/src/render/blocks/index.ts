@@ -30,3 +30,4 @@ export { accordion } from "./accordion";
 export { table } from "./table";
 export { socialIcons } from "./socialIcons";
 export { embed } from "./embed";
+export { ref } from "./ref";
