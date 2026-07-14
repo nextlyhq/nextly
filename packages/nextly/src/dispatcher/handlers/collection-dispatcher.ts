@@ -27,6 +27,9 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { buildCompanionReconcileSql } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -334,6 +337,13 @@ const COLLECTIONS_METHODS: Record<
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
+        // i18n: carry the localized flag so the push diff OMITS translatable
+        // columns from the main table's desired snapshot (they live in the
+        // companion `_locales` table). buildFullDesiredSchema already sets this
+        // from the registry, but the splice above overwrites that entry, so we
+        // must re-supply it or the preview would show translatable columns being
+        // added to the main table (findings H2).
+        localized: (collection as { localized?: boolean }).localized === true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -482,6 +492,11 @@ const COLLECTIONS_METHODS: Record<
         // Mirror previewSchemaChanges so apply diffs against the same
         // desired schema preview classified.
         status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Without this the apply re-adds
+        // translatable columns to the main table (findings H2).
+        localized: (collection as { localized?: boolean }).localized === true,
       };
 
       // Resolve adapter for the pipeline construction.
@@ -585,6 +600,57 @@ const COLLECTIONS_METHODS: Record<
         throw new Error(result.error.message);
       }
 
+      // i18n: the push pipeline deliberately EXCLUDES companion `_locales`
+      // tables from its diff (managed-tables `isCompanionTable`) — they are
+      // owned by the localization layer, not drizzle-kit. So for a localized
+      // collection we must reconcile the companion out-of-band here: create it
+      // on the first translatable field, then ADD/DROP localized columns as the
+      // field set changes. Without this, a localized collection edited in the
+      // builder has its translatable columns omitted from main (correct) but
+      // NOWHERE to store per-language values (companion never created) — every
+      // language shares one value. Runs in-process (no migration file written).
+      const isLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      if (isLocalized) {
+        try {
+          const oldFields = (collection.fields ??
+            []) as unknown as FieldDefinition[];
+          const newFields = fields as unknown as FieldDefinition[];
+          const oldLocalizedNames = new Set(
+            resolveLocalizedFieldNames(oldFields, true)
+          );
+          const newLocalizedNames = new Set(
+            resolveLocalizedFieldNames(newFields, true)
+          );
+          const companionSQL = buildCompanionReconcileSql({
+            slug: p.collectionName,
+            tableName,
+            oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
+            newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
+            dialect,
+            status: collection.status === true,
+            companionExists: await adapter.tableExists(`${tableName}_locales`),
+          });
+          // The reconciler emits self-generated, `;`-terminated statements with
+          // no string literals — safe to split on `;` and run one at a time
+          // (executeQuery is single-statement on some drivers, e.g. sqlite).
+          for (const stmt of companionSQL.split(";")) {
+            const s = stmt.trim();
+            if (s) await adapter.executeQuery(s);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Fatal to correctness (translatable values have nowhere to live), but
+          // the main-table apply already committed — surface loudly rather than
+          // silently leaving the collection half-migrated.
+          throw new Error(
+            `[applySchemaChanges] Companion table reconcile failed for ` +
+              `'${p.collectionName}': ${msg}. The main table was updated but the ` +
+              `localized companion is out of sync; re-apply to retry.`
+          );
+        }
+      }
+
       // pipeline.apply mutates the live DB (renamed/added/dropped
       // columns) but does NOT persist the updated `fields` JSON on
       // `dynamic_collections`. Without this post-apply write, subsequent
@@ -639,16 +705,41 @@ const COLLECTIONS_METHODS: Record<
       // request could arrive between the invalidation and the DB write of
       // the new `dynamic_collections.fields`, picking up the stale schema.
       try {
+        // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+        // omits translatable columns (kept in lockstep with the desired snapshot
+        // above), then register the companion `_locales` runtime table too so
+        // per-language reads/writes resolve in THIS process without a restart.
         const { table: freshTable } = generateRuntimeSchema(
           tableName,
           fields as FieldDefinition[],
-          dialect
+          dialect,
+          { localized: isLocalized, status: collection.status === true }
         );
         getCollectionsHandlerFromDI()?.refreshCollectionSchema(
           tableName,
           freshTable
         );
         getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
+        if (isLocalized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: p.collectionName,
+            tableName,
+            fields: fields as FieldDefinition[],
+            dialect,
+            localized: true,
+            status: collection.status === true,
+          });
+          if (companion) {
+            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+              companion.companionTableName,
+              companion.table
+            );
+            getSchemaRegistryFromDI()?.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(

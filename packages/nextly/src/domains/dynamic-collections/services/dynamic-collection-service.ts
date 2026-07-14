@@ -12,10 +12,9 @@ import type { MigrationStatus } from "../../../schemas/dynamic-collections/types
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { ddlType, q } from "../../i18n/migration/ddl-types";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
-import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
+import { buildCompanionReconcileSql } from "../../i18n/migration/reconcile-companion";
 
 import {
   DynamicCollectionRegistryService,
@@ -259,46 +258,20 @@ export class DynamicCollectionService extends BaseService {
     newLocalized: FieldDefinition[],
     status: boolean
   ): Promise<string> {
-    const companionTable = `${tableName}_locales`;
-    const dialect = this.adapter.dialect;
-    const exists = await this.adapter.tableExists(companionTable);
-
-    if (!exists) {
-      const spec = deriveCompanionSpec({
-        slug,
-        dbName: tableName,
-        fields: newLocalized,
-        dialect,
-        defaultLocale: "en", // unused for create-only (no seed)
-        collectionLocalized: true,
-        status,
-      });
-      return spec ? buildCompanionCreateOnlySql(spec) : "";
-    }
-
-    // Companion already exists — diff the localized columns and ADD/DROP.
-    const oldNames = new Set(oldLocalized.map(f => f.name));
-    const newNames = new Set(newLocalized.map(f => f.name));
-    const stmts: string[] = [];
-    for (const f of newLocalized) {
-      if (oldNames.has(f.name)) continue;
-      const col = fieldToLocalizedColumnSpec(f, dialect);
-      if (col) {
-        stmts.push(
-          `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)};`
-        );
-      }
-    }
-    for (const f of oldLocalized) {
-      if (newNames.has(f.name)) continue;
-      const col = fieldToLocalizedColumnSpec(f, dialect);
-      if (col) {
-        stmts.push(
-          `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)};`
-        );
-      }
-    }
-    return stmts.join("\n");
+    // Delegate to the shared reconciler (single source of truth shared with the
+    // builder-canvas apply pipeline). We only own the live existence check here.
+    const companionExists = await this.adapter.tableExists(
+      `${tableName}_locales`
+    );
+    return buildCompanionReconcileSql({
+      slug,
+      tableName,
+      oldLocalized,
+      newLocalized,
+      dialect: this.adapter.dialect,
+      status,
+      companionExists,
+    });
   }
 
   private generateSchemaHash(fields: FieldDefinition[]): string {
