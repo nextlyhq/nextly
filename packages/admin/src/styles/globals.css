@@ -69,16 +69,13 @@
 
   /* ============================================
    * COLOR PALETTE (Tailwind v4.1)
-   * Blue-Cyan Professional Design System
-   * WCAG 2.2 AA Compliant
+   * Monochrome design system, WCAG 2.2 AA compliant.
    *
    * Color Format Strategy:
-   * - Palette colors: HEX format for clarity and readability
-   * - Semantic tokens: HSL format for Tailwind compatibility and easy manipulation
-   * - No legacy colors reference these palette colors to avoid drift
-   *
-   * Verified: Zero references to removed legacy colors (--color-leaf,
-   * --color-admin-*, --color-status-*) exist in the codebase.
+   * - Reference scales (blue/slate/etc.): HEX, kept for utility classes.
+   * - Semantic tokens: OKLCH full-color values defined in `.adminapp` /
+   *   `.adminapp.dark`, mapped here via `@theme inline` with bare `var()`
+   *   so scoped/dark overrides resolve at the consuming element.
    * ============================================ */
 
   /* Blue Scale - Primary Brand Color */
@@ -356,12 +353,14 @@
 
   /* ============================================
    * BORDER RADIUS (Tailwind v4.1)
+   * Derived from the single --radius knob (shadcn pattern). With
+   * --radius: 0 (sharp-corner design) every step resolves to 0.
    * ============================================ */
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-2xl: 0px;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
 
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
@@ -830,6 +829,20 @@
   background-color: var(--background);
   color: var(--foreground);
   /* Font handled by CSS variable override in globals.css */
+}
+
+/**
+ * Base reset (shadcn convention, scoped to .adminapp).
+ * A bare `border` utility defaults to the theme border token instead of
+ * currentColor, so an un-tokened border can't slip through; explicit
+ * `border-*` utilities still win (this sits in the low-priority base layer).
+ */
+@layer base {
+  .adminapp *,
+  .adminapp ::before,
+  .adminapp ::after {
+    border-color: var(--border);
+  }
 }
 
 /**
