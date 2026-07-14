@@ -46,7 +46,11 @@ import { createResendProvider } from "./providers/resend-provider";
 import { createSendLayerProvider } from "./providers/sendlayer-provider";
 import { createSmtpProvider } from "./providers/smtp-provider";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
-import { interpolateTemplate } from "./template-engine";
+import {
+  htmlToText,
+  interpolateTemplate,
+  validateTemplateVariables,
+} from "./template-engine";
 
 /**
  * Dependencies needed to resolve attachments from the media library.
@@ -162,6 +166,20 @@ export class EmailService extends BaseService {
     }
 
     if (dbTemplate && dbTemplate.isActive) {
+      // Surface missing required variables without blocking the send — the
+      // authoring UI validates at edit time, and existing sends must not
+      // start failing on data that previously rendered (blank).
+      const validation = validateTemplateVariables(
+        dbTemplate.variables,
+        variables
+      );
+      if (!validation.valid) {
+        this.logger.warn(
+          "Email template sent with missing required variables — they render blank",
+          { slug: templateSlug, missing: validation.missing }
+        );
+      }
+
       // Interpolate subject (no HTML escaping — plain text)
       const subject = interpolateTemplate(dbTemplate.subject, variables, {
         escapeHtml: false,
@@ -175,6 +193,15 @@ export class EmailService extends BaseService {
         html = await this.composeWithLayout(dbTemplate, html, variables);
       }
 
+      // Plain-text alternative: use the template's own text if authored
+      // (interpolated, no HTML escaping); otherwise send() derives it from
+      // the HTML. The layout wrapper is HTML-only, so it is not applied here.
+      const plainText = dbTemplate.plainTextContent?.trim()
+        ? interpolateTemplate(dbTemplate.plainTextContent, variables, {
+            escapeHtml: false,
+          })
+        : undefined;
+
       // Merge template-default attachments with per-send attachments.
       // Dedupe by mediaId — per-send entries win on conflict.
       const mergedAttachments = mergeTemplateAttachments(
@@ -186,6 +213,7 @@ export class EmailService extends BaseService {
         to,
         subject,
         html,
+        plainText,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
@@ -283,6 +311,13 @@ export class EmailService extends BaseService {
     // D63 seam: let plugins transform the assembled email payload before dispatch.
     // Outside try/catch intentionally — the filter registry isolates per-handler
     // throws and never propagates, so a buggy plugin can't break sending.
+    // Always ship a plain-text alternative (multipart/alternative) — use the
+    // caller-supplied text, else derive one from the HTML. HTML-only mail
+    // hurts deliverability and breaks text-only clients.
+    const plainText = options.plainText?.trim()
+      ? options.plainText
+      : htmlToText(options.html);
+
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
@@ -293,6 +328,7 @@ export class EmailService extends BaseService {
         from,
         subject: options.subject,
         html: options.html,
+        text: plainText,
         cc: options.cc,
         bcc: options.bcc,
       },
@@ -305,6 +341,7 @@ export class EmailService extends BaseService {
         from: filtered.from,
         subject: filtered.subject,
         html: filtered.html,
+        text: filtered.text,
         cc: filtered.cc,
         bcc: filtered.bcc,
         attachments: resolvedAttachments,

@@ -72,6 +72,11 @@ export function createSendLayerProvider(
         HTMLContent: options.html,
       };
 
+      // Plain-text alternative (SendLayer's documented PlainContent field).
+      if (options.text) {
+        body.PlainContent = options.text;
+      }
+
       if (options.cc && options.cc.length > 0) {
         body.CC = options.cc.map(email => ({ name: "", email }));
       }
@@ -81,7 +86,7 @@ export function createSendLayerProvider(
       }
 
       if (options.attachments && options.attachments.length > 0) {
-        body.Attachments = options.attachments.map((a) => ({
+        body.Attachments = options.attachments.map(a => ({
           Name: a.filename,
           Content: a.content.toString("base64"),
           Type: a.mimeType,

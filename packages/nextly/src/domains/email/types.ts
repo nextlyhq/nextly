@@ -303,6 +303,12 @@ export interface EmailProviderAdapter {
     subject: string;
     /** HTML email body. */
     html: string;
+    /**
+     * Plain-text alternative body, sent alongside the HTML as a
+     * `multipart/alternative` message. Optional so custom adapters that
+     * predate this field keep compiling; built-in adapters forward it.
+     */
+    text?: string;
     /** CC email addresses. */
     cc?: string[];
     /** BCC email addresses. */
