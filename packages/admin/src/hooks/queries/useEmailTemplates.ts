@@ -32,14 +32,11 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
-  getLayout,
-  updateLayout,
   previewTemplate,
   sendTestEmail,
   type EmailTemplateRecord,
   type CreateEmailTemplatePayload,
   type UpdateEmailTemplatePayload,
-  type EmailLayout,
   type EmailTemplatePreviewResult,
   type SendTestEmailResult,
 } from "@admin/services/emailTemplateApi";
@@ -53,7 +50,6 @@ export const emailTemplateKeys = {
   lists: () => [...emailTemplateKeys.all(), "list"] as const,
   details: () => [...emailTemplateKeys.all(), "detail"] as const,
   detail: (id: string) => [...emailTemplateKeys.details(), id] as const,
-  layout: () => [...emailTemplateKeys.all(), "layout"] as const,
 };
 
 // ============================================================
@@ -95,19 +91,6 @@ export function useEmailTemplate(
       return getTemplate(id);
     },
     enabled: !!id,
-    ...options,
-  });
-}
-
-/**
- * useEmailLayout — Fetch the shared email layout (header/footer).
- */
-export function useEmailLayout(
-  options?: Omit<UseQueryOptions<EmailLayout, Error>, "queryKey" | "queryFn">
-) {
-  return useQuery<EmailLayout, Error>({
-    queryKey: emailTemplateKeys.layout(),
-    queryFn: () => getLayout(),
     ...options,
   });
 }
@@ -202,23 +185,6 @@ export function useDeleteEmailTemplate() {
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: emailTemplateKeys.all(),
-      });
-    },
-  });
-}
-
-/**
- * useUpdateEmailLayout — Update the shared email layout.
- * Invalidates the layout query on success.
- */
-export function useUpdateEmailLayout() {
-  const queryClient = useQueryClient();
-
-  return useMutation<void, Error, Partial<EmailLayout>>({
-    mutationFn: data => updateLayout(data),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: emailTemplateKeys.layout(),
       });
     },
   });

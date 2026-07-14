@@ -35,13 +35,21 @@ export interface EmailTemplateAttachment {
   filename?: string;
 }
 
+/** Row kind discriminator. Layouts wrap templates at their {{content}}. */
+export type EmailTemplateKind = "template" | "layout" | "partial";
+
 export interface EmailTemplateRecord {
   id: string;
   name: string;
   slug: string;
+  kind: EmailTemplateKind;
   subject: string;
   htmlContent: string;
   plainTextContent: string | null;
+  preheader: string | null;
+  layoutId: string | null;
+  fromOverride: string | null;
+  replyTo: string | null;
   variables: EmailTemplateVariable[] | null;
   useLayout: boolean;
   isActive: boolean;
@@ -54,9 +62,14 @@ export interface EmailTemplateRecord {
 export interface CreateEmailTemplatePayload {
   name: string;
   slug: string;
+  kind?: EmailTemplateKind;
   subject: string;
   htmlContent: string;
   plainTextContent?: string | null;
+  preheader?: string | null;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
   variables?: EmailTemplateVariable[] | null;
   useLayout?: boolean;
   isActive?: boolean;
@@ -69,16 +82,15 @@ export interface UpdateEmailTemplatePayload {
   subject?: string;
   htmlContent?: string;
   plainTextContent?: string | null;
+  preheader?: string | null;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
   variables?: EmailTemplateVariable[] | null;
   useLayout?: boolean;
   isActive?: boolean;
   providerId?: string | null;
   attachments?: EmailTemplateAttachment[] | null;
-}
-
-export interface EmailLayout {
-  header: string;
-  footer: string;
 }
 
 export interface EmailTemplatePreviewResult {
@@ -155,27 +167,6 @@ export async function deleteTemplate(id: string): Promise<void> {
 }
 
 /**
- * Get the shared email layout (header and footer HTML). The dispatcher
- * emits the bare `{ header, footer }` shape, so we type the fetcher
- * generic with EmailLayout directly.
- */
-export async function getLayout(): Promise<EmailLayout> {
-  return fetcher<EmailLayout>("/email-templates/layout", {}, true);
-}
-
-/**
- * Update the shared email layout. Server returns ActionResponse;
- * we discard.
- */
-export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
-  await fetcher<ActionResponse>(
-    "/email-templates/layout",
-    { method: "PATCH", body: JSON.stringify(data) },
-    true
-  );
-}
-
-/**
  * Preview a template with sample data. Returns rendered subject and
  * HTML.
  */
@@ -223,8 +214,6 @@ export const emailTemplateApi = {
   createTemplate,
   updateTemplate,
   deleteTemplate,
-  getLayout,
-  updateLayout,
   previewTemplate,
   sendTestEmail,
 } as const;

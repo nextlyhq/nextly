@@ -65,6 +65,9 @@ const BUILT_IN_SLUGS = new Set([
   "email-verification",
 ]);
 
+// The default layout is the fallback wrapper and cannot be deleted.
+const DEFAULT_LAYOUT_SLUG = "default-layout";
+
 function formatDate(dateValue?: string): string {
   return formatDateWithAdminTimezone(
     dateValue,
@@ -346,6 +349,7 @@ function EmailTemplateTable() {
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <span className="font-medium">{row.name}</span>
+            {row.kind === "layout" && <Badge variant="outline">Layout</Badge>}
             {BUILT_IN_SLUGS.has(row.slug) && (
               <Badge variant="outline">Built-in</Badge>
             )}
@@ -436,7 +440,10 @@ function EmailTemplateTable() {
           onSelect: () => handleDuplicate(template),
         },
       ];
-      if (!BUILT_IN_SLUGS.has(template.slug)) {
+      if (
+        !BUILT_IN_SLUGS.has(template.slug) &&
+        template.slug !== DEFAULT_LAYOUT_SLUG
+      ) {
         actions.push({
           id: "delete",
           label: "Delete",

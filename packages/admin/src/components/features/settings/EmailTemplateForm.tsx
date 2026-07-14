@@ -63,7 +63,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import {
-  useEmailLayout,
+  useEmailTemplates,
   useSendTestEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
 import { generateSlug } from "@admin/lib/fields";
@@ -102,11 +102,15 @@ export interface TemplateFormValues {
   name: string;
   slug: string;
   subject: string;
+  preheader: string;
   htmlContent: string;
   plainTextContent: string;
   useLayout: boolean;
   isActive: boolean;
   providerId: string; // empty string = "Use Default"
+  layoutId: string; // empty string = "Default layout"
+  fromOverride: string;
+  replyTo: string;
   variables: TemplateFormVariable[];
   attachments: TemplateFormAttachment[];
 }
@@ -146,11 +150,15 @@ const templateSchema = z.object({
       "Must be a valid slug (lowercase letters, numbers, and hyphens)"
     ),
   subject: z.string().min(1, "Email subject is required").max(500),
+  preheader: z.string().max(255).optional().or(z.literal("")),
   htmlContent: z.string().min(1, "HTML content is required"),
   plainTextContent: z.string().optional().or(z.literal("")),
   useLayout: z.boolean(),
   isActive: z.boolean(),
   providerId: z.string().optional().or(z.literal("")),
+  layoutId: z.string().optional().or(z.literal("")),
+  fromOverride: z.string().max(320).optional().or(z.literal("")),
+  replyTo: z.string().max(320).optional().or(z.literal("")),
   variables: z.array(templateVariableSchema),
   attachments: z.array(templateAttachmentSchema),
 });
@@ -159,17 +167,22 @@ const DEFAULT_VALUES: TemplateFormValues = {
   name: "",
   slug: "",
   subject: "",
+  preheader: "",
   htmlContent: "",
   plainTextContent: "",
   useLayout: true,
   isActive: true,
   providerId: "",
+  layoutId: "",
+  fromOverride: "",
+  replyTo: "",
   variables: [],
   attachments: [],
 };
 
-// Sentinel for "Use Default Provider" (Radix Select rejects empty values).
+// Sentinels for "Use Default" (Radix Select rejects empty values).
 const USE_DEFAULT_PROVIDER = "__default__";
+const USE_DEFAULT_LAYOUT = "__default_layout__";
 
 // ============================================================
 // Variables & sample data
@@ -280,11 +293,15 @@ export function formValuesToCreatePayload(
     name: values.name,
     slug: values.slug,
     subject: values.subject,
+    preheader: values.preheader || null,
     htmlContent: values.htmlContent,
     plainTextContent: values.plainTextContent || null,
     useLayout: values.useLayout,
     isActive: values.isActive,
     providerId: values.providerId || null,
+    layoutId: values.layoutId || null,
+    fromOverride: values.fromOverride || null,
+    replyTo: values.replyTo || null,
     variables: values.variables.length > 0 ? values.variables : null,
     attachments:
       values.attachments.length > 0
@@ -302,11 +319,15 @@ export function formValuesToUpdatePayload(
   return {
     name: values.name,
     subject: values.subject,
+    preheader: values.preheader || null,
     htmlContent: values.htmlContent,
     plainTextContent: values.plainTextContent || null,
     useLayout: values.useLayout,
     isActive: values.isActive,
     providerId: values.providerId || null,
+    layoutId: values.layoutId || null,
+    fromOverride: values.fromOverride || null,
+    replyTo: values.replyTo || null,
     variables: values.variables.length > 0 ? values.variables : null,
     attachments:
       values.attachments.length > 0
@@ -325,11 +346,15 @@ export function templateToFormValues(
     name: template.name,
     slug: template.slug,
     subject: template.subject,
+    preheader: template.preheader ?? "",
     htmlContent: template.htmlContent,
     plainTextContent: template.plainTextContent ?? "",
     useLayout: template.useLayout,
     isActive: template.isActive,
     providerId: template.providerId ?? "",
+    layoutId: template.layoutId ?? "",
+    fromOverride: template.fromOverride ?? "",
+    replyTo: template.replyTo ?? "",
     variables: (template.variables ?? []).map(v => ({
       name: v.name,
       description: v.description,
@@ -867,15 +892,26 @@ function SettingsRail({
   control,
   isEdit,
   isPending,
+  isLayoutRow,
   providers,
+  layouts,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   isEdit: boolean;
   isPending: boolean;
+  isLayoutRow: boolean;
   providers: { id: string; name: string; isDefault?: boolean }[];
+  layouts: { id: string; name: string; slug: string }[];
 }) {
   return (
     <div className="space-y-5">
+      {isLayoutRow && (
+        <p className="rounded-none border border-border-strong bg-muted px-3 py-2 text-xs text-muted-foreground">
+          This is a layout. Place{" "}
+          <code className="font-mono text-foreground">{"{{content}}"}</code>{" "}
+          where each email body should be injected.
+        </p>
+      )}
       <FormField
         control={control}
         name="slug"
@@ -901,6 +937,32 @@ function SettingsRail({
           </FormItem>
         )}
       />
+
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="preheader"
+          render={({ field }) => (
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Preheader
+              </FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="Preview line shown after the subject"
+                  className="h-8 text-sm"
+                  disabled={isPending}
+                  {...field}
+                />
+              </FormControl>
+              <p className="text-xs text-muted-foreground">
+                The inbox preview snippet. Supports {"{{variables}}"}.
+              </p>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
 
       <FormField
         control={control}
@@ -941,29 +1003,120 @@ function SettingsRail({
         )}
       />
 
-      <FormField
-        control={control}
-        name="useLayout"
-        render={({ field }) => (
-          <FormItem className="flex items-start justify-between gap-3">
-            <div className="space-y-0.5">
-              <FormLabel className="text-sm text-foreground">
-                Use shared layout
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="fromOverride"
+          render={({ field }) => (
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                From override
               </FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="Support &lt;help@example.com&gt;"
+                  className="h-8 text-sm"
+                  disabled={isPending}
+                  {...field}
+                />
+              </FormControl>
               <p className="text-xs text-muted-foreground">
-                Wrap the body in the global header and footer.
+                Leave blank to use the provider&apos;s From address.
               </p>
-            </div>
-            <FormControl>
-              <Switch
-                checked={field.value}
-                onCheckedChange={field.onChange}
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="replyTo"
+          render={({ field }) => (
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Reply-To
+              </FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="replies@example.com"
+                  className="h-8 text-sm"
+                  disabled={isPending}
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="useLayout"
+          render={({ field }) => (
+            <FormItem className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5">
+                <FormLabel className="text-sm text-foreground">
+                  Use layout
+                </FormLabel>
+                <p className="text-xs text-muted-foreground">
+                  Wrap the body in a layout at its {"{{content}}"}.
+                </p>
+              </div>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  disabled={isPending}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+      )}
+
+      {!isLayoutRow && layouts.length > 0 && (
+        <FormField
+          control={control}
+          name="layoutId"
+          render={({ field }) => (
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Layout
+              </FormLabel>
+              <Select
+                value={field.value || USE_DEFAULT_LAYOUT}
+                onValueChange={val =>
+                  field.onChange(val === USE_DEFAULT_LAYOUT ? "" : val)
+                }
                 disabled={isPending}
-              />
-            </FormControl>
-          </FormItem>
-        )}
-      />
+              >
+                <FormControl>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Default layout" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value={USE_DEFAULT_LAYOUT}>
+                    Default layout
+                  </SelectItem>
+                  {layouts.map(l => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Which layout wraps this template.
+              </p>
+            </FormItem>
+          )}
+        />
+      )}
 
       <FormField
         control={control}
@@ -1158,7 +1311,15 @@ export function EmailTemplateForm({
   );
   const providers = providersData?.data ?? [];
 
-  const { data: layout } = useEmailLayout();
+  // The row being edited keeps its kind; layouts are wrappers, not bodies.
+  const currentKind = template?.kind ?? "template";
+  const isLayoutRow = currentKind === "layout";
+
+  const { data: allTemplates } = useEmailTemplates();
+  const layouts = useMemo(
+    () => (allTemplates ?? []).filter(t => t.kind === "layout"),
+    [allTemplates]
+  );
 
   const htmlContent = form.watch("htmlContent");
   const plainTextContent = form.watch("plainTextContent");
@@ -1168,7 +1329,15 @@ export function EmailTemplateForm({
   const slug = form.watch("slug");
   const name = form.watch("name");
   const variables = form.watch("variables");
+  const layoutId = form.watch("layoutId");
   const isDirty = form.formState.isDirty;
+
+  // Resolve the wrapping layout for the live preview: the explicit choice,
+  // else the default-layout row, else the first available layout.
+  const activeLayout = useMemo(() => {
+    if (layoutId) return layouts.find(l => l.id === layoutId) ?? null;
+    return layouts.find(l => l.slug === "default-layout") ?? layouts[0] ?? null;
+  }, [layouts, layoutId]);
 
   useEffect(() => {
     if (initialValues) {
@@ -1256,12 +1425,24 @@ export function EmailTemplateForm({
   }, [subject, htmlContent, knownNames]);
 
   const previewHtml = useMemo(() => {
+    // A layout row previews its own wrapper with a stand-in body at the
+    // {{content}} placeholder so authors can see where content lands.
+    if (isLayoutRow) {
+      const [before, after] = (htmlContent ?? "").split("{{content}}");
+      const head = interpolate(before ?? "", sampleData, false);
+      const tail = interpolate(after ?? "", sampleData, false);
+      const sampleBody =
+        '<p style="color:#71717a;font-style:italic;">Your email content appears here.</p>';
+      return `${head}${sampleBody}${tail}`;
+    }
+
     const body = interpolate(htmlContent ?? "", sampleData, true);
-    if (!useLayout || !layout) return body;
-    const header = interpolate(layout.header ?? "", sampleData, false);
-    const footer = interpolate(layout.footer ?? "", sampleData, false);
-    return `${header}${body}${footer}`;
-  }, [htmlContent, sampleData, useLayout, layout]);
+    if (!useLayout || !activeLayout) return body;
+    const [before, after] = activeLayout.htmlContent.split("{{content}}");
+    const head = interpolate(before ?? "", sampleData, false);
+    const tail = interpolate(after ?? "", sampleData, false);
+    return `${head}${body}${tail}`;
+  }, [htmlContent, sampleData, useLayout, activeLayout, isLayoutRow]);
 
   const previewText = useMemo(
     () => interpolate(plainTextContent ?? "", sampleData, false),
@@ -1435,7 +1616,9 @@ export function EmailTemplateForm({
                   control={form.control}
                   isEdit={isEdit}
                   isPending={isPending}
+                  isLayoutRow={isLayoutRow}
                   providers={providers}
+                  layouts={layouts}
                 />
               )}
             </div>
