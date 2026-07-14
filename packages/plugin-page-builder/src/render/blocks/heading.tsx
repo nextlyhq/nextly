@@ -2,6 +2,7 @@ import { createElement } from "react";
 
 import { defineBlock } from "../../core/registry";
 
+import { renderInline } from "./markdown";
 import { safeUrl, str } from "./util";
 
 const LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"];
@@ -36,10 +37,10 @@ export const heading = defineBlock({
   },
   render: ({ props, className }) => {
     const level = LEVELS.includes(str(props.level)) ? str(props.level) : "h2";
-    const text = str(props.text);
+    const parts = renderInline(str(props.text));
     const link = props.link as { href?: string } | undefined;
     const href = safeUrl(link?.href);
-    const inner = href ? createElement("a", { href }, text) : text;
+    const inner = href ? createElement("a", { href }, parts) : parts;
     return createElement(level, { className }, inner);
   },
 });

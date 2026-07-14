@@ -9,35 +9,47 @@ import { safeUrl } from "./util";
  * paragraphs, and inline **bold**, *italic*, `code`, and [text](url) (url is scheme-checked).
  */
 
-function inline(text: string): ReactNode[] {
+/**
+ * Inline formatting → safe elements. Supports **bold**, *italic*, `code`,
+ * [text](url), ==highlight== (mark), ~~strike~~ (del), ^sup^ (sup), ~sub~ (sub).
+ * Order matters: `~~` (strike) is matched before `~` (sub).
+ */
+export function renderInline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
+  const re =
+    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)]+)\))|(==([^=]+)==)|(~~([^~]+)~~)|(\^([^^]+)\^)|(~([^~]+)~)/g;
   let last = 0;
   let i = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     if (m[2] !== undefined) out.push(<strong key={i}>{m[2]}</strong>);
-    else if (m[3] !== undefined) out.push(<em key={i}>{m[3]}</em>);
-    else if (m[4] !== undefined) out.push(<code key={i}>{m[4]}</code>);
-    else if (m[5] !== undefined) {
-      const href = safeUrl(m[6]);
+    else if (m[4] !== undefined) out.push(<em key={i}>{m[4]}</em>);
+    else if (m[6] !== undefined) out.push(<code key={i}>{m[6]}</code>);
+    else if (m[8] !== undefined) {
+      const href = safeUrl(m[9]);
       out.push(
         href ? (
           <a key={i} href={href}>
-            {m[5]}
+            {m[8]}
           </a>
         ) : (
-          m[5]
+          m[8]
         )
       );
-    }
+    } else if (m[11] !== undefined) out.push(<mark key={i}>{m[11]}</mark>);
+    else if (m[13] !== undefined) out.push(<del key={i}>{m[13]}</del>);
+    else if (m[15] !== undefined) out.push(<sup key={i}>{m[15]}</sup>);
+    else if (m[17] !== undefined) out.push(<sub key={i}>{m[17]}</sub>);
     last = m.index + m[0].length;
     i++;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
+
+/** Back-compat alias used internally by renderMarkdown. */
+const inline = renderInline;
 
 export function renderMarkdown(md: string): ReactNode[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");

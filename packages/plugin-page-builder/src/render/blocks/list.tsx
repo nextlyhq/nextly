@@ -2,6 +2,7 @@ import { createElement } from "react";
 
 import { defineBlock } from "../../core/registry";
 
+import { renderInline } from "./markdown";
 import { str } from "./util";
 
 /** A simple ordered / unordered text list. */
@@ -43,7 +44,7 @@ export const list = defineBlock({
         createElement(
           "li",
           { key: i },
-          str((raw as Record<string, unknown>)?.text)
+          renderInline(str((raw as Record<string, unknown>)?.text))
         )
       )
     );

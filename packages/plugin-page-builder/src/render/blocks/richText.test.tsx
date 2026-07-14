@@ -6,7 +6,7 @@ import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../RenderNode";
 
-import { renderMarkdown } from "./markdown";
+import { renderInline, renderMarkdown } from "./markdown";
 import "./index";
 
 const html = (node: BlockNode) =>
@@ -44,6 +44,28 @@ describe("rich text / markdown", () => {
     );
     expect(out).not.toContain("javascript:");
     expect(out).toContain("click");
+  });
+
+  it("renderInline supports highlight, strike, sup and sub", () => {
+    const out = renderToStaticMarkup(
+      <div>{renderInline("==hi== ~~gone~~ x^2^ H~2~O")}</div>
+    );
+    expect(out).toContain("<mark>hi</mark>");
+    expect(out).toContain("<del>gone</del>");
+    expect(out).toContain("<sup>2</sup>");
+    expect(out).toContain("<sub>2</sub>");
+  });
+
+  it("paragraph, heading and list render inline formatting", () => {
+    expect(html(makeNode("core/paragraph", { text: "a **b** c" }))).toContain(
+      "<strong>b</strong>"
+    );
+    expect(
+      html(makeNode("core/heading", { text: "T ==hot==", level: "h2" }))
+    ).toContain("<mark>hot</mark>");
+    expect(
+      html(makeNode("core/list", { items: [{ text: "i *em*" }] }))
+    ).toContain("<em>em</em>");
   });
 
   it("never emits raw HTML from the source", () => {
