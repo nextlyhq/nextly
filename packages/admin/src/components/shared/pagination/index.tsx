@@ -139,7 +139,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
         cn(
           "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
           isActive
-            ? "!bg-primary text-primary-foreground !border-primary z-20"
+            ? "bg-primary! text-primary-foreground border-primary! z-20"
             : "bg-background  border border-border hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
         );
 

@@ -1736,7 +1736,7 @@ export function EmailTemplateForm({
                       placeholder={
                         "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
                       }
-                      className="min-h-full font-mono text-sm leading-relaxed text-foreground caret-foreground [&_textarea]:!outline-none [&_textarea]:!ring-0 [&_textarea]:placeholder:text-muted-foreground [&_textarea]:placeholder:opacity-50"
+                      className="min-h-full font-mono text-sm leading-relaxed text-foreground caret-foreground [&_textarea]:outline-none! [&_textarea]:ring-0! [&_textarea]:placeholder:text-muted-foreground [&_textarea]:placeholder:opacity-50"
                     />
                   )}
                 />

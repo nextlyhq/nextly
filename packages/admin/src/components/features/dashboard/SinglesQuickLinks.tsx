@@ -36,7 +36,7 @@ function SingleCard({ single }: { single: ApiSingle }) {
     >
       <Card
         variant="interactive"
-        className="h-full !border-0 !bg-transparent transition-colors duration-200 rounded-none overflow-hidden relative"
+        className="h-full border-0! bg-transparent! transition-colors duration-200 rounded-none overflow-hidden relative"
       >
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between gap-4">

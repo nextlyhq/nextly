@@ -36,8 +36,8 @@ function renderPageNumbers(
   const getBtnClass = (active: boolean) =>
     `flex h-8 w-8 items-center justify-center  border-y border-border  border-r border-border text-xs z-10 -ml-px transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
       active
-        ? "!bg-primary !text-primary-foreground !border-primary z-20"
-        : "!bg-background !border-border hover-muted disabled:opacity-50"
+        ? "bg-primary! text-primary-foreground! border-primary! z-20"
+        : "bg-background! border-border! hover-muted disabled:opacity-50"
     }`;
 
   // Case 1: Few pages - show all without ellipsis
@@ -79,7 +79,7 @@ function renderPageNumbers(
       pages.push(
         <span
           key="ellipsis-start"
-          className="flex h-8 w-8 items-center justify-center  border-y border-border  border-r border-border !border-border !bg-background text-muted-foreground text-xs -ml-px"
+          className="flex h-8 w-8 items-center justify-center  border-y border-border  border-r border-border border-border! bg-background! text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
           ...
@@ -110,7 +110,7 @@ function renderPageNumbers(
       pages.push(
         <span
           key="ellipsis-end"
-          className="flex h-8 w-8 items-center justify-center  border-y border-border  border-r border-border !border-border !bg-background text-muted-foreground text-xs -ml-px"
+          className="flex h-8 w-8 items-center justify-center  border-y border-border  border-r border-border border-border! bg-background! text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
           ...

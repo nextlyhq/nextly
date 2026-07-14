@@ -13,8 +13,8 @@ function Switch({ className, ...props }: ComponentProps<typeof SwitchRoot>) {
     <SwitchRoot
       data-slot="switch"
       className={cn(
-        "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-none  border border-border transition-all outline-none focus-visible:border-primary aria-invalid:border-destructive aria-invalid:focus-visible:!border-destructive disabled:cursor-not-allowed disabled:opacity-50",
-        "data-[state=checked]:bg-primary data-[state=checked]:!border-primary",
+        "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-none  border border-border transition-all outline-none focus-visible:border-primary aria-invalid:border-destructive aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50",
+        "data-[state=checked]:bg-primary data-[state=checked]:border-primary!",
         "data-[state=unchecked]:bg-input data-[state=unchecked]:border-border dark:data-[state=unchecked]:bg-input/80",
         className
       )}
