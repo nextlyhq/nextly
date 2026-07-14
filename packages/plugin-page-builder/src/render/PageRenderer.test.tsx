@@ -87,8 +87,11 @@ describe("PageRenderer", () => {
     const html = renderToStaticMarkup(
       <PageRenderer document={{ version: 1, root }} registry={registry()} />
     );
-    expect(html).toContain("color:tomato");
-    expect(html).toContain(nodeClass(inner.id));
+    // Assert the scoped selector and declaration together, so an unscoped
+    // `selector{color:tomato}` leak would fail this test (selector isolation).
+    expect(html).toMatch(
+      new RegExp(`\\.${nodeClass(inner.id)}[^{]*\\{[^}]*color:tomato`)
+    );
   });
 
   it("applies css id + safe custom attributes to the block root, dropping unsafe ones", () => {

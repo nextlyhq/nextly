@@ -84,7 +84,11 @@ export const offCanvas = defineBlock({
     return (
       <div className={className}>
         <style dangerouslySetInnerHTML={{ __html: css }} />
-        <input type="checkbox" id={`nx-oc-${id}`} aria-hidden />
+        <input
+          type="checkbox"
+          id={`nx-oc-${id}`}
+          aria-label={str(props.triggerText, "Open menu")}
+        />
         <label
           htmlFor={`nx-oc-${id}`}
           style={{

@@ -126,7 +126,7 @@ export const image = defineBlock<ImageProps>({
         imgEl()
       );
       return (
-        <figure className={className} style={{ margin: 0 }}>
+        <figure className={className}>
           {inner}
           <figcaption style={{ fontSize: "0.875em", opacity: 0.75 }}>
             {caption}
