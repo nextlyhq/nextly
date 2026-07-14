@@ -16,7 +16,14 @@ import { blockIcon, ChevronDown, ChevronRight, Search } from "../icons";
 import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
-const CATEGORY_ORDER = ["basic", "layout", "media", "dynamic"];
+const CATEGORY_ORDER = [
+  "layout",
+  "basic",
+  "media",
+  "content",
+  "dynamic",
+  "utility",
+];
 
 function LibraryItem({ def }: { def: BlockDefinition }) {
   const { state, dispatch } = useEditor();

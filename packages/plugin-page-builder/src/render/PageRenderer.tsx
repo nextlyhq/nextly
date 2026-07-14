@@ -9,11 +9,13 @@ import type { ReactNode } from "react";
 import { sanitizeCustomCss } from "../core/css-sanitize";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
+  compileDocumentBlockCss,
   compileDocumentCss,
+  compileDocumentMotionCss,
   compileTokensCss,
   type BreakpointDef,
 } from "../core/style-compiler";
-import type { BlockDocument } from "../core/types";
+import type { BlockDocument, BlockNode } from "../core/types";
 
 import type { DataProvider } from "./dataProvider";
 import { DEFAULT_QUERY_BUDGET } from "./query/types";
@@ -31,6 +33,8 @@ export interface PageRendererProps {
   tokens?: Record<string, string>;
   /** Reserved (i18n, spec §13) — threaded through but ignored in the MVP. */
   locale?: string;
+  /** Reusable-block library: refId → stored subtree, resolved by `core/ref` nodes. */
+  refs?: Record<string, BlockNode>;
 }
 
 export function PageRenderer({
@@ -40,15 +44,19 @@ export function PageRenderer({
   customCss,
   breakpoints,
   tokens,
+  refs,
 }: PageRendererProps): ReactNode {
   if (!document?.root) return null;
 
-  const css =
-    compileTokensCss(PAGE_ROOT_CLASS, tokens) +
-    "\n" +
-    compileDocumentCss(document, { breakpoints }) +
-    "\n" +
-    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS);
+  const css = [
+    compileTokensCss(PAGE_ROOT_CLASS, tokens),
+    compileDocumentMotionCss(document),
+    compileDocumentCss(document, { breakpoints }),
+    compileDocumentBlockCss(document),
+    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div className={PAGE_ROOT_CLASS}>
@@ -58,6 +66,7 @@ export function PageRenderer({
         registry={registry}
         dataProvider={dataProvider}
         budget={{ n: DEFAULT_QUERY_BUDGET }}
+        refs={refs}
       />
     </div>
   );

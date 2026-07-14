@@ -3,6 +3,7 @@
  * core tree ops, with bounded undo/redo history. Defaults for new nodes come from the
  * block registry — never a hard-coded list.
  */
+import type { MotionConfig } from "../../core/motion";
 import { defaultBlockRegistry } from "../../core/registry";
 import {
   duplicateNode,
@@ -10,6 +11,7 @@ import {
   insertNode,
   makeNode,
   moveNode,
+  reidSubtree,
   removeNode,
   updateNode,
 } from "../../core/tree";
@@ -72,6 +74,31 @@ export type EditorAction =
     }
   | { type: "SET_BINDING"; id: string; prop: string; binding: Binding | null }
   | { type: "SET_CUSTOM_CLASS"; id: string; customClass: string }
+  | { type: "SET_BLOCK_CSS"; id: string; css: string }
+  | { type: "SET_CSS_ID"; id: string; cssId: string }
+  | { type: "SET_ATTRIBUTES"; id: string; attributes: Record<string, string> }
+  | {
+      type: "SET_VISIBILITY";
+      id: string;
+      breakpoint: string;
+      visible: boolean;
+    }
+  | { type: "SET_NAME"; id: string; name: string }
+  | { type: "SET_LOCKED"; id: string; locked: boolean }
+  | { type: "SET_MOTION"; id: string; motion: MotionConfig }
+  | {
+      type: "PASTE_NODE";
+      parentId: string;
+      slot: string;
+      index: number;
+      node: BlockNode;
+    }
+  | {
+      type: "PASTE_STYLE";
+      id: string;
+      style?: BlockNode["style"];
+      styleHover?: BlockNode["styleHover"];
+    }
   | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
@@ -179,6 +206,69 @@ export function editorReducer(
     case "SET_CUSTOM_CLASS": {
       const customClass = action.customClass.trim() || undefined;
       return commit(state, updateNode(root, action.id, { customClass }));
+    }
+
+    case "SET_BLOCK_CSS": {
+      const customCss = action.css.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { customCss }));
+    }
+
+    case "SET_CSS_ID": {
+      const cssId = action.cssId.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { cssId }));
+    }
+
+    case "SET_ATTRIBUTES":
+      return commit(
+        state,
+        updateNode(root, action.id, { attributes: action.attributes })
+      );
+
+    case "SET_VISIBILITY": {
+      const node = findNode(root, action.id);
+      const visibility = {
+        ...(node?.visibility ?? {}),
+        [action.breakpoint]: action.visible,
+      };
+      return commit(state, updateNode(root, action.id, { visibility }));
+    }
+
+    case "SET_NAME": {
+      const name = action.name.trim() || undefined;
+      return commit(state, updateNode(root, action.id, { name }));
+    }
+
+    case "SET_LOCKED":
+      return commit(
+        state,
+        updateNode(root, action.id, { locked: action.locked })
+      );
+
+    case "SET_MOTION":
+      return commit(
+        state,
+        updateNode(root, action.id, { motion: action.motion })
+      );
+
+    case "PASTE_NODE": {
+      const fresh = reidSubtree(action.node);
+      return commit(
+        state,
+        insertNode(root, action.parentId, action.slot, fresh, action.index),
+        fresh.id
+      );
+    }
+
+    case "PASTE_STYLE": {
+      const node = findNode(root, action.id);
+      if (!node) return state;
+      return commit(
+        state,
+        updateNode(root, action.id, {
+          style: action.style ?? node.style,
+          styleHover: action.styleHover ?? node.styleHover,
+        })
+      );
     }
 
     case "SET_PAGE_CUSTOM_CSS":

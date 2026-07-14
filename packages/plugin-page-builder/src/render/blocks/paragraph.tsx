@@ -1,5 +1,8 @@
 import { defineBlock } from "../../core/registry";
 
+import { renderInline } from "./markdown";
+import { str } from "./util";
+
 export const paragraph = defineBlock({
   type: "core/paragraph",
   version: 1,
@@ -8,16 +11,24 @@ export const paragraph = defineBlock({
   category: "basic",
   defaultProps: { text: "New paragraph" },
   contentFields: [
-    { name: "text", type: "textarea", label: "Text", bindable: true },
+    {
+      name: "text",
+      type: "textarea",
+      label: "Text (supports **bold**, *italic*, [links](url), ==highlight==)",
+      bindable: true,
+    },
   ],
-  styleControls: [
-    { control: "color", styleKey: "color", label: "Text color" },
-    { control: "dimension", styleKey: "fontSize", label: "Font size" },
-    { control: "align", styleKey: "textAlign", label: "Align" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    typography: true,
+    color: { text: true, background: true, link: true },
+    background: { gradient: true },
+    spacing: true,
+    border: true,
+    shadow: true,
+    visibility: true,
+    interactions: { hover: true },
+  },
   render: ({ props, className }) => (
-    <p className={className}>{String(props.text ?? "")}</p>
+    <p className={className}>{renderInline(str(props.text))}</p>
   ),
 });

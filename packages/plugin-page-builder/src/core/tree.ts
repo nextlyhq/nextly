@@ -110,20 +110,23 @@ export function moveNode(
   return insertNode(without, parentId, slot, found, index);
 }
 
+/** Deep-clone a subtree, assigning fresh ids to every node (for copy/paste + patterns). */
+export function reidSubtree(n: BlockNode): BlockNode {
+  const copy: BlockNode = { ...structuredClone(n), id: newId() };
+  if (n.slots) {
+    const slots: Record<string, BlockNode[]> = {};
+    for (const [name, children] of Object.entries(n.slots)) {
+      slots[name] = children.map(reidSubtree);
+    }
+    copy.slots = slots;
+  }
+  return copy;
+}
+
 export function duplicateNode(root: BlockNode, id: string): BlockNode {
   const found = findNode(root, id);
   if (!found) return root;
-  const clone = (n: BlockNode): BlockNode => {
-    const copy: BlockNode = { ...structuredClone(n), id: newId() };
-    if (n.slots) {
-      const slots: Record<string, BlockNode[]> = {};
-      for (const [name, children] of Object.entries(n.slots)) {
-        slots[name] = children.map(clone);
-      }
-      copy.slots = slots;
-    }
-    return copy;
-  };
+  const clone = reidSubtree;
   return mapTree(root, n => {
     if (!n.slots) return n;
     let changed = false;
