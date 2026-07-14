@@ -45,6 +45,7 @@ import {
   registerDefaultControls,
   renderControl,
 } from "../controls/registerDefaultControls";
+import { supportsToControls } from "../controls/supportsToControls";
 import { ArrowDown, ArrowUp, blockIcon, Copy, Trash2 } from "../icons";
 import { locateNode } from "../logic/locate";
 import { findEnclosingLoop } from "../logic/queryLoop";
@@ -315,13 +316,31 @@ function StyleTab({
 }) {
   const { state, dispatch } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
-  const controls = def?.styleControls ?? [];
+  const legacy = def?.styleControls ?? [];
+  const groups = supportsToControls(def?.supports);
   const bp = state.activeBreakpoint;
   const tree = styleState === "hover" ? node.styleHover : node.style;
 
-  if (controls.length === 0) {
+  if (legacy.length === 0 && groups.length === 0) {
     return <Empty>This block has no style options.</Empty>;
   }
+
+  const renderRef = (ref: ControlRef) => (
+    <div key={`${ref.control}:${ref.styleKey}`}>
+      {renderControl(ref.control, {
+        label: ref.label,
+        value: readStyleValue(tree, ref.styleKey, bp),
+        onChange: value =>
+          dispatch({
+            type: "UPDATE_STYLE",
+            id: node.id,
+            breakpoint: bp,
+            styleState,
+            style: { [ref.styleKey]: value },
+          }),
+      })}
+    </div>
+  );
 
   return (
     <div>
@@ -357,23 +376,19 @@ function StyleTab({
         </p>
       ) : null}
 
-      <SectionLabel>Style</SectionLabel>
-      {controls.map((ref: ControlRef) => (
-        <div key={`${ref.control}:${ref.styleKey}`}>
-          {renderControl(ref.control, {
-            label: ref.label,
-            value: readStyleValue(tree, ref.styleKey, bp),
-            onChange: value =>
-              dispatch({
-                type: "UPDATE_STYLE",
-                id: node.id,
-                breakpoint: bp,
-                styleState,
-                style: { [ref.styleKey]: value },
-              }),
-          })}
+      {groups.map(g => (
+        <div key={g.group}>
+          <SectionLabel>{g.group}</SectionLabel>
+          {g.controls.map(renderRef)}
         </div>
       ))}
+
+      {legacy.length ? (
+        <>
+          <SectionLabel>Style</SectionLabel>
+          {legacy.map(renderRef)}
+        </>
+      ) : null}
     </div>
   );
 }
