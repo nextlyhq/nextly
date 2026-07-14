@@ -28,6 +28,10 @@ const ROOTS = [
   "packages/admin/src",
   "packages/plugin-form-builder/src",
   "packages/plugin-page-builder/src",
+  // The shared token source is covered too, so token-consistency bugs (e.g. a
+  // shadow that hardcodes a color instead of deriving from its token) can't ship
+  // in the file every consumer depends on.
+  "packages/ui/src",
 ];
 
 // Files whose color literals are page-theme output defaults, not admin UI theming.
@@ -55,7 +59,13 @@ const listFiles = () =>
 function colorLiteralIsExempt(line, file) {
   if (line.includes("design-lint-ok")) return true;
   if (FILE_ALLOWLIST.some((f) => file.endsWith(f))) return true;
+  // The Tailwind palette scale (`--color-blue-500: #3b82f6`) is the literal
+  // source of truth in theme.css; only these `--color-*` scale definitions are
+  // allowed to hardcode. Semantic tokens and shadows must still derive from them.
+  if (/--color-[a-z]+-\d+\s*:/.test(line)) return true;
   let rest = line
+    // strip inline comments (a hex inside `/* … */` is documentation, not code)
+    .replace(/\/\*.*?\*\//g, "")
     .replace(/url\([^)]*\)/g, "")
     .replace(/placeholder\s*[:=]\s*["'][^"']*["']/g, "")
     .replace(/#(?:ffffff|fff|000000|000)\b/gi, "")
