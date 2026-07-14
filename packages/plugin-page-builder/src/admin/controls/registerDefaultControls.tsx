@@ -14,6 +14,7 @@ import { ColorControl } from "./ColorControl";
 import { BackgroundControl } from "./composite/BackgroundControl";
 import { BorderControl } from "./composite/BorderControl";
 import { BoxShadowControl } from "./composite/BoxShadowControl";
+import { GradientControl } from "./composite/GradientControl";
 import { IconPickerControl } from "./composite/IconPickerControl";
 import { PositionControl } from "./composite/PositionControl";
 import { RepeaterControl } from "./composite/RepeaterControl";
@@ -53,6 +54,7 @@ const CONTROLS: Record<string, ControlComponent> = {
   boxShadow: BoxShadowControl,
   icon: IconPickerControl,
   repeater: RepeaterControl,
+  gradient: GradientControl,
 };
 
 let registered = false;

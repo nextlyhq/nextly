@@ -11,6 +11,38 @@ export interface ControlGroup {
   controls: ControlRef[];
 }
 
+const opts = (...vs: string[]) => vs.map(v => ({ value: v, label: v }));
+
+const WEIGHTS = opts(
+  "normal",
+  "300",
+  "400",
+  "500",
+  "600",
+  "700",
+  "800",
+  "bold"
+);
+const TRANSFORMS = opts("none", "uppercase", "lowercase", "capitalize");
+const STYLES = opts("normal", "italic");
+const DECORATIONS = opts("none", "underline", "line-through", "overline");
+const WIDTH_ALIGN = [
+  { value: "none", label: "None" },
+  { value: "wide", label: "Wide" },
+  { value: "full", label: "Full width" },
+];
+const SHADOW_PRESETS = [
+  { value: "none", label: "Unset" },
+  { value: "0 1px 2px rgba(0,0,0,0.12)", label: "Natural" },
+  { value: "0 8px 24px rgba(0,0,0,0.2)", label: "Deep" },
+  { value: "6px 6px 0 rgba(0,0,0,0.85)", label: "Sharp" },
+  { value: "0 0 0 1px rgba(0,0,0,0.25)", label: "Outlined" },
+  {
+    value: "0 3px 6px rgba(0,0,0,0.16), 0 3px 6px rgba(0,0,0,0.23)",
+    label: "Crisp",
+  },
+];
+
 export function supportsToControls(
   supports: BlockSupports = {}
 ): ControlGroup[] {
@@ -33,7 +65,12 @@ export function supportsToControls(
     if (t.fontFamily)
       c.push({ control: "text", styleKey: "fontFamily", label: "Font family" });
     if (t.fontWeight)
-      c.push({ control: "select", styleKey: "fontWeight", label: "Weight" });
+      c.push({
+        control: "select",
+        styleKey: "fontWeight",
+        label: "Weight",
+        options: WEIGHTS,
+      });
     if (t.lineHeight)
       c.push({
         control: "dimension",
@@ -56,15 +93,22 @@ export function supportsToControls(
       c.push({
         control: "select",
         styleKey: "textTransform",
-        label: "Transform",
+        label: "Letter case",
+        options: TRANSFORMS,
       });
     if (t.fontStyle)
-      c.push({ control: "select", styleKey: "fontStyle", label: "Style" });
+      c.push({
+        control: "select",
+        styleKey: "fontStyle",
+        label: "Appearance",
+        options: STYLES,
+      });
     if (t.textDecoration)
       c.push({
         control: "select",
         styleKey: "textDecoration",
         label: "Decoration",
+        options: DECORATIONS,
       });
     if (t.textAlign)
       c.push({ control: "align", styleKey: "textAlign", label: "Align" });
@@ -84,18 +128,34 @@ export function supportsToControls(
         styleKey: "backgroundColor",
         label: "Background",
       });
+    if (s.color.link) {
+      c.push({ control: "color", styleKey: "linkColor", label: "Link" });
+      c.push({
+        control: "color",
+        styleKey: "linkColorHover",
+        label: "Link (hover)",
+      });
+    }
     push("Color", c);
   }
 
   // Background (image + gradient)
   if (s.background) {
-    push("Background", [
+    const c: ControlRef[] = [
       {
         control: "background",
         styleKey: "backgroundImageObj",
-        label: "Background",
+        label: "Background image",
       },
-    ]);
+    ];
+    if (s.background.gradient || (s.color && s.color.gradient)) {
+      c.push({
+        control: "gradient",
+        styleKey: "backgroundGradient",
+        label: "Gradient",
+      });
+    }
+    push("Background", c);
   }
 
   // Dimensions / layout
@@ -128,6 +188,12 @@ export function supportsToControls(
         styleKey: "aspectRatio",
         label: "Aspect ratio",
       });
+    c.push({
+      control: "select",
+      styleKey: "widthAlign",
+      label: "Width alignment",
+      options: WIDTH_ALIGN,
+    });
     push("Layout & size", c);
   }
 
@@ -154,9 +220,10 @@ export function supportsToControls(
       });
     if (s.shadow)
       c.push({
-        control: "boxShadow",
+        control: "select",
         styleKey: "boxShadow",
-        label: "Box shadow",
+        label: "Shadow",
+        options: SHADOW_PRESETS,
       });
     push("Border & Shadow", c);
   }

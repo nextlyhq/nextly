@@ -337,6 +337,14 @@ function StyleTab({
         label: ref.label,
         value: readStyleValue(tree, ref.styleKey, bp),
         tokens: ref.control === "color" ? tokenSwatches() : undefined,
+        field: ref.options
+          ? {
+              name: ref.styleKey,
+              type: "select",
+              label: ref.label,
+              options: ref.options,
+            }
+          : undefined,
         onChange: value =>
           dispatch({
             type: "UPDATE_STYLE",

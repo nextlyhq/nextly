@@ -22,7 +22,7 @@ export const grid = defineBlock<GridProps>({
     { name: "gap", type: "text", label: "Gap", placeholder: "16px" },
   ],
   supports: {
-    color: { background: true },
+    color: { background: true, link: true },
     background: true,
     spacing: true,
     border: true,

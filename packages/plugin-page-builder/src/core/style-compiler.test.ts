@@ -253,3 +253,30 @@ describe("compileNodeCss — visibility", () => {
     expect(compileNodeCss(n)).toBe("");
   });
 });
+
+describe("compileNodeCss — width alignment + link colors", () => {
+  it("emits wide/full width alignment", () => {
+    expect(
+      compileNodeCss(
+        makeNode("core/heading", {}, { base: { widthAlign: "wide" } })
+      )
+    ).toContain("max-width: 1100px");
+    expect(
+      compileNodeCss(
+        makeNode("core/container", {}, { base: { widthAlign: "full" } })
+      )
+    ).toContain("width: 100%");
+  });
+
+  it("emits descendant link colors on .cls a and :hover", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        { base: { linkColor: "#f00", linkColorHover: "#0f0" } }
+      )
+    );
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+  });
+});

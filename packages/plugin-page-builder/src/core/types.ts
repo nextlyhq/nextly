@@ -147,6 +147,11 @@ export interface StyleValues {
     left?: string;
     zIndex?: string;
   };
+  // Width alignment (Gutenberg none / wide / full)
+  widthAlign?: "none" | "wide" | "full";
+  // Descendant link colors → compiled to `.cls a` / `.cls a:hover`
+  linkColor?: StyleScalar;
+  linkColorHover?: StyleScalar;
 }
 
 /** Per-breakpoint style overrides. The base breakpoint holds defaults; others override. */
@@ -189,6 +194,8 @@ export interface ControlRef {
   /** Style key this control writes (e.g. "padding", "backgroundColor"). */
   styleKey: string;
   label: string;
+  /** Choices for `select`-type style controls (typography weight/transform/etc.). */
+  options?: { value: string; label: string }[];
 }
 
 export interface BlockRenderArgs<P = Record<string, unknown>> {

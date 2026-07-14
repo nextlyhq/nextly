@@ -22,7 +22,7 @@ export const container = defineBlock({
     },
   ],
   supports: {
-    color: { background: true },
+    color: { background: true, link: true },
     background: true,
     spacing: true,
     border: true,

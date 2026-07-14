@@ -24,6 +24,7 @@ export interface ColorSupport {
   background?: boolean;
   gradient?: boolean;
   border?: boolean;
+  link?: boolean;
 }
 export interface BackgroundSupport {
   image?: boolean;
@@ -109,6 +110,7 @@ const COLOR_KEYS: (keyof ColorSupport)[] = [
   "background",
   "gradient",
   "border",
+  "link",
 ];
 const BG_KEYS: (keyof BackgroundSupport)[] = ["image", "gradient"];
 const BORDER_KEYS: (keyof BorderSupport)[] = [

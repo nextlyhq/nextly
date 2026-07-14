@@ -237,6 +237,13 @@ function compileStyleValues(sv: StyleValues): string[] {
     if (v) out.push(`background-image: ${v}`);
   }
 
+  // Width alignment (Gutenberg none / wide / full).
+  if (sv.widthAlign === "wide") {
+    out.push("max-width: 1100px", "margin-left: auto", "margin-right: auto");
+  } else if (sv.widthAlign === "full") {
+    out.push("max-width: none", "width: 100%");
+  }
+
   return out;
 }
 
@@ -269,6 +276,17 @@ export function compileNodeCss(
 
   emit(node.style, "");
   emit(node.styleHover, ":hover");
+
+  // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
+  const base = node.style?.base;
+  if (base?.linkColor != null) {
+    const v = safeValue(resolveScalar(base.linkColor));
+    if (v) blocks.push(`.${cls} a { color: ${v}; }`);
+  }
+  if (base?.linkColorHover != null) {
+    const v = safeValue(resolveScalar(base.linkColorHover));
+    if (v) blocks.push(`.${cls} a:hover { color: ${v}; }`);
+  }
 
   // Entrance motion.
   const motionCss = compileMotionCss(node, cls);

@@ -13,7 +13,12 @@ export const spacer = defineBlock({
   contentFields: [
     { name: "height", type: "text", label: "Height", placeholder: "40px" },
   ],
-  supports: { visibility: true, customCss: true, customAttributes: true },
+  supports: {
+    spacing: { margin: true },
+    visibility: true,
+    customCss: true,
+    customAttributes: true,
+  },
   render: ({ props, className }) => (
     <div
       className={className}
