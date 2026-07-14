@@ -140,10 +140,29 @@ const numberRenderer: CellRenderer = ({ value }: CellContext) => {
   );
 };
 
+/**
+ * Parse a cell value into a Date. Date-only `YYYY-MM-DD` strings are parsed as a
+ * LOCAL calendar date: `new Date("2025-01-31")` would parse as UTC midnight and
+ * render one day early in negative-offset timezones.
+ */
+function parseCellDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  const text = toText(value);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (dateOnly) {
+    return new Date(
+      Number(dateOnly[1]),
+      Number(dateOnly[2]) - 1,
+      Number(dateOnly[3])
+    );
+  }
+  return new Date(text);
+}
+
 /** Date/datetime, formatted short. Shows "-" when the value is missing. */
 const dateRenderer: CellRenderer = ({ value }: CellContext) => {
   if (!value) return <EmptyValue />;
-  const d = value instanceof Date ? value : new Date(toText(value));
+  const d = parseCellDate(value);
   if (Number.isNaN(d.getTime())) return <EmptyValue />;
   const formatted = d.toLocaleDateString(undefined, {
     month: "short",

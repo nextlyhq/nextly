@@ -54,7 +54,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
 
   return (
     <Link href={editHref} className="block group">
-      <div className="flex items-center gap-5 px-4 py-4.5 rounded-none] transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
+      <div className="flex items-center gap-5 px-4 py-4.5 rounded-none transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
         {/* Hover Highlight Overlay */}
         <div className="absolute inset-0 bg-gradient-to-r from-primary/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
@@ -116,7 +116,7 @@ export const RecentEntriesWidget: React.FC = () => {
   const { data, isLoading, error } = useRecentEntries(7);
 
   return (
-    <Card className="border-border bg-card/60 backdrop-blur-md overflow-hidden rounded-none] transition-all duration-500 hover:border-border">
+    <Card className="border-border bg-card/60 backdrop-blur-md overflow-hidden rounded-none transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border"
@@ -146,7 +146,7 @@ export const RecentEntriesWidget: React.FC = () => {
           </div>
         ) : !data?.entries.length ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-none] bg-primary/5  border border-border">
+            <div className="p-6 rounded-none bg-primary/5  border border-border">
               <FileText className="h-10 w-10 text-muted-foreground/20" />
             </div>
             <div className="space-y-1">

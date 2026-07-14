@@ -1190,8 +1190,15 @@ function SendTestDialog({
   }, [open]);
 
   const handleSubmit = () => {
+    // Block duplicate sends while a request is in flight (Enter can re-fire), and
+    // validate the address since the manual Enter path bypasses native
+    // `type="email"` validation.
+    if (isPending) return;
     const to = email.trim();
-    if (!to) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      toast.error("Enter a valid email address");
+      return;
+    }
     doSend(
       { slug, to, variables: sampleData },
       {
@@ -1382,10 +1389,15 @@ export function EmailTemplateForm({
   const insertVariable = useCallback(
     (name: string) => {
       const token = `{{${name}}}`;
-      const current = form.getValues("htmlContent") ?? "";
+      // Insert into whichever body is being edited; on the plain-text tab the
+      // only mounted textarea is bound to plainTextContent, so writing to
+      // htmlContent would silently corrupt the HTML at an unrelated offset.
+      const fieldName =
+        editorTab === "html" ? "htmlContent" : "plainTextContent";
+      const current = form.getValues(fieldName) ?? "";
       const ta = editorWrapRef.current?.querySelector("textarea");
       if (!ta) {
-        form.setValue("htmlContent", current + token, {
+        form.setValue(fieldName, current + token, {
           shouldDirty: true,
           shouldValidate: true,
         });
@@ -1394,7 +1406,7 @@ export function EmailTemplateForm({
       const start = ta.selectionStart ?? current.length;
       const end = ta.selectionEnd ?? current.length;
       const next = current.slice(0, start) + token + current.slice(end);
-      form.setValue("htmlContent", next, {
+      form.setValue(fieldName, next, {
         shouldDirty: true,
         shouldValidate: true,
       });
@@ -1404,7 +1416,7 @@ export function EmailTemplateForm({
         ta.setSelectionRange(pos, pos);
       });
     },
-    [form]
+    [form, editorTab]
   );
 
   // Sample data derived from declared variables unless overridden.
@@ -1418,8 +1430,16 @@ export function EmailTemplateForm({
     sampleError: string | null;
   }>(() => {
     try {
-      const parsed: Record<string, unknown> = JSON.parse(sampleText);
-      return { sampleData: parsed, sampleError: null };
+      const parsed: unknown = JSON.parse(sampleText);
+      // `JSON.parse("null")` / arrays / primitives succeed but then crash the
+      // downstream `Object.keys(sampleData)`; require a plain object.
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Sample data must be a JSON object.");
+      }
+      return {
+        sampleData: parsed as Record<string, unknown>,
+        sampleError: null,
+      };
     } catch (e) {
       return {
         sampleData: {},
@@ -1445,12 +1465,23 @@ export function EmailTemplateForm({
   }, [subject, htmlContent, knownNames]);
 
   const previewHtml = useMemo(() => {
+    // Split a wrapper at its FIRST {{content}} marker, preserving the rest (a
+    // well-formed layout has exactly one). With no marker, the body is appended
+    // after the wrapper so nothing is silently dropped.
+    const CONTENT_MARKER = "{{content}}";
+    const splitLayout = (wrapper: string): [string, string] => {
+      const i = wrapper.indexOf(CONTENT_MARKER);
+      return i === -1
+        ? [wrapper, ""]
+        : [wrapper.slice(0, i), wrapper.slice(i + CONTENT_MARKER.length)];
+    };
+
     // A layout row previews its own wrapper with a stand-in body at the
     // {{content}} placeholder so authors can see where content lands.
     if (isLayoutRow) {
-      const [before, after] = (htmlContent ?? "").split("{{content}}");
-      const head = interpolate(before ?? "", sampleData, false);
-      const tail = interpolate(after ?? "", sampleData, false);
+      const [before, after] = splitLayout(htmlContent ?? "");
+      const head = interpolate(before, sampleData, false);
+      const tail = interpolate(after, sampleData, false);
       const sampleBody =
         '<p style="color:#71717a;font-style:italic;">Your email content appears here.</p>';
       return `${head}${sampleBody}${tail}`;
@@ -1458,9 +1489,9 @@ export function EmailTemplateForm({
 
     const body = interpolate(htmlContent ?? "", sampleData, true);
     if (!useLayout || !activeLayout) return body;
-    const [before, after] = activeLayout.htmlContent.split("{{content}}");
-    const head = interpolate(before ?? "", sampleData, false);
-    const tail = interpolate(after ?? "", sampleData, false);
+    const [before, after] = splitLayout(activeLayout.htmlContent);
+    const head = interpolate(before, sampleData, false);
+    const tail = interpolate(after, sampleData, false);
     return `${head}${body}${tail}`;
   }, [htmlContent, sampleData, useLayout, activeLayout, isLayoutRow]);
 
@@ -1736,7 +1767,7 @@ export function EmailTemplateForm({
                       placeholder={
                         "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
                       }
-                      className="min-h-full font-mono text-sm leading-relaxed text-foreground caret-foreground [&_textarea]:!outline-none [&_textarea]:!ring-0 [&_textarea]:placeholder:text-muted-foreground [&_textarea]:placeholder:opacity-50"
+                      className="min-h-full font-mono text-sm leading-relaxed text-foreground caret-foreground [&_textarea]:outline-none! [&_textarea]:ring-0! [&_textarea]:placeholder:text-muted-foreground [&_textarea]:placeholder:opacity-50"
                     />
                   )}
                 />

@@ -13,7 +13,9 @@ import {
 import type { NextlyColumn } from "./types";
 
 // Stub navigation so href-driven rows are inspectable without a router.
-const navigateTo = vi.fn();
+// `vi.hoisted` runs the factory before the hoisted `vi.mock`, so the spy exists
+// when the mock module factory closes over it.
+const { navigateTo } = vi.hoisted(() => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (href: string) => navigateTo(href),
 }));

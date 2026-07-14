@@ -6,7 +6,7 @@ export function DashboardHeader() {
 
   return (
     // In DashboardHeader.tsx
-    <header className="sticky top-0 z-30 shrink-0 hidden md:flex h-16 items-center justify-end  border-b border-border bg-background backdrop-blur-md px-4 sm:px-8">
+    <header className="sticky top-0 z-30 shrink-0 hidden lg:flex h-16 items-center justify-end  border-b border-border bg-background backdrop-blur-md px-4 sm:px-8">
       {/* Left Section: Sidebar Toggle */}
       <div className="flex items-center gap-2 hidden">
         <button

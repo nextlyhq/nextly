@@ -374,7 +374,8 @@ export class VideoNode extends DecoratorNode<React.JSX.Element> {
     const iframe = document.createElement("iframe");
     iframe.setAttribute("src", getEmbedUrl(this.__provider, this.__videoId));
     iframe.setAttribute("allowfullscreen", "true");
-    iframe.setAttribute("fram eborder border-border", "0");
+    iframe.setAttribute("frameborder", "0");
+    iframe.classList.add("border", "border-border");
     iframe.style.width = "100%";
     iframe.style.aspectRatio = "16/9";
     div.appendChild(iframe);

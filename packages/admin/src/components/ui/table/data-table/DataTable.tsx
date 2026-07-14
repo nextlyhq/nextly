@@ -15,7 +15,7 @@
 import { TablePagination, TableSearch, Button } from "@nextlyhq/ui";
 import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useServerTable } from "@admin/hooks/useServerTable";
 
@@ -64,7 +64,12 @@ export interface DataTableProps<Row extends object> {
 
 const DEFAULT_GET_ROW_ID = (row: object): string => {
   const id = (row as { id?: unknown }).id;
-  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+  if (typeof id === "string" || typeof id === "number") {
+    return String(id);
+  }
+  // Collapsing ID-less rows to "" produces duplicate React keys and merges their
+  // selection state. Require a real id or an explicit getRowId instead.
+  throw new Error("DataTable rows require an id or a custom getRowId.");
 };
 
 /** Wrap an in-memory array in a fetcher so client + server modes share one path. */
@@ -91,7 +96,9 @@ function makeStaticFetcher<Row extends object>(data: Row[]): DataFetcher<Row> {
       items: paged,
       meta: {
         total,
-        page,
+        // `page` is a 0-based index here; the pagination controls expect a
+        // 1-based `meta.page`.
+        page: page + 1,
         limit: pageSize,
         totalPages,
         hasNext: page < totalPages - 1,
@@ -153,6 +160,23 @@ export function DataTable<Row extends object>({
     [rows, selected, getRowId]
   );
   const clearSelection = () => setSelected({});
+
+  // Keep selection scoped to the rows currently loaded. When the page, search, or
+  // filters change the loaded rows, prune any selected ids that are no longer
+  // present so bulk actions and their confirmation always reflect exactly what is
+  // shown (never delete off-page rows the user can't see).
+  useEffect(() => {
+    setSelected(prev => {
+      const pageIds = new Set(rows.map(getRowId));
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const id of Object.keys(prev)) {
+        if (prev[id] && pageIds.has(id)) next[id] = true;
+        else if (prev[id]) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rows, getRowId]);
 
   const selection = useMemo<DataTableSelection<Row> | undefined>(() => {
     if (!enableSelection) return undefined;

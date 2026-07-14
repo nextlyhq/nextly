@@ -1,0 +1,13 @@
+# CodeRabbit configuration
+# https://docs.coderabbit.ai/reference/configuration
+#
+# Excludes non-review-worthy files (release notes, lockfiles, build output,
+# and generated migration snapshots) so large PRs stay under the file-count
+# limit and the meaningful source diff still gets a full review.
+language: en-US
+reviews:
+  path_filters:
+    - "!**/pnpm-lock.yaml"
+    - "!.changeset/**"
+    - "!**/dist/**"
+    - "!**/*.snapshot.json"

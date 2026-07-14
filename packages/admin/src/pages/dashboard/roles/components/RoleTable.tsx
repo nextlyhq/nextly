@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { Columns, Edit, Shield, Trash2 } from "lucide-react";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { RoleDeleteDialog } from "@admin/components/features/role-management/RoleDeleteDialog";
@@ -75,6 +75,19 @@ export default function RoleTable() {
   } = useRowSelection();
 
   const debouncedSearch = useDebouncedValue(search, 500);
+
+  // Reset to the first page when the search term changes so a later page does not
+  // request out-of-range results and show a false empty state.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  // Selection is page-scoped: clear it whenever the page or search changes so a
+  // bulk action never targets rows that are no longer shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, clearSelection]);
+
   const { mutate: bulkDeleteRoles, isPending: isBulkDeleting } =
     useBulkDeleteRoles();
 

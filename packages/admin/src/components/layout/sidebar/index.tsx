@@ -215,12 +215,12 @@ const Sidebar = React.forwardRef<
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_theme(spacing.4)_+2px)]"
-              : "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)] group-data-[side=left] :border-r border-border group-data-[side=right] :border-l border-border"
+              : "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)] group-data-[side=left]:border-r border-border group-data-[side=right]:border-l border-border"
           )}
         >
           <div
             data-sidebar="sidebar"
-            className="flex h-full w-full flex-col bg-sidebar-background text-sidebar-foreground border-sidebar-border group-data-[variant=floating]:rounded-none group-data-[variant=floating] :border border-border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow"
+            className="flex h-full w-full flex-col bg-sidebar-background text-sidebar-foreground border-sidebar-border group-data-[variant=floating]:rounded-none group-data-[variant=floating]:border border-border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow"
           >
             {children}
           </div>
@@ -561,7 +561,6 @@ const SidebarMenuButton = React.forwardRef<
             "bg-primary text-primary-foreground",
             tooltip.className
           )}
-          style={{ backgroundColor: "black", color: "white" }}
         />
       </Tooltip>
     );

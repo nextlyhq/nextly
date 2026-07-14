@@ -94,7 +94,7 @@ function CollectionCard({
       <Card
         variant="interactive"
         className={cn(
-          "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-none overflow-hidden relative"
+          "h-full border-0! bg-transparent! transition-colors duration-200 rounded-none overflow-hidden relative"
         )}
       >
         <CardContent className="p-5 relative z-10">

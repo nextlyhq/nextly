@@ -40,7 +40,7 @@ export const PluginsTableSkeleton: React.FC = () => {
                       <Skeleton className="h-4 w-4 rounded-none" />
                     ) : col === "label" ? (
                       <div className="flex items-center gap-3">
-                        <Skeleton className="w-9 rounded-none] shrink-0" />
+                        <Skeleton className="w-9 rounded-none shrink-0" />
                         <div className="space-y-1.5 flex-1">
                           <Skeleton className="h-4 w-[140px]" />
                           <Skeleton className="h-3 w-[100px]" />
@@ -64,7 +64,7 @@ export const PluginsTableSkeleton: React.FC = () => {
                         <Skeleton className="h-4 w-4 rounded-none" />
                       ) : col === "label" ? (
                         <div className="flex items-center gap-3">
-                          <Skeleton className="w-9 rounded-none] shrink-0" />
+                          <Skeleton className="w-9 rounded-none shrink-0" />
                           <div className="space-y-1.5 flex-1">
                             <Skeleton className="h-4 w-[160px]" />
                             <Skeleton className="h-3 w-[120px]" />

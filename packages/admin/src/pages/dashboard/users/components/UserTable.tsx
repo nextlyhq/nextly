@@ -17,7 +17,7 @@ import {
   Skeleton,
 } from "@nextlyhq/ui";
 import { Columns, Edit, Trash2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
@@ -152,6 +152,18 @@ export default function UserTable() {
 
   const { data: fieldsData } = useUserFields();
   const debouncedSearch = useDebouncedValue(search, 500);
+
+  // Reset to the first page when the search term changes so a later page does not
+  // request out-of-range results and show a false empty state.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  // Selection is page-scoped: clear it whenever the page or search changes so a
+  // bulk action never targets rows that are no longer shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, clearSelection]);
 
   const params: TableParams = {
     pagination: { page, pageSize },

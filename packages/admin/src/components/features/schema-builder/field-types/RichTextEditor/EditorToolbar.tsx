@@ -235,7 +235,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-1 p-2  border-b border-border dark:border-border bg-primary/5/50">
+      <div className="flex flex-wrap items-center gap-1 p-2  border-b border-border dark:border-border bg-primary/5">
         {/* Block type selector */}
         <Select
           value={blockType}

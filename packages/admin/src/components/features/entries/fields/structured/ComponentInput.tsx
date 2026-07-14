@@ -313,7 +313,7 @@ function SingleComponentNonRepeatable({
 
         {/* Accordion content */}
         {isOpen && (
-          <div className="space-y-4 px-6 pt-4 pb-4  border-b border-border border-border z-0">
+          <div className="space-y-4 px-6 pt-4 pb-4  border-b border-border z-0">
             {field.admin?.description && (
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {field.admin.description}
@@ -354,7 +354,7 @@ function SingleComponentNonRepeatable({
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5/50/50 hover:bg-primary/5 dark:hover:bg-accent transition-colors  border-b border-border dark:border-border"
+        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent transition-colors  border-b border-border dark:border-border"
       >
         <ChevronDown
           className={cn(

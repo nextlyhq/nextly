@@ -138,7 +138,17 @@ export function resolvePluginColumns<Row extends object>(
   }
   for (const transform of collect(columnTransforms, target)) {
     try {
-      columns = transform(columns, ctx);
+      // Transform a copy and only commit an array result, so a transform that
+      // mutates its input then throws (or returns a non-array) cannot leave the
+      // resolved columns corrupted.
+      const next = transform([...columns], ctx);
+      if (!Array.isArray(next)) {
+        console.warn(
+          `transformColumns for "${target}" returned a non-array; ignoring.`
+        );
+        continue;
+      }
+      columns = next;
     } catch (error) {
       console.warn(`transformColumns for "${target}" failed:`, error);
     }
