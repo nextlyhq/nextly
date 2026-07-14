@@ -978,44 +978,46 @@ function SettingsRail({
         />
       )}
 
-      <FormField
-        control={control}
-        name="providerId"
-        render={({ field }) => (
-          <FormItem className="space-y-1.5">
-            <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Provider
-            </FormLabel>
-            <Select
-              value={field.value || USE_DEFAULT_PROVIDER}
-              onValueChange={val =>
-                field.onChange(val === USE_DEFAULT_PROVIDER ? "" : val)
-              }
-              disabled={isPending}
-            >
-              <FormControl>
-                <SelectTrigger className="h-8">
-                  <SelectValue placeholder="Use default provider" />
-                </SelectTrigger>
-              </FormControl>
-              <SelectContent>
-                <SelectItem value={USE_DEFAULT_PROVIDER}>
-                  Use default provider
-                </SelectItem>
-                {providers.map(p => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                    {p.isDefault ? " (Default)" : ""}
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="providerId"
+          render={({ field }) => (
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Provider
+              </FormLabel>
+              <Select
+                value={field.value || USE_DEFAULT_PROVIDER}
+                onValueChange={val =>
+                  field.onChange(val === USE_DEFAULT_PROVIDER ? "" : val)
+                }
+                disabled={isPending}
+              >
+                <FormControl>
+                  <SelectTrigger className="h-8">
+                    <SelectValue placeholder="Use default provider" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value={USE_DEFAULT_PROVIDER}>
+                    Use default provider
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Override the default sending provider for this template.
-            </p>
-          </FormItem>
-        )}
-      />
+                  {providers.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                      {p.isDefault ? " (Default)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Override the default sending provider for this template.
+              </p>
+            </FormItem>
+          )}
+        />
+      )}
 
       {!isLayoutRow && (
         <FormField
@@ -1132,29 +1134,33 @@ function SettingsRail({
         />
       )}
 
-      <FormField
-        control={control}
-        name="isActive"
-        render={({ field }) => (
-          <FormItem className="flex items-start justify-between gap-3">
-            <div className="space-y-0.5">
-              <FormLabel className="text-sm text-foreground">Active</FormLabel>
-              <p className="text-xs text-muted-foreground">
-                Inactive templates cannot be used to send.
-              </p>
-            </div>
-            <FormControl>
-              <Switch
-                checked={field.value}
-                onCheckedChange={field.onChange}
-                disabled={isPending}
-              />
-            </FormControl>
-          </FormItem>
-        )}
-      />
+      {!isLayoutRow && (
+        <FormField
+          control={control}
+          name="isActive"
+          render={({ field }) => (
+            <FormItem className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5">
+                <FormLabel className="text-sm text-foreground">
+                  Active
+                </FormLabel>
+                <p className="text-xs text-muted-foreground">
+                  Inactive templates cannot be used to send.
+                </p>
+              </div>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  disabled={isPending}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+      )}
 
-      <AttachmentsField control={control} />
+      {!isLayoutRow && <AttachmentsField control={control} />}
     </div>
   );
 }
