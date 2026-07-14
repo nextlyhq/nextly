@@ -271,15 +271,6 @@
   color: var(--primary-foreground);
 }
 
-/**
-    * Button Reset Override
-    * 
-    * Fix for Tailwind's preflight setting background-color: transparent on buttons
-    * This ensures our button components display their intended background colors
-    * 
-    * Reference: https://github.com/tailwindlabs/tailwindcss/discussions/12063
-    */
-
 /* Global cursor pointer for interactive elements */
 [data-slot*="trigger"],
 [data-slot*="button"],
@@ -302,73 +293,6 @@
 [data-slot="switch"][disabled],
 [data-slot="radio-group-item"][disabled] {
   cursor: not-allowed !important;
-}
-
-/* Switch component fixes */
-button[data-slot="switch"][data-state="checked"],
-[data-slot="switch"][data-state="checked"] {
-  background-color: var(--primary) !important;
-}
-
-button[data-slot="switch"][data-state="unchecked"],
-[data-slot="switch"][data-state="unchecked"] {
-  background-color: var(--input) !important;
-}
-
-/* Switch thumb should remain white/background color */
-[data-slot="switch-thumb"] {
-  background-color: var(--background) !important;
-}
-
-/* Additional fixes for Radix UI state attributes */
-[data-state="checked"][data-slot="switch"] {
-  background-color: var(--primary) !important;
-}
-
-[data-state="unchecked"][data-slot="switch"] {
-  background-color: var(--input) !important;
-}
-
-/* Additional Radix UI state fixes with maximum specificity */
-button[role="switch"][data-state="checked"] {
-  background-color: var(--primary) !important;
-}
-
-button[role="switch"][data-state="unchecked"] {
-  background-color: var(--input) !important;
-}
-
-/* Ensure switch thumb visibility */
-span[data-slot="switch-thumb"] {
-  background-color: var(--background) !important;
-  /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important; */
-}
-
-/* Radio button fixes */
-button[role="radio"][data-state="checked"] {
-  border-color: var(--primary) !important;
-}
-
-button[role="radio"][data-state="checked"] svg {
-  fill: var(--primary) !important;
-  color: var(--primary) !important;
-}
-
-/* Radio group item indicator should use primary color when checked */
-[data-slot="radio-group-item"][data-state="checked"] svg {
-  fill: var(--primary) !important;
-  color: var(--primary) !important;
-}
-
-/* Ensure radio group selection uses primary color */
-button[data-slot="radio-group-item"][data-state="checked"],
-[data-slot="radio-group-item"][data-state="checked"] {
-  border-color: var(--primary) !important;
-}
-
-[data-slot="radio-group-item"][data-state="checked"] .lucide-circle {
-  fill: var(--primary) !important;
-  color: var(--primary) !important;
 }
 
 /* Force background class to work in portals */
