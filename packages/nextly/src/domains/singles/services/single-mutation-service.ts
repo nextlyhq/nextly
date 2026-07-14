@@ -308,6 +308,9 @@ export class SingleMutationService extends BaseService {
           parentTable: singleMeta.tableName,
           fields: fieldConfigs,
           data: componentFieldData,
+          // i18n: thread the write locale so an embedded localized component writes
+          // its translatable fields to the companion for this language.
+          locale: options.locale,
         });
       }
 

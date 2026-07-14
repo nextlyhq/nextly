@@ -1050,6 +1050,9 @@ export class CollectionQueryService extends BaseService {
             fields: fields as FieldConfig[],
             depth: params.depth,
             select: params.select,
+            // i18n: thread the read locale so embedded localized components resolve
+            // per language across the list.
+            locale: params.locale,
           });
       }
 
@@ -1756,6 +1759,9 @@ export class CollectionQueryService extends BaseService {
           fields: fields as FieldConfig[],
           depth: params.depth,
           select: params.select,
+          // i18n: thread the read locale so an embedded localized component resolves
+          // its translatable fields per language.
+          locale: params.locale,
         });
       }
 

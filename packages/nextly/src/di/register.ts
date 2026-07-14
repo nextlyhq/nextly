@@ -988,21 +988,52 @@ async function initializeSchemaRegistry(
       }
     );
 
-    // Step 4: Dynamic components (comp_* tables). Components don't have a
-    // status column — the registered callback ignores `hasStatus`.
+    // Step 4: Dynamic components (comp_* tables). Components have no status
+    // column, but a localized component omits its translatable columns from the
+    // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
     await loadDynamicTables(
       adapter,
       "dynamic_components",
-      async (tableName, fields) => {
+      async (tableName, fields, _hasStatus, localized) => {
         const { ComponentSchemaService } = await import(
           "../services/components/component-schema-service"
         );
         const compSchemaService = new ComponentSchemaService(dialect);
         const runtimeTable = compSchemaService.generateRuntimeSchema(
           tableName,
-          fields as FieldConfig[]
+          fields as FieldConfig[],
+          { localized }
         );
         registry.registerDynamicSchema(tableName, runtimeTable);
+        if (localized) {
+          const { ensureCompanionTable } = await import(
+            "../domains/i18n/runtime/companion-io"
+          );
+          await ensureCompanionTable(adapter, {
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            status: false,
+          });
+          const { buildCompanionRuntimeTable } = await import(
+            "../domains/i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: false,
+          });
+          if (companion) {
+            registry.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     );
 
@@ -1497,6 +1528,9 @@ async function syncCodeFirstComponents(
       tableName: comp.dbName,
       admin: comp.admin,
       configPath: `components/${comp.slug}.ts`,
+      // i18n: forward the localized flag from defineComponent so the registry persists
+      // it and the companion is provisioned for embedded per-language values.
+      localized: (comp as { localized?: boolean }).localized === true,
     }));
 
   const componentSyncResult = await componentRegistry.syncCodeFirstComponents(

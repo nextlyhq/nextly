@@ -404,6 +404,7 @@ function convertToComponentRecords(
     admin: component.admin,
     source: "code" as const,
     locked: true, // Code-first components are locked
+    localized: (component as { localized?: boolean }).localized === true,
     schemaHash: "", // Not needed for type generation
     schemaVersion: 1,
     migrationStatus: "synced" as const,

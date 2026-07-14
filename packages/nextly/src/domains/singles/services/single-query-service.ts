@@ -323,6 +323,9 @@ export class SingleQueryService extends BaseService {
           parentTable: singleMeta.tableName,
           fields: singleMeta.fields,
           depth: options.depth,
+          // i18n: thread the read locale so an embedded localized component resolves
+          // its translatable fields per language.
+          locale: options.locale,
         })) as SingleDocument;
       }
 

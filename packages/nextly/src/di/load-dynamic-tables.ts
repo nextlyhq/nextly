@@ -54,10 +54,9 @@ export async function loadDynamicTables(
     localized: boolean
   ) => Promise<void>
 ): Promise<void> {
-  // Components don't have `status` / `localized` columns — selecting them would
-  // fail on strict dialects. Branch the SELECT so the boot pass survives every
-  // dialect/version combination.
-  const hasStatusColumn = sourceTable !== "dynamic_components";
+  // Components have no `status` column (they're not Draft/Published) — selecting it
+  // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
+  const statusCol = sourceTable !== "dynamic_components" ? ", status" : "";
 
   // Read the rows, tolerating an existing DB that predates the i18n `localized`
   // column: try the full select first, and on failure fall back to one without
@@ -66,20 +65,15 @@ export async function loadDynamicTables(
   // column is added by the core-schema reconcile; until it runs, `localized`
   // defaults to false, which is correct for a pre-i18n database.
   const readRows = async (): Promise<DynamicTableRow[]> => {
-    if (!hasStatusColumn) {
-      return adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug FROM ${sourceTable}`
-      );
-    }
     try {
       return await adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug, status, localized FROM ${sourceTable}`
+        `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`
       );
     } catch {
       // `localized` column not present yet — retry without it. A genuinely
       // missing table re-throws here and is handled by the outer catch.
       return adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug, status FROM ${sourceTable}`
+        `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`
       );
     }
   };

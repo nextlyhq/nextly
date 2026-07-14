@@ -913,6 +913,9 @@ export class CollectionMutationService extends BaseService {
             parentTable: tableName,
             fields: fields as unknown as FieldConfig[],
             data: componentFieldData,
+            // i18n: thread the write locale so an embedded localized component writes
+            // translatable fields to its companion within the same transaction.
+            locale: params.locale,
           });
         }
       });
@@ -1597,6 +1600,9 @@ export class CollectionMutationService extends BaseService {
             parentTable: tableName,
             fields: fields as unknown as FieldConfig[],
             data: componentFieldData,
+            // i18n: thread the write locale so an embedded localized component writes
+            // translatable fields to its companion within the same transaction.
+            locale: params.locale,
           });
         }
       });

@@ -4,6 +4,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import type { Logger } from "../../../shared/types";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 
 import {
   ComponentMutationService,
@@ -31,18 +32,23 @@ export class ComponentDataService {
     adapter: DrizzleAdapter,
     logger: Logger,
     registryService: ComponentRegistryService,
-    relationshipService?: CollectionRelationshipService
+    relationshipService?: CollectionRelationshipService,
+    // i18n: threaded to the query/mutation services so a localized embedded component
+    // resolves/writes its translatable fields via `comp_<slug>_locales` per language.
+    localization?: SanitizedLocalizationConfig
   ) {
     this.queryService = new ComponentQueryService(
       adapter,
       logger,
       registryService,
-      relationshipService
+      relationshipService,
+      localization
     );
     this.mutationService = new ComponentMutationService(
       adapter,
       logger,
-      registryService
+      registryService,
+      localization
     );
   }
 
