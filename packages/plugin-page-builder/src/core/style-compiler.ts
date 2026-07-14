@@ -9,6 +9,7 @@
  */
 import * as csstree from "css-tree";
 
+import { sanitizeBlockCss } from "./css-sanitize";
 import { walk } from "./tree";
 import type {
   BlockDocument,
@@ -291,6 +292,18 @@ export function compileDocumentCss(
   walk(doc.root, n => {
     const css = compileNodeCss(n, opts);
     if (css) parts.push(css);
+  });
+  return parts.join("\n");
+}
+
+/** Collect every node's sanitized per-block custom CSS for the page <style> (spec §4.4). */
+export function compileDocumentBlockCss(doc: BlockDocument): string {
+  const parts: string[] = [];
+  walk(doc.root, n => {
+    if (n.customCss) {
+      const scoped = sanitizeBlockCss(n.customCss, nodeClass(n.id));
+      if (scoped) parts.push(scoped);
+    }
   });
   return parts.join("\n");
 }

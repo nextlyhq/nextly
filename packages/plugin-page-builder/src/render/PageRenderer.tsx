@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 import { sanitizeCustomCss } from "../core/css-sanitize";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
+  compileDocumentBlockCss,
   compileDocumentCss,
   compileTokensCss,
   type BreakpointDef,
@@ -43,12 +44,14 @@ export function PageRenderer({
 }: PageRendererProps): ReactNode {
   if (!document?.root) return null;
 
-  const css =
-    compileTokensCss(PAGE_ROOT_CLASS, tokens) +
-    "\n" +
-    compileDocumentCss(document, { breakpoints }) +
-    "\n" +
-    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS);
+  const css = [
+    compileTokensCss(PAGE_ROOT_CLASS, tokens),
+    compileDocumentCss(document, { breakpoints }),
+    compileDocumentBlockCss(document),
+    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div className={PAGE_ROOT_CLASS}>

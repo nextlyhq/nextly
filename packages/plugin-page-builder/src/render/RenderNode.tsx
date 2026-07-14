@@ -10,7 +10,7 @@
  * at any depth resolves via `resolveBindings`. `core/query-loop` is intercepted and
  * rendered data-driven via `QueryLoop`.
  */
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 
 import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
@@ -22,6 +22,24 @@ import { BlockErrorBoundary } from "./ErrorBoundary";
 import { QueryLoop } from "./query/QueryLoop";
 import type { QueryBudget } from "./query/runQuery";
 import { QUERY_LOOP_TYPE } from "./query/types";
+
+const BLOCKED_ATTRS = new Set(["style", "srcdoc", "class", "classname"]);
+
+/** Allowlist author-supplied HTML attributes: valid names, no event handlers, no style. */
+function safeAttributes(
+  attrs?: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!attrs) return out;
+  for (const [k, v] of Object.entries(attrs)) {
+    const key = k.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]*$/.test(key)) continue; // valid attr name only
+    if (key.startsWith("on")) continue; // no event handlers
+    if (BLOCKED_ATTRS.has(key)) continue;
+    out[k] = String(v);
+  }
+  return out;
+}
 
 export interface RenderNodeProps {
   node: BlockNode;
@@ -82,10 +100,16 @@ export function RenderNode({
   }
 
   const props = item ? resolveBindings(node, item) : node.props;
+  const el = def.render({ props, node, slots, className });
 
-  return (
-    <BlockErrorBoundary>
-      {def.render({ props, node, slots, className })}
-    </BlockErrorBoundary>
-  );
+  const extra: Record<string, string> = {
+    ...safeAttributes(node.attributes),
+    ...(node.cssId ? { id: node.cssId } : {}),
+  };
+  const rendered =
+    Object.keys(extra).length && isValidElement(el)
+      ? cloneElement(el, extra)
+      : el;
+
+  return <BlockErrorBoundary>{rendered}</BlockErrorBoundary>;
 }
