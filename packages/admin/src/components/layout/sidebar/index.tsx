@@ -561,7 +561,6 @@ const SidebarMenuButton = React.forwardRef<
             "bg-primary text-primary-foreground",
             tooltip.className
           )}
-          style={{ backgroundColor: "black", color: "white" }}
         />
       </Tooltip>
     );

@@ -218,7 +218,6 @@ export function SidebarNavigationItem({
           side="right"
           hidden={!isCollapsed}
           className="bg-primary text-primary-foreground"
-          style={{ backgroundColor: "black", color: "white" }}
         >
           {item.title}
         </TooltipContent>
