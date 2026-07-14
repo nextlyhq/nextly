@@ -46,7 +46,10 @@ export const tabs = defineBlock({
       .map(
         (_, i) =>
           `#nx-tab-${id}-${i}:checked~.nx-pb-tab-panels-${id}>div:nth-child(${i + 1}){display:block}` +
-          `#nx-tab-${id}-${i}:checked~.nx-pb-tab-labels-${id}>label:nth-child(${i + 1}){border-bottom-color:var(--nx-color-primary);font-weight:600}`
+          `#nx-tab-${id}-${i}:checked~.nx-pb-tab-labels-${id}>label:nth-child(${i + 1}){border-bottom-color:var(--nx-color-primary);font-weight:600}` +
+          // The radios are visually hidden, so surface a focus indicator on the
+          // associated label for keyboard users tabbing through them.
+          `#nx-tab-${id}-${i}:focus-visible~.nx-pb-tab-labels-${id}>label:nth-child(${i + 1}){outline:2px solid var(--nx-color-primary);outline-offset:2px}`
       )
       .join("");
     const css = `.nx-pb-tab-panels-${id}>div{display:none}${rules}`;

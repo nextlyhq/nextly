@@ -100,11 +100,15 @@ export const flipBox = defineBlock({
     const css = `
 .nx-flip-${id}{perspective:1000px}
 .nx-flip-${id} .nx-flip-inner{position:relative;width:100%;height:${h}px;transition:transform .6s;transform-style:preserve-3d}
-.nx-flip-${id}:hover .nx-flip-inner{transform:rotateY(180deg)}
+.nx-flip-${id}:hover .nx-flip-inner,.nx-flip-${id}:focus-within .nx-flip-inner{transform:rotateY(180deg)}
 .nx-flip-${id} .nx-flip-face{position:absolute;inset:0;backface-visibility:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:12px;padding:20px;text-align:center}
 .nx-flip-${id} .nx-flip-back{transform:rotateY(180deg);background:var(--nx-color-primary);color:#fff}`;
     return (
-      <div className={`${className} nx-flip-${id}`}>
+      <div
+        className={`${className} nx-flip-${id}`}
+        tabIndex={0}
+        aria-label={str(props.frontTitle)}
+      >
         <style dangerouslySetInnerHTML={{ __html: css }} />
         <div className="nx-flip-inner">
           <div
