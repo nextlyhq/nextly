@@ -49,6 +49,12 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      # Enforce the design-token theming contract in the admin + plugin packages
+      # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
+      # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.
+      - name: Design tokens lint
+        run: pnpm lint:design
+
       - name: Build
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
         env:

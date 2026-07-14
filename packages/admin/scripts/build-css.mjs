@@ -154,6 +154,20 @@ try {
         const selector = parts[0];
         const rest = parts.slice(1).join("{");
 
+        // Contain the imported design-system token blocks to the admin scope so
+        // tokens never leak to the host document. Only the bare `:root` / `.dark`
+        // blocks (the theme) are mapped; Tailwind's own compound `:root, :host`
+        // theme block and the `.dark:where(...)` utilities are left untouched.
+        const bareSelector = selector.trim();
+        if (bareSelector === ":root") {
+          result.push(`.adminapp{${rest}`);
+          continue;
+        }
+        if (bareSelector === ".dark") {
+          result.push(`.adminapp.dark{${rest}`);
+          continue;
+        }
+
         // Skip if already has .adminapp
         if (selector.includes(".adminapp")) {
           result.push(line);

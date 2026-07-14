@@ -82,7 +82,7 @@ export const PluginsTableSkeleton: React.FC = () => {
         </div>
 
         {/* Footer Skeleton */}
-        <div className="table-footer border-t border-border bg-[hsl(var(--table-header-bg))]">
+        <div className="table-footer border-t border-border bg-[var(--table-header-bg)]">
           <div className="flex items-center justify-between px-2 py-4 p-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />

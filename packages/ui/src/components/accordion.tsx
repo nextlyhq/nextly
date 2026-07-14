@@ -168,7 +168,7 @@ const AccordionTrigger = forwardRef<AccordionTriggerRef, AccordionTriggerProps>(
         {...props}
       >
         {children}
-        <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-150" />
+        <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-150 will-change-transform" />
       </AccordionPrimitive.Trigger>
     </AccordionPrimitive.Header>
   )
@@ -200,7 +200,7 @@ const AccordionContent = forwardRef<AccordionContentRef, AccordionContentProps>(
     <AccordionPrimitive.Content
       ref={ref}
       data-slot="accordion-content"
-      className="overflow-hidden text-sm transition-all data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down"
+      className="overflow-hidden text-sm transition-all will-change-[height] transform-[translateZ(0)] data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down"
       {...props}
     >
       <div className={cn("pb-4 pt-0", className)}>{children}</div>

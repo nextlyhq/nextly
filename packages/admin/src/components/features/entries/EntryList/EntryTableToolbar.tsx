@@ -76,9 +76,9 @@ export function EntryTableToolbar({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col justify-between gap-4 @lg/content:flex-row @lg/content:items-center">
         {/* Search Input */}
-        <div className="relative w-full sm:max-w-xs md:max-w-sm">
+        <div className="relative w-full @lg/content:max-w-xs @2xl/content:max-w-sm">
           <SearchBar
             value={globalFilter}
             onChange={onGlobalFilterChange}
@@ -89,7 +89,7 @@ export function EntryTableToolbar({
         </div>
 
         {/* Toolbar Controls */}
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <div className="flex flex-wrap items-center gap-2 @lg/content:justify-end">
           {/* Custom Filters (e.g. Status) */}
           {filters && (
             <DropdownMenu>
@@ -97,7 +97,7 @@ export function EntryTableToolbar({
                 <Button
                   variant="outline"
                   size="md"
-                  className="relative flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 sm:flex-none"
+                  className="relative flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 @lg/content:flex-none"
                 >
                   <Filter className="h-4 w-4" />
                   Filter
@@ -118,7 +118,7 @@ export function EntryTableToolbar({
               <Button
                 variant="outline"
                 size="md"
-                className="flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 sm:flex-none"
+                className="flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 @lg/content:flex-none"
               >
                 <Columns className="h-4 w-4" />
                 Columns

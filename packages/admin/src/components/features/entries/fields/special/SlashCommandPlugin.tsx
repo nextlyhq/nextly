@@ -259,8 +259,8 @@ const menuContainerStyle: React.CSSProperties = {
   overflowX: "hidden",
   borderRadius: "8px",
   // Use theme tokens so the slash menu adapts to light/dark instead of a hardcoded white panel
-  border: "1px solid hsl(var(--border))",
-  backgroundColor: "hsl(var(--popover))",
+  border: "1px solid var(--border)",
+  backgroundColor: "var(--popover)",
   padding: "4px",
   boxShadow:
     "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
@@ -282,8 +282,8 @@ const getMenuItemStyle = (isSelected: boolean): React.CSSProperties => ({
   borderRadius: "6px",
   cursor: "pointer",
   fontSize: "14px",
-  color: "hsl(var(--popover-foreground))",
-  backgroundColor: isSelected ? "hsl(var(--muted))" : "transparent",
+  color: "var(--popover-foreground)",
+  backgroundColor: isSelected ? "var(--muted)" : "transparent",
   transition: "background-color 0.15s ease",
   whiteSpace: "nowrap",
 });
@@ -292,7 +292,7 @@ const iconStyle: React.CSSProperties = {
   width: "16px",
   height: "16px",
   flexShrink: 0,
-  color: "hsl(var(--muted-foreground))",
+  color: "var(--muted-foreground)",
 };
 
 const textStyle: React.CSSProperties = {

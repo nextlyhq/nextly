@@ -25,6 +25,7 @@
     "check:drizzle-kit-pin": "node scripts/check-drizzle-kit-pin.cjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "lint": "turbo run lint",
+    "lint:design": "node scripts/lint-design.mjs",
     "lint:fix": "turbo run lint -- --fix",
     "lint:report": "node scripts/lint-report.mjs",
     "_comment_testing": "=== Testing ===",

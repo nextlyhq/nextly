@@ -31,32 +31,40 @@ pnpm add react react-dom lucide-react
 
 ## Setup
 
-The components ship as Tailwind CSS 4 token consumers. They reference HSL CSS variables (`--background`, `--primary`, `--border`, etc.) which your project must define.
+The package ships two CSS entry points. Pick one:
 
-**Tailwind v4 (recommended)**
+**Zero config — pre-compiled bundle**
 
-In your global CSS, define the design tokens with `@theme` and import the components:
-
-```css
-/* app/globals.css */
-@import "tailwindcss";
-
-@theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(222 47% 11%);
-  --color-primary: hsl(221 83% 53%);
-  --color-primary-foreground: hsl(0 0% 100%);
-  /* ...the rest. See `uiPreset` for the full token contract. */
-}
-```
-
-The exported `uiPreset` is the reference contract: it lists every token name the components expect. Use it to write the matching `@theme` block (or import it directly if you are still on Tailwind v3).
+Import the pre-built stylesheet once at your root. It bundles Tailwind, every design token
+(on `:root`, flipped under `.dark`), and the base reset, so components render fully styled
+with no build wiring:
 
 ```tsx
+import "@nextlyhq/ui/styles.css";
 import { Button } from "@nextlyhq/ui";
 
 <Button variant="outline">Click me</Button>;
 ```
+
+**Bring your own Tailwind v4 build**
+
+If you already run Tailwind v4, import just the tokens and let your pipeline compile the
+utilities the components use:
+
+```css
+/* app/globals.css */
+@import "tailwindcss";
+@import "@nextlyhq/ui/theme.css";
+@source "../node_modules/@nextlyhq/ui/dist";
+```
+
+`theme.css` defines the tokens as complete OKLCH color values (`--background`, `--primary`,
+`--border`, …) with `@theme inline` mappings and the dark-mode overrides. Reference tokens
+directly (`var(--primary)`) — never wrap them in `hsl()`. The exported `uiPreset` remains
+available as a Tailwind v3 preset.
+
+> Inside a Nextly admin plugin you need neither import — the admin already provides the
+> tokens. See the [**Plugin UI authoring guide**](./docs/plugin-ui-authoring.md).
 
 ## Components
 
@@ -81,6 +89,7 @@ import { Button } from "@nextlyhq/ui";
 
 ## Documentation
 
+- [**Plugin UI authoring guide**](./docs/plugin-ui-authoring.md): the token contract, dark mode, container queries, and the design lint guard
 - [**Admin customization**](https://nextlyhq.com/docs/admin/customization): theming, branding, and custom field UIs
 
 ## Related packages

@@ -288,13 +288,13 @@ export function EntryTablePagination({
     <nav
       aria-label="Entry table pagination"
       className={cn(
-        "flex flex-col md:flex-row items-center justify-between gap-4 p-4 border-t border-border bg-[hsl(var(--table-header-bg))]",
+        "flex flex-col @2xl/content:flex-row items-center justify-between gap-4 p-4 border-t border-border bg-[var(--table-header-bg)]",
         className
       )}
       onKeyDown={handleKeyDown}
     >
       {/* Entry count info */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground order-2 md:order-1">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground order-2 @2xl/content:order-1">
         <span>
           {total === 0 ? (
             "No entries"
@@ -309,10 +309,10 @@ export function EntryTablePagination({
       </div>
 
       {/* Controls */}
-      <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 order-1 md:order-2">
+      <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 order-1 @2xl/content:order-2">
         {/* Page size selector */}
         <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground hidden sm:inline-block">
+          <span className="text-sm text-muted-foreground hidden @md/content:inline-block">
             Rows per page
           </span>
           <Select
@@ -339,7 +339,7 @@ export function EntryTablePagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-8 w-8 hidden sm:flex"
+            className="h-8 w-8 hidden @md/content:flex"
             onClick={() => onPageChange(0)}
             disabled={!canGoPrevious || isLoading}
             aria-label="Go to first page"
@@ -410,7 +410,7 @@ export function EntryTablePagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-8 w-8 hidden sm:flex"
+            className="h-8 w-8 hidden @md/content:flex"
             onClick={() => onPageChange(totalPages - 1)}
             disabled={!canGoNext || isLoading}
             aria-label="Go to last page"
@@ -420,10 +420,10 @@ export function EntryTablePagination({
         </div>
 
         {/* Page info / Jump to page */}
-        <div className="min-w-[100px] sm:min-w-[120px] text-right">
+        <div className="min-w-[100px] @md/content:min-w-[120px] text-right">
           {isEditingPage ? (
             <div className="flex items-center gap-1 text-sm justify-end">
-              <span className="text-muted-foreground hidden sm:inline">
+              <span className="text-muted-foreground hidden @md/content:inline">
                 Page
               </span>
               <Input
@@ -435,7 +435,7 @@ export function EntryTablePagination({
                 onChange={e => setJumpToPageValue(e.target.value)}
                 onKeyDown={handleJumpToPageKeyDown}
                 onBlur={handleJumpToPageBlur}
-                className="h-7 w-12 sm:w-14 text-center text-sm px-1"
+                className="h-7 w-12 @md/content:w-14 text-center text-sm px-1"
                 aria-label="Jump to page number"
               />
               <span className="text-muted-foreground whitespace-nowrap">
@@ -459,7 +459,7 @@ export function EntryTablePagination({
               }
               aria-label={`Page ${displayPage} of ${totalPages || 1}. ${totalPages > 1 ? "Click to jump to a specific page." : ""}`}
             >
-              <span className="hidden sm:inline">Page </span>
+              <span className="hidden @md/content:inline">Page </span>
               <span className="font-medium">{displayPage}</span> /{" "}
               <span className="font-medium">{totalPages || 1}</span>
             </button>

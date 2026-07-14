@@ -122,9 +122,9 @@ export function Toaster({ theme = "system", ...props }: ToasterProps) {
       }}
       style={
         {
-          "--normal-bg": "hsl(var(--popover, 0 0% 100%))",
-          "--normal-text": "hsl(var(--popover-foreground, 222.2 84% 4.9%))",
-          "--normal-border": "hsl(var(--border, 214.3 31.8% 91.4%))",
+          "--normal-bg": "var(--popover)",
+          "--normal-text": "var(--popover-foreground)",
+          "--normal-border": "var(--border)",
           "--border-radius": "0px",
         } as React.CSSProperties
       }

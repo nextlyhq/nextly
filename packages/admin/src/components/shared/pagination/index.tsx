@@ -242,12 +242,12 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
       <div
         ref={ref}
         className={cn(
-          "flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-border bg-[hsl(var(--table-header-bg))]",
+          "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--table-header-bg)]",
           className
         )}
       >
         {/* Left: Info */}
-        <div className="whitespace-nowrap order-2 sm:order-1">
+        <div className="whitespace-nowrap order-2 @2xl/content:order-1">
           {totalItems !== undefined ? (
             <>
               Showing {currentPage * pageSize + 1}-
@@ -263,11 +263,11 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
         </div>
 
         {/* Right: Controls */}
-        <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 lg:gap-8 order-1 sm:order-2">
+        <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
             <div className="flex items-center space-x-2">
-              <span className="whitespace-nowrap hidden sm:inline-block">
+              <span className="whitespace-nowrap hidden @md/content:inline-block">
                 Rows per page
               </span>
               <div className="relative">
@@ -312,7 +312,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(0)}
               disabled={currentPage === 0 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-border bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to first page"
             >
               <ChevronsLeft className="h-4 w-4" />
@@ -345,7 +345,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(totalPages - 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-border bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to last page"
             >
               <ChevronsRight className="h-4 w-4" />
@@ -353,7 +353,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
           </div>
 
           {/* Page Count (Far Right) */}
-          <div className="whitespace-nowrap hidden sm:block">
+          <div className="whitespace-nowrap hidden @md/content:block">
             Page {currentPage + 1} of {totalPages}
           </div>
         </div>

@@ -70,9 +70,10 @@ export function JsonViewer({ value }: JsonViewerProps) {
           padding: "16px 12px",
         },
         ".cm-gutters": {
-          borderRight: "1px solid hsl(var(--border) / 0.5)",
-          backgroundColor: "hsl(var(--muted) / 0.3)",
-          color: "hsl(var(--muted-foreground) / 0.5)",
+          borderRight:
+            "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+          backgroundColor: "color-mix(in srgb, var(--muted) 30%, transparent)",
+          color: "color-mix(in srgb, var(--muted-foreground) 50%, transparent)",
           padding: "0 4px",
         },
         ".cm-activeLine, .cm-activeLineGutter": {

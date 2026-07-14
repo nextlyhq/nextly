@@ -155,7 +155,8 @@ function SortableFieldItem({
       <div
         className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-foreground mr-1"
         style={{
-          border: "1px solid hsl(var(--primary) / 0.25)",
+          border:
+            "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
         }}
       >
         <svg

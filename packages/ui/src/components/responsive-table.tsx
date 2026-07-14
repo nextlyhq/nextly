@@ -305,7 +305,7 @@ function ResponsiveTableInner<T extends { id: string }>(
         )}
       >
         <Table aria-label={ariaLabel || "Data table"}>
-          <TableHeader className="bg-[hsl(var(--table-header-bg))]">
+          <TableHeader className="bg-[var(--table-header-bg)]">
             <TableRow>
               {columns.map(column => (
                 <TableHead
@@ -355,7 +355,7 @@ function ResponsiveTableInner<T extends { id: string }>(
         </Table>
       </div>
       {footer && (
-        <div className="table-footer border-t border-border bg-[hsl(var(--table-header-bg))]">
+        <div className="table-footer border-t border-border bg-[var(--table-header-bg)]">
           {footer}
         </div>
       )}

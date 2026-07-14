@@ -162,8 +162,8 @@ function ButtonLinkComponent({
           )}
           style={{
             ...(variant === "filled" && {
-              backgroundColor: bgColor || "hsl(var(--primary))",
-              color: textColor || "hsl(var(--primary-foreground))",
+              backgroundColor: bgColor || "var(--primary)",
+              color: textColor || "var(--primary-foreground)",
             }),
             ...(variant === "outline" &&
               textColor && {

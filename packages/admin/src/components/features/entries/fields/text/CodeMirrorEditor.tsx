@@ -293,23 +293,23 @@ export function CodeMirrorEditor({
           "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
       },
       ".cm-gutters": {
-        borderRight: "1px solid hsl(var(--border))",
-        backgroundColor: "hsl(var(--muted))",
+        borderRight: "1px solid var(--border)",
+        backgroundColor: "var(--muted)",
       },
       ".cm-activeLineGutter": {
-        backgroundColor: "hsl(var(--accent))",
+        backgroundColor: "var(--accent)",
       },
       ".cm-activeLine": {
-        backgroundColor: "hsl(var(--accent) / 0.1)",
+        backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
       },
       ".cm-selectionMatch": {
-        backgroundColor: "hsl(var(--primary) / 0.2)",
+        backgroundColor: "color-mix(in srgb, var(--primary) 20%, transparent)",
       },
       ".cm-searchMatch": {
-        backgroundColor: "hsl(var(--warning) / 0.3)",
+        backgroundColor: "color-mix(in srgb, var(--warning) 30%, transparent)",
       },
       ".cm-searchMatch.cm-searchMatch-selected": {
-        backgroundColor: "hsl(var(--warning) / 0.5)",
+        backgroundColor: "color-mix(in srgb, var(--warning) 50%, transparent)",
       },
     });
   }, [editorOptions.fontSize, editorOptions.fontFamily]);

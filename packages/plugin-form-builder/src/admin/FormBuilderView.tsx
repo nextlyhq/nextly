@@ -505,7 +505,7 @@ function FormBuilderViewInner({
                       style={{
                         borderBottomColor:
                           activeTab === tab.value
-                            ? "hsl(var(--primary))"
+                            ? "var(--primary)"
                             : "transparent",
                       }}
                       className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"

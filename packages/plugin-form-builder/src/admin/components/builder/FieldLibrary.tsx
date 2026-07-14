@@ -185,7 +185,8 @@ function DraggableFieldItem({
       <div
         className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
         style={{
-          border: "1px solid hsl(var(--primary) / 0.25)",
+          border:
+            "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
         }}
       >
         <svg
@@ -255,7 +256,7 @@ function CategorySection({
         {/* Category name */}
         <span
           className="text-[13px] font-semibold tracking-widest uppercase"
-          style={{ color: "hsl(var(--muted-foreground))" }}
+          style={{ color: "var(--muted-foreground)" }}
         >
           {name}
         </span>
@@ -264,8 +265,8 @@ function CategorySection({
         <span
           className="ml-auto text-[10px] font-medium leading-none"
           style={{
-            background: "hsl(var(--muted))",
-            color: "hsl(var(--muted-foreground))",
+            background: "var(--muted)",
+            color: "var(--muted-foreground)",
             padding: "2px 6px",
           }}
         >
@@ -280,7 +281,7 @@ function CategorySection({
           style={{
             marginLeft: "10px",
             paddingLeft: "10px",
-            borderLeft: "1px solid hsl(var(--border))",
+            borderLeft: "1px solid var(--border)",
           }}
         >
           {types.map(field => (

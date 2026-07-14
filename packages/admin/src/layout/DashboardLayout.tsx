@@ -100,7 +100,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             {/* Main Content */}
             <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative">
               <DashboardHeader />
-              <main className="flex-1 overflow-y-auto bg-transparent">
+              {/* Named container so content responds to the panel width
+                  (viewport minus sidebar), not the viewport. */}
+              <main className="@container/content flex-1 overflow-y-auto bg-transparent">
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">
