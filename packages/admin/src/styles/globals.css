@@ -280,24 +280,6 @@
     * Reference: https://github.com/tailwindlabs/tailwindcss/discussions/12063
     */
 
-/* Override Tailwind's button preflight styles for backgrounds */
-button[data-slot^="button"].bg-primary,
-[data-slot^="button"].bg-primary {
-  background-color: var(--primary) !important;
-}
-
-button[data-slot^="button"].bg-destructive,
-[data-slot^="button"].bg-destructive,
-.bg-destructive {
-  background-color: var(--destructive) !important;
-  color: var(--destructive-foreground) !important;
-}
-
-/* Ensure text colors work for destructive buttons */
-.text-destructive-foreground {
-  color: var(--destructive-foreground) !important;
-}
-
 /* Global cursor pointer for interactive elements */
 [data-slot*="trigger"],
 [data-slot*="button"],
@@ -320,68 +302,6 @@ button[data-slot^="button"].bg-destructive,
 [data-slot="switch"][disabled],
 [data-slot="radio-group-item"][disabled] {
   cursor: not-allowed !important;
-}
-
-/* Override text colors for buttons to ensure proper contrast */
-button[data-slot^="button"].text-primary-foreground,
-[data-slot^="button"].text-primary-foreground {
-  color: var(--primary-foreground) !important;
-}
-
-button[data-slot^="button"].text-destructive-foreground,
-[data-slot^="button"].text-destructive-foreground {
-  color: var(--destructive-foreground) !important;
-}
-
-/* Ensure badge backgrounds work properly */
-[data-slot^="badge"].bg-primary {
-  background-color: var(--primary) !important;
-}
-
-[data-slot^="badge"].bg-destructive {
-  background-color: var(--destructive) !important;
-}
-
-[data-slot^="badge"].bg-secondary {
-  background-color: var(--secondary) !important;
-}
-
-[data-slot^="badge"].bg-success {
-  background-color: var(--success) !important;
-}
-
-[data-slot^="badge"].bg-warning {
-  background-color: var(--warning) !important;
-}
-
-/* Ensure badge text colors work properly */
-[data-slot^="badge"].text-primary-foreground {
-  color: var(--primary-foreground) !important;
-}
-
-[data-slot^="badge"].text-destructive-foreground {
-  color: var(--destructive-foreground) !important;
-}
-
-[data-slot^="badge"].text-secondary-foreground {
-  color: var(--secondary-foreground) !important;
-}
-
-[data-slot^="badge"].text-success-foreground {
-  color: var(--success-foreground) !important;
-}
-
-[data-slot^="badge"].text-warning-foreground {
-  color: var(--warning-foreground) !important;
-}
-
-/* Auth form icon containers - ensure primary background is applied */
-.bg-primary {
-  background-color: var(--primary) !important;
-}
-
-.text-white {
-  color: white !important;
 }
 
 /* Ensure checkbox and switch components work properly with stronger specificity */
@@ -484,16 +404,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
 [data-slot="radio-group-item"][data-state="checked"] .lucide-circle {
   fill: var(--primary) !important;
   color: var(--primary) !important;
-}
-
-/* Popover and Dropdown Menu Background Fixes */
-/* These components render in portals and need explicit background enforcement */
-.bg-popover {
-  background-color: var(--popover) !important;
-}
-
-.text-popover-foreground {
-  color: var(--popover-foreground) !important;
 }
 
 /* Ensure dropdown menu content has proper background */
