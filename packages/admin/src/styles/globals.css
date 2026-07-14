@@ -295,15 +295,6 @@
   cursor: not-allowed !important;
 }
 
-/* Force background class to work in portals */
-.bg-background {
-  background-color: var(--background);
-}
-
-.bg-card {
-  background-color: var(--card);
-}
-
 /**
     * Auth Pages
     *
@@ -410,49 +401,6 @@
 
 /* Form component enhancements */
 [data-slot="input"]:focus,
-[data-slot="textarea"]:focus {
-  border-color: var(--ring);
-}
-
-[data-slot="input"][aria-invalid="true"],
-[data-slot="textarea"][aria-invalid="true"] {
-  border-color: var(--destructive);
-}
-
-/* Dialog enhancements */
-[data-slot="dialog-overlay"] {
-  backdrop-filter: blur(2px);
-}
-
-/* Card enhancements */
-[data-slot="card"] {
-  transition: all 0.2s ease;
-}
-
-/* Badge enhancements */
-[data-slot="badge"] {
-  font-weight: 500;
-  font-size: 0.75rem;
-  transition: all 0.2s ease;
-}
-
-/* Alert enhancements */
-[data-slot="alert"] {
-  border-left: 4px solid;
-}
-
-[data-slot="alert"][data-variant="destructive"] {
-  border-left-color: var(--destructive);
-}
-
-[data-slot="alert"][data-variant="warning"] {
-  border-left-color: var(--warning);
-}
-
-[data-slot="alert"][data-variant="success"] {
-  border-left-color: var(--success);
-}
-
 /**
     * Form & Input Enhancements
     * 
