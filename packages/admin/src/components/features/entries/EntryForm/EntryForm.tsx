@@ -369,7 +369,7 @@ export function EntryForm({
                 07-admin-bugs-feedback). Skip the whole block until the
                 entry exists. */}
             {mode === "edit" && !railCollapsed && (
-              <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
+              <div className="hidden lg:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
                 <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
                   <EntryFormSidebar
                     mode={mode}

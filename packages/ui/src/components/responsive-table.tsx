@@ -197,13 +197,7 @@ function ResponsiveTableInner<T extends { id: string }>(
   // Empty state
   if (data.length === 0) {
     return (
-      <div
-        ref={ref}
-        className={cn(
-          "p-8 text-center",
-          className
-        )}
-      >
+      <div ref={ref} className={cn("p-8 text-center", className)}>
         <p className="text-sm text-muted-foreground">{emptyMessage}</p>
       </div>
     );
@@ -306,7 +300,7 @@ function ResponsiveTableInner<T extends { id: string }>(
       {/* Desktop: Table view */}
       <div
         className={cn(
-          "table-wrapper hidden md:block overflow-hidden rounded-none  border border-primary/5",
+          "table-wrapper hidden md:block overflow-hidden rounded-none  border border-border",
           tableWrapperClassName
         )}
       >
@@ -361,7 +355,7 @@ function ResponsiveTableInner<T extends { id: string }>(
         </Table>
       </div>
       {footer && (
-        <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
+        <div className="table-footer border-t border-border bg-[hsl(var(--table-header-bg))]">
           {footer}
         </div>
       )}

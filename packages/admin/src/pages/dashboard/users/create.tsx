@@ -302,9 +302,9 @@ export default function CreateUserPage(): ReactElement {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card  border border-primary/5 rounded-none p-6 shadow-none">
+        <div className="bg-card  border border-border rounded-none p-6 shadow-none">
           {/* Avatar Section */}
-          <div className="flex items-center gap-4 mb-8 pb-8  border-b border-primary/5">
+          <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
             <AvatarUploader
               value={watchedAvatar ?? ""}
               onChange={url =>

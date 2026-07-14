@@ -136,6 +136,18 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
     htmlContent: string;
     /** Plain text fallback content */
     textContent?: string;
+    /** Row kind: "template" (default), "layout", or "partial". */
+    kind?: "template" | "layout" | "partial";
+    /** Hidden inbox-preview line rendered before the body. */
+    preheader?: string;
+    /** Layout row that wraps this template at its {{content}} marker. */
+    layoutId?: string;
+    /** Override the provider's From address for this template. */
+    fromOverride?: string;
+    /** Reply-To address for this template. */
+    replyTo?: string;
+    /** Whether to wrap this template in its layout when sending. */
+    useLayout?: boolean;
     /** Specific provider ID to use for this template */
     providerId?: string;
     /** Whether this template is active */
@@ -176,24 +188,6 @@ export interface PreviewEmailTemplateArgs extends DirectAPIConfig {
   id: string;
   /** Variable values for interpolation */
   data?: Record<string, string>;
-}
-
-/**
- * Arguments for getting the shared email layout (header/footer).
- */
-export type GetEmailLayoutArgs = DirectAPIConfig;
-
-/**
- * Arguments for updating the shared email layout (header/footer).
- */
-export interface UpdateEmailLayoutArgs extends DirectAPIConfig {
-  /** Layout data */
-  data: {
-    /** Header HTML content */
-    header?: string;
-    /** Footer HTML content */
-    footer?: string;
-  };
 }
 
 /**

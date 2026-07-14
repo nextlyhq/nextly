@@ -224,7 +224,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
   const TypeIcon = typeConfig.icon;
 
   return (
-    <TableRow className="bg-primary/5 hover:bg-primary/5">
+    <TableRow>
       {/* Lock icon + Name */}
       <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
@@ -234,7 +234,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm px-1.5 py-0.5 rounded-none font-mono">
+          <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-sm">
             {field.name}
           </code>
         </div>
@@ -323,9 +323,10 @@ function SortableFieldRow({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "hover-unified-table-row",
-        isDragging && "bg-primary/5 opacity-80"
+        "hover-unified-table-row cursor-pointer",
+        isDragging && "bg-muted opacity-80"
       )}
+      onClick={() => (isCode ? onView(field) : onEdit(field))}
     >
       {/* Drag handle + Name */}
       <TableCell className="whitespace-nowrap text-base">
@@ -337,12 +338,20 @@ function SortableFieldRow({
             tabIndex={0}
             aria-label="Drag to reorder"
             style={{ touchAction: "none" }}
+            onClick={e => e.stopPropagation()}
           >
             <GripVertical className="h-4 w-4" />
           </span>
           <code
-            className="text-sm bg-primary/5 px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
-            onClick={() => (isCode ? onView(field) : onEdit(field))}
+            className="text-sm bg-muted px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
+            onClick={e => {
+              e.stopPropagation();
+              if (isCode) {
+                onView(field);
+              } else {
+                onEdit(field);
+              }
+            }}
             role="button"
             tabIndex={0}
             onKeyDown={e => {
@@ -409,7 +418,10 @@ function SortableFieldRow({
       </TableCell>
 
       {/* Actions */}
-      <TableCell className="whitespace-nowrap text-sm">
+      <TableCell
+        className="whitespace-nowrap text-sm"
+        onClick={e => e.stopPropagation()}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-sm">
@@ -618,7 +630,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -646,7 +658,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -665,7 +677,7 @@ function UserFieldsTable() {
           <AlertDescription className="flex items-center justify-between">
             <span>
               Restart the server (
-              <code className="text-xs bg-primary/5 px-1 py-0.5 rounded-none">
+              <code className="text-xs bg-muted px-1 py-0.5 rounded-none">
                 next dev
               </code>
               ) for new fields to take effect in the database.
@@ -690,7 +702,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={isLoading}
-              className="bg-background text-foreground border-primary/5"
+              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -706,7 +718,7 @@ function UserFieldsTable() {
       {/* Table with DnD */}
       {filteredStaticFields.length === 0 && paginatedFields.length === 0 ? (
         <div className="border rounded-none p-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-primary/5 mx-auto mb-4">
+          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-muted mx-auto mb-4">
             <Users className="h-7 w-7 text-muted-foreground" />
           </div>
           <h3 className="text-base font-medium mb-1">
@@ -717,16 +729,16 @@ function UserFieldsTable() {
           </p>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <Table aria-label="User fields table">
+            <Table aria-label="User fields table" className="min-w-max">
               <TableHeader className="bg-[hsl(var(--table-header-bg))]">
                 <TableRow>
-                  <TableHead className="w-[200px]">Name</TableHead>
+                  <TableHead className="w-50">Name</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Required</TableHead>
@@ -735,7 +747,7 @@ function UserFieldsTable() {
                   <TableHead className="hidden lg:table-cell">
                     Created
                   </TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
+                  <TableHead className="w-25">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               {/* Static fields (read-only, non-draggable) */}
@@ -767,7 +779,7 @@ function UserFieldsTable() {
           </DndContext>
 
           {/* Pagination inside table wrapper - always show if table is shown */}
-          {/* <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4"> */}
+          {/* <div className="table-footer  border-t border-border bg-[hsl(var(--table-header-bg))] p-4"> */}
           <Pagination
             currentPage={page}
             totalPages={Math.max(1, totalPages)}
@@ -812,7 +824,7 @@ const UserFieldsPage: React.FC = () => {
               <h1 className="text-xl font-semibold tracking-tight">
                 User Fields
               </h1>
-              <p className="text-sm font-normal text-primary/50 mt-1">
+              <p className="text-sm font-normal text-muted-foreground mt-1">
                 Manage custom attributes for user accounts
               </p>
             </div>

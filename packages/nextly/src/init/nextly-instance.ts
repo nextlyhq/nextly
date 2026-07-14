@@ -67,7 +67,6 @@ import type {
   FindUsersArgs,
   ForgotPasswordArgs,
   FormSubmissionsArgs,
-  GetEmailLayoutArgs,
   GetRolePermissionsArgs,
   ListFoldersArgs,
   ListResult,
@@ -90,7 +89,6 @@ import type {
   SubmitFormResult,
   TestEmailProviderArgs,
   UpdateArgs,
-  UpdateEmailLayoutArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
   UpdateSingleArgs,
@@ -195,7 +193,7 @@ export interface Nextly {
   /**
    * Delete a document by ID or by where clause.
    *
-  * the by-id path returns `{ message, item: { id } }`;
+   * the by-id path returns `{ message, item: { id } }`;
    * the by-where path keeps the legacy `DeleteResult` because it can
    * affect multiple rows.
    *
@@ -575,9 +573,7 @@ export interface Nextly {
     find: (args?: FindMediaArgs) => Promise<ListResult<MediaFile>>;
     findByID: (args: FindMediaByIDArgs) => Promise<MediaFile | null>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
-    delete: (
-      args: DeleteMediaArgs
-    ) => Promise<MutationResult<{ id: string }>>;
+    delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;
     folders: {
       list: (args?: ListFoldersArgs) => Promise<MediaFolder[]>;
@@ -757,10 +753,6 @@ export interface Nextly {
     preview: (
       args: PreviewEmailTemplateArgs
     ) => Promise<{ subject: string; html: string }>;
-    getLayout: (
-      args?: GetEmailLayoutArgs
-    ) => Promise<{ header: string; footer: string }>;
-    updateLayout: (args: UpdateEmailLayoutArgs) => Promise<void>;
   };
 
   // ==========================================================================
@@ -831,9 +823,7 @@ export interface Nextly {
     findByID: (args: FindRoleByIDArgs) => Promise<Role>;
     create: (args: CreateRoleArgs) => Promise<MutationResult<Role>>;
     update: (args: UpdateRoleArgs) => Promise<MutationResult<Role>>;
-    delete: (
-      args: DeleteRoleArgs
-    ) => Promise<MutationResult<{ id: string }>>;
+    delete: (args: DeleteRoleArgs) => Promise<MutationResult<{ id: string }>>;
     getPermissions: (args: GetRolePermissionsArgs) => Promise<Permission[]>;
     setPermissions: (args: SetRolePermissionsArgs) => Promise<Permission[]>;
   };
@@ -861,9 +851,7 @@ export interface Nextly {
   permissions: {
     find: (args?: FindPermissionsArgs) => Promise<ListResult<Permission>>;
     findByID: (args: FindPermissionByIDArgs) => Promise<Permission | null>;
-    create: (
-      args: CreatePermissionArgs
-    ) => Promise<MutationResult<Permission>>;
+    create: (args: CreatePermissionArgs) => Promise<MutationResult<Permission>>;
     delete: (
       args: DeletePermissionArgs
     ) => Promise<MutationResult<{ id: string }>>;

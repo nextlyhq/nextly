@@ -203,7 +203,7 @@ export function EmailProviderForm({
                           <CardContent className="p-3 flex items-center justify-center">
                             <div className="w-full h-full max-w-[90px] max-h-[36px] flex items-center justify-center">
                               <p.icon
-                                className="max-w-full max-h-full"
+                                className="max-w-full max-h-full text-foreground"
                                 aria-label={`${p.name} logo`}
                               />
                             </div>
@@ -326,6 +326,28 @@ export function EmailProviderForm({
                 <SettingsRow
                   label="Set as Default Provider"
                   description="When enabled, this provider will be used to send all transactional emails unless a specific provider is requested."
+                >
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isPending}
+                    />
+                  </FormControl>
+                  <FormMessage className="mt-1.5" />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="isActive"
+            render={({ field }) => (
+              <FormItem className="m-0">
+                <SettingsRow
+                  label="Active"
+                  description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
                 >
                   <FormControl>
                     <Switch

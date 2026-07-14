@@ -120,7 +120,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
 const EmptyState: React.FC = () => (
   <div className="py-20 text-center space-y-4">
-    <div className="inline-flex p-6 rounded-none] bg-primary/5  border border-primary/5">
+    <div className="inline-flex p-6 rounded-none bg-primary/5  border border-border">
       <Clock className="h-10 w-10 text-muted-foreground/10" />
     </div>
     <div className="space-y-1">
@@ -140,8 +140,8 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
   const { data, isLoading, error } = useRecentActivity(limit);
 
   return (
-    <Card className="border-primary/5 bg-card/40 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/5">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-primary/5">
+    <Card className="border-border bg-card/40 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border">
         <div className="space-y-1">
           <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
             System Event Log
@@ -185,7 +185,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
                     <ActivityItem key={activity.id} activity={activity} />
                   ))}
                 </div>
-                <div className="mt-6 pt-4  border-t border-primary/5 text-center">
+                <div className="mt-6 pt-4  border-t border-border text-center">
                   <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/30 hover-unified transition-all duration-500 py-3 px-8 rounded-none hover-unified">
                     Sync Previous Events
                   </button>

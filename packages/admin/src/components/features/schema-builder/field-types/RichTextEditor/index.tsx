@@ -125,7 +125,7 @@ export function RichTextEditor({
 
   return (
     <LexicalComposer initialConfig={initialConfig}>
-      <div className="relative  border border-primary/5 dark:border-primary/5 rounded-none overflow-hidden bg-white dark:bg-gray-900">
+      <div className="relative  border border-border dark:border-border rounded-none overflow-hidden bg-card">
         {/* Toolbar */}
         {!disabled && <EditorToolbar toolbarOptions={toolbarOptions} />}
 
@@ -140,7 +140,7 @@ export function RichTextEditor({
               />
             }
             placeholder={
-              <div className="absolute top-3 left-4 text-gray-400 pointer-events-none select-none">
+              <div className="absolute top-3 left-4 text-muted-foreground pointer-events-none select-none">
                 {placeholder}
               </div>
             }

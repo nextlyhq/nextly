@@ -193,6 +193,13 @@ export interface EmailConfig {
   from: string;
 
   /**
+   * Application name injected into templates and the shared layout as the
+   * `{{appName}}` variable. Falls back to "Nextly" when not set.
+   * @example 'Acme'
+   */
+  appName?: string;
+
+  /**
    * Base URL for links in emails (e.g., password reset link).
    * Falls back to `NEXT_PUBLIC_APP_URL` environment variable if not set.
    * @example 'https://example.com'
@@ -303,6 +310,17 @@ export interface EmailProviderAdapter {
     subject: string;
     /** HTML email body. */
     html: string;
+    /**
+     * Plain-text alternative body, sent alongside the HTML as a
+     * `multipart/alternative` message. Optional so custom adapters that
+     * predate this field keep compiling; built-in adapters forward it.
+     */
+    text?: string;
+    /**
+     * Reply-To address. Optional so custom adapters that predate this
+     * field keep compiling; built-in adapters forward it when set.
+     */
+    replyTo?: string;
     /** CC email addresses. */
     cc?: string[];
     /** BCC email addresses. */

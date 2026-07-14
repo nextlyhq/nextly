@@ -26,8 +26,8 @@ import RolesPage from "./dashboard/roles";
 import RolesCreatePage from "./dashboard/roles/create";
 import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
+import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
-import EmailLayoutPage from "./dashboard/settings/email-layout/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
@@ -270,11 +270,6 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "manage-email-templates",
   },
-  [ROUTES.SETTINGS_EMAIL_LAYOUT]: {
-    component: EmailLayoutPage,
-    type: "private",
-    requiredPermission: "manage-email-templates",
-  },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
     type: "private",
@@ -289,6 +284,11 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: CreateApiKeyPage,
     type: "private",
     requiredPermission: "create-api-keys",
+  },
+  [ROUTES.SETTINGS_API_KEYS_EDIT]: {
+    component: EditApiKeyPage,
+    type: "private",
+    requiredPermission: "update-api-keys",
   },
 
   // Image sizes settings

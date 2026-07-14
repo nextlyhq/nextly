@@ -136,9 +136,9 @@ export function UserFieldForm({
           }}
           className="space-y-6"
         >
-          <div className="bg-card  border border-primary/5 rounded-none overflow-hidden">
+          <div className="bg-card  border border-border rounded-none overflow-hidden">
             {/* Page Header */}
-            <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
+            <div className="border-b border-border bg-primary/5 px-6 py-5">
               <div className="flex items-center gap-3">
                 <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary">
                   <SlidersHorizontal className="h-4 w-4" />
@@ -333,7 +333,7 @@ export function UserFieldForm({
                           control={form.control}
                           name="required"
                           render={({ field }) => (
-                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-primary/5 border-primary/25">
+                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-border border-primary/25">
                               <div className="space-y-0.5">
                                 <FormLabel>Required</FormLabel>
                               </div>
@@ -353,7 +353,7 @@ export function UserFieldForm({
                           control={form.control}
                           name="isActive"
                           render={({ field }) => (
-                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-primary/5 border-primary/25">
+                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-border border-primary/25">
                               <div className="space-y-0.5">
                                 <FormLabel>Active</FormLabel>
                               </div>
@@ -376,7 +376,7 @@ export function UserFieldForm({
 
             {/* Form Actions */}
             {!isCodeSourced && (
-              <div className="border-t border-primary/5 px-6 py-4 bg-primary/5">
+              <div className="border-t border-border px-6 py-4 bg-primary/5">
                 <div className="flex justify-end gap-3">
                   <Link href={ROUTES.USERS_FIELDS}>
                     <Button

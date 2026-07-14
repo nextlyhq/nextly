@@ -106,7 +106,7 @@ export function SidebarUserFooter({
               onClick={() => {
                 void logout();
               }}
-              className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
+              className="cursor-pointer rounded-none text-foreground hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <LogOut className="h-4 w-4" />
               <span>Log out</span>
@@ -186,7 +186,7 @@ export function SidebarUserFooter({
           onClick={() => {
             void logout();
           }}
-          className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
+          className="cursor-pointer rounded-none text-foreground hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <LogOut className="h-4 w-4" />
           <span>Log out</span>

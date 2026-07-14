@@ -89,12 +89,12 @@ function CollectionCard({
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-none overflow-hidden  border border-primary/5 bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/5"
+      className="block group h-full rounded-none overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-border"
     >
       <Card
         variant="interactive"
         className={cn(
-          "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-none overflow-hidden relative"
+          "h-full border-0! bg-transparent! transition-colors duration-200 rounded-none overflow-hidden relative"
         )}
       >
         <CardContent className="p-5 relative z-10">
@@ -123,7 +123,7 @@ function LoadingSkeleton() {
       {Array.from({ length: 4 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-32 rounded-none bg-primary/5  border border-primary/5"
+          className="h-32 rounded-none bg-primary/5  border border-border"
         />
       ))}
     </div>
@@ -166,7 +166,7 @@ export const CollectionQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none  border border-primary/5 border-destructive/10">
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none  border border-border border-destructive/10">
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>

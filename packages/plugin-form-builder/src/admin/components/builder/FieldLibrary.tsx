@@ -175,7 +175,7 @@ function DraggableFieldItem({
       type="button"
       onClick={() => onAdd(type)}
       title={description}
-      className={`flex items-center gap-3 w-full px-2 py-2 rounded-none text-left group hover:bg-primary/5/50 transition-all duration-150 cursor-grab active:cursor-grabbing active:scale-[0.98] ${
+      className={`flex items-center gap-3 w-full px-2 py-2 rounded-none text-left group hover:bg-muted transition-all duration-150 cursor-grab active:cursor-grabbing active:scale-[0.98] ${
         isDragging ? "opacity-50 bg-primary/5" : ""
       }`}
       {...attributes}
@@ -185,7 +185,6 @@ function DraggableFieldItem({
       <div
         className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
         style={{
-          borderRadius: "6px",
           border: "1px solid hsl(var(--primary) / 0.25)",
         }}
       >
@@ -247,7 +246,7 @@ function CategorySection({
           }`}
           viewBox="0 0 24 24"
           fill="none"
-          stroke="#9ca3af"
+          stroke="currentColor"
           strokeWidth="2"
         >
           <polyline points="6 9 12 15 18 9" />
@@ -256,7 +255,7 @@ function CategorySection({
         {/* Category name */}
         <span
           className="text-[13px] font-semibold tracking-widest uppercase"
-          style={{ color: "#9ca3af" }}
+          style={{ color: "hsl(var(--muted-foreground))" }}
         >
           {name}
         </span>
@@ -265,10 +264,9 @@ function CategorySection({
         <span
           className="ml-auto text-[10px] font-medium leading-none"
           style={{
-            background: "#f3f4f6",
-            color: "#9ca3af",
+            background: "hsl(var(--muted))",
+            color: "hsl(var(--muted-foreground))",
             padding: "2px 6px",
-            borderRadius: "4px",
           }}
         >
           {types.length}
@@ -282,7 +280,7 @@ function CategorySection({
           style={{
             marginLeft: "10px",
             paddingLeft: "10px",
-            borderLeft: "1px solid #e5e7eb",
+            borderLeft: "1px solid hsl(var(--border))",
           }}
         >
           {types.map(field => (
@@ -373,8 +371,8 @@ export function FieldLibrary() {
             placeholder={`Search ${activeFieldCount} field types...`}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="text-[13px] pl-9 flex h-9 w-full rounded-none border border-input bg-primary/5/20 px-3 py-1 text-sm shadow-none transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            style={{ borderRadius: "6px", height: "38px" }}
+            className="text-[13px] pl-9 flex h-9 w-full rounded-none border border-input bg-muted px-3 py-1 text-sm shadow-none transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            style={{ height: "38px" }}
           />
         </div>
       </div>

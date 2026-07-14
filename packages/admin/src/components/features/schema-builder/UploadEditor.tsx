@@ -163,7 +163,7 @@ export function UploadEditor({
       </div>
 
       {/* File Type Filter */}
-      <div className="space-y-3 pt-2 border-t border-primary/5">
+      <div className="space-y-3 pt-2 border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           File Type Filter
         </Label>
@@ -252,7 +252,7 @@ export function UploadEditor({
       </div>
 
       {/* Admin Options */}
-      <div className="space-y-3 pt-2 border-t border-primary/5">
+      <div className="space-y-3 pt-2 border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>

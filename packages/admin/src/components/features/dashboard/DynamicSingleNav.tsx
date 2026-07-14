@@ -159,8 +159,7 @@ export function DynamicSingleNav({
               <TooltipContent
                 side="right"
                 hidden={!isCollapsed}
-                className="bg-black text-white"
-                style={{ backgroundColor: "black", color: "white" }}
+                className="bg-primary text-primary-foreground"
               >
                 {displayName}
               </TooltipContent>

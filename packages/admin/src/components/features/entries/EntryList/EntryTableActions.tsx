@@ -88,7 +88,7 @@ export function EntryTableActions({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={() => onDelete(entryId)}
-            className="text-black focus:text-black"
+            className="text-foreground focus:text-foreground"
           >
             <Trash2 className="h-4 w-4" />
             Delete

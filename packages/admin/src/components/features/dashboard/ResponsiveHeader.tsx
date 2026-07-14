@@ -39,7 +39,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
   const [activeMenu, setActiveMenu] = React.useState<"user" | null>(null);
 
   return (
-    <header className="sticky top-0 z-50 w-full  border-b border-primary/5 bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-50 w-full  border-b border-border bg-background/80 backdrop-blur-md">
       <div className="flex h-16 items-center justify-between px-4">
         {/* Left: Hamburger Menu (Mobile Only) */}
         <Button
@@ -61,7 +61,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-primary/5 border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:!border-primary focus-visible:ring-1 focus-visible:!ring-primary/20 cursor-pointer relative"
+                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary/20! cursor-pointer relative"
               >
                 <Avatar className="h-full w-full bg-transparent rounded-none transition-all duration-200">
                   <AvatarImage
@@ -76,12 +76,12 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="w-64 p-2 mt-2 rounded-none border-primary/5 shadow-xl shadow-black/5 admin-dropdown-content"
+              className="w-64 p-2 mt-2 rounded-none border-border shadow-xl shadow-black/5 admin-dropdown-content"
               align="end"
               forceMount
             >
               {/* User identity block */}
-              <div className="px-3 py-2.5 mb-1  border-b border-primary/5">
+              <div className="px-3 py-2.5 mb-1  border-b border-border">
                 <p className="text-sm font-semibold text-foreground leading-tight truncate">
                   {user?.name || "Super Admin"}
                 </p>
@@ -117,7 +117,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                 </a>
               </DropdownMenuItem>
 
-              <div className="pt-2 mt-2  border-t border-primary/5">
+              <div className="pt-2 mt-2  border-t border-border">
                 <DropdownMenuItem
                   onClick={() => {
                     void logout();

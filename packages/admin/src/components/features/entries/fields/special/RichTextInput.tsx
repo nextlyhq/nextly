@@ -137,7 +137,7 @@ const editorTheme = {
 
   // Blockquote
   quote:
-    "border-l-4 border-primary/5-foreground/30 pl-4 italic text-muted-foreground mb-2",
+    "border-l-4 border-border-foreground/30 pl-4 italic text-muted-foreground mb-2",
 
   // Links
   link: "text-primary underline hover-unified cursor-pointer",
@@ -149,25 +149,25 @@ const editorTheme = {
     attr: "text-primary",
     boolean: "text-orange-500",
     builtin: "text-cyan-500",
-    cdata: "text-gray-500",
+    cdata: "text-muted-foreground",
     char: "text-green-500",
     class: "text-yellow-500",
     "class-name": "text-yellow-500",
-    comment: "text-gray-500 italic",
+    comment: "text-muted-foreground italic",
     constant: "text-orange-500",
     deleted: "text-red-500",
-    doctype: "text-gray-500",
+    doctype: "text-muted-foreground",
     entity: "text-red-500",
     function: "text-primary",
     important: "text-red-500 font-bold",
     inserted: "text-green-500",
     keyword: "text-purple-500",
-    namespace: "text-gray-500",
+    namespace: "text-muted-foreground",
     number: "text-orange-500",
     operator: "text-pink-500",
-    prolog: "text-gray-500",
+    prolog: "text-muted-foreground",
     property: "text-primary",
-    punctuation: "text-gray-600",
+    punctuation: "text-muted-foreground",
     regex: "text-red-500",
     selector: "text-green-500",
     string: "text-green-500",
@@ -179,10 +179,9 @@ const editorTheme = {
 
   // Tables
   table: "border-collapse w-full my-4",
-  tableCell:
-    "border border-primary/5 px-3 py-2 text-left align-top min-w-[75px]",
+  tableCell: "border border-border px-3 py-2 text-left align-top min-w-[75px]",
   tableCellHeader:
-    "border border-primary/5 px-3 py-2 text-left font-bold bg-primary/5 align-top",
+    "border border-border px-3 py-2 text-left font-bold bg-primary/5 align-top",
   tableRow: "",
   tableRowStriping: "even:bg-primary/5",
 };
@@ -262,7 +261,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none  border border-primary/5 bg-background",
+        "relative rounded-none  border border-border bg-background",
         !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}

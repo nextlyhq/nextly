@@ -1,6 +1,12 @@
 "use client";
 
-import { Button, Sheet, SheetContent } from "@nextlyhq/ui";
+import {
+  Button,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+} from "@nextlyhq/ui";
 import type React from "react";
 import { useState, useEffect } from "react";
 
@@ -45,7 +51,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
           {/* Mobile Header */}
-          <div className="md:hidden flex h-14 shrink-0 items-center justify-between  border-b border-primary/5 px-4 bg-background z-30">
+          <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
               <Button
                 variant="ghost"
@@ -73,7 +79,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
 
           <div className="flex flex-1 min-h-0 overflow-hidden">
-            <div className="hidden md:flex h-full overflow-hidden shrink-0">
+            <div className="hidden lg:flex h-full overflow-hidden shrink-0">
               <DualSidebar />
             </div>
 
@@ -82,6 +88,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 side="left"
                 className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
               >
+                {/* Screen-reader label for the drawer dialog. */}
+                <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+                <SheetDescription className="sr-only">
+                  Primary admin navigation
+                </SheetDescription>
                 <DualSidebar isMobile />
               </SheetContent>
             </Sheet>
@@ -93,7 +104,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">
-                      <div className="max-w-md rounded-none bg-card p-6 shadow-xl  border border-primary/5">
+                      <div className="max-w-md rounded-none bg-card p-6 shadow-xl  border border-border">
                         <h2 className="text-xl font-bold text-foreground mb-2">
                           Something went wrong
                         </h2>

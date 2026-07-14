@@ -124,6 +124,7 @@ export {
   MessageCircle, // Collection Settings: icon picker
   MessageSquare, // Collection Settings: icon picker
   Minus,
+  Monitor, // Email Template editor: desktop preview
   MousePointerClick, // Rich text editor: button link
   Moon,
   MoreHorizontal,
@@ -161,6 +162,7 @@ export {
   ShoppingBag, // Collection Settings: icon picker
   ShoppingCart, // Collection Settings: icon picker
   SlidersHorizontal, // EntryTableToolbar: filters
+  Smartphone, // Email Template editor: mobile preview
   Sparkles,
   Square,
   Star, // Collection Settings: icon picker

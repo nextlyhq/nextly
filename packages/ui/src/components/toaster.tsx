@@ -106,7 +106,7 @@ export function Toaster({ theme = "system", ...props }: ToasterProps) {
   return (
     <Sonner
       theme={theme}
-      className="toaster group !bg-transparent !overflow-visible !z-[9999]"
+      className="toaster group bg-transparent! overflow-visible! z-[9999]!"
       data-slot="toaster"
       toastOptions={{
         classNames: {
