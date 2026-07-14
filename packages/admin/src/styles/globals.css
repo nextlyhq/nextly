@@ -623,19 +623,12 @@ button[data-slot="radio-group-item"][data-state="checked"],
 .adminapp select:-webkit-autofill:hover,
 .adminapp select:-webkit-autofill:focus {
   -webkit-text-fill-color: var(--foreground) !important;
-  /* Use a box-shadow inset to effectively "replace" the background color */
-  box-shadow: 0 0 0px 1000px white inset !important;
+  /* Use a box-shadow inset to effectively "replace" the background color.
+   * The token inverts for dark mode, so no separate dark rule is needed. */
+  box-shadow: 0 0 0px 1000px var(--background) inset !important;
   /* Very long transition delay to prevent the background-color from changing */
   transition: background-color 5000s ease-in-out 0s;
   background-clip: content-box !important;
-}
-
-/* Specific background handling for Dark Mode */
-.adminapp.dark input:-webkit-autofill,
-.adminapp.dark textarea:-webkit-autofill,
-.adminapp.dark select:-webkit-autofill {
-  -webkit-text-fill-color: #f8fafc !important; /* slate-50 */
-  box-shadow: 0 0 0px 1000px #0f172a inset !important; /* Deep dark background */
 }
 
 .form-field-wrapper {
@@ -972,10 +965,10 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
-/* Exclude badges from aggressive color inheritance */
+/* Keep badges readable instead of inheriting the row's hover text color. */
 .hover-subtle-row:hover [data-testid*="badge"],
 .hover-subtle-row:hover .badge {
-  color: white !important;
+  color: var(--foreground) !important;
 }
 
 .hover-subtle-row:hover svg {
@@ -998,11 +991,9 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
-/* Dedicated hover for dashboard cards: full black surface + white content */
-
 /*
  * TABLE ROW HOVER (DEDICATED)
- * Use for all data-table rows where hover should be subtle.
+ * Subtle primary tint; the token inverts for dark, so no OS media query.
  */
 .hover-unified-table-row {
   @apply hover:bg-primary/5 hover:text-primary transition-colors;
@@ -1016,71 +1007,49 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .hover-unified-table-row {
-    @apply hover:bg-white/5 hover:text-white transition-colors;
-  }
-}
-
-/* Table icon covers: flat shape with unified neutral background */
+/* Table icon covers: flat shape with unified neutral background. */
 .table-row-icon-cover {
-  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary/5 text-black;
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary/5 text-foreground dark:bg-white/20;
 }
 
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .table-row-icon-cover {
-    @apply bg-white/20 text-white;
-  }
-}
-
-/* Normalize table pills/badges to one monochrome look across all tables */
+/* Normalize table pills/badges to one monochrome look across all tables. */
 .adminapp table [data-slot^="badge."] {
-  background-color: rgb(0 0 0 / 0.06) !important;
-  color: #000000 !important;
-  border-color: rgb(0 0 0 / 0.08) !important;
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 6%,
+    transparent
+  ) !important;
+  color: var(--foreground) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--foreground) 8%,
+    transparent
+  ) !important;
   box-shadow: none !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark table [data-slot^="badge."] {
-    background-color: rgb(255 255 255 / 0.12) !important;
-    color: #ffffff !important;
-    border-color: rgb(255 255 255 / 0.2) !important;
-    box-shadow: none !important;
-  }
+.adminapp.dark table [data-slot^="badge."] {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 12%,
+    transparent
+  ) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  ) !important;
 }
 
+/* Interactive hover: fills with the primary token (inverts for dark). */
 .hover-muted,
 .hover-primary,
-.hover-foreground,
-.hover-primary-light,
-.hover-accent,
-.hover-bg-muted,
-.hover-underline-primary,
-.hover-transparent-bg {
-  @apply hover:bg-black hover:text-white transition-colors;
+.hover-primary-light {
+  @apply hover:bg-primary hover:text-primary-foreground transition-colors;
 }
 
 .hover-muted:hover svg,
 .hover-primary:hover svg,
-.hover-foreground:hover svg,
-.hover-primary-light:hover svg,
-.hover-accent:hover svg,
-.hover-bg-muted:hover svg,
-.hover-underline-primary:hover svg,
-.hover-transparent-bg:hover svg {
-  color: #ffffff !important;
-}
-
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .hover-muted,
-  .adminapp.dark .hover-primary,
-  .adminapp.dark .hover-foreground,
-  .adminapp.dark .hover-primary-light,
-  .adminapp.dark .hover-accent,
-  .adminapp.dark .hover-bg-muted,
-  .adminapp.dark .hover-underline-primary,
-  .adminapp.dark .hover-transparent-bg {
-    @apply hover:bg-black hover:text-white transition-colors;
-  }
+.hover-primary-light:hover svg {
+  color: var(--primary-foreground) !important;
 }
