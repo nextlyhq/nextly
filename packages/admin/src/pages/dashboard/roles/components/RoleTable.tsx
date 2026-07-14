@@ -81,6 +81,13 @@ export default function RoleTable() {
   useEffect(() => {
     setPage(0);
   }, [debouncedSearch]);
+
+  // Selection is page-scoped: clear it whenever the page or search changes so a
+  // bulk action never targets rows that are no longer shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, clearSelection]);
+
   const { mutate: bulkDeleteRoles, isPending: isBulkDeleting } =
     useBulkDeleteRoles();
 

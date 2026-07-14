@@ -159,6 +159,12 @@ export default function UserTable() {
     setPage(0);
   }, [debouncedSearch]);
 
+  // Selection is page-scoped: clear it whenever the page or search changes so a
+  // bulk action never targets rows that are no longer shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, clearSelection]);
+
   const params: TableParams = {
     pagination: { page, pageSize },
     sorting: [],

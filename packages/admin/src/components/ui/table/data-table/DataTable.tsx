@@ -15,7 +15,7 @@
 import { TablePagination, TableSearch, Button } from "@nextlyhq/ui";
 import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useServerTable } from "@admin/hooks/useServerTable";
 
@@ -153,6 +153,23 @@ export function DataTable<Row extends object>({
     [rows, selected, getRowId]
   );
   const clearSelection = () => setSelected({});
+
+  // Keep selection scoped to the rows currently loaded. When the page, search, or
+  // filters change the loaded rows, prune any selected ids that are no longer
+  // present so bulk actions and their confirmation always reflect exactly what is
+  // shown (never delete off-page rows the user can't see).
+  useEffect(() => {
+    setSelected(prev => {
+      const pageIds = new Set(rows.map(getRowId));
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const id of Object.keys(prev)) {
+        if (prev[id] && pageIds.has(id)) next[id] = true;
+        else if (prev[id]) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rows, getRowId]);
 
   const selection = useMemo<DataTableSelection<Row> | undefined>(() => {
     if (!enableSelection) return undefined;
