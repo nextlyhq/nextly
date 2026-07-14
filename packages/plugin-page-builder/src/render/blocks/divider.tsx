@@ -35,7 +35,14 @@ export const divider = defineBlock({
       options: ["left", "center", "right"].map(a => ({ value: a, label: a })),
     },
   ],
-  supports: { spacing: true, visibility: true, customCss: true },
+  supports: {
+    spacing: true,
+    dimensions: {},
+    background: { gradient: true },
+    visibility: true,
+    customCss: true,
+    customAttributes: true,
+  },
   render: ({ props, className }) => {
     const lineStyle = STYLES.includes(str(props.lineStyle))
       ? str(props.lineStyle)
