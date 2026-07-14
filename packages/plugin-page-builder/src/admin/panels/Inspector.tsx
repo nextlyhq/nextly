@@ -52,6 +52,7 @@ import {
 } from "../controls/registerDefaultControls";
 import { supportsToControls } from "../controls/supportsToControls";
 import { ArrowDown, ArrowUp, blockIcon, Copy, Trash2 } from "../icons";
+import { clipboard } from "../logic/clipboard";
 import { locateNode } from "../logic/locate";
 import { findEnclosingLoop } from "../logic/queryLoop";
 import { useEditor } from "../store/EditorProvider";
@@ -453,6 +454,63 @@ function AdvancedTab({ node }: { node: BlockNode }) {
               onClick={() => dispatch({ type: "DUPLICATE", id: node.id })}
             >
               <Copy size={15} aria-hidden /> Duplicate
+            </button>
+          </div>
+          <div
+            style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}
+          >
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Copy block"
+              onClick={() => clipboard.copyNode(node)}
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Paste block after"
+              onClick={() => {
+                const clip = clipboard.getNode();
+                if (clip && loc) {
+                  dispatch({
+                    type: "PASTE_NODE",
+                    parentId: loc.parentId,
+                    slot: loc.slot,
+                    index: loc.index + 1,
+                    node: clip,
+                  });
+                }
+              }}
+            >
+              Paste
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Copy style"
+              onClick={() => clipboard.copyStyle(node)}
+            >
+              Copy style
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Paste style"
+              onClick={() => {
+                const s = clipboard.getStyle();
+                if (s) {
+                  dispatch({
+                    type: "PASTE_STYLE",
+                    id: node.id,
+                    style: s.style,
+                    styleHover: s.styleHover,
+                  });
+                }
+              }}
+            >
+              Paste style
             </button>
           </div>
         </div>

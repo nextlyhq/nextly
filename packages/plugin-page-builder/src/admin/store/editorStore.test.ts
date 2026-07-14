@@ -49,6 +49,34 @@ describe("editorReducer — advanced node fields", () => {
       mobile: false,
     });
   });
+
+  it("PASTE_NODE inserts a re-id'd clone; PASTE_STYLE copies style over", () => {
+    const { doc, childId } = docWithChild();
+    const start = initialState(doc);
+    const rootId = start.document.root.id;
+    const clip = makeNode("core/badge", { text: "Copied" });
+    let s = editorReducer(start, {
+      type: "PASTE_NODE",
+      parentId: rootId,
+      slot: "default",
+      index: 1,
+      node: clip,
+    });
+    const kids = s.document.root.slots!.default!;
+    expect(kids.length).toBe(2);
+    expect(kids[1].type).toBe("core/badge");
+    expect(kids[1].id).not.toBe(clip.id); // fresh id
+    expect(s.selectedId).toBe(kids[1].id);
+
+    s = editorReducer(s, {
+      type: "PASTE_STYLE",
+      id: childId,
+      style: { base: { color: "#f00" } },
+    });
+    expect(findNode(s.document.root, childId)!.style).toEqual({
+      base: { color: "#f00" },
+    });
+  });
 });
 
 describe("editorReducer", () => {

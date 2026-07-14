@@ -11,6 +11,7 @@ import {
   insertNode,
   makeNode,
   moveNode,
+  reidSubtree,
   removeNode,
   updateNode,
 } from "../../core/tree";
@@ -85,6 +86,19 @@ export type EditorAction =
   | { type: "SET_NAME"; id: string; name: string }
   | { type: "SET_LOCKED"; id: string; locked: boolean }
   | { type: "SET_MOTION"; id: string; motion: MotionConfig }
+  | {
+      type: "PASTE_NODE";
+      parentId: string;
+      slot: string;
+      index: number;
+      node: BlockNode;
+    }
+  | {
+      type: "PASTE_STYLE";
+      id: string;
+      style?: BlockNode["style"];
+      styleHover?: BlockNode["styleHover"];
+    }
   | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
@@ -235,6 +249,27 @@ export function editorReducer(
         state,
         updateNode(root, action.id, { motion: action.motion })
       );
+
+    case "PASTE_NODE": {
+      const fresh = reidSubtree(action.node);
+      return commit(
+        state,
+        insertNode(root, action.parentId, action.slot, fresh, action.index),
+        fresh.id
+      );
+    }
+
+    case "PASTE_STYLE": {
+      const node = findNode(root, action.id);
+      if (!node) return state;
+      return commit(
+        state,
+        updateNode(root, action.id, {
+          style: action.style ?? node.style,
+          styleHover: action.styleHover ?? node.styleHover,
+        })
+      );
+    }
 
     case "SET_PAGE_CUSTOM_CSS":
       return { ...state, customCss: action.customCss, dirty: true };
