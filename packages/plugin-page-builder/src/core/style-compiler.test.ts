@@ -122,3 +122,40 @@ describe("style compiler", () => {
     expect(css).toContain("#000");
   });
 });
+
+describe("compileNodeCss — extended scalars", () => {
+  it("emits extended typography + dimensions", () => {
+    const n = makeNode(
+      "core/heading",
+      {},
+      {
+        base: {
+          fontWeight: "700",
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          minHeight: "200px",
+          objectFit: "cover",
+          overflow: "hidden",
+          opacity: "0.5",
+        },
+      }
+    );
+    const css = compileNodeCss(n);
+    expect(css).toContain("font-weight: 700");
+    expect(css).toContain("letter-spacing: 0.05em");
+    expect(css).toContain("text-transform: uppercase");
+    expect(css).toContain("min-height: 200px");
+    expect(css).toContain("object-fit: cover");
+    expect(css).toContain("overflow: hidden");
+    expect(css).toContain("opacity: 0.5");
+  });
+
+  it("drops values that fail css-tree validation", () => {
+    const n = makeNode(
+      "core/heading",
+      {},
+      { base: { fontWeight: "700; color:red" } }
+    );
+    expect(compileNodeCss(n)).not.toContain("color:red");
+  });
+});
