@@ -19,6 +19,21 @@
   --color-tag-bg: #f1f5f9;
   --color-tag-fg: #475569;
   --radius-base: 4px;
+
+  /* Syntax colors. Nextly labels each token with what it is and leaves the
+   * colour to the site, so these are yours to change and they follow the
+   * theme like everything else. */
+  --color-code-bg: #f8fafc;
+  --color-code-fg: #1e293b;
+  --color-code-comment: #64748b;
+  --color-code-keyword: #7c3aed;
+  --color-code-string: #15803d;
+  --color-code-number: #c2410c;
+  --color-code-function: #2563eb;
+  --color-code-operator: #be123c;
+  --color-code-punctuation: #64748b;
+  --color-code-variable: #a16207;
+  --color-code-tag: #dc2626;
 }
 
 [data-theme="dark"] {
@@ -31,6 +46,20 @@
   --color-accent-fg: #0f172a;
   --color-tag-bg: #1e293b;
   --color-tag-fg: #cbd5e1;
+
+  /* Lightened for the dark surface rather than reused: the light hues are too
+   * dark to read against it. */
+  --color-code-bg: #0b1220;
+  --color-code-fg: #e2e8f0;
+  --color-code-comment: #94a3b8;
+  --color-code-keyword: #c4b5fd;
+  --color-code-string: #86efac;
+  --color-code-number: #fdba74;
+  --color-code-function: #93c5fd;
+  --color-code-operator: #fda4af;
+  --color-code-punctuation: #94a3b8;
+  --color-code-variable: #fcd34d;
+  --color-code-tag: #fca5a5;
 }
 
 @theme inline {
@@ -166,7 +195,9 @@ h3 {
   line-height: 1.3;
 }
 
-.prose-blog code {
+/* Inline code. `:not(pre *)` because a code block is a <code> inside a <pre>,
+   and it must not pick up the chip's border and padding. */
+.prose-blog code:not(pre *) {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -177,12 +208,80 @@ h3 {
 }
 
 .prose-blog pre {
-  background: var(--color-bg-surface);
+  background: var(--color-code-bg);
+  color: var(--color-code-fg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: 1.5rem;
   overflow-x: auto;
   margin: 2.5em 0;
+}
+
+.prose-blog pre code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  line-height: 1.6;
+}
+
+/* Syntax tokens. Nextly ships the token type as a class and no colour, so the
+   palette is the site's and both themes work from one rendered page — with no
+   highlighter shipped to the browser. */
+.prose-blog .nextly-code-token--comment,
+.prose-blog .nextly-code-token--prolog,
+.prose-blog .nextly-code-token--doctype,
+.prose-blog .nextly-code-token--cdata,
+.prose-blog .nextly-code-token--namespace {
+  color: var(--color-code-comment);
+  font-style: italic;
+}
+
+.prose-blog .nextly-code-token--keyword,
+.prose-blog .nextly-code-token--atrule,
+.prose-blog .nextly-code-token--important {
+  color: var(--color-code-keyword);
+}
+
+.prose-blog .nextly-code-token--string,
+.prose-blog .nextly-code-token--char,
+.prose-blog .nextly-code-token--regex,
+.prose-blog .nextly-code-token--inserted {
+  color: var(--color-code-string);
+}
+
+.prose-blog .nextly-code-token--number,
+.prose-blog .nextly-code-token--boolean,
+.prose-blog .nextly-code-token--constant,
+.prose-blog .nextly-code-token--symbol {
+  color: var(--color-code-number);
+}
+
+.prose-blog .nextly-code-token--function,
+.prose-blog .nextly-code-token--attr,
+.prose-blog .nextly-code-token--property,
+.prose-blog .nextly-code-token--builtin,
+.prose-blog .nextly-code-token--url {
+  color: var(--color-code-function);
+}
+
+.prose-blog .nextly-code-token--operator {
+  color: var(--color-code-operator);
+}
+
+.prose-blog .nextly-code-token--punctuation {
+  color: var(--color-code-punctuation);
+}
+
+.prose-blog .nextly-code-token--variable,
+.prose-blog .nextly-code-token--class,
+.prose-blog .nextly-code-token--class-name {
+  color: var(--color-code-variable);
+}
+
+.prose-blog .nextly-code-token--tag,
+.prose-blog .nextly-code-token--selector,
+.prose-blog .nextly-code-token--entity,
+.prose-blog .nextly-code-token--deleted {
+  color: var(--color-code-tag);
 }
 
 .prose-blog blockquote {
