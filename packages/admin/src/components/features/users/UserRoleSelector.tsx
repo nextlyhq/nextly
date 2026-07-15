@@ -198,10 +198,8 @@ export function UserRoleSelector({
                 disabled={disabled || roles.length === 0}
                 className={cn(
                   "w-full justify-between h-auto py-3 px-4 font-normal transition-colors cursor-pointer",
-                  // Use theme tokens so the trigger keeps adequate contrast in
-                  // both light and dark modes. The previous `bg-slate-700`/
-                  // `text-white` had no dark-mode variant and visibly washed
-                  // out against the dark background.
+                  // Tokens rather than fixed colours, so the trigger keeps its
+                  // contrast in both modes rather than washing out in one.
                   selectedRoles.length > 0
                     ? "bg-accent text-accent-foreground hover-unified"
                     : "text-muted-foreground hover-unified"
