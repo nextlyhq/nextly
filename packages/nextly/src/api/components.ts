@@ -25,6 +25,7 @@ import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { respondList, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
@@ -107,8 +108,7 @@ export const GET = withErrorHandler(async (request: Request) => {
   // page-derivation safe when the caller asks for `limit=0`.
   const safeLimit = Math.max(1, limit);
   const page = Math.floor(offset / safeLimit) + 1;
-  const totalPages =
-    result.total > 0 ? Math.ceil(result.total / safeLimit) : 0;
+  const totalPages = result.total > 0 ? Math.ceil(result.total / safeLimit) : 0;
   return respondList(result.data, {
     total: result.total,
     page,
@@ -142,6 +142,9 @@ export const GET = withErrorHandler(async (request: Request) => {
  * @returns Response with JSON created component
  */
 export const POST = withErrorHandler(async (request: Request) => {
+  // Schema DDL: refuse when the builder is disabled for this environment.
+  requireBuilderEnabled("create-component");
+
   const authHeader = request.headers.get("Authorization");
   if (!authHeader) {
     throw NextlyError.authRequired();

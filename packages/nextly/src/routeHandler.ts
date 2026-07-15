@@ -88,6 +88,11 @@ import {
   hasSuperAdminExcluding,
 } from "./services/lib/permissions";
 import {
+  isBuilderEnabled,
+  isBuilderRoute,
+  requireBuilderEnabled,
+} from "./shared/builder-access";
+import {
   hexToHslTriplet,
   getForegroundForBackground,
   isValidHex,
@@ -633,6 +638,15 @@ async function handleServiceRequest(
     );
   }
 
+  // The builder writes DDL straight to the live database, so it is off in
+  // production by default. Refuse its routes here, at the one point every
+  // dispatched request passes through — hiding the navigation would still
+  // leave these reachable by URL. Entry CRUD is untouched, and boot-time
+  // code-first sync goes through the registry services, not this dispatcher.
+  if (isBuilderRoute(service, method)) {
+    requireBuilderEnabled(`${service}.${method}`);
+  }
+
   // ==================== API KEYS DIRECT DISPATCH ====================
   // API key handlers own their auth + body parsing. Intercepting here (before
   // req.text() is called below) ensures the body stream is still available.
@@ -940,16 +954,9 @@ async function handleAdminMetaRequest(): Promise<Response> {
   if (branding?.logoText) payload.logoText = branding.logoText;
   if (branding?.favicon?.trim()) payload.favicon = branding.favicon.trim();
 
-  // Builder visibility defaults to NODE_ENV:
-  // - production => hidden
-  // - non-production => visible
-  // Host apps can still explicitly override using admin.branding.showBuilder.
-  const resolvedShowBuilder =
-    typeof branding?.showBuilder === "boolean"
-      ? branding.showBuilder
-      : process.env.NODE_ENV !== "production";
-
-  payload.showBuilder = resolvedShowBuilder;
+  // Same resolver the schema-mutation endpoints enforce with, so what the
+  // admin renders and what the API accepts can never disagree.
+  payload.showBuilder = isBuilderEnabled();
 
   const colors = branding?.colors;
   if (colors) {
