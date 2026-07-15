@@ -33,6 +33,8 @@ export interface ApiResponse<T> {
 export interface ApiRole {
   id: string;
   name: string;
+  /** The API returns this on every role; it identifies the seeded ones. */
+  slug?: string;
   level: number;
   isSystem: boolean;
   description?: string;

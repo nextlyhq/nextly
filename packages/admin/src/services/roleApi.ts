@@ -43,6 +43,7 @@ const transformRole = (
   id: apiRole.id,
   roleName: apiRole.name,
   name: apiRole.name,
+  slug: apiRole.slug,
   subtitle: apiRole.isSystem ? "System role" : "Custom role",
   description: apiRole.description || `Role with level ${apiRole.level}`,
   type: apiRole.isSystem ? "System" : "Custom",

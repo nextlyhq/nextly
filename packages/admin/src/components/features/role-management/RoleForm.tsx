@@ -40,7 +40,6 @@ export function RoleForm({ roleId }: RoleFormProps) {
     setSelectedBaseRoleIds,
     lockedPermissionIds,
     setLockedPermissionIds,
-    rolePermissionsMap,
     setRolePermissionsMap,
     onSubmit,
     handleNameChange,
@@ -146,7 +145,6 @@ export function RoleForm({ roleId }: RoleFormProps) {
                   allRoles={allRoles}
                   selectedBaseRoleIds={selectedBaseRoleIds}
                   setSelectedBaseRoleIds={setSelectedBaseRoleIds}
-                  rolePermissionsMap={rolePermissionsMap}
                   setRolePermissionsMap={setRolePermissionsMap}
                   lockedPermissionIds={lockedPermissionIds}
                   setLockedPermissionIds={setLockedPermissionIds}

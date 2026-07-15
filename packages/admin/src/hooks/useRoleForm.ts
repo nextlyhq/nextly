@@ -30,6 +30,9 @@ interface LoadingState {
 
 // System resources that belong in the "Settings" tab of the permission matrix.
 // Keep this list in sync with SYSTEM_RESOURCES in packages/nextly/src/schemas/rbac.ts
+/** The one role nothing may be built on; see the base-role filter below. */
+const SUPER_ADMIN_SLUG = "super-admin";
+
 const SYSTEM_RESOURCE_SLUGS = new Set([
   "users",
   "roles",
@@ -454,14 +457,20 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const rolesWithPermissions = (res?.items || []).map(r => ({
           id: r.id,
           name: r.roleName,
+          slug: r.slug,
           permissions: normalizePermissions(r.permissions),
           description: r.description,
           isSystem: r.type === "System",
         }));
 
         const filteredRoles = rolesWithPermissions.filter(r => {
+          // A role cannot be built on itself.
           if (r.id === roleId) return false;
-          if (r.isSystem) return false;
+          // Building on Super Admin would grant everything, including the
+          // permission to grant. The presets are system roles too, and are
+          // the thing most worth building on — so the line is drawn at the
+          // one role that hands out everything, not at the class.
+          if (r.slug === SUPER_ADMIN_SLUG) return false;
           return true;
         });
 
