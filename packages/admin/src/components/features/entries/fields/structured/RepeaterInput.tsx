@@ -405,7 +405,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
             {field.minRows !== undefined &&
               items.length < field.minRows &&
               items.length > 0 && (
-                <p className="text-sm text-amber-600 dark:text-amber-500">
+                <p className="text-sm text-warning-600 dark:text-warning-500">
                   Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
                   Currently have {items.length}.
                 </p>

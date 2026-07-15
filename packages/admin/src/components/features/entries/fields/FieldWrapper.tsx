@@ -172,7 +172,7 @@ export function FieldWrapper({
           >
             {label}
             {isRequired && (
-              <span className="text-red-500 ml-1" aria-hidden="true">
+              <span className="text-destructive-500 ml-1" aria-hidden="true">
                 *
               </span>
             )}
@@ -185,7 +185,7 @@ export function FieldWrapper({
           {error && (
             <p
               id={errorId}
-              className="text-sm text-red-500! font-medium"
+              className="text-sm text-destructive-500! font-medium"
               role="alert"
             >
               {error}
@@ -219,7 +219,7 @@ export function FieldWrapper({
       >
         {label}
         {isRequired && (
-          <span className="text-red-500 ml-1" aria-hidden="true">
+          <span className="text-destructive-500 ml-1" aria-hidden="true">
             *
           </span>
         )}
@@ -240,7 +240,7 @@ export function FieldWrapper({
       {error && (
         <p
           id={errorId}
-          className="text-sm text-red-500! font-medium"
+          className="text-sm text-destructive-500! font-medium"
           role="alert"
         >
           {error}

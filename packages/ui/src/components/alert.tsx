@@ -78,11 +78,11 @@ const alertVariants = cva(
       variant: {
         info: "border-border bg-primary/5 text-primary dark:border-primary/30 dark:bg-primary/5 dark:text-primary-foreground/90",
         success:
-          "border-green-200 bg-green-50 text-green-900 border-l-4 border-l-success dark:border-green-900 dark:bg-green-950 dark:text-green-100",
+          "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:bg-success-950 dark:text-success-100",
         warning:
-          "border-amber-200 bg-amber-50 text-amber-900 border-l-4 border-l-warning dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100",
+          "border-warning-200 bg-warning-50 text-warning-900 border-l-4 border-l-warning dark:border-warning-900 dark:bg-warning-950 dark:text-warning-100",
         destructive:
-          "border-red-200 bg-red-50 text-red-900 border-l-4 border-l-destructive dark:border-red-900 dark:bg-red-950 dark:text-red-100",
+          "border-destructive-200 bg-destructive-50 text-destructive-900 border-l-4 border-l-destructive dark:border-destructive-900 dark:bg-destructive-950 dark:text-destructive-100",
       },
     },
     defaultVariants: {

@@ -52,10 +52,10 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
 
   const colors: Record<ComponentMigrationStatus, string> = {
     synced: "",
-    pending: "bg-yellow-500",
+    pending: "bg-warning-500",
     generated: "bg-primary",
-    applied: "bg-green-500",
-    failed: "bg-red-500",
+    applied: "bg-success-500",
+    failed: "bg-destructive-500",
   };
 
   const titles: Record<ComponentMigrationStatus, string> = {

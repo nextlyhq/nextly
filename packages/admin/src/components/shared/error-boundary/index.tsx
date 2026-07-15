@@ -84,20 +84,20 @@ export class ErrorBoundary extends Component<
 
       return (
         <div className="flex items-center justify-center p-4">
-          <div className="rounded-none  border border-border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
-            <h2 className="mb-2 text-lg font-semibold text-red-900 dark:text-red-100">
+          <div className="rounded-none  border border-border border-destructive-200 bg-destructive-50 p-4 dark:border-destructive-800 dark:bg-destructive-950">
+            <h2 className="mb-2 text-lg font-semibold text-destructive-900 dark:text-destructive-100">
               Something went wrong
             </h2>
-            <p className="text-sm text-red-700 dark:text-red-300">
+            <p className="text-sm text-destructive-700 dark:text-destructive-300">
               An error occurred while rendering this component. Please try
               refreshing the page.
             </p>
             {process.env.NODE_ENV === "development" && this.state.error && (
               <details className="mt-4">
-                <summary className="cursor-pointer text-sm font-medium text-red-800 dark:text-red-200">
+                <summary className="cursor-pointer text-sm font-medium text-destructive-800 dark:text-destructive-200">
                   Error details
                 </summary>
-                <pre className="mt-2 overflow-auto rounded-none bg-red-100 p-2 text-xs text-red-900 dark:bg-red-900 dark:text-red-100">
+                <pre className="mt-2 overflow-auto rounded-none bg-destructive-100 p-2 text-xs text-destructive-900 dark:bg-destructive-900 dark:text-destructive-100">
                   {this.state.error.toString()}
                 </pre>
               </details>

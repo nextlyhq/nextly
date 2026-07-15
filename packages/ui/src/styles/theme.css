@@ -157,14 +157,77 @@
   --color-secondary: var(--nx-secondary);
   --color-secondary-foreground: var(--nx-secondary-foreground);
 
+  /* Status scales, derived the same way as the primary scale above.
+   *
+   * A status role is one token; the scale is mixed from it, so retheming
+   * `--nx-success` moves every shade with it and they cannot drift apart. The
+   * shades exist because a status needs more than its solid colour: a tinted
+   * surface, a border on that surface, and text dark enough to read on it.
+   * Mixing toward white and black keeps 50 pale and 900 deep in both modes,
+   * which is what a `dark:` pair at the call site already assumes. */
   --color-destructive: var(--nx-destructive);
+  --color-destructive-50: color-mix(in srgb, var(--nx-destructive), white 95%);
+  --color-destructive-100: color-mix(in srgb, var(--nx-destructive), white 90%);
+  --color-destructive-200: color-mix(in srgb, var(--nx-destructive), white 70%);
+  --color-destructive-300: color-mix(in srgb, var(--nx-destructive), white 50%);
+  --color-destructive-400: color-mix(in srgb, var(--nx-destructive), white 30%);
+  --color-destructive-500: var(--nx-destructive);
+  --color-destructive-600: color-mix(in srgb, var(--nx-destructive), black 10%);
+  --color-destructive-700: color-mix(in srgb, var(--nx-destructive), black 30%);
+  --color-destructive-800: color-mix(in srgb, var(--nx-destructive), black 50%);
+  --color-destructive-900: color-mix(in srgb, var(--nx-destructive), black 70%);
+  --color-destructive-950: color-mix(in srgb, var(--nx-destructive), black 85%);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
   --color-success: var(--nx-success);
+  --color-success-50: color-mix(in srgb, var(--nx-success), white 95%);
+  --color-success-100: color-mix(in srgb, var(--nx-success), white 90%);
+  --color-success-200: color-mix(in srgb, var(--nx-success), white 70%);
+  --color-success-300: color-mix(in srgb, var(--nx-success), white 50%);
+  --color-success-400: color-mix(in srgb, var(--nx-success), white 30%);
+  --color-success-500: var(--nx-success);
+  --color-success-600: color-mix(in srgb, var(--nx-success), black 10%);
+  --color-success-700: color-mix(in srgb, var(--nx-success), black 30%);
+  --color-success-800: color-mix(in srgb, var(--nx-success), black 50%);
+  --color-success-900: color-mix(in srgb, var(--nx-success), black 70%);
+  --color-success-950: color-mix(in srgb, var(--nx-success), black 85%);
   --color-success-foreground: var(--nx-success-foreground);
 
   --color-warning: var(--nx-warning);
+  --color-warning-50: color-mix(in srgb, var(--nx-warning), white 95%);
+  --color-warning-100: color-mix(in srgb, var(--nx-warning), white 90%);
+  --color-warning-200: color-mix(in srgb, var(--nx-warning), white 70%);
+  --color-warning-300: color-mix(in srgb, var(--nx-warning), white 50%);
+  --color-warning-400: color-mix(in srgb, var(--nx-warning), white 30%);
+  --color-warning-500: var(--nx-warning);
+  --color-warning-600: color-mix(in srgb, var(--nx-warning), black 10%);
+  --color-warning-700: color-mix(in srgb, var(--nx-warning), black 30%);
+  --color-warning-800: color-mix(in srgb, var(--nx-warning), black 50%);
+  --color-warning-900: color-mix(in srgb, var(--nx-warning), black 70%);
+  --color-warning-950: color-mix(in srgb, var(--nx-warning), black 85%);
   --color-warning-foreground: var(--nx-warning-foreground);
+
+  /* The editor's highlight mark. A token rather than a literal because it
+   * styles authored content, which an integrator restyles to their own site
+   * and which has to stay readable on a dark page. */
+  --color-highlight: var(--nx-highlight);
+  --color-highlight-foreground: var(--nx-highlight-foreground);
+
+  /* Syntax colors, so code tokens are styled the same way as everything else
+   * (text-code-keyword, bg-code-bg) instead of through bespoke CSS. */
+  --color-code-bg: var(--nx-code-bg);
+  --color-code-fg: var(--nx-code-fg);
+  --color-code-comment: var(--nx-code-comment);
+  --color-code-keyword: var(--nx-code-keyword);
+  --color-code-string: var(--nx-code-string);
+  --color-code-number: var(--nx-code-number);
+  --color-code-function: var(--nx-code-function);
+  --color-code-operator: var(--nx-code-operator);
+  --color-code-punctuation: var(--nx-code-punctuation);
+  --color-code-variable: var(--nx-code-variable);
+  --color-code-tag: var(--nx-code-tag);
+  --color-code-deleted: var(--nx-code-deleted);
+  --color-code-inserted: var(--nx-code-inserted);
 
   --color-muted: var(--nx-muted);
   --color-muted-foreground: var(--nx-muted-foreground);
@@ -578,6 +641,33 @@
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
+  /* The highlighter mark in authored content. Kept a light yellow in both
+   * modes on purpose: it stands for a marker pen drawn over the text, and the
+   * pairing below is what keeps that readable rather than the page's own
+   * foreground, which would be white-on-yellow in dark mode. */
+  --nx-highlight: oklch(0.9297 0.1638 101.06);
+  /* yellow-200 */
+  --nx-highlight-foreground: oklch(0.2079 0.0399 265.73);
+  /* slate-900 — the mark keeps its own dark text, whatever the page does */
+
+  /* Syntax colors. The tokenizer reports what a token *is*; these decide how
+   * it looks, so a code block carries no colour of its own and renders from
+   * whichever mode is active. Kept muted against the monochrome chrome, and
+   * held above 4.5:1 on --nx-code-bg since code is small text. */
+  --nx-code-bg: oklch(0.9761 0.0035 247.86);
+  --nx-code-fg: oklch(0.2079 0.0399 265.73);
+  --nx-code-comment: oklch(0.5547 0.0407 257.44);
+  --nx-code-keyword: oklch(0.4882 0.2172 303.9);
+  --nx-code-string: oklch(0.4478 0.1189 152.1);
+  --nx-code-number: oklch(0.5106 0.1518 44.2);
+  --nx-code-function: oklch(0.4757 0.1444 254.6);
+  --nx-code-operator: oklch(0.4936 0.1418 8.4);
+  --nx-code-punctuation: oklch(0.5547 0.0407 257.44);
+  --nx-code-variable: oklch(0.4694 0.1173 62.3);
+  --nx-code-tag: oklch(0.5054 0.1905 27.5);
+  --nx-code-deleted: oklch(0.5054 0.1905 27.5);
+  --nx-code-inserted: oklch(0.4478 0.1189 152.1);
+
   /* Element colors — 3-tier translucent border scale (monochrome).
    * Was a single --nx-border at 5% black (~1.05:1, effectively invisible).
    * subtle = decorative dividers/cards; default = tables/groups;
@@ -696,6 +786,30 @@
   /* amber-500 */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
+
+  /* Dimmed so the mark reads as highlighted rather than as a lamp on a dark
+   * page, while its own foreground stays dark enough to read against it. */
+  --nx-highlight: oklch(0.8 0.1425 101.06);
+  /* yellow-300-ish, pulled back for the dark surface */
+  --nx-highlight-foreground: oklch(0.2079 0.0399 265.73);
+  /* slate-900 */
+
+  /* Syntax colors (dark). Lightened rather than reused from light mode: the
+   * light hues sit near 0.45-0.5 lightness and disappear on the dark surface.
+   * Chroma is pulled back slightly so they don't vibrate against it. */
+  --nx-code-bg: oklch(0.1916 0.0228 266.36);
+  --nx-code-fg: oklch(0.9838 0.0035 247.86);
+  --nx-code-comment: oklch(0.6626 0.0364 256.79);
+  --nx-code-keyword: oklch(0.7482 0.1235 303.9);
+  --nx-code-string: oklch(0.7654 0.1476 152.1);
+  --nx-code-number: oklch(0.7807 0.1189 44.2);
+  --nx-code-function: oklch(0.7365 0.1163 254.6);
+  --nx-code-operator: oklch(0.7549 0.1234 8.4);
+  --nx-code-punctuation: oklch(0.6626 0.0364 256.79);
+  --nx-code-variable: oklch(0.7938 0.1052 62.3);
+  --nx-code-tag: oklch(0.7118 0.1476 27.5);
+  --nx-code-deleted: oklch(0.7118 0.1476 27.5);
+  --nx-code-inserted: oklch(0.7654 0.1476 152.1);
 
   /* Element colors — 3-tier translucent border scale (white-alpha for dark).
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read

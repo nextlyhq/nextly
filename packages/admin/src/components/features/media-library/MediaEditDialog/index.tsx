@@ -230,7 +230,7 @@ function ImageSizesDisplay({
               title={`Copy ${name} URL`}
             >
               {copiedUrl === name ? (
-                <Check className="h-3.5 w-3.5 text-emerald-500" />
+                <Check className="h-3.5 w-3.5 text-success-500" />
               ) : (
                 <Copy className="h-3.5 w-3.5 text-muted-foreground" />
               )}

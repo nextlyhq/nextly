@@ -46,7 +46,7 @@ export function SafeChangeConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
-          <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 mb-1">
+          <div className="flex items-center gap-2 text-success-600 dark:text-success-400 mb-1">
             <CheckCircle2 className="h-4 w-4" />
             <span className="text-xs font-semibold uppercase tracking-wider">
               Safe change
@@ -68,7 +68,7 @@ export function SafeChangeConfirmDialog({
               <div key={`add-${f.name}`} className="flex items-center gap-2">
                 <Badge
                   variant="outline"
-                  className="font-mono text-xs bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/40 dark:border-emerald-900/50 dark:text-emerald-300"
+                  className="font-mono text-xs bg-success-50 border-success-200 text-success-700 dark:bg-success-950/40 dark:border-success-900/50 dark:text-success-300"
                 >
                   + {f.name}
                 </Badge>

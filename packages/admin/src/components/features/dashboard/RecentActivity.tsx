@@ -45,11 +45,11 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
   const getBadgeStyle = (type: string) => {
     const t = type.toLowerCase();
     if (t.includes("create"))
-      return "bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/20";
+      return "bg-success-500/10 text-success-500 ring-1 ring-success-500/20";
     if (t.includes("update"))
       return "bg-primary/5 text-primary ring-1 ring-primary/20";
     if (t.includes("delete"))
-      return "bg-rose-500/10 text-rose-500 ring-1 ring-rose-500/20";
+      return "bg-destructive-500/10 text-destructive-500 ring-1 ring-destructive-500/20";
     return "bg-primary/5 text-muted-foreground ring-1 ring-border/50";
   };
 
@@ -67,9 +67,9 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
             className={cn(
               "h-full w-full rounded-none ring-1 ring-inset",
               activity.type.toLowerCase().includes("create")
-                ? "bg-emerald-500 ring-emerald-500/40"
+                ? "bg-success-500 ring-success-500/40"
                 : activity.type.toLowerCase().includes("delete")
-                  ? "bg-rose-500 ring-rose-500/40"
+                  ? "bg-destructive-500 ring-destructive-500/40"
                   : "bg-primary ring-primary/40"
             )}
           />

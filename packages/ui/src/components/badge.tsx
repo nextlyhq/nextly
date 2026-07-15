@@ -41,11 +41,11 @@ const badgeVariants = cva(
         default: "bg-muted text-foreground",
         primary: "bg-primary/10 text-primary dark:bg-primary/20",
         success:
-          "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-100",
+          "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
         warning:
-          "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-100",
+          "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
         destructive:
-          "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-100",
+          "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
         outline:
           "border border-border! bg-transparent text-foreground dark:text-muted-foreground dark:border-border!",
       },
