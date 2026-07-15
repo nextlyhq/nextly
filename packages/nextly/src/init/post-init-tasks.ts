@@ -12,6 +12,7 @@ import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
 } from "../database/repair-sqlite-timestamps";
+import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
@@ -108,6 +109,18 @@ export async function runPostInitTasks(): Promise<void> {
   } catch {
     // Silently skip — permissions table may not exist yet (migrations not run),
     // or permissionSeedService may not be registered
+  }
+
+  // Bring the preset roles in line with the permissions that now exist. Runs
+  // every boot rather than once: each preset is a predicate, so a collection
+  // added since last boot is covered without anyone editing a role. Presets
+  // are never assigned to anyone — defining a role is not granting it.
+  try {
+    const adapter = getService("adapter");
+    const logger = getService("logger");
+    await seedRolePresets(adapter, logger);
+  } catch {
+    // Silently skip — roles/permissions tables may not exist yet.
   }
 
   // Seed plugin/app-declared role bundles (D67) AFTER permissions exist, so each
