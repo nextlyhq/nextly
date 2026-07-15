@@ -51,6 +51,12 @@ export interface CodeMirrorEditorProps {
     tabSize?: number;
   };
   placeholder?: string;
+  /**
+   * Receives the editor view once mounted, for callers that must act on the
+   * document directly — inserting at the caret, for one, which has no
+   * equivalent in the value/onChange pair.
+   */
+  onCreateEditor?: (view: EditorView) => void;
 }
 
 // ============================================================
@@ -274,6 +280,7 @@ export function CodeMirrorEditor({
   maxHeight,
   editorOptions,
   placeholder,
+  onCreateEditor,
 }: CodeMirrorEditorProps) {
   // Get language extensions with linters
   const extensions = useMemo(() => getLanguageExtensions(language), [language]);
@@ -350,6 +357,7 @@ export function CodeMirrorEditor({
         drawSelection: true,
       }}
       placeholder={placeholder}
+      onCreateEditor={onCreateEditor}
       className="overflow-hidden rounded-none"
     />
   );
