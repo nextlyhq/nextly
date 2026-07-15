@@ -79,6 +79,11 @@ export function scopeSelector(selector) {
   return `.nextly-admin ${selector}`;
 }
 
+/** How far a line opens or closes the brace depth. */
+function countBraces(line) {
+  return (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
+}
+
 /**
  * Scope every rule in a stylesheet.
  *
@@ -95,13 +100,19 @@ export function scopeCss(css) {
   for (const line of lines) {
     // @keyframes bodies are percentages and `from`/`to`, not selectors.
     if (line.includes("@keyframes")) {
-      inKeyframes = true;
+      // Count this line's own braces. Skipping them left the depth at zero, so
+      // the first frame's closing brace read as the end of the whole block and
+      // every later frame was scoped as a selector — `.nextly-admin to{...}`,
+      // which is not valid inside @keyframes, so the minifier dropped it and
+      // the animation quietly lost its frames.
+      braceCount = countBraces(line);
+      inKeyframes = braceCount > 0;
+      if (!inKeyframes) braceCount = 0;
       result.push(line);
       continue;
     }
     if (inKeyframes) {
-      braceCount += (line.match(/{/g) || []).length;
-      braceCount -= (line.match(/}/g) || []).length;
+      braceCount += countBraces(line);
       if (braceCount <= 0) {
         inKeyframes = false;
         braceCount = 0;
