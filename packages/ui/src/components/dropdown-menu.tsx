@@ -112,6 +112,17 @@ const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
+/**
+ * Shared treatment for every interactive menu item.
+ *
+ * Radix sets `data-highlighted` for pointer hover *and* keyboard navigation, so
+ * driving the highlight off that one state keeps mouse and keyboard in sync.
+ * `bg-muted` is a real surface token: it reads clearly against the popover
+ * without the full-contrast flip a solid `bg-primary` produces.
+ */
+const menuItemBase =
+  "cursor-pointer transition-colors data-[highlighted]:bg-muted data-[highlighted]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & {
@@ -121,7 +132,8 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-none px-2 py-1.5 text-sm outline-none hover-unified focus:bg-primary/5 focus:text-primary data-[state=open]:bg-primary/5 data-[state=open]:text-primary [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      "flex select-none items-center gap-2 rounded-none px-2 py-1.5 text-sm outline-none data-[state=open]:bg-muted data-[state=open]:text-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      menuItemBase,
       inset && "pl-8",
       className
     )}
@@ -181,7 +193,8 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center gap-2 rounded-none px-2 py-1.5 text-sm outline-none transition-colors hover-unified focus:bg-primary/5 focus:text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      "relative flex select-none items-center gap-2 rounded-none px-2 py-1.5 text-sm outline-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      menuItemBase,
       inset && "pl-8",
       className
     )}
@@ -197,7 +210,8 @@ const DropdownMenuCheckboxItem = React.forwardRef<
   <DropdownMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-none py-1.5 pl-8 pr-2 text-sm outline-none transition-colors hover-primary-light focus:bg-primary/5 focus:text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex select-none items-center rounded-none py-1.5 pl-8 pr-2 text-sm outline-none",
+      menuItemBase,
       className
     )}
     checked={checked}
@@ -221,7 +235,8 @@ const DropdownMenuRadioItem = React.forwardRef<
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-none py-1.5 pl-8 pr-2 text-sm outline-none transition-colors hover-primary-light focus:bg-primary/5 focus:text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex select-none items-center rounded-none py-1.5 pl-8 pr-2 text-sm outline-none",
+      menuItemBase,
       className
     )}
     {...props}

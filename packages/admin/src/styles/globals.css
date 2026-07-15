@@ -536,14 +536,10 @@
 }
 
 /* Interactive hover: fills with the primary token (inverts for dark). */
-.hover-muted,
-.hover-primary,
-.hover-primary-light {
+.hover-muted {
   @apply hover:bg-primary hover:text-primary-foreground transition-colors;
 }
 
-.hover-muted:hover svg,
-.hover-primary:hover svg,
-.hover-primary-light:hover svg {
+.hover-muted:hover svg {
   color: var(--nx-primary-foreground) !important;
 }

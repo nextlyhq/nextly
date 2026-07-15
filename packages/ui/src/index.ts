@@ -289,9 +289,6 @@ export type {
   TableEmptyProps,
 } from "./components/table-states";
 
-export { TablePagination } from "./components/table-pagination";
-export type { TablePaginationProps } from "./components/table-pagination";
-
 export { TableSkeleton } from "./components/table-skeleton";
 export type { TableSkeletonProps } from "./components/table-skeleton";
 

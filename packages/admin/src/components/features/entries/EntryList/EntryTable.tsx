@@ -27,6 +27,7 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
+import { Pagination } from "@admin/components/shared/pagination";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
@@ -40,7 +41,6 @@ import {
   getEntryTitleField,
   type CollectionForColumns,
 } from "./EntryTableColumns";
-import { EntryTablePagination } from "./EntryTablePagination";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import { EntryTableToolbar } from "./EntryTableToolbar";
 
@@ -49,10 +49,11 @@ import { EntryTableToolbar } from "./EntryTableToolbar";
 // ============================================================================
 
 /**
- * Pagination state for the entry table.
- * Uses 0-indexed page numbers internally.
+ * A table's pagination state. Distinct from `PaginationMeta` in `@nextlyhq/ui`,
+ * which is the 1-indexed wire contract; this is the 0-indexed view model the
+ * table controls run on.
  */
-export interface EntryTablePagination {
+export interface TablePaginationState {
   /** Current page index (0-indexed) */
   page: number;
   /** Number of items per page */
@@ -76,7 +77,7 @@ export interface EntryTableProps {
   /** Array of entry records to display */
   entries: EntryRow[];
   /** Pagination state */
-  pagination: EntryTablePagination;
+  pagination: TablePaginationState;
   /** Whether data is currently loading */
   isLoading?: boolean;
   /** Current sort value ('-field' for desc, 'field' for asc) */
@@ -502,11 +503,16 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
               }
             />
 
-            <EntryTablePagination
-              pagination={pagination}
+            <Pagination
+              currentPage={pagination.page}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.total}
+              pageSize={pagination.limit}
               onPageChange={onPageChange}
-              onLimitChange={onLimitChange}
+              onPageSizeChange={onLimitChange}
               isLoading={isLoading}
+              itemLabel="entries"
+              ariaLabel="Entry table pagination"
             />
           </div>
         )}
