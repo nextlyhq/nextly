@@ -369,7 +369,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 0 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 focus:outline-none focus:border-primary z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to previous page"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -382,7 +382,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to next page"
             >
               <ChevronRight className="h-4 w-4" />
