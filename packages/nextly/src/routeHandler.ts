@@ -88,9 +88,9 @@ import {
   hasSuperAdminExcluding,
 } from "./services/lib/permissions";
 import {
+  builderDisabledError,
   isBuilderEnabled,
   isBuilderRoute,
-  requireBuilderEnabled,
 } from "./shared/builder-access";
 import {
   hexToHslTriplet,
@@ -643,8 +643,22 @@ async function handleServiceRequest(
   // dispatched request passes through — hiding the navigation would still
   // leave these reachable by URL. Entry CRUD is untouched, and boot-time
   // code-first sync goes through the registry services, not this dispatcher.
-  if (isBuilderRoute(service, method)) {
-    requireBuilderEnabled(`${service}.${method}`);
+  //
+  // Returned rather than thrown: this runs outside the dispatcher's
+  // NextlyError-to-response mapping, so a throw would surface as a 500.
+  if (isBuilderRoute(service, method) && !isBuilderEnabled()) {
+    const err = builderDisabledError(`${service}.${method}`);
+    const requestId = readOrGenerateRequestId(req);
+    return new Response(
+      JSON.stringify({ error: err.toResponseJSON(requestId) }),
+      {
+        status: err.statusCode,
+        headers: {
+          "content-type": "application/problem+json",
+          "x-request-id": requestId,
+        },
+      }
+    );
   }
 
   // ==================== API KEYS DIRECT DISPATCH ====================

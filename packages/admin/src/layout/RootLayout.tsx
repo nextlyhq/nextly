@@ -5,6 +5,7 @@ import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
@@ -61,17 +62,31 @@ function AdminAppContent() {
     return <div className="min-h-screen bg-background nextly-admin" />;
   }
 
-  const { Component, params, searchParams, routeType, requiredPermission } =
-    route;
+  const {
+    Component,
+    params,
+    searchParams,
+    routeType,
+    requiredPermission,
+    requiresBuilder,
+  } = route;
 
   // Wrap component with appropriate route guard
   const renderComponent = () => {
     // Suspense lets React handle suspended lazy chunks gracefully; fallback
     // is null because we don't render a load indicator during transitions.
-    const componentElement = (
+    const suspended = (
       <Suspense fallback={null}>
         <Component params={params} searchParams={searchParams} />
       </Suspense>
+    );
+
+    // Builder routes are unreachable where the builder is disabled, even by
+    // URL. Wraps inside the permission guard so permissions still decide first.
+    const componentElement = requiresBuilder ? (
+      <BuilderGuard>{suspended}</BuilderGuard>
+    ) : (
+      suspended
     );
 
     if (routeType === "private") {

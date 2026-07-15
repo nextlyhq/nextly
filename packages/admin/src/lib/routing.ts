@@ -20,6 +20,8 @@ export interface RouteResult {
   searchParams: Record<string, string | string[] | undefined>;
   routeType?: "public" | "private";
   requiredPermission?: string;
+  /** Route is part of the schema builder, which is disabled in production. */
+  requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
   pluginComponentPath?: string;
 }
@@ -80,6 +82,7 @@ function matchDynamicRoute(pathname: string): {
   params: Params;
   routeType?: "public" | "private";
   requiredPermission?: string;
+  requiresBuilder?: boolean;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
@@ -105,6 +108,7 @@ function matchDynamicRoute(pathname: string): {
         params,
         routeType: config?.type,
         requiredPermission: config?.requiredPermission,
+        requiresBuilder: config?.requiresBuilder,
         pattern,
       };
     }
@@ -152,6 +156,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       searchParams: parseSearchParams(rawSearch),
       routeType: config?.type,
       requiredPermission: config?.requiredPermission,
+      requiresBuilder: config?.requiresBuilder,
     };
   }
 
@@ -187,6 +192,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       searchParams: parseSearchParams(rawSearch),
       routeType: dynamic.routeType,
       requiredPermission: dynamicPermission ?? dynamic.requiredPermission,
+      requiresBuilder: dynamic.requiresBuilder,
     };
   }
 

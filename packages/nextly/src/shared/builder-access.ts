@@ -29,7 +29,7 @@ export function isBuilderEnabled(): boolean {
 }
 
 /**
- * Refuse a builder-only schema mutation when the builder is disabled.
+ * The refusal for a builder-only operation while the builder is disabled.
  *
  * Distinct from a permission failure: the caller may well be a super-admin.
  * The environment, not the user, is what forbids this — so it carries its own
@@ -37,15 +37,26 @@ export function isBuilderEnabled(): boolean {
  *
  * @param operation - Operation name for the log, e.g. "create-collection".
  */
-export function requireBuilderEnabled(operation: string): void {
-  if (isBuilderEnabled()) return;
-
-  throw new NextlyError({
+export function builderDisabledError(operation: string): NextlyError {
+  return new NextlyError({
     code: "BUILDER_DISABLED",
     publicMessage:
       "The schema builder is disabled in this environment. Define schema in code, or set admin.branding.showBuilder to true to enable it here.",
     logContext: { operation, nodeEnv: process.env.NODE_ENV },
   });
+}
+
+/**
+ * Throw when a builder-only schema mutation is attempted while disabled.
+ *
+ * For handlers wrapped in `withErrorHandler`, which turns a NextlyError into
+ * the canonical response. Callers outside that wrapper must not use this —
+ * a throw there escapes as a 500 — and should return a response built from
+ * {@link builderDisabledError} instead.
+ */
+export function requireBuilderEnabled(operation: string): void {
+  if (isBuilderEnabled()) return;
+  throw builderDisabledError(operation);
 }
 
 /**
