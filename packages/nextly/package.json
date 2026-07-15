@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.33",
+  "version": "0.0.2-alpha.34",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
