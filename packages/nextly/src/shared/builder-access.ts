@@ -67,31 +67,46 @@ export function requireBuilderEnabled(operation: string): void {
  * they exist only to feed the builder's diff UI — they are dry runs, but there
  * is no reason to answer them where the builder cannot run.
  */
-const BUILDER_METHODS: Record<string, ReadonlySet<string>> = {
-  collections: new Set([
-    "createCollection",
-    "updateCollection",
-    "deleteCollection",
-    "previewSchemaChanges",
-    "applySchemaChanges",
-  ]),
-  singles: new Set([
-    "createSingle",
-    "updateSingleSchema",
-    "deleteSingle",
-    "previewSingleSchemaChanges",
-    "applySingleSchemaChanges",
-  ]),
-  components: new Set([
-    "createComponent",
-    "updateComponent",
-    "deleteComponent",
-    "previewComponentSchemaChanges",
-    "applyComponentSchemaChanges",
-  ]),
-};
+const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [
+    "collections",
+    new Set([
+      "createCollection",
+      "updateCollection",
+      "deleteCollection",
+      "previewSchemaChanges",
+      "applySchemaChanges",
+    ]),
+  ],
+  [
+    "singles",
+    new Set([
+      "createSingle",
+      "updateSingleSchema",
+      "deleteSingle",
+      "previewSingleSchemaChanges",
+      "applySingleSchemaChanges",
+    ]),
+  ],
+  [
+    "components",
+    new Set([
+      "createComponent",
+      "updateComponent",
+      "deleteComponent",
+      "previewComponentSchemaChanges",
+      "applyComponentSchemaChanges",
+    ]),
+  ],
+]);
 
-/** Whether a resolved dispatcher route belongs to the schema builder. */
+/**
+ * Whether a resolved dispatcher route belongs to the schema builder.
+ *
+ * A Map rather than an object literal: the lookup key is a routing string, and
+ * an object would resolve inherited names like "constructor" to a function,
+ * making the membership test throw instead of answering false.
+ */
 export function isBuilderRoute(service: string, method: string): boolean {
-  return BUILDER_METHODS[service]?.has(method) ?? false;
+  return BUILDER_METHODS.get(service)?.has(method) ?? false;
 }
