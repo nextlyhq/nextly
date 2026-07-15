@@ -38,6 +38,8 @@ export interface PermissionBase extends EntityBase {
 export interface Permission extends PermissionBase {
   slug?: string;
   category?: string;
+  /** Package that declared this permission; absent for the built-in seeds. */
+  owner?: string;
   isInUse?: boolean;
   roleCount?: number;
   isSystemPermission?: boolean;
@@ -67,12 +69,15 @@ export interface ContentTypePermissions {
   name: string;
   apiId?: string;
   category: string;
-  permissions: {
-    create: Permission | null;
-    view: Permission | null;
-    edit: Permission | null;
-    delete: Permission | null;
-  };
+  /**
+   * The resource's permissions, keyed by the action the database recorded.
+   *
+   * A map rather than a fixed set of slots because the actions are data: the
+   * permissions table is `(resource, action)`, and plugins declare their own
+   * verbs. A key is present only when the resource has that permission, so
+   * absence means "no such permission", not "not granted".
+   */
+  permissions: Record<string, Permission>;
 }
 
 export type RoleUsersSectionProps = {

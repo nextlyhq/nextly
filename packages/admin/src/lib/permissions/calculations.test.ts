@@ -1,18 +1,21 @@
 /**
  * `organizePermissions` and the matrix's selection helpers.
  *
- * These pin what the matrix does **today**, which in several places is wrong.
- * The tests that describe a defect say so and name it; they are here so the
- * change that fixes them has to flip them on purpose rather than silently.
- * Read a `// DEFECT` test as "this is the behaviour, not the intent".
+ * The cases that used to be marked DEFECT are the interesting ones: each named
+ * a permission the editor could grant but not display, and each is now an
+ * assertion that it displays. They are kept in place, flipped, rather than
+ * deleted, so the behaviour they pin stays pinned.
  *
- * Fixtures mirror what `useRoleForm` builds, which is what the component
- * actually receives: a `slug` of `${resource}.${action}` (its own dot form,
- * not the database's `${action}-${resource}`) and a `category` already
- * resolved by the hook.
+ * Fixtures mirror what `useRoleForm` emits, which is what the component
+ * actually receives: `resource` and `action` as fields, a `category` the hook
+ * already resolved, and `owner` set for a plugin's permission.
  */
 import { describe, expect, it } from "vitest";
 
+import {
+  actionLabel,
+  actionsForContentTypes,
+} from "../../constants/permissions";
 import type { Permission } from "../../types/ui/form";
 
 import {
@@ -29,15 +32,16 @@ function perm(
   resource: string,
   action: string,
   category = "collection-types",
-  id = `${action}-${resource}`
+  owner?: string
 ): Permission {
   return {
-    id,
+    id: `${action}-${resource}`,
     name: `${resource} ${action}`,
     resource,
     action,
     slug: `${resource}.${action}`,
     category,
+    owner,
   };
 }
 
@@ -60,7 +64,7 @@ describe("organizePermissions", () => {
     const result = organizePermissions([
       perm("posts", "read", "collection-types"),
       perm("homepage", "read", "single-types"),
-      perm("settings", "read", "settings"),
+      perm("settings", "manage", "settings"),
     ]);
 
     expect(result["collection-types"].map(c => c.name)).toEqual(["posts"]);
@@ -82,101 +86,153 @@ describe("organizePermissions", () => {
     ]);
   });
 
-  it("renames read to view and update to edit for the four columns", () => {
+  it("keys each permission by the action it actually has", () => {
     const result = organizePermissions(POSTS_CRUD);
     const posts = result["collection-types"][0];
 
-    expect(posts.permissions.view?.action).toBe("read");
-    expect(posts.permissions.edit?.action).toBe("update");
-    expect(posts.permissions.create?.action).toBe("create");
-    expect(posts.permissions.delete?.action).toBe("delete");
+    expect(Object.keys(posts.permissions).sort()).toEqual([
+      "create",
+      "delete",
+      "read",
+      "update",
+    ]);
   });
 
-  it("leaves a slot null when the resource has no such permission", () => {
+  it("omits an action the resource does not have", () => {
     const result = organizePermissions([perm("posts", "read")]);
     const posts = result["collection-types"][0];
 
-    expect(posts.permissions.view).not.toBeNull();
-    expect(posts.permissions.create).toBeNull();
-    expect(posts.permissions.edit).toBeNull();
-    expect(posts.permissions.delete).toBeNull();
+    expect(posts.permissions.read).toBeDefined();
+    expect(posts.permissions.create).toBeUndefined();
   });
 
-  it("survives a permission with no slug", () => {
-    const bare = { ...perm("posts", "read"), slug: undefined };
+  it("ignores a permission with no resource or action", () => {
+    const bare = { ...perm("posts", "read"), resource: "", action: "" };
 
     expect(() => organizePermissions([bare])).not.toThrow();
+    expect(organizePermissions([bare])["collection-types"]).toEqual([]);
   });
 
-  // DEFECT (A2). The type has four named slots, so an action outside
-  // create/read/update/delete has nowhere to go and is dropped. Both of these
-  // exist in the database and both are grantable through Select All, which
-  // reads the raw permission list — so the editor grants what it cannot show.
-  it("DEFECT: drops publish, leaving a row that cannot show it", () => {
+  it("falls back to collection types for an unrecognised category", () => {
+    const result = organizePermissions([perm("posts", "read", "nonsense")]);
+
+    expect(result["collection-types"].map(c => c.name)).toEqual(["posts"]);
+  });
+
+  // Was: DEFECT — dropped, because the type had four named slots.
+  it("keeps publish, so a page's publish permission has a column", () => {
     const result = organizePermissions([
       perm("pages", "read"),
       perm("pages", "publish"),
     ]);
     const pages = result["collection-types"][0];
 
-    expect(Object.values(pages.permissions).filter(Boolean)).toHaveLength(1);
-    expect(
-      Object.values(pages.permissions).some(p => p?.action === "publish")
-    ).toBe(false);
+    expect(pages.permissions.publish).toBeDefined();
+    expect(pages.permissions.publish.action).toBe("publish");
   });
 
-  // DEFECT (B2). export is the form-builder's declared permission. Dropping it
-  // leaves `submissions` as a row of four dashes and a select-all checkbox
-  // that selects nothing.
-  it("DEFECT: drops export, leaving submissions an empty row", () => {
-    const result = organizePermissions([perm("submissions", "export")]);
-    const submissions = result["collection-types"][0];
+  // Was: DEFECT — dropped, leaving submissions a row of four dashes whose
+  // select-all checkbox selected nothing.
+  it("keeps export, so submissions is a row with something in it", () => {
+    const result = organizePermissions([
+      perm("submissions", "export", "plugins", "@nextlyhq/plugin-form-builder"),
+    ]);
+    const submissions = result["plugins"][0];
 
     expect(submissions.name).toBe("submissions");
-    expect(Object.values(submissions.permissions).filter(Boolean)).toHaveLength(
-      0
-    );
+    expect(submissions.permissions.export).toBeDefined();
   });
 
-  // DEFECT (A3). `manage` is a distinct action — a role holding manage-media
-  // is not granted read-media — but it is filed under the slot the header
-  // labels "Update". Ticking Update on Settings grants manage-settings.
-  it("DEFECT: files manage under the slot labelled Update", () => {
+  // Was: DEFECT — filed under the slot the header labelled "Update", so
+  // ticking Update on Settings granted manage-settings.
+  it("keeps manage as itself rather than filing it under update", () => {
     const result = organizePermissions([
       perm("settings", "manage", "settings"),
     ]);
     const settings = result["settings"][0];
 
-    expect(settings.permissions.edit?.action).toBe("manage");
+    expect(settings.permissions.manage).toBeDefined();
+    expect(settings.permissions.update).toBeUndefined();
   });
 
-  // DEFECT. An unexplained special case. delete-api-keys is seeded and
-  // grantable through Select All, and has no checkbox to revoke it with.
-  it("DEFECT: hides the api-keys delete permission", () => {
+  // Was: DEFECT — an unexplained special case hid it while Select All kept
+  // granting it.
+  it("shows the api-keys delete permission", () => {
     const result = organizePermissions([
       perm("api-keys", "read", "settings"),
       perm("api-keys", "delete", "settings"),
     ]);
     const apiKeys = result["settings"][0];
 
-    expect(apiKeys.permissions.delete).toBeNull();
+    expect(apiKeys.permissions.delete).toBeDefined();
   });
 
-  // DEFECT. Three call sites skip the plugins category outright, in a repo
-  // that ships two plugins and a documented API for their permissions.
-  it("DEFECT: discards a permission categorised as a plugin's", () => {
+  // Was: DEFECT — discarded outright, in a repo shipping two plugins.
+  it("files a plugin's permission under Plugins", () => {
     const result = organizePermissions([
       perm("posts", "read"),
-      perm("submissions", "export", "plugins"),
+      perm("submissions", "export", "plugins", "@nextlyhq/plugin-form-builder"),
     ]);
 
-    expect(result["plugins"]).toBeUndefined();
-    expect(result["collection-types"]).toHaveLength(1);
-    expect(
-      Object.values(result)
-        .flat()
-        .some(c => c.name === "submissions")
-    ).toBe(false);
+    expect(result["plugins"].map(c => c.name)).toEqual(["submissions"]);
+    expect(result["collection-types"].map(c => c.name)).toEqual(["posts"]);
+  });
+});
+
+describe("actionsForContentTypes", () => {
+  it("returns every action any row has, deduplicated", () => {
+    const rows = organizePermissions([
+      perm("posts", "read"),
+      perm("posts", "create"),
+      perm("pages", "read"),
+      perm("pages", "publish"),
+    ])["collection-types"];
+
+    expect(actionsForContentTypes(rows)).toEqual(["create", "read", "publish"]);
+  });
+
+  it("orders the seeded verbs the way people read them, not alphabetically", () => {
+    const rows = organizePermissions([
+      perm("posts", "delete"),
+      perm("posts", "read"),
+      perm("posts", "create"),
+      perm("posts", "update"),
+    ])["collection-types"];
+
+    expect(actionsForContentTypes(rows)).toEqual([
+      "create",
+      "read",
+      "update",
+      "delete",
+    ]);
+  });
+
+  // A plugin's verb is not in the order list, so it sorts after the ones that
+  // are. Nothing here needs to know the verb exists.
+  it("puts an unknown verb after the seeded ones", () => {
+    const rows = organizePermissions([
+      perm("x", "export"),
+      perm("x", "read"),
+      perm("x", "archive"),
+    ])["collection-types"];
+
+    expect(actionsForContentTypes(rows)).toEqual(["read", "archive", "export"]);
+  });
+
+  it("returns nothing for no rows", () => {
+    expect(actionsForContentTypes([])).toEqual([]);
+  });
+});
+
+describe("actionLabel", () => {
+  it("capitalises the action itself", () => {
+    expect(actionLabel("read")).toBe("Read");
+    expect(actionLabel("manage")).toBe("Manage");
+  });
+
+  it("renders a verb it has never heard of", () => {
+    expect(actionLabel("export")).toBe("Export");
+    expect(actionLabel("archive")).toBe("Archive");
   });
 });
 
@@ -205,9 +261,7 @@ describe("filterContentTypes", () => {
 
 describe("row selection", () => {
   const posts = organizePermissions(POSTS_CRUD)["collection-types"][0];
-  const allIds = Object.values(posts.permissions)
-    .filter(Boolean)
-    .map(p => p!.id);
+  const allIds = Object.values(posts.permissions).map(p => p.id);
 
   it("is all-selected when every permission the row has is held", () => {
     expect(isAllSelected(posts, allIds)).toBe(true);
@@ -230,15 +284,14 @@ describe("row selection", () => {
     expect(isPartiallySelected(posts, allIds)).toBe(false);
   });
 
-  // A row whose only action has no column has no permission ids at all, so it
-  // can never be selected. This is what makes the submissions row's checkbox
-  // do nothing.
-  it("DEFECT: a row with no surviving permissions can never be selected", () => {
-    const submissions = organizePermissions([perm("submissions", "export")])[
-      "collection-types"
-    ][0];
+  // Was: DEFECT — the row's only action had no column, so it held no ids and
+  // its checkbox could never select anything.
+  it("selects a row whose only action is a plugin's verb", () => {
+    const submissions = organizePermissions([
+      perm("submissions", "export", "plugins", "@nextlyhq/plugin-form-builder"),
+    ])["plugins"][0];
 
-    expect(isAllSelected(submissions, ["export-submissions"])).toBe(false);
+    expect(isAllSelected(submissions, ["export-submissions"])).toBe(true);
   });
 });
 
@@ -251,7 +304,7 @@ describe("column selection", () => {
 
   it("is all-selected for an action when every row holding it is held", () => {
     expect(
-      isAllSelectedForAction(rows, "view", ["read-posts", "read-categories"])
+      isAllSelectedForAction(rows, "read", ["read-posts", "read-categories"])
     ).toBe(true);
   });
 
@@ -261,7 +314,7 @@ describe("column selection", () => {
   });
 
   it("is partial when only some rows holding the action are held", () => {
-    expect(isPartiallySelectedForAction(rows, "view", ["read-posts"])).toBe(
+    expect(isPartiallySelectedForAction(rows, "read", ["read-posts"])).toBe(
       true
     );
   });

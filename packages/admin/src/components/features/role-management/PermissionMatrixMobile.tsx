@@ -12,17 +12,22 @@ import {
 } from "@nextlyhq/ui";
 import { useMemo } from "react";
 
+import {
+  actionLabel,
+  actionsForContentTypes,
+} from "@admin/constants/permissions";
+import { permissionIdsForContentType } from "@admin/lib/permissions/calculations";
 import type { ContentTypePermissions, Permission } from "@admin/types/ui/form";
 
 /**
  * Props for PermissionCheckboxRow component
  */
 interface PermissionCheckboxRowProps {
-  /** Permission object (can be null or undefined if not available) */
-  permission: Permission | null | undefined;
+  /** Permission object (absent when the resource has no such action) */
+  permission: Permission | undefined;
   /** Display label for the permission (e.g., "Create", "Read") */
   label: string;
-  /** Action key for the permission (e.g., "create", "view") */
+  /** Action key for the permission (e.g., "create", "read") */
   actionKey: string;
   /** Content type ID for generating unique HTML IDs */
   contentTypeId: string;
@@ -53,7 +58,7 @@ interface PermissionCheckboxRowProps {
  * @example
  * ```tsx
  * <PermissionCheckboxRow
- *   permission={contentType.permissions.create}
+ *   permission={contentType.permissions["create"]}
  *   label="Create"
  *   actionKey="create"
  *   contentTypeId={contentType.id}
@@ -138,18 +143,16 @@ function getSelectedCount(
   contentType: ContentTypePermissions,
   value: string[]
 ): number {
-  return Object.values(contentType.permissions)
-    .filter((p): p is Permission => p !== null)
-    .filter(p => value.includes(p.id)).length;
+  return permissionIdsForContentType(contentType).filter(id =>
+    value.includes(id)
+  ).length;
 }
 
 /**
  * Get total count of permissions for a content type
  */
 function getTotalCount(contentType: ContentTypePermissions): number {
-  return Object.values(contentType.permissions).filter(
-    (p): p is Permission => p !== null
-  ).length;
+  return permissionIdsForContentType(contentType).length;
 }
 
 /**
@@ -272,53 +275,25 @@ export function PermissionMatrixMobile({
 
             <AccordionContent className="px-4">
               <div className="space-y-2">
-                <PermissionCheckboxRow
-                  permission={contentType.permissions.create}
-                  label="Create"
-                  actionKey="create"
-                  contentTypeId={contentType.id}
-                  contentTypeName={contentType.name}
-                  value={value}
-                  lockedIds={lockedIds}
-                  disabled={disabled}
-                  onToggle={onTogglePermission}
-                />
-
-                <PermissionCheckboxRow
-                  permission={contentType.permissions.view}
-                  label="Read"
-                  actionKey="view"
-                  contentTypeId={contentType.id}
-                  contentTypeName={contentType.name}
-                  value={value}
-                  lockedIds={lockedIds}
-                  disabled={disabled}
-                  onToggle={onTogglePermission}
-                />
-
-                <PermissionCheckboxRow
-                  permission={contentType.permissions.edit}
-                  label="Update"
-                  actionKey="edit"
-                  contentTypeId={contentType.id}
-                  contentTypeName={contentType.name}
-                  value={value}
-                  lockedIds={lockedIds}
-                  disabled={disabled}
-                  onToggle={onTogglePermission}
-                />
-
-                <PermissionCheckboxRow
-                  permission={contentType.permissions.delete}
-                  label="Delete"
-                  actionKey="delete"
-                  contentTypeId={contentType.id}
-                  contentTypeName={contentType.name}
-                  value={value}
-                  lockedIds={lockedIds}
-                  disabled={disabled}
-                  onToggle={onTogglePermission}
-                />
+                {/*
+                  The row's own actions, not the tab's. Unlike the table there
+                  are no columns to line up with, so a resource without an
+                  action simply omits it rather than showing an empty slot.
+                */}
+                {actionsForContentTypes([contentType]).map(action => (
+                  <PermissionCheckboxRow
+                    key={action}
+                    permission={contentType.permissions[action]}
+                    label={actionLabel(action)}
+                    actionKey={action}
+                    contentTypeId={contentType.id}
+                    contentTypeName={contentType.name}
+                    value={value}
+                    lockedIds={lockedIds}
+                    disabled={disabled}
+                    onToggle={onTogglePermission}
+                  />
+                ))}
               </div>
             </AccordionContent>
           </AccordionItem>

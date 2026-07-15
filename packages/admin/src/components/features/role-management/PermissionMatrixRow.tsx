@@ -1,5 +1,6 @@
 import { Checkbox } from "@nextlyhq/ui";
 
+import { permissionIdsForContentType } from "@admin/lib/permissions/calculations";
 import { cn } from "@admin/lib/utils";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
 
@@ -7,6 +8,8 @@ import { PermissionMatrixCell } from "./PermissionMatrixCell";
 
 export interface PermissionMatrixRowProps {
   contentType: ContentTypePermissions;
+  /** The tab's columns, so every row lines up with the header. */
+  actions: string[];
   value: string[];
   lockedIds: string[];
   disabled: boolean;
@@ -18,6 +21,7 @@ export interface PermissionMatrixRowProps {
 
 export function PermissionMatrixRow({
   contentType,
+  actions,
   value,
   lockedIds,
   disabled,
@@ -26,9 +30,10 @@ export function PermissionMatrixRow({
   isAllSelected,
   isPartiallySelected,
 }: PermissionMatrixRowProps) {
-  const hasLockedPermissions = Object.values(contentType.permissions).some(
-    permission => permission && lockedIds.includes(permission.id)
+  const hasLockedPermissions = permissionIdsForContentType(contentType).some(
+    id => lockedIds.includes(id)
   );
+  const rowHeaderId = `permission-row-${contentType.id}`;
 
   return (
     <tr
@@ -37,7 +42,6 @@ export function PermissionMatrixRow({
         isAllSelected && "bg-primary/5 hover-unified"
       )}
     >
-      {/* Content Type Name with Row Checkbox */}
       <td className="p-4 align-middle  border-b border-border min-w-[200px]">
         <div className="flex items-center space-x-4">
           <Checkbox
@@ -48,88 +52,33 @@ export function PermissionMatrixRow({
             aria-label={`Toggle all permissions for ${contentType.name}`}
             className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
           />
-          <span className="font-medium text-sm text-foreground capitalize">
+          <span
+            id={rowHeaderId}
+            className="font-medium text-sm text-foreground capitalize"
+          >
             {contentType.name}
           </span>
         </div>
       </td>
 
-      {/* Create Permission Cell */}
-      <PermissionMatrixCell
-        permission={contentType.permissions.create}
-        checked={
-          contentType.permissions.create
-            ? value.includes(contentType.permissions.create.id)
-            : false
-        }
-        disabled={disabled}
-        locked={
-          contentType.permissions.create
-            ? lockedIds.includes(contentType.permissions.create.id)
-            : false
-        }
-        contentTypeName={contentType.name}
-        action="Create"
-        onToggle={onToggle}
-      />
+      {actions.map(action => {
+        const permission = contentType.permissions[action];
 
-      {/* View Permission Cell */}
-      <PermissionMatrixCell
-        permission={contentType.permissions.view}
-        checked={
-          contentType.permissions.view
-            ? value.includes(contentType.permissions.view.id)
-            : false
-        }
-        disabled={disabled}
-        locked={
-          contentType.permissions.view
-            ? lockedIds.includes(contentType.permissions.view.id)
-            : false
-        }
-        contentTypeName={contentType.name}
-        action="Read"
-        onToggle={onToggle}
-      />
-
-      {/* Edit Permission Cell */}
-      <PermissionMatrixCell
-        permission={contentType.permissions.edit}
-        checked={
-          contentType.permissions.edit
-            ? value.includes(contentType.permissions.edit.id)
-            : false
-        }
-        disabled={disabled}
-        locked={
-          contentType.permissions.edit
-            ? lockedIds.includes(contentType.permissions.edit.id)
-            : false
-        }
-        contentTypeName={contentType.name}
-        action="Update"
-        onToggle={onToggle}
-      />
-
-      {/* Delete Permission Cell (no right border) */}
-      <PermissionMatrixCell
-        permission={contentType.permissions.delete}
-        checked={
-          contentType.permissions.delete
-            ? value.includes(contentType.permissions.delete.id)
-            : false
-        }
-        disabled={disabled}
-        locked={
-          contentType.permissions.delete
-            ? lockedIds.includes(contentType.permissions.delete.id)
-            : false
-        }
-        contentTypeName={contentType.name}
-        action="Delete"
-        onToggle={onToggle}
-        className="p-4 text-center  border-b border-border align-middle w-[120px]"
-      />
+        return (
+          <PermissionMatrixCell
+            key={action}
+            permission={permission}
+            checked={permission ? value.includes(permission.id) : false}
+            disabled={disabled}
+            locked={permission ? lockedIds.includes(permission.id) : false}
+            contentTypeName={contentType.name}
+            action={action}
+            columnHeaderId={`permission-column-${action}`}
+            rowHeaderId={rowHeaderId}
+            onToggle={onToggle}
+          />
+        );
+      })}
     </tr>
   );
 }

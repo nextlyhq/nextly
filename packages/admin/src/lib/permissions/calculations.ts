@@ -1,130 +1,59 @@
-import {
-  DEFAULT_PERMISSION_ACTION,
-  initializePermissionCategories,
-} from "../../constants/permissions";
+import { initializePermissionCategories } from "../../constants/permissions";
 import type { ContentTypePermissions, Permission } from "../../types/ui/form";
 
 /**
- * Organize permissions by content type and action
- * Extracted from PermissionMatrix component for better testability and reusability
+ * Group permissions into one row per resource, keyed by the action each
+ * permission actually has.
+ *
+ * Reads `resource` and `action` off the permission rather than parsing them
+ * back out of a slug the caller composed from those same two fields.
+ *
+ * Actions are kept as they are. Renaming them on the way in is what made a
+ * column headed "Update" grant `manage`, and filing them into a fixed set of
+ * slots is what dropped every verb outside CRUD — `publish` and `export` are
+ * grantable through Select All, which reads the raw list, so the editor
+ * granted permissions it could not display.
  */
 export function organizePermissions(
   permissions: Permission[]
 ): Record<string, ContentTypePermissions[]> {
   const contentTypeMap = new Map<string, ContentTypePermissions>();
 
-  // Process permissions to organize them by content type and action
   for (const permission of permissions) {
-    if (!permission.slug) {
+    if (!permission.resource || !permission.action) {
       continue;
     }
-    const parts = permission.slug.split(".");
 
-    let contentTypeId: string;
-    let action: keyof ContentTypePermissions["permissions"];
-    let category = "collection-types"; // Default category
+    const contentTypeId = permission.resource;
 
-    if (parts.length >= 3) {
-      // Format: {category}.{contentType}.{action}
-      const [cat, contentType, act] = parts;
-      contentTypeId = `${cat}.${contentType}`;
-      action = act as keyof ContentTypePermissions["permissions"];
-
-      // Determine category
-      if (cat === "content-types") {
-        category = "collection-types";
-      } else if (cat === "single-types") {
-        category = "single-types";
-      } else if (cat === "plugins" || cat.includes("plugin")) {
-        // Skip plugins category since we're not working on plugins yet
-        continue;
-      } else if (cat === "settings" || cat.includes("setting")) {
-        category = "settings";
-      }
-    } else if (parts.length === 2) {
-      // Format: {contentType}.{action}
-      const [contentType, act] = parts;
-      contentTypeId = contentType;
-      action = act as keyof ContentTypePermissions["permissions"];
-
-      // Infer category from contentType
-      if (contentType.includes("settings")) {
-        category = "settings";
-      } else if (contentType.includes("plugin")) {
-        // Skip plugins category since we're not working on plugins yet
-        continue;
-      }
-    } else {
-      // Just use the slug as content type ID if it doesn't follow the pattern
-      contentTypeId = permission.slug;
-      action = DEFAULT_PERMISSION_ACTION;
-    }
-
-    // Use the permission's explicit category if set — this overrides slug-based
-    // inference and ensures correctly categorized permissions from useRoleForm
-    // (collection-types, single-types, settings) are placed in the right tab.
-    if (permission.category) {
-      category = permission.category;
-    }
-
-    // Get or initialize the content type
     let contentType = contentTypeMap.get(contentTypeId);
     if (!contentType) {
       contentType = {
         id: contentTypeId,
-        name: contentTypeId.split(".").pop() || contentTypeId,
-        category,
-        permissions: {
-          create: null,
-          view: null,
-          edit: null,
-          delete: null,
-        },
+        name: contentTypeId,
+        category: permission.category || "collection-types",
+        permissions: {},
       };
       contentTypeMap.set(contentTypeId, contentType);
     }
 
-    // Map API actions to internal UI actions
-    // read -> view
-    // update -> edit
-    // manage -> edit (settings-style permissions)
-    let mappedAction = action;
-    if ((action as string) === "read") {
-      mappedAction = "view";
-    } else if ((action as string) === "update") {
-      mappedAction = "edit";
-    } else if ((action as string) === "manage") {
-      mappedAction = "edit";
-    }
-
-    // Assign the permission to the appropriate action
-    if (mappedAction in contentType.permissions) {
-      if (contentTypeId === "api-keys" && mappedAction === "delete") {
-        continue;
-      }
-      contentType.permissions[mappedAction] = permission;
-    }
+    contentType.permissions[permission.action] = permission;
   }
 
-  // Convert to array and organize by category
   const result = initializePermissionCategories();
 
-  // Add content types to their categories
   for (const contentType of contentTypeMap.values()) {
     const category = contentType.category;
-    if (category === "plugins") {
-      // Skip plugins category since we're not working on plugins yet
-      continue;
-    }
     if (category in result) {
       result[category].push(contentType);
     } else {
-      // If category doesn't match our predefined ones, add to collection types
+      // An unrecognised category would otherwise vanish. Collection types is
+      // the visible fallback: wrong tab beats no tab, since a permission the
+      // editor cannot show is one it can still grant.
       result["collection-types"].push(contentType);
     }
   }
 
-  // Sort each category alphabetically by name
   for (const category in result) {
     result[category].sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -152,6 +81,26 @@ export function filterContentTypes(
   return result;
 }
 
+/** Every permission id a row holds. */
+export function permissionIdsForContentType(
+  contentType: ContentTypePermissions
+): string[] {
+  return Object.values(contentType.permissions).map(
+    (permission: Permission) => permission.id
+  );
+}
+
+/** Every permission id a column holds, across the rows that have that action. */
+export function permissionIdsForAction(
+  contentTypes: ContentTypePermissions[],
+  action: string
+): string[] {
+  return contentTypes
+    .map(ct => ct.permissions[action])
+    .filter((permission): permission is Permission => permission !== undefined)
+    .map(permission => permission.id);
+}
+
 /**
  * Check if all permissions for a content type are selected
  */
@@ -159,9 +108,7 @@ export function isAllSelected(
   contentType: ContentTypePermissions,
   value: string[]
 ): boolean {
-  const permissionIds = Object.values(contentType.permissions)
-    .filter((permission): permission is Permission => permission !== null)
-    .map(permission => permission.id);
+  const permissionIds = permissionIdsForContentType(contentType);
 
   return (
     permissionIds.length > 0 && permissionIds.every(id => value.includes(id))
@@ -175,9 +122,7 @@ export function isPartiallySelected(
   contentType: ContentTypePermissions,
   value: string[]
 ): boolean {
-  const permissionIds = Object.values(contentType.permissions)
-    .filter((permission): permission is Permission => permission !== null)
-    .map(permission => permission.id);
+  const permissionIds = permissionIdsForContentType(contentType);
 
   return (
     permissionIds.some(id => value.includes(id)) &&
@@ -190,13 +135,10 @@ export function isPartiallySelected(
  */
 export function isAllSelectedForAction(
   contentTypes: ContentTypePermissions[],
-  action: keyof ContentTypePermissions["permissions"],
+  action: string,
   value: string[]
 ): boolean {
-  const permissionIds = contentTypes
-    .map(ct => ct.permissions[action])
-    .filter((permission): permission is Permission => permission !== null)
-    .map(permission => permission.id);
+  const permissionIds = permissionIdsForAction(contentTypes, action);
 
   return (
     permissionIds.length > 0 && permissionIds.every(id => value.includes(id))
@@ -208,13 +150,10 @@ export function isAllSelectedForAction(
  */
 export function isPartiallySelectedForAction(
   contentTypes: ContentTypePermissions[],
-  action: keyof ContentTypePermissions["permissions"],
+  action: string,
   value: string[]
 ): boolean {
-  const permissionIds = contentTypes
-    .map(ct => ct.permissions[action])
-    .filter((permission): permission is Permission => permission !== null)
-    .map(permission => permission.id);
+  const permissionIds = permissionIdsForAction(contentTypes, action);
 
   return (
     permissionIds.some(id => value.includes(id)) &&

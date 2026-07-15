@@ -266,6 +266,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
               action: string;
               resource: string;
               description: string | null;
+              owner: string | null;
             }>
           >(`/permissions${query}`),
           protectedApi
@@ -281,9 +282,16 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           const resource = String(p.resource);
           const action = String(p.action);
           const slug = `${resource}.${action}`;
+          const owner = p.owner ? String(p.owner) : undefined;
 
           let category: string;
-          if (SYSTEM_RESOURCE_SLUGS.has(resource)) {
+          if (owner) {
+            // Provenance, not the resource name. A plugin names its own
+            // resource, so it matches no collection or single and would
+            // otherwise fall through to collection-types and render as a
+            // content type nobody created.
+            category = "plugins";
+          } else if (SYSTEM_RESOURCE_SLUGS.has(resource)) {
             category = "settings";
           } else if (singleSlugs.has(resource)) {
             category = "single-types";
@@ -299,6 +307,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             action,
             slug,
             category,
+            owner,
           };
         });
 
