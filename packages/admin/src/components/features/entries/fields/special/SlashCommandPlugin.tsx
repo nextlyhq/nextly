@@ -11,7 +11,7 @@
  * @since 1.2.0
  */
 
-import { $createCodeNode } from "@lexical/code";
+import { $createCodeNode } from "@lexical/code-core";
 import {
   INSERT_CHECK_LIST_COMMAND,
   INSERT_ORDERED_LIST_COMMAND,
