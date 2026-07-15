@@ -46,7 +46,7 @@ export function RepeaterControl({
             display: "grid",
             gap: 6,
             padding: 8,
-            border: "1px solid var(--border)",
+            border: "1px solid var(--nx-border)",
             borderRadius: 6,
           }}
         >

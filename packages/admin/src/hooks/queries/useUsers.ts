@@ -23,6 +23,7 @@ import type {
 } from "@admin/types/user";
 
 import { useBulkMutation } from "../useBulkMutation";
+import { currentUserKey } from "../useDashboardUser";
 
 /**
  * Query Keys:
@@ -334,6 +335,10 @@ export function useUpdateUser() {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["users"] });
       void queryClient.invalidateQueries({ queryKey: ["users", userId] });
+      // The edited user may be the signed-in one, in which case the header
+      // avatar and name are now stale. /me is small, so refresh it either way
+      // rather than plumb the current user's id in here to compare.
+      void queryClient.invalidateQueries({ queryKey: currentUserKey });
     },
   });
 }

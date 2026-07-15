@@ -29,6 +29,7 @@ import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
+import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { requireAuthHeader } from "./auth-header-only";
 import { respondDoc, respondMutation } from "./response-shapes";
@@ -101,6 +102,9 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("update-single-schema");
+
     requireAuthHeader(request);
 
     const { slug } = await context.params;
@@ -203,6 +207,9 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("delete-single");
+
     requireAuthHeader(request);
 
     const { slug } = await context.params;

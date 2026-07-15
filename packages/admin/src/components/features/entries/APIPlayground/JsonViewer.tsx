@@ -71,9 +71,11 @@ export function JsonViewer({ value }: JsonViewerProps) {
         },
         ".cm-gutters": {
           borderRight:
-            "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
-          backgroundColor: "color-mix(in srgb, var(--muted) 30%, transparent)",
-          color: "color-mix(in srgb, var(--muted-foreground) 50%, transparent)",
+            "1px solid color-mix(in srgb, var(--nx-border) 50%, transparent)",
+          backgroundColor:
+            "color-mix(in srgb, var(--nx-muted) 30%, transparent)",
+          color:
+            "color-mix(in srgb, var(--nx-muted-foreground) 50%, transparent)",
           padding: "0 4px",
         },
         ".cm-activeLine, .cm-activeLineGutter": {

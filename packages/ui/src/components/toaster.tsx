@@ -77,9 +77,9 @@ export { toast };
  *
  * Customization:
  * All styling uses CSS variables from the design system:
- * - --normal-bg: Background color (uses --popover with fallback)
- * - --normal-text: Text color (uses --popover-foreground with fallback)
- * - --normal-border: Border color (uses --border with fallback)
+ * - --normal-bg: Background color (uses --nx-popover with fallback)
+ * - --normal-text: Text color (uses --nx-popover-foreground with fallback)
+ * - --normal-border: Border color (uses --nx-border with fallback)
  * - --border-radius: Border radius (uses --radius with fallback)
  *
  * Security:
@@ -122,9 +122,9 @@ export function Toaster({ theme = "system", ...props }: ToasterProps) {
       }}
       style={
         {
-          "--normal-bg": "var(--popover)",
-          "--normal-text": "var(--popover-foreground)",
-          "--normal-border": "var(--border)",
+          "--normal-bg": "var(--nx-popover)",
+          "--normal-text": "var(--nx-popover-foreground)",
+          "--normal-border": "var(--nx-border)",
           "--border-radius": "0px",
         } as React.CSSProperties
       }

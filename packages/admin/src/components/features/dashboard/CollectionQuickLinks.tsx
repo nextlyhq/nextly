@@ -89,7 +89,7 @@ function CollectionCard({
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-none overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-border"
+      className="block group h-full rounded-none overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/30"
     >
       <Card
         variant="interactive"
@@ -100,15 +100,15 @@ function CollectionCard({
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between">
             <div className="space-y-1">
-              <span className="text-2xl font-bold tabular-nums tracking-tight text-primary/50 leading-none group-hover:text-primary transition-colors">
+              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none group-hover:text-primary transition-colors">
                 {item.count}
               </span>
-              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-primary/50 group-hover:text-primary pt-1">
+              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-primary pt-1">
                 {item.label}
               </h5>
             </div>
-            <div className="text-primary/50 group-hover:text-primary transition-colors pt-1">
-              <Icon className="h-6 w-6 shrink-0" />
+            <div className="text-muted-foreground/60 group-hover:text-primary transition-colors pt-1">
+              <Icon className="h-5 w-5 shrink-0" />
             </div>
           </div>
         </CardContent>
@@ -123,7 +123,7 @@ function LoadingSkeleton() {
       {Array.from({ length: 4 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-32 rounded-none bg-primary/5  border border-border"
+          className="h-32 rounded-none bg-muted/30  border border-border"
         />
       ))}
     </div>

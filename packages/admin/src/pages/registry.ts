@@ -76,6 +76,12 @@ export interface RouteConfig {
   type: "public" | "private";
   /** Permission slug required to access this route. Routes without this are accessible to all authenticated users. */
   requiredPermission?: string;
+  /**
+   * Route belongs to the schema builder, so it is only reachable where the
+   * builder is enabled (`admin.branding.showBuilder`; off in production by
+   * default). Its links are already hidden there — this covers arriving by URL.
+   */
+  requiresBuilder?: boolean;
 }
 
 export const routeConfig: Record<string, RouteConfig> = {
@@ -121,14 +127,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.BUILDER_COLLECTIONS]: {
     component: CollectionsPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_COLLECTIONS_NEW]: {
     component: CollectionBuilderPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_COLLECTIONS_EDIT]: {
     component: CollectionBuilderEditPage,
     type: "private",
+    requiresBuilder: true,
   },
 
   // ============================================================
@@ -200,14 +209,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.BUILDER_SINGLES]: {
     component: SinglesPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_SINGLES_NEW]: {
     component: SingleBuilderPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_SINGLES_EDIT]: {
     component: SingleBuilderEditPage,
     type: "private",
+    requiresBuilder: true,
   },
   // Single CONTENT routes — permission is per-slug (checked server-side).
   // IMPORTANT: literal segments like /api must be registered before the wildcard [slug].
@@ -224,14 +236,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.BUILDER_COMPONENTS]: {
     component: ComponentsPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_COMPONENTS_NEW]: {
     component: ComponentBuilderPage,
     type: "private",
+    requiresBuilder: true,
   },
   [ROUTES.BUILDER_COMPONENTS_EDIT]: {
     component: ComponentBuilderEditPage,
     type: "private",
+    requiresBuilder: true,
   },
 
   // Settings routes

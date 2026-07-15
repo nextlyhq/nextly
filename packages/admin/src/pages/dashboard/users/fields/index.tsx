@@ -736,7 +736,7 @@ function UserFieldsTable() {
             onDragEnd={handleDragEnd}
           >
             <Table aria-label="User fields table" className="min-w-max">
-              <TableHeader className="bg-[var(--table-header-bg)]">
+              <TableHeader className="bg-[var(--nx-table-header-bg)]">
                 <TableRow>
                   <TableHead className="w-50">Name</TableHead>
                   <TableHead>Label</TableHead>
@@ -779,7 +779,7 @@ function UserFieldsTable() {
           </DndContext>
 
           {/* Pagination inside table wrapper - always show if table is shown */}
-          {/* <div className="table-footer  border-t border-border bg-[var(--table-header-bg)] p-4"> */}
+          {/* <div className="table-footer  border-t border-border bg-[var(--nx-table-header-bg)] p-4"> */}
           <Pagination
             currentPage={page}
             totalPages={Math.max(1, totalPages)}

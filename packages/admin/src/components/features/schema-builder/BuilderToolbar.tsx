@@ -6,7 +6,7 @@
 // read-only.
 import { Badge, Button } from "@nextlyhq/ui";
 
-import { Lock, Save, Settings } from "@admin/components/icons";
+import { Lock, Settings } from "@admin/components/icons";
 
 import type { BuilderConfig } from "./builder-config";
 
@@ -77,7 +77,6 @@ export function BuilderToolbar({
           title={lockedSaveTitle}
           onClick={onSave}
         >
-          <Save className="h-4 w-4" />
           Save
         </Button>
       </div>

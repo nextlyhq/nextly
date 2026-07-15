@@ -50,7 +50,7 @@ export function UserProfileDropdown({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className="w-64 p-2 mb-2 ml-2 rounded-none border-border shadow-xl shadow-black/5 admin-dropdown-content  border border-border bg-sidebar"
+          className="w-64 p-2 mb-2 ml-2 rounded-none shadow-xl shadow-black/5 admin-dropdown-content border border-border bg-popover"
           side="bottom"
           align="end"
           forceMount
@@ -83,7 +83,7 @@ export function UserProfileDropdown({
             onClick={onLogout}
             className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-primary/50"
           >
-            <LogOut className="h-4 w-4 transform transition-transform transition-colors" />
+            <LogOut className="h-4 w-4 transition-colors" />
             <span>Sign out</span>
           </DropdownMenuItem>
         </DropdownMenuContent>

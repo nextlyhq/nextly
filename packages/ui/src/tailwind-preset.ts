@@ -17,46 +17,46 @@ const uiPreset = {
   theme: {
     extend: {
       colors: {
-        border: "var(--border)",
-        input: "var(--input)",
-        ring: "var(--ring)",
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        border: "var(--nx-border)",
+        input: "var(--nx-input)",
+        ring: "var(--nx-ring)",
+        background: "var(--nx-background)",
+        foreground: "var(--nx-foreground)",
         primary: {
-          DEFAULT: "var(--primary)",
-          foreground: "var(--primary-foreground)",
+          DEFAULT: "var(--nx-primary)",
+          foreground: "var(--nx-primary-foreground)",
         },
         secondary: {
-          DEFAULT: "var(--secondary)",
-          foreground: "var(--secondary-foreground)",
+          DEFAULT: "var(--nx-secondary)",
+          foreground: "var(--nx-secondary-foreground)",
         },
         destructive: {
-          DEFAULT: "var(--destructive)",
-          foreground: "var(--destructive-foreground)",
+          DEFAULT: "var(--nx-destructive)",
+          foreground: "var(--nx-destructive-foreground)",
         },
         success: {
-          DEFAULT: "var(--success)",
-          foreground: "var(--success-foreground)",
+          DEFAULT: "var(--nx-success)",
+          foreground: "var(--nx-success-foreground)",
         },
         warning: {
-          DEFAULT: "var(--warning)",
-          foreground: "var(--warning-foreground)",
+          DEFAULT: "var(--nx-warning)",
+          foreground: "var(--nx-warning-foreground)",
         },
         muted: {
-          DEFAULT: "var(--muted)",
-          foreground: "var(--muted-foreground)",
+          DEFAULT: "var(--nx-muted)",
+          foreground: "var(--nx-muted-foreground)",
         },
         accent: {
-          DEFAULT: "var(--accent)",
-          foreground: "var(--accent-foreground)",
+          DEFAULT: "var(--nx-accent)",
+          foreground: "var(--nx-accent-foreground)",
         },
         popover: {
-          DEFAULT: "var(--popover)",
-          foreground: "var(--popover-foreground)",
+          DEFAULT: "var(--nx-popover)",
+          foreground: "var(--nx-popover-foreground)",
         },
         card: {
-          DEFAULT: "var(--card)",
-          foreground: "var(--card-foreground)",
+          DEFAULT: "var(--nx-card)",
+          foreground: "var(--nx-card-foreground)",
         },
       },
       borderRadius: {

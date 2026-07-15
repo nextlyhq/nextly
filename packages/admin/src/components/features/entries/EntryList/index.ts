@@ -17,7 +17,7 @@ export { EntryEmptyState, type EntryEmptyStateProps } from "./EntryEmptyState";
 export {
   EntryTable,
   type EntryTableProps,
-  type EntryTablePagination,
+  type TablePaginationState,
   type EntryTableRef,
 } from "./EntryTable";
 
@@ -44,12 +44,6 @@ export {
   EntryTableToolbar,
   type EntryTableToolbarProps,
 } from "./EntryTableToolbar";
-
-// Pagination
-export {
-  EntryTablePagination as EntryTablePaginationComponent,
-  type EntryTablePaginationProps,
-} from "./EntryTablePagination";
 
 // Bulk actions
 export { BulkActionBar, type BulkActionBarProps } from "./BulkActionBar";

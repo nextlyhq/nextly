@@ -22,7 +22,6 @@ import {
   PanelRight,
   PanelRightClose,
   RotateCcw,
-  Save,
   Trash2,
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -228,11 +227,7 @@ export function EntrySystemHeader({
               onClick={onSaveChanges}
               data-status="save-changes"
             >
-              {isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save changes
             </Button>
             <Button
@@ -256,11 +251,7 @@ export function EntrySystemHeader({
               onClick={onSaveDraft}
               data-status="draft"
             >
-              {isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save Draft
             </Button>
             <Button
@@ -290,11 +281,10 @@ export function EntrySystemHeader({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Saving…
               </>
+            ) : mode === "create" ? (
+              "Create"
             ) : (
-              <>
-                <Save className="h-3.5 w-3.5" />
-                {mode === "create" ? "Create" : "Save"}
-              </>
+              "Save"
             )}
           </Button>
         )}

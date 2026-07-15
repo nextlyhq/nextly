@@ -152,7 +152,6 @@ export {
   RotateCcw, // Column visibility: reset to default
   RemoveFormatting, // Rich text editor
   SeparatorHorizontal, // Rich text editor: horizontal rule
-  Save, // Collection Builder
   Search,
   Send, // Collection Settings: icon picker
   Settings,

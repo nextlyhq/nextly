@@ -75,7 +75,7 @@ export const ContentStatusWidget: React.FC = () => {
   const draftPct = total > 0 ? Math.round((draft / total) * 100) : 0;
 
   const segments = [
-    { label: "Published", value: published, color: "var(--primary)" },
+    { label: "Published", value: published, color: "var(--nx-primary)" },
     { label: "Draft", value: draft, color: "#f59e0b" }, // Amber
   ];
 
@@ -142,7 +142,7 @@ export const ContentStatusWidget: React.FC = () => {
                 label="Published"
                 count={published}
                 percentage={publishedPct}
-                color="var(--primary)"
+                color="var(--nx-primary)"
               />
               <StatusItem
                 label="Draft"
