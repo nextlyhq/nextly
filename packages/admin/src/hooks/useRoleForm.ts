@@ -268,6 +268,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
               resource: string;
               description: string | null;
               owner: string | null;
+              danger?: boolean;
             }>
           >(`/permissions${query}`),
           protectedApi
@@ -309,6 +310,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             slug,
             category,
             owner,
+            danger: p.danger === true,
           };
         });
 

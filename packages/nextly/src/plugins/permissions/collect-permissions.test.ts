@@ -16,7 +16,7 @@ const cfg = (
 
 const plugin = (
   name: string,
-  permissions: Array<Record<string, string>>,
+  permissions: Array<Record<string, unknown>>,
   enabled = true
 ): PluginDefinition =>
   ({
@@ -42,6 +42,8 @@ describe("collectCustomPermissions", () => {
         name: "Manage SEO",
         description: undefined,
         owner: "@acme/seo",
+        group: "General",
+        danger: false,
       },
     ]);
   });
@@ -115,6 +117,8 @@ describe("collectCustomPermissions", () => {
         name: "Export Reports",
         description: undefined,
         owner: "app",
+        group: "General",
+        danger: false,
       },
     ]);
   });
@@ -141,5 +145,70 @@ describe("collectCustomPermissions", () => {
         []
       )
     ).toThrow();
+  });
+});
+
+describe("what a declaration says beyond its identity", () => {
+  // `group` was on the public interface, set by the canonical example, and
+  // read by nothing: no column, no consumer. A field that accepts a value and
+  // ignores it is worse than no field, because it looks like it worked.
+  it("keeps the group a plugin declares", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/big", [
+        { action: "export", resource: "reports", group: "Reporting" },
+      ]),
+    ]);
+
+    expect(out[0].group).toBe("Reporting");
+  });
+
+  it("files an ungrouped permission under General", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/small", [{ action: "export", resource: "reports" }]),
+    ]);
+
+    expect(out[0].group).toBe("General");
+  });
+
+  // Defaulted at the edge so nothing downstream has to decide what an empty
+  // string, a stray space, or undefined were supposed to mean.
+  it("treats a blank group as no group", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/small", [
+        { action: "export", resource: "reports", group: "   " },
+      ]),
+    ]);
+
+    expect(out[0].group).toBe("General");
+  });
+
+  it("keeps a danger flag", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/x", [
+        { action: "export", resource: "reports", danger: true },
+      ]),
+    ]);
+
+    expect(out[0].danger).toBe(true);
+  });
+
+  it("is not dangerous unless the declaration says so", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/x", [{ action: "export", resource: "reports" }]),
+    ]);
+
+    expect(out[0].danger).toBe(false);
+  });
+
+  // A boolean, not anything truthy: `danger: "yes"` is a mistake, and reading
+  // it as true would let a typo decide whether a warning appears.
+  it("only accepts a real true", () => {
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/x", [
+        { action: "export", resource: "reports", danger: "yes" },
+      ]),
+    ]);
+
+    expect(out[0].danger).toBe(false);
   });
 });

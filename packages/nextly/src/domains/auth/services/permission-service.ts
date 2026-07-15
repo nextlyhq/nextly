@@ -148,6 +148,10 @@ export class PermissionService extends BaseService {
       owner: string | null;
       /** True once the declaring package stopped declaring it. */
       orphaned: boolean;
+      /** Heading within the owner's section; null when the owner set none. */
+      group: string | null;
+      /** True for a permission the admin should warn before granting. */
+      danger: boolean;
     }>;
     meta: {
       total: number;
@@ -241,6 +245,8 @@ export class PermissionService extends BaseService {
           description: permissions.description,
           owner: permissions.owner,
           orphanedAt: permissions.orphanedAt,
+          permissionGroup: permissions.permissionGroup,
+          danger: permissions.danger,
         })
         .from(permissions)
         .where(whereClause)
@@ -311,6 +317,8 @@ export class PermissionService extends BaseService {
             category,
             owner: row.owner ? String(row.owner) : null,
             orphaned: row.orphanedAt !== null && row.orphanedAt !== undefined,
+            group: row.permissionGroup ? String(row.permissionGroup) : null,
+            danger: Boolean(row.danger),
           };
         }),
         meta: {
@@ -437,12 +445,25 @@ export class PermissionService extends BaseService {
     slug: string,
     description?: string,
     /**
-     * Who declared it — a plugin name, or omitted for the framework's own
-     * per-collection seeds. Recorded so the admin can tell a plugin's custom
-     * permission from a content type's, rather than inferring one from the
-     * slug and inventing a collection that does not exist.
+     * What the declaration says about the permission beyond its identity.
+     *
+     * An object rather than three more positional arguments: the signature was
+     * already six deep, and `(…, undefined, undefined, true)` is not something
+     * anyone should have to read.
      */
-    owner?: string
+    meta?: {
+      /**
+       * Who declared it — a plugin name, or omitted for the framework's own
+       * per-collection seeds. Recorded so the admin can tell a plugin's custom
+       * permission from a content type's, rather than inferring one from the
+       * slug and inventing a collection that does not exist.
+       */
+      owner?: string;
+      /** Heading within the owner's section of the matrix. */
+      group?: string;
+      /** True for a permission the admin should warn before granting. */
+      danger?: boolean;
+    }
   ): Promise<{
     /** ID of the existing or newly created permission row. */
     id: string;
@@ -459,6 +480,8 @@ export class PermissionService extends BaseService {
         id: permissions.id,
         owner: permissions.owner,
         slug: permissions.slug,
+        permissionGroup: permissions.permissionGroup,
+        danger: permissions.danger,
       })
       .from(permissions)
       .where(
@@ -482,13 +505,32 @@ export class PermissionService extends BaseService {
       // renames without revoking. Without this, a corrected slug would reach
       // new installs only, and existing databases would keep answering to a
       // name no caller asks for.
-      const patch: { owner?: string | null; slug?: string } = {};
+      const patch: {
+        owner?: string | null;
+        slug?: string;
+        permissionGroup?: string | null;
+        danger?: boolean;
+      } = {};
 
       const currentOwner =
         (existing as { owner?: string | null }).owner ?? null;
-      const declaredOwner = owner ?? null;
+      const declaredOwner = meta?.owner ?? null;
       if (currentOwner !== declaredOwner) {
         patch.owner = declaredOwner;
+      }
+
+      const currentGroup =
+        (existing as { permissionGroup?: string | null }).permissionGroup ??
+        null;
+      const declaredGroup = meta?.group ?? null;
+      if (currentGroup !== declaredGroup) {
+        patch.permissionGroup = declaredGroup;
+      }
+
+      const currentDanger = Boolean((existing as { danger?: unknown }).danger);
+      const declaredDanger = meta?.danger === true;
+      if (currentDanger !== declaredDanger) {
+        patch.danger = declaredDanger;
       }
 
       const currentSlug = (existing as { slug?: string | null }).slug ?? null;
@@ -512,7 +554,9 @@ export class PermissionService extends BaseService {
       action,
       resource,
       description: description ?? null,
-      owner: owner ?? null,
+      owner: meta?.owner ?? null,
+      permissionGroup: meta?.group ?? null,
+      danger: meta?.danger === true,
     };
     try {
       const insertPerm = (this.db as RBACDatabaseInstance)

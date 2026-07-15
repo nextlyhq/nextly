@@ -39,6 +39,8 @@ export interface Permission extends PermissionBase {
   category?: string;
   /** Package that declared this permission; absent for the built-in seeds. */
   owner?: string;
+  /** True for a permission that hands out access or takes data off the site. */
+  danger?: boolean;
   isInUse?: boolean;
   roleCount?: number;
   isSystemPermission?: boolean;

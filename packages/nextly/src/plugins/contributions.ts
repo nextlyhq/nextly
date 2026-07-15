@@ -23,7 +23,26 @@ export interface PluginPermission {
   resource: string;
   label?: string;
   description?: string;
+  /**
+   * A heading to file this permission under, within the plugin's own section
+   * of the admin's permission matrix. Defaults to `"General"`.
+   *
+   * The section itself is not yours to choose — it is the package that
+   * declared the permission, which the host knows and cannot be wrong about.
+   * This is the level below that: a plugin with two permissions needs no
+   * groups, and one with forty needs them badly, and only the plugin knows
+   * which of its own verbs belong together.
+   */
   group?: string;
+  /**
+   * Mark a permission that hands out access, destroys data irreversibly, or
+   * reaches outside the site. The admin warns before granting it.
+   *
+   * A boolean, not a message: the warning's wording belongs to the host, so
+   * that it reads the same everywhere and stays recognisable. A permission
+   * that explains its own danger in its own voice is one people stop reading.
+   */
+  danger?: boolean;
 }
 
 /**

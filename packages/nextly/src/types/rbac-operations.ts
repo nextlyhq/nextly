@@ -49,6 +49,10 @@ export interface PermissionInsertData {
   description: string | null;
   /** Declaring plugin, or null for the framework's own seeded permissions. */
   owner: string | null;
+  /** Heading within the owner's section of the matrix; null when ungrouped. */
+  permissionGroup: string | null;
+  /** True for a permission the admin should warn before granting. */
+  danger: boolean | null;
 }
 
 export interface PermissionUpdateData {
@@ -70,6 +74,10 @@ export interface PermissionSelectResult {
   owner: string | null;
   /** Set once the declaring package stopped declaring it; null while live. */
   orphanedAt: Date | null;
+  /** Heading within the owner's section of the matrix. */
+  permissionGroup: string | null;
+  /** True for a permission the admin should warn before granting. */
+  danger: boolean | number | null;
 }
 
 export interface PermissionBasicSelectResult {

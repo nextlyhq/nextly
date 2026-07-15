@@ -90,6 +90,21 @@ export const permissions = pgTable(
      * toward a preset, and be retired later on purpose.
      */
     orphanedAt: timestamp("orphaned_at", { withTimezone: false }),
+    /**
+     * Heading this permission is filed under within its owner's section of the
+     * matrix. Declared by the owner, which is the only thing that knows which
+     * of its own verbs belong together.
+     */
+    permissionGroup: varchar("permission_group", { length: 191 }),
+    /**
+     * True for a permission that hands out access, destroys data, or reaches
+     * outside the site. The admin warns before granting it.
+     *
+     * Nullable, like `owner` and `orphaned_at`: a not-null column cannot be
+     * added to a table that already has rows without a SQL default, and
+     * drizzle-kit refuses the change rather than guess. Absent reads as false.
+     */
+    danger: boolean("danger"),
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),

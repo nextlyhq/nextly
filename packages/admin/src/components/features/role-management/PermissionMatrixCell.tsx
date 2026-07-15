@@ -49,25 +49,37 @@ export function PermissionMatrixCell({
     );
   }
 
+  // A permission that hands out access or takes data off the site. Marked in
+  // the host's own words, not the plugin's, so that it reads the same wherever
+  // it appears — a warning phrased forty different ways is one people stop
+  // seeing. The mark rides on the checkbox's accessible name so it is not
+  // colour alone, which would say nothing to a screen reader and nothing to
+  // the monochrome admin either.
+  const dangerNote = permission.danger
+    ? `${action} ${contentTypeName} — grant with care, this gives access to data beyond this site`
+    : undefined;
+
   return (
     <td className={className}>
       <Checkbox
         checked={checked}
         onCheckedChange={checked => onToggle(permission.id, !!checked)}
         disabled={disabled || locked}
+        data-danger={permission.danger ? "true" : undefined}
         // Named by its column and row rather than a sentence built here, so
         // the pairing a sighted reader gets from position is the one a screen
         // reader announces. Falls back to a composed label where the ids are
         // not supplied.
         aria-labelledby={
-          columnHeaderId && rowHeaderId
-            ? `${columnHeaderId} ${rowHeaderId}`
-            : undefined
+          dangerNote || !(columnHeaderId && rowHeaderId)
+            ? undefined
+            : `${columnHeaderId} ${rowHeaderId}`
         }
         aria-label={
-          columnHeaderId && rowHeaderId
+          dangerNote ??
+          (columnHeaderId && rowHeaderId
             ? undefined
-            : `${action} permission for ${contentTypeName}`
+            : `${action} permission for ${contentTypeName}`)
         }
       />
     </td>
