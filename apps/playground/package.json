@@ -29,7 +29,7 @@
     "@nextlyhq/admin": "workspace:^",
     "@nextlyhq/plugin-form-builder": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "1.0.0-rc.4",
     "mysql2": "^3.12.0",
     "next": "16.2.6",
     "nextly": "workspace:^",

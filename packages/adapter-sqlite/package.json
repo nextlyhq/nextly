@@ -36,7 +36,7 @@
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "better-sqlite3": "^12.5.0",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "1.0.0-rc.4"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
