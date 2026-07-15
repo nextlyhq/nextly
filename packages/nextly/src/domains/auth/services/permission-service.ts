@@ -125,6 +125,8 @@ export class PermissionService extends BaseService {
       resource: string;
       description: string | null;
       category?: string;
+      /** Package that declared this permission; null for the built-in seeds. */
+      owner: string | null;
     }>;
     meta: {
       total: number;
@@ -213,6 +215,7 @@ export class PermissionService extends BaseService {
           action: permissions.action,
           resource: permissions.resource,
           description: permissions.description,
+          owner: permissions.owner,
         })
         .from(permissions)
         .where(whereClause)
@@ -281,6 +284,7 @@ export class PermissionService extends BaseService {
             resource: String(row.resource),
             description: row.description ? String(row.description) : null,
             category,
+            owner: row.owner ? String(row.owner) : null,
           };
         }),
         meta: {

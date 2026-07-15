@@ -66,6 +66,8 @@ export interface PermissionSelectResult {
   action: string;
   resource: string;
   description: string | null;
+  /** Package that declared this permission; null for the built-in seeds. */
+  owner: string | null;
 }
 
 export interface PermissionBasicSelectResult {

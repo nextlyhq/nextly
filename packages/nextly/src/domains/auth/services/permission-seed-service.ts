@@ -643,9 +643,17 @@ export class PermissionSeedService extends BaseService {
    * Remove permissions for dynamic resources that no longer exist.
    *
    * This is NOT auto-run — it must be called explicitly to prevent
-   * accidental permission loss. Removes permissions whose resource is not
-   * a system resource and not found in dynamic_collections,
-   * dynamic_singles, or dynamic_components.
+   * accidental permission loss. Removes permissions whose resource is not a
+   * system resource, not found in dynamic_collections, dynamic_singles or
+   * dynamic_components, **and** which no package declared.
+   *
+   * Plugin-declared permissions (`owner` set) are never removed here. Their
+   * resource is a name the plugin chose and is not expected to appear in any
+   * of those tables, so the resource check cannot judge them. Retiring one
+   * whose plugin has genuinely gone needs a signal this does not have —
+   * absence from config is not an uninstall, and disabled plugins still
+   * declare their permissions.
+   *
    * First removes permissions from all roles, then deletes the permissions.
    */
   async cleanupOrphanedPermissions(): Promise<SeedResult> {
@@ -674,7 +682,12 @@ export class PermissionSeedService extends BaseService {
       const { rolePermissions, permissions } = this.tables;
 
       for (const perm of allPerms.data) {
-        if (!knownResources.has(perm.resource)) {
+        // A plugin's resource is not a collection, a single, a component or a
+        // system resource, so an unknown resource says nothing about whether
+        // a permission is orphaned. `owner` does: a permission that records
+        // the package that declared it was declared by something, and is not
+        // rubbish left behind by a deleted content type.
+        if (!knownResources.has(perm.resource) && !perm.owner) {
           result.total++;
 
           try {
