@@ -209,6 +209,47 @@ describe("formatWhere", () => {
     });
   });
 
+  // Two conditions on one field is how a range is written. Assigning rather
+  // than merging kept only the last, so half the range went silently missing.
+  // The earlier test used two *different* fields and sailed past this.
+  it("keeps both conditions when a field carries a range", () => {
+    const result = formatWhere([
+      condition({
+        id: "a",
+        field: "createdAt",
+        operator: "greater_than",
+        value: "2026-01-01",
+      }),
+      condition({
+        id: "b",
+        field: "createdAt",
+        operator: "less_than",
+        value: "2026-12-31",
+      }),
+    ]);
+    expect(JSON.parse(result)).toEqual({
+      createdAt: { greater_than: "2026-01-01", less_than: "2026-12-31" },
+    });
+  });
+
+  it("keeps the last value when a field repeats the same operator", () => {
+    const result = formatWhere([
+      condition({
+        id: "a",
+        field: "status",
+        operator: "equals",
+        value: "draft",
+      }),
+      condition({
+        id: "b",
+        field: "status",
+        operator: "equals",
+        value: "published",
+      }),
+    ]);
+    expect(JSON.parse(result)).toEqual({ status: { equals: "published" } });
+  });
+
   it("splits list operators into an array", () => {
     const result = formatWhere([
       condition({ operator: "in", value: "draft, published" }),

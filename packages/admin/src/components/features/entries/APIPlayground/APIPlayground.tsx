@@ -387,7 +387,21 @@ export function APIPlayground({
   /**
    * Execute the API request
    */
+  /**
+   * Whether the request is missing the entry ID its action needs.
+   *
+   * Above `executeRequest` so the send itself can refuse. The button used to
+   * be the only thing that checked, which made the guard a property of one
+   * control rather than of the request: ⌘↵ went straight through and sent the
+   * collection's base path instead — a different request from the one the
+   * disabled button was describing.
+   */
+  const entryIdMissing =
+    !isSingle && currentAction.requiresEntryId && !entryId.trim();
+
   const executeRequest = useCallback(async () => {
+    if (entryIdMissing) return;
+
     // A second send replaces the first rather than racing it: the slower reply
     // could otherwise land last and overwrite the newer one.
     abortRef.current?.abort();
@@ -474,7 +488,7 @@ export function APIPlayground({
         setIsLoading(false);
       }
     }
-  }, [method, fullUrl, requestBody]);
+  }, [method, fullUrl, requestBody, entryIdMissing]);
 
   /** Stop an in-flight request without touching what is already on screen. */
   const cancelRequest = useCallback(() => {
@@ -580,6 +594,8 @@ export function APIPlayground({
         body: actionRequiresBody ? requestBody : undefined,
         collection: collectionSlug,
         isSingle,
+        action,
+        entryId: entryId.trim() || undefined,
         params: Object.fromEntries(
           Object.entries(effectiveParams).filter(([, v]) => v && v.trim())
         ),
@@ -592,14 +608,10 @@ export function APIPlayground({
       collectionSlug,
       isSingle,
       effectiveParams,
+      action,
+      entryId,
     ]
   );
-
-  /**
-   * Check if entry ID is missing when required
-   */
-  const entryIdMissing =
-    !isSingle && currentAction.requiresEntryId && !entryId.trim();
 
   return (
     // Fills the height it is given rather than demanding a minimum: the panes
@@ -610,10 +622,14 @@ export function APIPlayground({
         method={method}
         url={fullUrl}
         action={
+          // Enabled for a single too: it has two actions, and the list below
+          // offers both. Disabling the picker left `update` selectable in
+          // theory and unreachable in practice, so a single's write endpoint
+          // could not be tried here at all — while everything behind it, the
+          // PATCH, the URL and the body tab, already handled it.
           <Select
             value={action}
             onValueChange={v => setAction(v as EndpointAction)}
-            disabled={isSingle}
           >
             <SelectTrigger className="h-full rounded-none border-0 px-4 text-sm shadow-none focus:ring-0">
               {/* The trigger renders its own content rather than echoing the
@@ -665,7 +681,7 @@ export function APIPlayground({
         isLoading={isLoading}
         copied={copied}
         onSend={() => {
-          if (!entryIdMissing) void executeRequest();
+          void executeRequest();
         }}
         onCancel={cancelRequest}
         onCopy={() => {

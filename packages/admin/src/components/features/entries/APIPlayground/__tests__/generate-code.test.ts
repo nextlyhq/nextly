@@ -18,6 +18,7 @@ const base: CodeRequest = {
   collection: "posts",
   isSingle: false,
   params: { limit: "10" },
+  action: "list",
 };
 
 describe("curl", () => {
@@ -149,5 +150,131 @@ describe("generateCode", () => {
     expect(out.curl).toContain("curl");
     expect(out.fetch).toContain("fetch(");
     expect(out.sdk).toContain("nextly");
+  });
+});
+
+// Every action used to produce `find()`. The snippet under "Create Entry" ran
+// a query, and nothing failed — it just did the wrong thing, authoritatively.
+// These pin each action to the call that performs it, against the direct API's
+// real signatures.
+describe("sdk — the call matches the action", () => {
+  const req = (over: Partial<CodeRequest>): CodeRequest => ({
+    ...base,
+    ...over,
+  });
+
+  it("list reads with find", () => {
+    expect(toSdk(req({ action: "list" }))).toContain("nextly.find({");
+  });
+
+  it("get reads one entry by id", () => {
+    const out = toSdk(req({ action: "get", entryId: "abc123" }));
+    expect(out).toContain("nextly.findByID({");
+    expect(out).toContain('id: "abc123"');
+    expect(out).not.toContain("nextly.find({");
+  });
+
+  it("create writes, and carries the body as data", () => {
+    const out = toSdk(
+      req({ action: "create", body: '{"title":"Hello"}', method: "POST" })
+    );
+    expect(out).toContain("nextly.create({");
+    expect(out).toContain('"title": "Hello"');
+    expect(out).not.toContain("nextly.find(");
+  });
+
+  it("update addresses the entry it edits", () => {
+    const out = toSdk(
+      req({ action: "update", entryId: "abc123", body: '{"title":"New"}' })
+    );
+    expect(out).toContain("nextly.update({");
+    expect(out).toContain('id: "abc123"');
+  });
+
+  it("delete deletes", () => {
+    const out = toSdk(req({ action: "delete", entryId: "abc123" }));
+    expect(out).toContain("nextly.delete({");
+    expect(out).toContain('id: "abc123"');
+  });
+
+  it("duplicate duplicates", () => {
+    expect(toSdk(req({ action: "duplicate", entryId: "abc123" }))).toContain(
+      "nextly.duplicate({"
+    );
+  });
+
+  it("count counts, and keeps the filter", () => {
+    const out = toSdk(
+      req({
+        action: "count",
+        params: { where: '{"status":{"equals":"draft"}}' },
+      })
+    );
+    expect(out).toContain("nextly.count({");
+    expect(out).toContain("where:");
+  });
+
+  it("bulk delete passes the ids from the body", () => {
+    const out = toSdk(
+      req({ action: "bulk-delete", body: '{"ids":["a","b"]}' })
+    );
+    expect(out).toContain("nextly.bulkDelete({");
+    expect(out).toContain('["a","b"]');
+  });
+
+  // The SDK has no bulkUpdate: `update` with a `where` is the bulk form, so
+  // the REST body's ids have to become one.
+  it("bulk update becomes an update with a where on id", () => {
+    const out = toSdk(
+      req({
+        action: "bulk-update",
+        body: '{"ids":["a","b"],"data":{"status":"published"}}',
+      })
+    );
+    expect(out).toContain("nextly.update({");
+    expect(out).toContain('where: { id: { in: ["a","b"] } }');
+    expect(out).toContain('"status": "published"');
+  });
+
+  it("a single reads with findSingle and a single update writes with updateSingle", () => {
+    expect(toSdk(req({ isSingle: true, action: "get" }))).toContain(
+      "nextly.findSingle({"
+    );
+    const upd = toSdk(
+      req({ isSingle: true, action: "update", body: '{"title":"Home"}' })
+    );
+    expect(upd).toContain("nextly.updateSingle({");
+    expect(upd).toContain('"title": "Home"');
+  });
+
+  // findSingle takes slug/select/populate. Its own JSDoc example passes
+  // `depth: 1`, which is not on the interface and does not compile — the
+  // snippet must not copy the documentation's mistake.
+  it("does not pass depth to findSingle", () => {
+    const out = toSdk(
+      req({ isSingle: true, action: "get", params: { depth: "2" } })
+    );
+    expect(out).not.toContain("depth");
+  });
+});
+
+describe("sdk — numeric arguments", () => {
+  const req = (params: Record<string, string>): CodeRequest => ({
+    ...base,
+    action: "list",
+    params,
+  });
+
+  it("keeps numbers", () => {
+    expect(toSdk(req({ limit: "25" }))).toContain("limit: 25,");
+  });
+
+  // `Number("abc")` is NaN, and `limit: NaN` reads as code while being none.
+  it("drops values that are not numbers rather than emitting NaN", () => {
+    const out = toSdk(req({ limit: "abc", page: "", depth: "x" }));
+    expect(out).not.toContain("NaN");
+    expect(out).not.toContain("limit:");
+    expect(out).not.toContain("page:");
+    expect(out).not.toContain("depth:");
   });
 });
