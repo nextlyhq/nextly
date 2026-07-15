@@ -73,7 +73,6 @@ export function PermissionMatrixHeader({
                   }
                   disabled={disabled || hasLocked}
                   aria-label={`Toggle all ${action} permissions`}
-                  className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                 />
                 <span>{actionLabel(action)}</span>
               </div>

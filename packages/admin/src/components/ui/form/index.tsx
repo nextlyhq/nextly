@@ -1,24 +1,11 @@
 "use client";
 
-import {
-  Label,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Label } from "@nextlyhq/ui";
 import type * as LabelPrimitive from "@radix-ui/react-label";
 import { Slot } from "@radix-ui/react-slot";
-import { Info } from "lucide-react";
 import type * as React from "react";
 import type { ComponentProps } from "react";
-import {
-  createContext,
-  useContext,
-  useId,
-  useLayoutEffect,
-  useState,
-} from "react";
+import { createContext, useContext, useId } from "react";
 import {
   Controller,
   FormProvider,
@@ -40,8 +27,6 @@ type FormFieldContextValue<
 
 type FormItemContextValue = {
   id: string;
-  description: React.ReactNode;
-  setDescription: (d: React.ReactNode) => void;
 };
 
 const Form: typeof FormProvider = FormProvider;
@@ -92,10 +77,9 @@ const FormItemContext = createContext<FormItemContextValue>(
 
 function FormItem({ className, ...props }: ComponentProps<"div">) {
   const id = useId();
-  const [description, setDescription] = useState<React.ReactNode>(null);
 
   return (
-    <FormItemContext.Provider value={{ id, description, setDescription }}>
+    <FormItemContext.Provider value={{ id }}>
       <div
         data-slot="form-item"
         className={cn("space-y-1.5", className)}
@@ -110,40 +94,15 @@ function FormLabel({
   ...props
 }: React.ComponentProps<typeof LabelPrimitive.Root>) {
   const { error, formItemId } = useFormField();
-  const { description, id } = useContext(FormItemContext);
-  const formDescriptionId = `${id}-form-item-description`;
 
   return (
-    <div className="flex items-center gap-1.5">
-      <Label
-        data-slot="form-label"
-        data-error={!!error}
-        className={cn("text-foreground", className)}
-        htmlFor={formItemId}
-        {...props}
-      />
-      {description && (
-        <TooltipProvider>
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger
-              type="button"
-              tabIndex={-1}
-              aria-describedby={formDescriptionId}
-              className="shrink-0 text-muted-foreground hover:text-foreground focus:outline-none focus:text-foreground transition-colors cursor-help"
-            >
-              <Info className="h-3.5 w-3.5" />
-              <span className="sr-only">Field description</span>
-            </TooltipTrigger>
-            <TooltipContent
-              side="right"
-              className="max-w-[250px] text-[12px] break-words relative z-[100] shadow-md  border border-border bg-primary text-primary-foreground px-3 py-2 rounded-none"
-            >
-              {description}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-    </div>
+    <Label
+      data-slot="form-label"
+      data-error={!!error}
+      className={cn("text-foreground", className)}
+      htmlFor={formItemId}
+      {...props}
+    />
   );
 }
 
@@ -167,26 +126,27 @@ function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
   );
 }
 
-function FormDescription({ children }: React.ComponentProps<"p">) {
+/**
+ * A field's helper text, under the field.
+ *
+ * This used to render nothing and hand its text to the label, which showed it
+ * in a tooltip behind an info icon. Help that has to be discovered by hovering
+ * an icon is help most people never read, and it is unreachable by touch. The
+ * text sits under the control it describes instead, where `aria-describedby`
+ * has always claimed it was.
+ */
+function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
   const { formDescriptionId } = useFormField();
-  const { setDescription } = useContext(FormItemContext);
 
-  useLayoutEffect(() => {
-    setDescription(children ?? null);
-    return () => setDescription(null);
-  }, [children, setDescription]);
+  if (!props.children) return null;
 
-  if (!children) return null;
-
-  // Visually hidden — kept for aria-describedby to resolve correctly
   return (
-    <span
+    <p
       id={formDescriptionId}
       data-slot="form-description"
-      className="sr-only"
-    >
-      {children}
-    </span>
+      className={cn("text-sm text-muted-foreground", className)}
+      {...props}
+    />
   );
 }
 

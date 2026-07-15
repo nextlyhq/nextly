@@ -69,7 +69,6 @@ export function PermissionMatrixCell({
             ? undefined
             : `${action} permission for ${contentTypeName}`
         }
-        className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
       />
     </td>
   );

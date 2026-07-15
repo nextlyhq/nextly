@@ -50,7 +50,6 @@ export function PermissionMatrixRow({
             onCheckedChange={checked => onToggleAll(contentType, !!checked)}
             disabled={disabled || hasLockedPermissions}
             aria-label={`Toggle all permissions for ${contentType.name}`}
-            className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
           />
           <span
             id={rowHeaderId}
