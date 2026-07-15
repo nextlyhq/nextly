@@ -618,8 +618,8 @@
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --sidebar-background: oklch(1 0 0);
-  /* Pure white for weightless aesthetic */
+  --sidebar-background: var(--background);
+  /* flat with the content surface; nav is separated by borders, not fill */
   --sidebar-foreground: oklch(0.372 0.0392 257.3);
   /* slate-700 */
   --sidebar-primary: oklch(0.2079 0.0399 265.73);
@@ -720,8 +720,8 @@
   /* red-500 */
 
   /* Sidebar specific colors - dark mode */
-  --sidebar-background: oklch(0.2079 0.0399 265.73);
-  /* slate-900 (#0f172a) - matches cards for consistent depth */
+  --sidebar-background: var(--background);
+  /* flat with the content surface; nav is separated by borders, not fill */
   --sidebar-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
   --sidebar-primary: oklch(0.9838 0.0035 247.86);
