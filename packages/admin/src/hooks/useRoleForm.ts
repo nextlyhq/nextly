@@ -14,6 +14,7 @@ import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { PAGINATION } from "../constants/pagination";
 import { ROUTES } from "../constants/routes";
+import { apiErrorMessage } from "../lib/api/parseApiError";
 import { protectedApi } from "../lib/api/protectedApi";
 import { roleApi } from "../services/roleApi";
 import type { FetchRolesParams } from "../types/role";
@@ -225,8 +226,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       navigateTo(ROUTES.SECURITY_ROLES);
     } catch (err) {
       debugError("useRoleForm", "Error:", err);
-      const errorMessage =
-        err instanceof Error ? err.message : "An error occurred";
+      // The reasons live per-field, not in the top-level message, which for a
+      // validation failure only ever says "Validation failed."
+      const errorMessage = apiErrorMessage(err);
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
