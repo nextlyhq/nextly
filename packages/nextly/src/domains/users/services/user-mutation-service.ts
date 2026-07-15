@@ -414,6 +414,39 @@ export class UserMutationService extends BaseService {
         }
       }
 
+      // Asked before the user exists, not after the send fails.
+      //
+      // `sendWelcomeEmail` leaves emailVerified null, and login refuses an
+      // unverified user by default — so the emailed link is the account's only
+      // way in. The send was attempted after the insert and its failure was
+      // caught and logged, which meant a site with no mail provider answered
+      // "User created." and produced someone who could never sign in. What
+      // they saw on the way in was "invalid credentials", indistinguishable
+      // from a wrong password.
+      //
+      // Refusing here costs the admin an error and no user; the alternative
+      // cost them a user they had to notice was broken.
+      if (userData.sendWelcomeEmail) {
+        // Ask about the template that will actually be sent, not about mail in
+        // general: the `email-verification` template may name its own
+        // provider, which the send prefers over the default. Asking whether a
+        // default exists would refuse an install whose only provider is the
+        // one that template names — a user it could have created.
+        const canSend = this.emailService
+          ? await this.emailService.canSendTemplate("email-verification")
+          : false;
+
+        if (!canSend) {
+          throw new NextlyError({
+            code: "BUSINESS_RULE_VIOLATION",
+            statusCode: 422,
+            publicMessage:
+              "This user would need an email to sign in, and no email provider is configured. Add one in Settings > Email Providers, or create the user with a password instead.",
+            logContext: { reason: "verification-email-unsendable" },
+          });
+        }
+      }
+
       // Insert new user (and user_ext if custom fields are configured)
       const now = new Date();
       const newUserId = randomUUID();
@@ -532,10 +565,17 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // ✅ Send email verification if requested.
-      // Post-migration: generateEmailVerificationToken returns `{ token? }`
-      // directly (no `.success`) and throws NextlyError on real DB faults.
-      // Email-send failures are isolated so the user creation still succeeds.
+      // Send the verification link the account needs to be usable.
+      //
+      // The unsendable case is refused before the insert, so reaching here and
+      // failing means something transient — the provider was configured and
+      // did not answer. The row is already committed, so throwing now would
+      // report a failure that did not happen and send the admin back to a
+      // form that answers "email already exists" on the retry.
+      //
+      // Logged at error, not console: this leaves a real person unable to sign
+      // in until someone sends them a link, so it belongs where the operator's
+      // errors are, with the address that needs repairing.
       if (userData.sendWelcomeEmail && this.emailService) {
         try {
           // Generate verification token (without sending a separate email)
@@ -553,9 +593,17 @@ export class UserMutationService extends BaseService {
             );
           }
         } catch (err) {
-          console.error(
-            "[UserMutationService] Failed to send verification email:",
-            err instanceof Error ? err.message : String(err)
+          // The address and the provider's reason go to logContext, not into
+          // the message: the recipient is personal data, and a provider's
+          // error text is untrusted output that often quotes the address back.
+          // Keeping both structured lets a log pipeline redact them, and keeps
+          // the message itself a stable, greppable sentence.
+          this.logger.error(
+            "Created a user but could not send their verification email; they cannot sign in until one reaches them.",
+            {
+              userId: String(user.id),
+              reason: err instanceof Error ? err.message : String(err),
+            }
           );
         }
       }

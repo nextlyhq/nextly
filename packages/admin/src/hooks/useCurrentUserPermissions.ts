@@ -110,7 +110,6 @@ function buildCapabilities(
       permSet.has("create-api-keys") ||
       permSet.has("update-api-keys") ||
       permSet.has("delete-api-keys") ||
-      permSet.has("manage-api-keys") ||
       permSet.has("manage-email-providers") ||
       permSet.has("manage-email-templates"),
     collections,

@@ -8,6 +8,10 @@ import {
 } from "@nextlyhq/ui";
 
 import { Search } from "@admin/components/icons";
+import {
+  PERMISSION_CATEGORIES,
+  PERMISSION_CATEGORY_LABELS,
+} from "@admin/constants/permissions";
 import { usePermissionMatrix } from "@admin/hooks/usePermissionMatrix";
 import type { PermissionMatrixProps } from "@admin/types/ui/form";
 
@@ -41,9 +45,11 @@ export function PermissionMatrix({
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-4 px-6">
           <TabsList>
-            <TabsTrigger value="collection-types">Collection Types</TabsTrigger>
-            <TabsTrigger value="single-types">Single Types</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+            {PERMISSION_CATEGORIES.map(category => (
+              <TabsTrigger key={category} value={category}>
+                {PERMISSION_CATEGORY_LABELS[category]}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
           {/* Search Bar and Action Buttons */}
@@ -86,62 +92,29 @@ export function PermissionMatrix({
 
         {/* Tab Contents */}
         <div className="mt-4">
-          <TabsContent
-            value="collection-types"
-            className="m-0 p-0 outline-none"
-          >
-            <PermissionMatrixTable
-              contentTypes={filteredContentTypes["collection-types"]}
-              value={value}
-              lockedIds={lockedIds}
-              disabled={disabled}
-              searchTerm={searchTerm}
-              onClearSearch={() => setSearchTerm("")}
-              onTogglePermission={togglePermission}
-              onToggleAllForContentType={toggleAllForContentType}
-              onToggleAllForAction={toggleAllForAction}
-              isAllSelected={isAllSelected}
-              isPartiallySelected={isPartiallySelected}
-              isAllSelectedForAction={isAllSelectedForAction}
-              isPartiallySelectedForAction={isPartiallySelectedForAction}
-            />
-          </TabsContent>
-
-          <TabsContent value="single-types" className="m-0 p-0 outline-none">
-            <PermissionMatrixTable
-              contentTypes={filteredContentTypes["single-types"]}
-              value={value}
-              lockedIds={lockedIds}
-              disabled={disabled}
-              searchTerm={searchTerm}
-              onClearSearch={() => setSearchTerm("")}
-              onTogglePermission={togglePermission}
-              onToggleAllForContentType={toggleAllForContentType}
-              onToggleAllForAction={toggleAllForAction}
-              isAllSelected={isAllSelected}
-              isPartiallySelected={isPartiallySelected}
-              isAllSelectedForAction={isAllSelectedForAction}
-              isPartiallySelectedForAction={isPartiallySelectedForAction}
-            />
-          </TabsContent>
-
-          <TabsContent value="settings" className="m-0 p-0 outline-none">
-            <PermissionMatrixTable
-              contentTypes={filteredContentTypes["settings"]}
-              value={value}
-              lockedIds={lockedIds}
-              disabled={disabled}
-              searchTerm={searchTerm}
-              onClearSearch={() => setSearchTerm("")}
-              onTogglePermission={togglePermission}
-              onToggleAllForContentType={toggleAllForContentType}
-              onToggleAllForAction={toggleAllForAction}
-              isAllSelected={isAllSelected}
-              isPartiallySelected={isPartiallySelected}
-              isAllSelectedForAction={isAllSelectedForAction}
-              isPartiallySelectedForAction={isPartiallySelectedForAction}
-            />
-          </TabsContent>
+          {PERMISSION_CATEGORIES.map(category => (
+            <TabsContent
+              key={category}
+              value={category}
+              className="m-0 p-0 outline-none"
+            >
+              <PermissionMatrixTable
+                contentTypes={filteredContentTypes[category] ?? []}
+                value={value}
+                lockedIds={lockedIds}
+                disabled={disabled}
+                searchTerm={searchTerm}
+                onClearSearch={() => setSearchTerm("")}
+                onTogglePermission={togglePermission}
+                onToggleAllForContentType={toggleAllForContentType}
+                onToggleAllForAction={toggleAllForAction}
+                isAllSelected={isAllSelected}
+                isPartiallySelected={isPartiallySelected}
+                isAllSelectedForAction={isAllSelectedForAction}
+                isPartiallySelectedForAction={isPartiallySelectedForAction}
+              />
+            </TabsContent>
+          ))}
         </div>
       </Tabs>
     </div>

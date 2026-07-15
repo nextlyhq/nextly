@@ -16,6 +16,7 @@
 
 import {
   mysqlTable,
+  boolean,
   int,
   varchar,
   datetime,
@@ -54,6 +55,39 @@ export const permissions = mysqlTable(
     action: varchar("action", { length: 50 }).notNull(),
     resource: varchar("resource", { length: 50 }).notNull(),
     description: varchar("description", { length: 255 }),
+    /**
+     * Who declared this permission — a plugin name, or null for the ones the
+     * framework seeds per collection and single. See the postgres schema for
+     * why it is stored rather than inferred.
+     */
+    owner: varchar("owner", { length: 191 }),
+    /**
+     * When the declaring package stopped declaring this permission, or null
+     * while it is still declared.
+     *
+     * Absence from config is not an uninstall — there is no uninstall event to
+     * read, and a disabled plugin still declares its permissions — so an
+     * orphan is marked rather than deleted. Grants survive: revoking access
+     * because a declaration moved would be a surprising way to find out. The
+     * mark is what lets the permission drop out of the UI, stop counting
+     * toward a preset, and be retired later on purpose.
+     */
+    orphanedAt: datetime("orphaned_at"),
+    /**
+     * Heading this permission is filed under within its owner's section of the
+     * matrix. Declared by the owner, which is the only thing that knows which
+     * of its own verbs belong together.
+     */
+    permissionGroup: varchar("permission_group", { length: 191 }),
+    /**
+     * True for a permission that hands out access, destroys data, or reaches
+     * outside the site. The admin warns before granting it.
+     *
+     * Nullable, like `owner` and `orphaned_at`: a not-null column cannot be
+     * added to a table that already has rows without a SQL default, and
+     * drizzle-kit refuses the change rather than guess. Absent reads as false.
+     */
+    danger: boolean("danger"),
     createdAt: datetime("created_at").notNull().default(new Date()),
     updatedAt: datetime("updated_at").notNull().default(new Date()),
   },

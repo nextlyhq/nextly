@@ -670,31 +670,24 @@ export class RoleMutationService extends BaseService {
         });
       }
 
-      // Wrap all database mutations in a transaction for atomicity
-      // Required by Drizzle ORM: transaction callback type varies by dialect.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.db.transaction(async (tx: any) => {
-        // Delete cascade: role-permissions, user-roles, role-inheritance
-        await tx
-          .delete(this.tables.rolePermissions)
-          .where(eq(this.tables.rolePermissions.roleId, roleId));
-
-        await tx
-          .delete(this.tables.userRoles)
-          .where(eq(this.tables.userRoles.roleId, roleId));
-
-        await tx
-          .delete(this.tables.roleInherits)
-          .where(eq(this.tables.roleInherits.parentRoleId, roleId));
-
-        await tx
-          .delete(this.tables.roleInherits)
-          .where(eq(this.tables.roleInherits.childRoleId, roleId));
-
-        // Delete the role itself
-        await tx
-          .delete(this.tables.roles)
-          .where(eq(this.tables.roles.id, roleId));
+      // The adapter's transaction rather than Drizzle's. Drizzle's SQLite
+      // driver wraps better-sqlite3's transaction, which is synchronous and
+      // rejects a callback returning a promise — it threw and rolled back
+      // while the callback's statements ran on anyway, outside any
+      // transaction: the role was deleted and the caller was told it failed.
+      // The adapter is async on every dialect, and on Postgres it holds the
+      // one pooled client the statements run on, which `this.db` would not.
+      // Columns are named as the schema declares them, not as SQL spells them:
+      // the adapter resolves a where clause against the table object, whose
+      // keys are the JS property names.
+      await this.adapter.transaction(async tx => {
+        // Cascade first, then the role, so nothing references a row that is
+        // already gone if the database is enforcing keys.
+        await tx.delete("role_permissions", this.whereEq("roleId", roleId));
+        await tx.delete("user_roles", this.whereEq("roleId", roleId));
+        await tx.delete("role_inherits", this.whereEq("parentRoleId", roleId));
+        await tx.delete("role_inherits", this.whereEq("childRoleId", roleId));
+        await tx.delete("roles", this.whereEq("id", roleId));
       });
 
       // Invalidate cache after successful transaction (fire-and-forget).

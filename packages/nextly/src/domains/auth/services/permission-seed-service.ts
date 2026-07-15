@@ -198,11 +198,11 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to delete email templates",
   },
   {
-    name: "Manage API Keys",
-    slug: "manage-api-keys",
+    name: "Update API Keys",
+    slug: "update-api-keys",
     action: "update",
     resource: "api-keys",
-    description: "Permission to create and manage API keys",
+    description: "Permission to update API keys",
   },
   {
     name: "Create API Keys",
@@ -469,7 +469,13 @@ export class PermissionSeedService extends BaseService {
           perm.resource,
           perm.name,
           perm.slug,
-          perm.description
+          perm.description,
+          // Everything the declaration said about the permission that is not
+          // its identity. Provenance was collected and thrown away, so a
+          // plugin's permission arrived indistinguishable from a collection's
+          // and the admin drew a content type that does not exist; `group` was
+          // documented, set by the canonical example, and read by nothing.
+          { owner: perm.owner, group: perm.group, danger: perm.danger }
         );
         if (ensured.created) {
           result.created++;
@@ -480,6 +486,92 @@ export class PermissionSeedService extends BaseService {
       } catch {
         result.errors++;
       }
+    }
+
+    return result;
+  }
+
+  /**
+   * Mark permissions whose declaring package has stopped declaring them, and
+   * unmark any that are declared again.
+   *
+   * `ensurePermission` writes `owner` only for a permission that is declared,
+   * so once a declaration goes the attribution freezes at whatever was last
+   * true. That was cosmetic until presets began reading `owner` to decide
+   * whether a permission is a plugin's; a stale attribution now silently
+   * changes what a preset grants.
+   *
+   * Marked, not deleted, and grants are left alone. Absence from config is not
+   * an uninstall: a plugin can be disabled and still declare its permissions,
+   * a config can be edited by mistake, and there is no uninstall event to tell
+   * the difference. Deleting on that evidence would revoke access as a side
+   * effect of a config change. `cleanupOrphanedPermissions` retires them later,
+   * on purpose.
+   *
+   * Only permissions with an `owner` are considered: a collection's CRUD seeds
+   * have no declaring package, and their lifecycle follows the collection.
+   *
+   * @param declared - Every custom permission currently declared, from every
+   *   plugin, including disabled ones.
+   */
+  async markOrphanedPermissions(
+    declared: CollectedPermission[]
+  ): Promise<SeedResult> {
+    const result = this.emptySeedResult();
+    const { permissions } = this.tables;
+
+    const declaredKeys = new Set(
+      declared.map(p => `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`)
+    );
+
+    try {
+      const rows = (await this.db
+        .select({
+          id: permissions.id,
+          action: permissions.action,
+          resource: permissions.resource,
+          owner: permissions.owner,
+          orphanedAt: permissions.orphanedAt,
+        })
+        .from(permissions)) as Array<{
+        id: string;
+        action: string;
+        resource: string;
+        owner: string | null;
+        orphanedAt: Date | null;
+      }>;
+
+      for (const row of rows) {
+        if (!row.owner) continue;
+
+        const key = `${String(row.action).toLowerCase()}|${String(
+          row.resource
+        ).toLowerCase()}`;
+        const isDeclared = declaredKeys.has(key);
+        const isMarked = row.orphanedAt !== null;
+
+        if (isDeclared === !isMarked) continue;
+
+        result.total++;
+        await this.db
+          .update(permissions)
+          .set({ orphanedAt: isDeclared ? null : new Date() })
+          .where(eq(permissions.id, String(row.id)));
+        result.created++;
+
+        this.logger.info?.(
+          isDeclared
+            ? `Permission "${row.action}-${row.resource}" is declared again by ${row.owner}.`
+            : `Permission "${row.action}-${row.resource}" is no longer declared by ${row.owner}; marked as orphaned. Grants are unchanged.`
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to mark orphaned permissions: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      result.errors++;
     }
 
     return result;
@@ -639,9 +731,17 @@ export class PermissionSeedService extends BaseService {
    * Remove permissions for dynamic resources that no longer exist.
    *
    * This is NOT auto-run — it must be called explicitly to prevent
-   * accidental permission loss. Removes permissions whose resource is not
-   * a system resource and not found in dynamic_collections,
-   * dynamic_singles, or dynamic_components.
+   * accidental permission loss. Removes permissions whose resource is not a
+   * system resource, not found in dynamic_collections, dynamic_singles or
+   * dynamic_components, **and** which no package declared.
+   *
+   * Plugin-declared permissions (`owner` set) are never removed here. Their
+   * resource is a name the plugin chose and is not expected to appear in any
+   * of those tables, so the resource check cannot judge them. Retiring one
+   * whose plugin has genuinely gone needs a signal this does not have —
+   * absence from config is not an uninstall, and disabled plugins still
+   * declare their permissions.
+   *
    * First removes permissions from all roles, then deletes the permissions.
    */
   async cleanupOrphanedPermissions(): Promise<SeedResult> {
@@ -665,12 +765,29 @@ export class PermissionSeedService extends BaseService {
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
         limit: 10000,
+        // The whole point of this pass is to find what the rest of the app is
+        // deliberately not shown.
+        includeOrphaned: true,
       });
 
       const { rolePermissions, permissions } = this.tables;
 
       for (const perm of allPerms.data) {
-        if (!knownResources.has(perm.resource)) {
+        // Two ways to be rubbish, and they need different evidence.
+        //
+        // A permission with no owner belongs to a content type, so a resource
+        // that is no longer a collection, single or component means the type
+        // is gone and the permission with it.
+        //
+        // A permission with an owner belongs to a package, and its resource is
+        // a name that package chose — it matches no collection and never did,
+        // so the resource check says nothing about it. `orphanedAt` is its
+        // evidence: it is set only once the package stops declaring it.
+        const isVanishedContentType =
+          !perm.owner && !knownResources.has(perm.resource);
+        const isRetiredDeclaration = Boolean(perm.owner) && perm.orphaned;
+
+        if (isVanishedContentType || isRetiredDeclaration) {
           result.total++;
 
           try {

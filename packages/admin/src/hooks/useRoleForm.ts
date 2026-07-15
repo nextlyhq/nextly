@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -14,6 +14,7 @@ import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { PAGINATION } from "../constants/pagination";
 import { ROUTES } from "../constants/routes";
+import { apiErrorMessage } from "../lib/api/parseApiError";
 import { protectedApi } from "../lib/api/protectedApi";
 import { roleApi } from "../services/roleApi";
 import type { FetchRolesParams } from "../types/role";
@@ -30,6 +31,9 @@ interface LoadingState {
 
 // System resources that belong in the "Settings" tab of the permission matrix.
 // Keep this list in sync with SYSTEM_RESOURCES in packages/nextly/src/schemas/rbac.ts
+/** The one role nothing may be built on; see the base-role filter below. */
+const SUPER_ADMIN_SLUG = "super-admin";
+
 const SYSTEM_RESOURCE_SLUGS = new Set([
   "users",
   "roles",
@@ -99,7 +103,6 @@ const roleFormSchema = z.object({
         "Slug must contain only lowercase letters, numbers, underscores, and hyphens.",
     }),
   description: z.string().optional(),
-  status: z.enum(["active", "inactive", "deprecated"]),
   permissions: z.array(z.string()),
   baseRoleId: z.string().optional(),
 });
@@ -125,7 +128,6 @@ export interface UseRoleFormReturn {
   onSubmit: (e?: React.BaseSyntheticEvent) => Promise<void>;
   handleNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleCancel: () => void;
-  statusOptions: Array<{ id: string; name: string; description: string }>;
   formRef: React.RefObject<HTMLFormElement | null>;
   ignoreFormChanges: boolean;
   setIgnoreFormChanges: (value: boolean) => void;
@@ -149,7 +151,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       name: "",
       slug: "",
       description: "",
-      status: "active",
       permissions: [],
       baseRoleId: undefined,
     },
@@ -193,13 +194,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setIsLoading(true);
 
     try {
-      const roleType: "Custom" | "System" =
-        values.status === "active" ? "Custom" : "System";
-
       const roleData = {
         roleName: values.name,
         description: values.description || "",
-        type: roleType,
         permissions: values.permissions,
         slug: values.slug,
         childRoleIds: selectedBaseRoleIds,
@@ -207,6 +204,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
 
       if (isEditMode && roleId) {
         debugLog("useRoleForm", "Updating role...");
+        // No `type`: this form has no control for it, and `updateRole` turns
+        // one into `isSystem`, so naming it here would answer a question
+        // nobody asked — and answering "Custom" would demote a seeded role to
+        // a custom one on any save, including a description-only edit.
         await roleApi.updateRole(roleId, roleData);
         const currentIds = (role?.permissions || []).map(p => p.id);
         const nextIds = values.permissions;
@@ -215,7 +216,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         toast.success("Role updated successfully");
       } else {
         debugLog("useRoleForm", "Creating role...");
-        await roleApi.createRole(roleData);
+        // A role someone creates here is theirs, not the framework's. Being a
+        // system role locks the name and slug, and the seeder is the only
+        // thing that should hand that out.
+        await roleApi.createRole({ ...roleData, type: "Custom" });
         await queryClient.invalidateQueries({ queryKey: ["roles"] });
         toast.success("Role created successfully");
       }
@@ -224,8 +228,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       navigateTo(ROUTES.SECURITY_ROLES);
     } catch (err) {
       debugError("useRoleForm", "Error:", err);
-      const errorMessage =
-        err instanceof Error ? err.message : "An error occurred";
+      // The reasons live per-field, not in the top-level message, which for a
+      // validation failure only ever says "Validation failed."
+      const errorMessage = apiErrorMessage(err);
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -266,6 +271,8 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
               action: string;
               resource: string;
               description: string | null;
+              owner: string | null;
+              danger?: boolean;
             }>
           >(`/permissions${query}`),
           protectedApi
@@ -281,9 +288,16 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           const resource = String(p.resource);
           const action = String(p.action);
           const slug = `${resource}.${action}`;
+          const owner = p.owner ? String(p.owner) : undefined;
 
           let category: string;
-          if (SYSTEM_RESOURCE_SLUGS.has(resource)) {
+          if (owner) {
+            // Provenance, not the resource name. A plugin names its own
+            // resource, so it matches no collection or single and would
+            // otherwise fall through to collection-types and render as a
+            // content type nobody created.
+            category = "plugins";
+          } else if (SYSTEM_RESOURCE_SLUGS.has(resource)) {
             category = "settings";
           } else if (singleSlugs.has(resource)) {
             category = "single-types";
@@ -299,6 +313,8 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             action,
             slug,
             category,
+            owner,
+            danger: p.danger === true,
           };
         });
 
@@ -353,10 +369,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           name: roleData.roleName,
           slug: roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
           description: roleData.description,
-          status: roleData.status.toLowerCase() as
-            | "active"
-            | "inactive"
-            | "deprecated",
           isSystemRole: roleData.type === "System",
           permissions: normalizedRolePermissionIds.map(id => ({ id })),
           users: [],
@@ -371,7 +383,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           name: roleWithPermissions.name,
           slug: roleWithPermissions.slug,
           description: roleWithPermissions.description || "",
-          status: roleWithPermissions.status,
           permissions: normalizedRolePermissionIds,
         });
 
@@ -452,14 +463,20 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const rolesWithPermissions = (res?.items || []).map(r => ({
           id: r.id,
           name: r.roleName,
+          slug: r.slug,
           permissions: normalizePermissions(r.permissions),
           description: r.description,
           isSystem: r.type === "System",
         }));
 
         const filteredRoles = rolesWithPermissions.filter(r => {
+          // A role cannot be built on itself.
           if (r.id === roleId) return false;
-          if (r.isSystem) return false;
+          // Building on Super Admin would grant everything, including the
+          // permission to grant. The presets are system roles too, and are
+          // the thing most worth building on — so the line is drawn at the
+          // one role that hands out everything, not at the class.
+          if (r.slug === SUPER_ADMIN_SLUG) return false;
           return true;
         });
 
@@ -513,27 +530,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     [form, isEditMode]
   );
 
-  const statusOptions = useMemo(
-    () => [
-      {
-        id: "active",
-        name: "Active",
-        description: "Role is active and can be assigned to users",
-      },
-      {
-        id: "inactive",
-        name: "Inactive",
-        description: "Role is inactive and cannot be assigned to new users",
-      },
-      {
-        id: "deprecated",
-        name: "Deprecated",
-        description: "Role is deprecated and will be removed in the future",
-      },
-    ],
-    []
-  );
-
   return {
     form,
     role,
@@ -553,7 +549,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     onSubmit: form.handleSubmit(onSubmitHandler),
     handleNameChange,
     handleCancel,
-    statusOptions,
     formRef,
     ignoreFormChanges,
     setIgnoreFormChanges,
