@@ -107,7 +107,12 @@ describe("scopeCss and @keyframes", () => {
 .box {
   color: blue;
 }`);
+    // The negative assertion alone would also hold if the frames were dropped
+    // altogether, so pin each step to prove it survived unscoped.
     expect(out).not.toMatch(/\.nextly-admin \d+%/);
+    expect(out).toContain("0%,");
+    expect(out).toContain("100% {");
+    expect(out).toContain("50% {");
     expect(out).toContain(".nextly-admin .box{");
   });
 
