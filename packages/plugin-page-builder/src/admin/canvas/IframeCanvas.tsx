@@ -21,7 +21,7 @@ import { useEditor } from "../store/EditorProvider";
 // (selection ring, drop indicators, placeholders) is monochrome and follows the admin's
 // light/dark theme. The iframe is a separate document that renders the *user's* page with
 // its own tokens, so admin tokens aren't otherwise available inside it.
-const MIRRORED_TOKENS = [
+export const MIRRORED_TOKENS = [
   "--nx-primary",
   "--nx-primary-foreground",
   "--nx-ring",
@@ -32,13 +32,21 @@ const MIRRORED_TOKENS = [
   "--nx-destructive",
 ];
 
+/** The admin's token prefix, dropped so `--nx-primary` mirrors as `--nx-pb-ed-primary`. */
+const ADMIN_TOKEN_PREFIX = "--nx-";
+
+/** The editor-chrome name the overlay reads for a given admin token. */
+export function mirroredName(token: string): string {
+  return `--nx-pb-ed-${token.slice(ADMIN_TOKEN_PREFIX.length)}`;
+}
+
 /** Read the current admin token values and emit an iframe `:root` mirror block. */
 function buildTokenMirrorCss(): string {
   const src =
     document.querySelector(".nextly-admin") ?? document.documentElement;
   const cs = getComputedStyle(src);
   const decls = MIRRORED_TOKENS.map(
-    t => `--nx-pb-ed${t.slice(1)}: ${cs.getPropertyValue(t).trim()};`
+    t => `${mirroredName(t)}: ${cs.getPropertyValue(t).trim()};`
   ).join("");
   return `:root{${decls}}`;
 }
