@@ -522,6 +522,24 @@ export class EmailService extends BaseService {
     });
   }
 
+  /**
+   * Whether this instance can actually send mail.
+   *
+   * Asking is otherwise only possible by trying: `resolveProvider` throws when
+   * nothing is configured, so a caller that merely wants to know had to catch
+   * the failure — and a caught failure is one nobody sees. Creating a user
+   * whose only way in arrives by email needs to know before the user exists,
+   * not after.
+   */
+  async isConfigured(): Promise<boolean> {
+    try {
+      await this.resolveProvider();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ============================================================
   // Private: Provider Resolution
   // ============================================================
