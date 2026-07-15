@@ -295,14 +295,6 @@ export type { TablePaginationProps } from "./components/table-pagination";
 export { TableSkeleton } from "./components/table-skeleton";
 export type { TableSkeletonProps } from "./components/table-skeleton";
 
-// Components — ResponsiveTable
-export { ResponsiveTable } from "./components/responsive-table";
-export type {
-  Column,
-  ResponsiveTableProps,
-} from "./components/responsive-table";
-export type { ResponsiveTableRef } from "./types/responsive-table";
-
 // Types: Table
 export type {
   PaginationMeta,

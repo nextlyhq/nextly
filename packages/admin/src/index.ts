@@ -220,16 +220,10 @@ export type {
   CardTitleProps,
 } from "@nextlyhq/ui";
 export { Checkbox } from "@nextlyhq/ui";
-export { BulkSelectCheckbox } from "./components/shared/bulk-select-checkbox";
 export { BulkActionBar } from "./components/shared/bulk-action-bar";
-export {
-  RoleAssignDialog,
-  BulkDeleteDialog,
-} from "./components/shared/bulk-action-dialogs";
+export { BulkDeleteDialog } from "./components/shared/bulk-action-dialogs";
 export type {
-  BulkSelectCheckboxProps,
   BulkActionBarProps,
-  RoleAssignDialogProps,
   BulkDeleteDialogProps,
 } from "./types/ui/bulk-operations";
 export {
@@ -311,12 +305,6 @@ export { Spinner, spinnerVariants } from "@nextlyhq/ui";
 export type { SpinnerProps } from "@nextlyhq/ui";
 export { Progress, progressVariants } from "@nextlyhq/ui";
 export type { ProgressProps } from "@nextlyhq/ui";
-export { ResponsiveTable } from "@nextlyhq/ui";
-export type {
-  Column,
-  ResponsiveTableProps,
-  ResponsiveTableRef,
-} from "@nextlyhq/ui";
 export {
   DropdownMenu,
   DropdownMenuCheckboxItem,

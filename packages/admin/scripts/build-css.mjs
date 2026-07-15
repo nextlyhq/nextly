@@ -20,6 +20,53 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
+/**
+ * Collect style-rule selectors that are not scoped under .nextly-admin.
+ * Walks brace depth so nested at-rules (@layer/@media/@supports) are checked,
+ * while at-rules whose bodies are not selectors (@keyframes steps, @property,
+ * @font-face) are skipped.
+ */
+function findUnscopedRules(css) {
+  const offenders = [];
+  const skipAtRule = /^@(keyframes|font-face|property|counter-style|page)/i;
+  // Comments would otherwise be swallowed into the following rule's prelude
+  // (e.g. the leading `/*! tailwindcss ... */` banner before `@layer`).
+  css = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  function walk(block) {
+    let i = 0;
+    while (i < block.length) {
+      const open = block.indexOf("{", i);
+      if (open === -1) break;
+      // Statement (e.g. @charset/@import) before any block — skip past it.
+      const semi = block.indexOf(";", i);
+      if (semi !== -1 && semi < open) {
+        i = semi + 1;
+        continue;
+      }
+      const prelude = block.slice(i, open).trim();
+      let depth = 1;
+      let j = open + 1;
+      for (; j < block.length && depth > 0; j++) {
+        if (block[j] === "{") depth++;
+        else if (block[j] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (prelude.startsWith("@")) {
+        if (!skipAtRule.test(prelude)) walk(block.slice(open + 1, j));
+      } else if (prelude && !prelude.includes(".nextly-admin")) {
+        offenders.push(prelude.slice(0, 100));
+      }
+      i = j + 1;
+    }
+  }
+
+  walk(css);
+  return [...new Set(offenders)];
+}
+
 const inputFile = path.join(rootDir, "src/styles/globals.css");
 const outputDir = path.join(rootDir, "dist/styles");
 const outputFile = path.join(outputDir, "globals.css");
@@ -220,6 +267,23 @@ try {
 
   // Clean up scoped temp file
   fs.unlinkSync(scopedTempFile);
+
+  // Step 4: Guard the isolation invariant. The admin mounts inside the host
+  // app's document, so any style rule that escapes .nextly-admin restyles the
+  // host page. Fail the build rather than ship a leak.
+  const unscoped = findUnscopedRules(fs.readFileSync(outputFile, "utf-8"));
+  if (unscoped.length) {
+    console.error(
+      `\n❌ ${unscoped.length} style rule(s) escaped the .nextly-admin scope:\n`
+    );
+    for (const sel of unscoped) console.error("  " + sel);
+    console.error(
+      "\nEvery selector must be scoped. Selector lists are scoped per-selector,\n" +
+        "so this usually means a new preflight/base selector shape reached\n" +
+        "scopeSelector() unhandled.\n"
+    );
+    process.exit(1);
+  }
 
   // Get file size
   const stats = fs.statSync(outputFile);
