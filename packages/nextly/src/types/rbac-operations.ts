@@ -68,6 +68,8 @@ export interface PermissionSelectResult {
   description: string | null;
   /** Package that declared this permission; null for the built-in seeds. */
   owner: string | null;
+  /** Set once the declaring package stopped declaring it; null while live. */
+  orphanedAt: Date | null;
 }
 
 export interface PermissionBasicSelectResult {

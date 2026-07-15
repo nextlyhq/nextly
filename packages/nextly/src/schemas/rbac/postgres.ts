@@ -78,6 +78,18 @@ export const permissions = pgTable(
      * be retired safely if it is known who stopped declaring it.
      */
     owner: varchar("owner", { length: 191 }),
+    /**
+     * When the declaring package stopped declaring this permission, or null
+     * while it is still declared.
+     *
+     * Absence from config is not an uninstall — there is no uninstall event to
+     * read, and a disabled plugin still declares its permissions — so an
+     * orphan is marked rather than deleted. Grants survive: revoking access
+     * because a declaration moved would be a surprising way to find out. The
+     * mark is what lets the permission drop out of the UI, stop counting
+     * toward a preset, and be retired later on purpose.
+     */
+    orphanedAt: timestamp("orphaned_at", { withTimezone: false }),
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),

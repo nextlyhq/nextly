@@ -490,6 +490,92 @@ export class PermissionSeedService extends BaseService {
   }
 
   /**
+   * Mark permissions whose declaring package has stopped declaring them, and
+   * unmark any that are declared again.
+   *
+   * `ensurePermission` writes `owner` only for a permission that is declared,
+   * so once a declaration goes the attribution freezes at whatever was last
+   * true. That was cosmetic until presets began reading `owner` to decide
+   * whether a permission is a plugin's; a stale attribution now silently
+   * changes what a preset grants.
+   *
+   * Marked, not deleted, and grants are left alone. Absence from config is not
+   * an uninstall: a plugin can be disabled and still declare its permissions,
+   * a config can be edited by mistake, and there is no uninstall event to tell
+   * the difference. Deleting on that evidence would revoke access as a side
+   * effect of a config change. `cleanupOrphanedPermissions` retires them later,
+   * on purpose.
+   *
+   * Only permissions with an `owner` are considered: a collection's CRUD seeds
+   * have no declaring package, and their lifecycle follows the collection.
+   *
+   * @param declared - Every custom permission currently declared, from every
+   *   plugin, including disabled ones.
+   */
+  async markOrphanedPermissions(
+    declared: CollectedPermission[]
+  ): Promise<SeedResult> {
+    const result = this.emptySeedResult();
+    const { permissions } = this.tables;
+
+    const declaredKeys = new Set(
+      declared.map(p => `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`)
+    );
+
+    try {
+      const rows = (await this.db
+        .select({
+          id: permissions.id,
+          action: permissions.action,
+          resource: permissions.resource,
+          owner: permissions.owner,
+          orphanedAt: permissions.orphanedAt,
+        })
+        .from(permissions)) as Array<{
+        id: string;
+        action: string;
+        resource: string;
+        owner: string | null;
+        orphanedAt: Date | null;
+      }>;
+
+      for (const row of rows) {
+        if (!row.owner) continue;
+
+        const key = `${String(row.action).toLowerCase()}|${String(
+          row.resource
+        ).toLowerCase()}`;
+        const isDeclared = declaredKeys.has(key);
+        const isMarked = row.orphanedAt !== null;
+
+        if (isDeclared === !isMarked) continue;
+
+        result.total++;
+        await this.db
+          .update(permissions)
+          .set({ orphanedAt: isDeclared ? null : new Date() })
+          .where(eq(permissions.id, String(row.id)));
+        result.created++;
+
+        this.logger.info?.(
+          isDeclared
+            ? `Permission "${row.action}-${row.resource}" is declared again by ${row.owner}.`
+            : `Permission "${row.action}-${row.resource}" is no longer declared by ${row.owner}; marked as orphaned. Grants are unchanged.`
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to mark orphaned permissions: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      result.errors++;
+    }
+
+    return result;
+  }
+
+  /**
    * Assign newly created permissions to the super_admin role.
    *
    * Ensures the super_admin role retains full access when new permissions
@@ -677,17 +763,29 @@ export class PermissionSeedService extends BaseService {
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
         limit: 10000,
+        // The whole point of this pass is to find what the rest of the app is
+        // deliberately not shown.
+        includeOrphaned: true,
       });
 
       const { rolePermissions, permissions } = this.tables;
 
       for (const perm of allPerms.data) {
-        // A plugin's resource is not a collection, a single, a component or a
-        // system resource, so an unknown resource says nothing about whether
-        // a permission is orphaned. `owner` does: a permission that records
-        // the package that declared it was declared by something, and is not
-        // rubbish left behind by a deleted content type.
-        if (!knownResources.has(perm.resource) && !perm.owner) {
+        // Two ways to be rubbish, and they need different evidence.
+        //
+        // A permission with no owner belongs to a content type, so a resource
+        // that is no longer a collection, single or component means the type
+        // is gone and the permission with it.
+        //
+        // A permission with an owner belongs to a package, and its resource is
+        // a name that package chose — it matches no collection and never did,
+        // so the resource check says nothing about it. `orphanedAt` is its
+        // evidence: it is set only once the package stops declaring it.
+        const isVanishedContentType =
+          !perm.owner && !knownResources.has(perm.resource);
+        const isRetiredDeclaration = Boolean(perm.owner) && perm.orphaned;
+
+        if (isVanishedContentType || isRetiredDeclaration) {
           result.total++;
 
           try {

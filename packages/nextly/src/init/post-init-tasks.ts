@@ -92,9 +92,16 @@ export async function runPostInitTasks(): Promise<void> {
     const singleResult = await permissionSeedService.seedAllSinglePermissions();
 
     const config = getService("config");
-    const customResult = await permissionSeedService.seedCustomPermissions(
-      collectCustomPermissions(config, config.plugins ?? [])
-    );
+    const declared = collectCustomPermissions(config, config.plugins ?? []);
+    const customResult =
+      await permissionSeedService.seedCustomPermissions(declared);
+
+    // Seeding only ever adds. A permission whose package has stopped declaring
+    // it keeps the attribution it had, which is read to decide whether it is a
+    // plugin's — so a declaration that goes away quietly changes what the
+    // presets grant. Marked here, against the same list that was just seeded;
+    // grants are untouched and nothing is deleted.
+    await permissionSeedService.markOrphanedPermissions(declared);
 
     const allNewIds = [
       ...systemResult.newPermissionIds,

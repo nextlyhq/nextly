@@ -22,17 +22,30 @@ import type { Logger } from "../../../services/shared";
 interface PermissionsTableLike {
   resource: unknown;
   action: unknown;
+  orphanedAt: unknown;
 }
 
 function buildHiddenPermissionConditions(
-  permissionsTable: PermissionsTableLike
+  permissionsTable: PermissionsTableLike,
+  options?: { includeOrphaned?: boolean }
 ) {
-  return [
+  const conditions = [
     // Hide the legacy `permissions` resource from assignable/admin permission lists.
     sql`${permissionsTable.resource} <> 'permissions'`,
     // Hide create/delete actions for `settings` resource.
     sql`NOT (${permissionsTable.resource} = 'settings' AND ${permissionsTable.action} IN ('create', 'delete'))`,
   ];
+
+  if (!options?.includeOrphaned) {
+    // A permission nothing declares any more should not be offered as a choice
+    // — it enforces nothing, so granting it does nothing. It stays in the table
+    // and keeps its grants; this only takes it off the menu. Retiring it is a
+    // separate, deliberate act, and the cleanup that does the retiring asks for
+    // orphans explicitly.
+    conditions.push(sql`${permissionsTable.orphanedAt} IS NULL`);
+  }
+
+  return conditions;
 }
 
 /**
@@ -116,6 +129,12 @@ export class PermissionService extends BaseService {
     // Sorting
     sortBy?: "action" | "resource" | "name";
     sortOrder?: "asc" | "desc";
+    /**
+     * Include permissions nothing declares any more. Off by default: they are
+     * not a choice anyone should be offered. The cleanup that retires them
+     * needs to see them, and asks.
+     */
+    includeOrphaned?: boolean;
   }): Promise<{
     data: Array<{
       id: string;
@@ -127,6 +146,8 @@ export class PermissionService extends BaseService {
       category?: string;
       /** Package that declared this permission; null for the built-in seeds. */
       owner: string | null;
+      /** True once the declaring package stopped declaring it. */
+      orphaned: boolean;
     }>;
     meta: {
       total: number;
@@ -144,11 +165,14 @@ export class PermissionService extends BaseService {
         resource,
         sortBy = "resource",
         sortOrder = "asc",
+        includeOrphaned = false,
       } = options || {};
 
       const { permissions } = this.tables;
 
-      const conditions = [...buildHiddenPermissionConditions(permissions)];
+      const conditions = [
+        ...buildHiddenPermissionConditions(permissions, { includeOrphaned }),
+      ];
 
       if (search) {
         const searchPattern = `%${search}%`;
@@ -216,6 +240,7 @@ export class PermissionService extends BaseService {
           resource: permissions.resource,
           description: permissions.description,
           owner: permissions.owner,
+          orphanedAt: permissions.orphanedAt,
         })
         .from(permissions)
         .where(whereClause)
@@ -285,6 +310,7 @@ export class PermissionService extends BaseService {
             description: row.description ? String(row.description) : null,
             category,
             owner: row.owner ? String(row.owner) : null,
+            orphaned: row.orphanedAt !== null && row.orphanedAt !== undefined,
           };
         }),
         meta: {
