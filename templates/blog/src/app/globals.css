@@ -223,6 +223,18 @@ h3 {
   line-height: 1.6;
 }
 
+/* The highlighter mark. Nextly names it and leaves the colour here for the
+   same reason as the syntax tokens below: a colour baked into the content
+   cannot be restyled, and the browser's default `mark` is a light yellow with
+   whatever the page's own text colour is — which on a dark page is white on
+   yellow. Its foreground is set with its background so the pairing survives
+   the theme. */
+.prose-blog .nextly-rich-text-highlight {
+  background-color: var(--color-highlight, #fef08a);
+  color: var(--color-highlight-foreground, #0f172a);
+  padding: 0.125rem 0.25rem;
+}
+
 /* Syntax tokens. Nextly ships the token type as a class and no colour, so the
    palette is the site's and both themes work from one rendered page — with no
    highlighter shipped to the browser. */
