@@ -413,12 +413,17 @@ export function APIPlayground({
   }, [fullUrl]);
 
   /**
-   * Get status color based on status code
+   * Colour a response by what its status class means.
+   *
+   * Tokens rather than palette classes, so the hues track the theme and stay
+   * legible in dark mode. A 4xx is the caller's mistake and a 5xx is the
+   * server's, so they read as warning and error respectively.
    */
   const getStatusColor = (status: number): string => {
-    if (status >= 200 && status < 300) return "text-green-600";
-    if (status >= 400 && status < 500) return "text-yellow-600";
-    if (status >= 500) return "text-red-600";
+    if (status >= 200 && status < 300) return "text-success";
+    if (status >= 300 && status < 400) return "text-muted-foreground";
+    if (status >= 400 && status < 500) return "text-warning";
+    if (status >= 500) return "text-destructive";
     return "text-muted-foreground";
   };
 
@@ -439,9 +444,14 @@ export function APIPlayground({
     !isSingle && currentAction.requiresEntryId && !entryId.trim();
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-[600px]">
+    // Fills the height it is given rather than demanding a minimum: the panes
+    // below scroll on their own, so the page never grows past the panel and
+    // the request's Send button and the response's status stay put.
+    // Stacked on narrow screens, where two scroll panes side by side would
+    // leave neither usable, so the page scrolls there instead.
+    <div className="grid h-full min-h-0 grid-cols-1 gap-8 lg:grid-cols-12">
       {/* Request Builder Panel - 5 columns */}
-      <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+      <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
         <CardHeader className="p-6 pb-4" noBorder>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base font-semibold tracking-tight text-foreground">
@@ -458,7 +468,7 @@ export function APIPlayground({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="flex-1 space-y-6 px-6 pb-6">
+        <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-6 px-6 pb-6">
           {/* Base Path (read-only) */}
           <div className="space-y-2">
             <Label className="text-sm font-medium text-foreground">
@@ -623,7 +633,7 @@ export function APIPlayground({
       </Card>
 
       {/* Response Panel - 7 columns */}
-      <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+      <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
         <CardHeader className="p-6 pb-4" noBorder>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base font-semibold tracking-tight text-foreground">
@@ -659,7 +669,7 @@ export function APIPlayground({
             )}
           </div>
         </CardHeader>
-        <CardContent className="flex-1 p-0 overflow-hidden">
+        <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
           <ResponseViewer
             data={response?.data}
             isLoading={isLoading}

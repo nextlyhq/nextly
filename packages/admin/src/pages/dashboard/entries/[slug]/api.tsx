@@ -109,23 +109,24 @@ export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
   const collectionLabel = collection?.label || slug;
 
   return (
-    <PageContainer>
-      <div className="flex flex-col gap-4 h-full">
-        {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            API Playground
-          </h1>
-          <p className="text-sm font-normal text-primary/50 mt-1">
-            Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
-            collection. Build requests, execute them, and view responses.
-          </p>
-        </div>
+    // Fills the content panel instead of growing past it, so the request and
+    // response panes scroll on their own. Otherwise a long response stretches
+    // the page and takes the response's own status line off-screen with it.
+    <PageContainer className="flex h-full min-h-0 flex-col overflow-hidden">
+      {/* Page header */}
+      <div className="mb-8 shrink-0">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          API Playground
+        </h1>
+        <p className="text-sm font-normal text-primary/50 mt-1">
+          Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
+          collection. Build requests, execute them, and view responses.
+        </p>
+      </div>
 
-        {/* API Playground component */}
-        <div className="flex-1 min-h-0">
-          <APIPlayground collectionSlug={slug} />
-        </div>
+      {/* API Playground component */}
+      <div className="min-h-0 flex-1">
+        <APIPlayground collectionSlug={slug} />
       </div>
     </PageContainer>
   );

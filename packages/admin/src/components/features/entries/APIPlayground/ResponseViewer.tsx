@@ -99,7 +99,7 @@ export function ResponseViewer({
   // Loading state
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] bg-muted/30">
+      <div className="flex flex-col items-center justify-center h-full min-h-0 bg-muted/30">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/60 mb-4" />
         <p className="text-sm text-muted-foreground">Sending request…</p>
       </div>
@@ -109,7 +109,7 @@ export function ResponseViewer({
   // Error state
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-destructive/5">
+      <div className="flex flex-col items-center justify-center h-full min-h-0 p-12 text-center bg-destructive/5">
         <div className="h-12 w-12 rounded-none bg-destructive/10 flex items-center justify-center mb-4">
           <AlertCircle className="h-6 w-6 text-destructive" />
         </div>
@@ -126,7 +126,7 @@ export function ResponseViewer({
   // Empty state
   if (!jsonString) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-muted/30">
+      <div className="flex flex-col items-center justify-center h-full min-h-0 p-12 text-center bg-muted/30">
         <div className="h-14 w-14 mb-4 rounded-none bg-card border border-border flex items-center justify-center">
           <FileJson className="h-6 w-6 text-muted-foreground/60" />
         </div>
@@ -143,7 +143,7 @@ export function ResponseViewer({
 
   // Response display
   return (
-    <div className="h-full min-h-[400px] flex flex-col bg-card">
+    <div className="h-full min-h-0 flex flex-col bg-card">
       {/* Action Header */}
       <div className="flex items-center justify-between px-6 py-2 border-b border-border bg-muted/30">
         <span className="text-sm font-medium text-foreground">
@@ -167,7 +167,7 @@ export function ResponseViewer({
       </div>
 
       {/* JSON content */}
-      <div className="flex-1 overflow-auto rounded-none border-none p-0 bg-background font-mono text-xs leading-relaxed selection:bg-primary selection:text-primary-foreground">
+      <div className="flex-1 min-h-0 overflow-auto rounded-none border-none p-0 bg-background font-mono text-xs leading-relaxed selection:bg-primary selection:text-primary-foreground">
         <JsonViewer value={jsonString} />
       </div>
     </div>
