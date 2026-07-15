@@ -181,7 +181,14 @@ export function formatWhere(conditions: WhereCondition[]): string {
       value = condition.value.toLowerCase() !== "false";
     }
 
-    where[condition.field] = { [condition.operator]: value };
+    // Merged, not assigned: a field holds an object of operators, and two
+    // conditions on one field is the ordinary way to write a range —
+    // `createdAt` after X and before Y. Overwriting dropped the earlier one
+    // and sent half the question with no sign that it had.
+    where[condition.field] = {
+      ...where[condition.field],
+      [condition.operator]: value,
+    };
   }
 
   return Object.keys(where).length > 0 ? JSON.stringify(where) : "";

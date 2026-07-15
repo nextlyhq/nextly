@@ -37,6 +37,7 @@ import {
   fieldLabel,
   formatSelect,
   formatSort,
+  formatWhere,
   LIST_OPERATORS,
   parseSelect,
   parseSort,
@@ -167,6 +168,9 @@ export function QueryBuilder({
 }: QueryBuilderProps) {
   const sort = parseSort(params.sort);
   const selected = parseSelect(params.select);
+  // The same value the playground puts on the wire, so the preview cannot
+  // claim one thing while the request says another.
+  const generatedWhere = formatWhere(conditions);
 
   const sortable = sortableFields(fields, hasStatus);
   const selectable = selectableFields(fields);
@@ -565,13 +569,18 @@ export function QueryBuilder({
             </div>
           )}
 
-          {params.where && (
+          {/* Built from the rows, which are what this panel edits. It used to
+              read `params.where`, and once the rows moved up to the playground
+              nothing wrote that key back down — so the preview quietly stopped
+              rendering at all. The rows are the source; deriving here is the
+              same thing the parent does to build the URL. */}
+          {generatedWhere && (
             <div className="space-y-1.5">
               <Label className="text-sm font-medium text-foreground">
                 Generated where clause
               </Label>
               <code className="block break-all rounded-none border border-border bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
-                {params.where}
+                {generatedWhere}
               </code>
             </div>
           )}
