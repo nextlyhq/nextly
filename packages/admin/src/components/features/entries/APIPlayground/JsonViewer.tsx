@@ -13,8 +13,9 @@
 import { json } from "@codemirror/lang-json";
 import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
-import { useTheme } from "next-themes";
 import { useMemo, useState, useEffect } from "react";
+
+import { useTheme } from "@admin/context/providers/ThemeProvider";
 
 // ============================================================================
 // Types
@@ -44,7 +45,9 @@ export interface JsonViewerProps {
  * ```
  */
 export function JsonViewer({ value }: JsonViewerProps) {
-  const { theme } = useTheme();
+  // resolvedTheme, not theme: the default is "system", which never equals
+  // "dark" and would leave the editor on its light palette inside a dark admin.
+  const { resolvedTheme } = useTheme();
 
   // SSR guard - only render CodeMirror on the client
   const [isMounted, setIsMounted] = useState(false);
@@ -100,7 +103,7 @@ export function JsonViewer({ value }: JsonViewerProps) {
     <CodeMirror
       value={value}
       extensions={[...extensions, editorTheme]}
-      theme={theme === "dark" ? "dark" : "light"}
+      theme={resolvedTheme === "dark" ? "dark" : "light"}
       editable={false}
       readOnly={true}
       basicSetup={{
