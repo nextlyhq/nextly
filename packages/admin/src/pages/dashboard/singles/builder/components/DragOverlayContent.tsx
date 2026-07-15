@@ -84,7 +84,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
             {field.label || field.name || "Unnamed Field"}
           </span>
           {isRequired && (
-            <span className="text-[10px] px-2 py-0 bg-red-50 text-red-600 font-normal rounded-none  border border-border border-red-200">
+            <span className="text-[10px] px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-none  border border-border border-destructive-200">
               Required
             </span>
           )}

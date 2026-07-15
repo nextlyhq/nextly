@@ -104,7 +104,10 @@ const editorTheme = {
     underline: "underline",
     strikethrough: "line-through",
     code: "bg-primary/5 px-1.5 py-0.5 rounded-none font-mono text-sm",
-    highlight: "bg-yellow-200 dark:bg-yellow-800",
+    // Its own token rather than a status one: a marker drawn over text is not
+    // a warning, and it carries its own foreground so the text stays readable
+    // when the page's own flips to white.
+    highlight: "bg-highlight text-highlight-foreground",
     subscript: "align-sub text-xs",
     superscript: "align-super text-xs",
   },
@@ -128,7 +131,7 @@ const editorTheme = {
     ol: "list-decimal ml-6 mb-2",
     listitem: "mb-1",
     listitemChecked:
-      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-green-500",
+      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-success-500",
     listitemUnchecked:
       "list-none relative pl-6 before:content-['○'] before:absolute before:left-0",
     nested: {

@@ -342,7 +342,7 @@ function StaleDefaultWarning({ field }: { field: BuilderField }) {
   if (!stale) return null;
 
   return (
-    <p className="text-xs text-amber-600">
+    <p className="text-xs text-warning-600">
       Default {`"${field.defaultValue}"`} no longer matches any option. It will
       be cleared on save.
     </p>

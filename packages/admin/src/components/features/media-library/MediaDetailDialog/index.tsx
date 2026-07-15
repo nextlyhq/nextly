@@ -397,7 +397,7 @@ export function MediaDetailDialog({
                         }}
                       >
                         {isCopied ? (
-                          <Check className="h-3.5 w-3.5 text-green-500 mr-2" />
+                          <Check className="h-3.5 w-3.5 text-success-500 mr-2" />
                         ) : null}
                         {isCopied ? "Copied" : "Copy"}
                       </Button>

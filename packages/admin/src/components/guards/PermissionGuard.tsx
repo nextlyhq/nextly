@@ -93,7 +93,7 @@ export function PermissionGuard({
             </div>
           </div>
 
-          <h2 className="text-base font-semibold tracking-tight text-foreground dark:text-slate-100 mb-1.5">
+          <h2 className="text-base font-semibold tracking-tight text-foreground mb-1.5">
             Setting up your workspace
           </h2>
           <p className="text-xs text-muted-foreground dark:text-muted-foreground font-medium leading-relaxed">

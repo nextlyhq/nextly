@@ -206,7 +206,7 @@ export function SchemaChangeDialog({
                   </span>
                 </div>
                 {field.rowCount > 0 && (
-                  <span className="ml-16 text-xs text-amber-600">
+                  <span className="ml-16 text-xs text-warning-600">
                     {field.rowCount.toLocaleString()} rows may be affected
                   </span>
                 )}
@@ -286,7 +286,7 @@ export function SchemaChangeDialog({
 
         {/* Interactive fields -- need user input */}
         {interactiveFields.length > 0 && (
-          <div className="space-y-3 rounded-none  border border-border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+          <div className="space-y-3 rounded-none  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
             {interactiveFields.map(field => (
               <div key={field.name} className="space-y-2">
                 <Label className="text-sm font-medium">

@@ -20,8 +20,8 @@ export function NotFoundPage() {
         </div>
 
         {/* Badge */}
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-green-50 text-green-700 mb-6">
-          <span className="h-1.5 w-1.5 rounded-none bg-green-500" />
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-success-50 text-success-700 mb-6">
+          <span className="h-1.5 w-1.5 rounded-none bg-success-500" />
           Page Not Found
         </div>
 
