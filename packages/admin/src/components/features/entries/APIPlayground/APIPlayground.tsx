@@ -30,21 +30,32 @@ import {
   TabsTrigger,
   toast,
 } from "@nextlyhq/ui";
-import { useState, useCallback, useMemo, useEffect } from "react";
-
 import {
-  Play,
-  Copy,
-  Check,
-  ExternalLink,
-  Loader2,
-  RotateCcw,
-} from "@admin/components/icons";
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+  lazy,
+  Suspense,
+} from "react";
+
+import { RotateCcw } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
+import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { cn } from "@admin/lib/utils";
 
+import { generateCode } from "./generate-code";
 import { QueryBuilder } from "./QueryBuilder";
+import { METHOD_TONE, RequestBar } from "./RequestBar";
 import { ResponseViewer } from "./ResponseViewer";
+
+// CodeMirror reaches for browser globals on import, so it loads on demand.
+const CodeMirrorEditor = lazy(() =>
+  import("../fields/text/CodeMirrorEditor").then(m => ({
+    default: m.CodeMirrorEditor,
+  }))
+);
 
 // ============================================================================
 // Types
@@ -92,18 +103,39 @@ export interface APIResponse {
   data: unknown;
   /** Response time in milliseconds */
   time: number;
+  /** Body size in bytes — what `depth` and `limit` are actually traded against. */
+  size: number;
+  /** What the API sent back, including the request id we stamp on every reply. */
+  headers: Record<string, string>;
+  /** The body as it arrived, for the raw view and for download. */
+  raw: string;
 }
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const METHOD_COLORS: Record<HttpMethod, string> = {
-  GET: "text-primary font-bold",
-  POST: "text-foreground font-bold",
-  PATCH: "text-muted-foreground font-bold",
-  DELETE: "text-destructive font-bold",
-};
+/** The status dot, keyed to the same meaning as the status text beside it. */
+function statusDotTone(status: number): string {
+  if (status >= 200 && status < 300) return "bg-success";
+  if (status >= 300 && status < 400) return "bg-muted-foreground";
+  if (status >= 400 && status < 500) return "bg-warning";
+  if (status >= 500) return "bg-destructive";
+  return "bg-muted-foreground";
+}
+
+/**
+ * A payload size someone can act on.
+ *
+ * Two significant figures past a kilobyte: the question a size answers here is
+ * "is this response big?", and 2.4 KB answers it while 2438 B makes you count
+ * digits.
+ */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 /** Configuration for each endpoint action */
 const ENDPOINT_ACTIONS: {
@@ -224,6 +256,11 @@ export function APIPlayground({
   // Copy state
   const [copied, setCopied] = useState(false);
 
+  const { resolvedTheme } = useTheme();
+
+  /** The in-flight request, so a re-send or Escape can call it off. */
+  const abortRef = useRef<AbortController | null>(null);
+
   /**
    * Get the current action configuration
    */
@@ -323,6 +360,12 @@ export function APIPlayground({
    * Execute the API request
    */
   const executeRequest = useCallback(async () => {
+    // A second send replaces the first rather than racing it: the slower reply
+    // could otherwise land last and overwrite the newer one.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsLoading(true);
     setError(null);
     const startTime = performance.now();
@@ -334,6 +377,7 @@ export function APIPlayground({
           "Content-Type": "application/json",
         },
         credentials: "include", // Include cookies for authentication
+        signal: controller.signal,
       };
 
       // Add body for POST/PATCH requests
@@ -350,21 +394,40 @@ export function APIPlayground({
       const res = await fetch(fullUrl, options);
       const endTime = performance.now();
 
-      let data: unknown;
-      const contentType = res.headers.get("content-type");
-      if (contentType?.includes("application/json")) {
-        data = await res.json();
-      } else {
-        data = await res.text();
+      // Read the body as text first: it is what gets measured, downloaded and
+      // shown raw, and parsing it is only one of the things we do with it.
+      const raw = await res.text();
+
+      let data: unknown = raw;
+      if (res.headers.get("content-type")?.includes("json")) {
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          // A malformed body is a result worth seeing, not a failed request —
+          // showing the text beats replacing it with a parser message.
+          data = raw;
+        }
       }
+
+      const headers: Record<string, string> = {};
+      res.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
 
       setResponse({
         status: res.status,
         statusText: res.statusText,
         data,
         time: Math.round(endTime - startTime),
+        size: new TextEncoder().encode(raw).length,
+        headers,
+        raw,
       });
     } catch (err) {
+      // An abort is the user changing their mind; leave the previous response
+      // alone rather than reporting their own keystroke back to them.
+      if (err instanceof DOMException && err.name === "AbortError") return;
+
       const endTime = performance.now();
       const message = err instanceof Error ? err.message : "Request failed";
       setError(message);
@@ -373,11 +436,47 @@ export function APIPlayground({
         statusText: "Error",
         data: { error: message },
         time: Math.round(endTime - startTime),
+        size: 0,
+        headers: {},
+        raw: message,
       });
     } finally {
-      setIsLoading(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setIsLoading(false);
+      }
     }
   }, [method, fullUrl, requestBody]);
+
+  /** Stop an in-flight request without touching what is already on screen. */
+  const cancelRequest = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsLoading(false);
+  }, []);
+
+  /**
+   * Send with the keyboard, the way every API client does.
+   *
+   * Bound to the window rather than a form: the send is worth reaching from
+   * wherever you are, and where you are is usually the body editor or a
+   * parameter field. Escape is not prevented — an open menu should still close
+   * on the same press.
+   */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        void executeRequest();
+        return;
+      }
+      if (e.key === "Escape" && isLoading) {
+        cancelRequest();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [executeRequest, cancelRequest, isLoading]);
 
   /**
    * Reset the playground to initial state
@@ -438,6 +537,36 @@ export function APIPlayground({
   ].includes(action);
 
   /**
+   * The request, as code you can leave with.
+   *
+   * Recomputed as the request is built rather than on send: the snippet is
+   * most useful while you are still deciding what to ask for, and it costs
+   * nothing to keep it honest.
+   */
+  const codeSnippets = useMemo(
+    () =>
+      generateCode({
+        method,
+        url: fullUrl,
+        body: actionRequiresBody ? requestBody : undefined,
+        collection: collectionSlug,
+        isSingle,
+        params: Object.fromEntries(
+          Object.entries(queryParams).filter(([, v]) => v && v.trim())
+        ),
+      }),
+    [
+      method,
+      fullUrl,
+      actionRequiresBody,
+      requestBody,
+      collectionSlug,
+      isSingle,
+      queryParams,
+    ]
+  );
+
+  /**
    * Check if entry ID is missing when required
    */
   const entryIdMissing =
@@ -446,237 +575,252 @@ export function APIPlayground({
   return (
     // Fills the height it is given rather than demanding a minimum: the panes
     // below scroll on their own, so the page never grows past the panel and
-    // the request's Send button and the response's status stay put.
-    // Stacked on narrow screens, where two scroll panes side by side would
-    // leave neither usable, so the page scrolls there instead.
-    <div className="grid h-full min-h-0 grid-cols-1 gap-8 lg:grid-cols-12">
-      {/* Request Builder Panel - 5 columns */}
-      <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
-        <CardHeader className="p-6 pb-4" noBorder>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-semibold tracking-tight text-foreground">
-              Request configuration
-            </CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              className="gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reset
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-6 px-6 pb-6">
-          {/* Base Path (read-only) */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-foreground">
-              Base endpoint
-            </Label>
-            <div className="flex items-center gap-1 px-3 py-2 bg-muted/30 border border-border rounded-none font-mono text-xs">
-              <span className="text-muted-foreground">
-                {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
-              </span>
-              <span className="font-semibold text-foreground">
-                {collectionSlug}
-              </span>
-              {!isSingle && (
-                <span className="text-muted-foreground">/entries</span>
-              )}
-            </div>
-          </div>
-
-          {/* Action Selector */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-foreground">
-              Endpoint action
-            </Label>
-            <Select
-              value={action}
-              onValueChange={v => setAction(v as EndpointAction)}
-              disabled={isSingle}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ENDPOINT_ACTIONS.filter(a =>
-                  isSingle ? ["get", "update"].includes(a.value) : true
-                ).map(a => (
-                  <SelectItem key={a.value} value={a.value}>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-sm ${METHOD_COLORS[a.method]}`}
-                      >
-                        {a.method}
-                      </span>
-                      <span className="text-sm">{a.label}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {currentAction.description}
-            </p>
-          </div>
-
-          {/* Entry ID Input (conditional) */}
-          {!isSingle && currentAction.requiresEntryId && (
-            <div className="space-y-2">
-              <Label className="text-sm font-medium text-foreground">
-                Entry ID <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                value={entryId}
-                onChange={e => setEntryId(e.target.value)}
-                placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs"
-              />
-              {entryIdMissing && (
-                <p className="text-xs text-destructive">
-                  Entry ID is required for this action
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Tabs for Query Params and Body */}
-          <Tabs
-            defaultValue="params"
-            className="flex-1 flex flex-col min-h-0 pt-2"
+    // the request bar and the response's status stay put.
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <RequestBar
+        method={method}
+        url={fullUrl}
+        action={
+          <Select
+            value={action}
+            onValueChange={v => setAction(v as EndpointAction)}
+            disabled={isSingle}
           >
-            <TabsList className="w-full justify-start">
-              <TabsTrigger value="params">Query params</TabsTrigger>
-              <TabsTrigger value="body">Body</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="params" className="mt-4">
-              <QueryBuilder
-                params={queryParams}
-                onChange={setQueryParams}
-                collectionSlug={collectionSlug}
-                isSingle={isSingle}
-              />
-            </TabsContent>
-
-            <TabsContent value="body" className="mt-4 flex-1 min-h-0">
-              <div className="space-y-2 h-full flex flex-col">
-                <Label className="text-sm font-medium text-foreground">
-                  Request body (JSON)
-                </Label>
-                <textarea
-                  value={requestBody}
-                  onChange={e => setRequestBody(e.target.value)}
-                  className="w-full flex-1 font-mono text-xs px-3 py-2.5 border border-input rounded-none bg-background resize-none focus:outline-none focus:border-primary transition-all"
-                  placeholder={getBodyPlaceholder()}
-                  disabled={!actionRequiresBody}
-                />
-              </div>
-            </TabsContent>
-          </Tabs>
-
-          {/* Request URL Display */}
-          <div className="pt-6 border-t border-border space-y-2">
-            <Label className="text-sm font-medium text-foreground">
-              Full request URL
-            </Label>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs bg-muted/30 px-3 py-2 border border-border rounded-none break-all font-mono">
-                <span className={METHOD_COLORS[method]}>{method}</span>{" "}
-                {fullUrl}
-              </code>
-              <div className="flex flex-col gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => {
-                    void handleCopyUrl();
-                  }}
-                  className="shrink-0 h-9 w-9"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-emerald-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleOpenInNewTab}
-                  className="shrink-0 h-9 w-9"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Execute Button */}
-          <Button
-            onClick={() => {
-              void executeRequest();
-            }}
-            disabled={isLoading || entryIdMissing}
-            className="w-full gap-2 h-11 text-sm font-semibold"
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="h-4 w-4 fill-current" />
-            )}
-            {isLoading ? "Sending request..." : "Send request"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Response Panel - 7 columns */}
-      <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
-        <CardHeader className="p-6 pb-4" noBorder>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-semibold tracking-tight text-foreground">
-              API response
-            </CardTitle>
-            {response && (
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Status</span>
-                  <div
-                    className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      response.status < 300 ? "bg-emerald-500" : "bg-rose-500"
-                    )}
-                  />
+            <SelectTrigger className="h-full rounded-none border-0 px-4 text-sm shadow-none focus:ring-0">
+              {/* The trigger renders its own content rather than echoing the
+                  chosen item: the item carries a description for the menu, and
+                  the default would drag that into the bar and wrap it. */}
+              <SelectValue>
+                <span className="flex items-baseline gap-2">
                   <span
                     className={cn(
-                      "font-mono text-sm font-semibold",
-                      getStatusColor(response.status)
+                      "shrink-0 font-mono text-[10px] font-semibold",
+                      METHOD_TONE[currentAction.method]
                     )}
                   >
-                    {response.status}
+                    {currentAction.method}
                   </span>
-                </div>
-                <div className="h-4 w-px bg-border" />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Latency</span>
-                  <span className="text-foreground font-mono text-sm font-semibold">
-                    {response.time}ms
+                  <span className="truncate text-sm">
+                    {currentAction.label}
                   </span>
-                </div>
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {ENDPOINT_ACTIONS.filter(a =>
+                isSingle ? ["get", "update"].includes(a.value) : true
+              ).map(a => (
+                <SelectItem key={a.value} value={a.value}>
+                  {/* The description rides in the menu, where there is room
+                      for it: naming what an operation does is how someone
+                      finds Duplicate or Bulk Update without reading docs. */}
+                  <div className="flex items-baseline gap-2">
+                    <span
+                      className={cn(
+                        "w-12 shrink-0 font-mono text-[10px] font-semibold",
+                        METHOD_TONE[a.method]
+                      )}
+                    >
+                      {a.method}
+                    </span>
+                    <span className="text-sm">{a.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {a.description}
+                    </span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+        isLoading={isLoading}
+        copied={copied}
+        onSend={() => {
+          if (!entryIdMissing) void executeRequest();
+        }}
+        onCancel={cancelRequest}
+        onCopy={() => {
+          void handleCopyUrl();
+        }}
+        onOpen={handleOpenInNewTab}
+      />
+
+      {/* Stacked on narrow screens, where two scroll panes side by side would
+          leave neither usable, so the page scrolls there instead. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-8 lg:grid-cols-12">
+        {/* Request Builder Panel - 5 columns */}
+        <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
+          <CardHeader className="p-6 pb-4" noBorder>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+                Request configuration
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReset}
+                className="gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-6 px-6 pb-6">
+            {/* The base path and the full URL both used to be restated here; the
+              bar above shows the real thing, so they were saying it a third
+              time and only the bar can be trusted to stay correct. */}
+
+            {/* Entry ID Input (conditional) */}
+            {!isSingle && currentAction.requiresEntryId && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-foreground">
+                  Entry ID <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  value={entryId}
+                  onChange={e => setEntryId(e.target.value)}
+                  placeholder="Enter entry ID (e.g., abc123)"
+                  className="font-mono text-xs"
+                />
+                {entryIdMissing && (
+                  <p className="text-xs text-destructive">
+                    Entry ID is required for this action
+                  </p>
+                )}
               </div>
             )}
-          </div>
-        </CardHeader>
-        <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
-          <ResponseViewer
-            data={response?.data}
-            isLoading={isLoading}
-            error={error}
-          />
-        </CardContent>
-      </Card>
+
+            {/* A body only exists for the actions that carry one, so the tabs
+              only exist then too — a single-tab tab bar is a control that
+              cannot do anything. */}
+            {actionRequiresBody ? (
+              <Tabs
+                defaultValue="body"
+                className="flex-1 flex flex-col min-h-0 pt-2"
+              >
+                <TabsList className="w-full justify-start">
+                  {/* Body first: on a write it is what you came to edit. */}
+                  <TabsTrigger value="body">Body</TabsTrigger>
+                  <TabsTrigger value="params">Parameters</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="body" className="mt-4 flex-1 min-h-0">
+                  {/* A JSON editor rather than a textarea: this is the one
+                    field you type code into, and it was the only one without
+                    highlighting, bracket matching, or a line to point at when
+                    the JSON is wrong. */}
+                  <div className="flex h-full min-h-0 flex-col gap-2">
+                    <Label className="text-sm font-medium text-foreground">
+                      Request body (JSON)
+                    </Label>
+                    <div className="min-h-0 flex-1 border border-input">
+                      <Suspense
+                        fallback={
+                          <div className="h-full w-full animate-pulse bg-muted/30" />
+                        }
+                      >
+                        <CodeMirrorEditor
+                          value={requestBody}
+                          onChange={setRequestBody}
+                          language="json"
+                          theme={resolvedTheme === "dark" ? "dark" : "light"}
+                          disabled={false}
+                          readOnly={false}
+                          minHeight={320}
+                          editorOptions={{ tabSize: 2, lineNumbers: true }}
+                          placeholder={getBodyPlaceholder()}
+                        />
+                      </Suspense>
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="params" className="mt-4">
+                  <QueryBuilder
+                    params={queryParams}
+                    onChange={setQueryParams}
+                    collectionSlug={collectionSlug}
+                    isSingle={isSingle}
+                  />
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <div className="pt-2">
+                <QueryBuilder
+                  params={queryParams}
+                  onChange={setQueryParams}
+                  collectionSlug={collectionSlug}
+                  isSingle={isSingle}
+                />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Response Panel - 7 columns */}
+        <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
+          <CardHeader className="p-6 pb-4" noBorder>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+                API response
+              </CardTitle>
+              {response && (
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      Status
+                    </span>
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        statusDotTone(response.status)
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "font-mono text-sm font-semibold",
+                        getStatusColor(response.status)
+                      )}
+                    >
+                      {response.status}
+                    </span>
+                  </div>
+                  <div className="h-4 w-px bg-border" />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      Latency
+                    </span>
+                    <span className="font-mono text-sm font-semibold text-foreground">
+                      {response.time}ms
+                    </span>
+                  </div>
+                  <div className="h-4 w-px bg-border" />
+                  {/* Size sits beside latency because they are the pair you
+                      trade against each other when tuning depth and limit. */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Size</span>
+                    <span className="font-mono text-sm font-semibold text-foreground">
+                      {formatBytes(response.size)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
+            <ResponseViewer
+              data={response?.data}
+              isLoading={isLoading}
+              error={error}
+              headers={response?.headers}
+              raw={response?.raw}
+              code={codeSnippets}
+              filename={`${collectionSlug}-response`}
+            />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

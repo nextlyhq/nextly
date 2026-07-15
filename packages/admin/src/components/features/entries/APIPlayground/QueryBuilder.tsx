@@ -208,29 +208,40 @@ export function QueryBuilder({
   }, []);
 
   /**
+   * Commit a new set of conditions.
+   *
+   * The parent's `onChange` is called here rather than inside a state updater.
+   * An updater has to be pure — React may run it while rendering — and setting
+   * state on another component from inside one is what produced "Cannot update
+   * a component while rendering a different component".
+   */
+  const applyConditions = useCallback(
+    (next: WhereCondition[]) => {
+      setWhereConditions(next);
+
+      const whereJson = buildWhereClause(next);
+      const newParams = { ...params };
+      if (whereJson) {
+        newParams.where = whereJson;
+      } else {
+        // No usable conditions left: drop the key rather than send `where=`.
+        delete newParams.where;
+      }
+      onChange(newParams);
+    },
+    [params, onChange]
+  );
+
+  /**
    * Update a where condition
    */
   const updateWhereCondition = useCallback(
     (id: string, updates: Partial<WhereCondition>) => {
-      setWhereConditions(prev => {
-        const newConditions = prev.map(c =>
-          c.id === id ? { ...c, ...updates } : c
-        );
-
-        // Rebuild where clause and update params
-        const whereJson = buildWhereClause(newConditions);
-        const newParams = { ...params };
-        if (whereJson) {
-          newParams.where = whereJson;
-        } else {
-          delete newParams.where;
-        }
-        onChange(newParams);
-
-        return newConditions;
-      });
+      applyConditions(
+        whereConditions.map(c => (c.id === id ? { ...c, ...updates } : c))
+      );
     },
-    [params, onChange]
+    [whereConditions, applyConditions]
   );
 
   /**
@@ -238,23 +249,9 @@ export function QueryBuilder({
    */
   const removeWhereCondition = useCallback(
     (id: string) => {
-      setWhereConditions(prev => {
-        const newConditions = prev.filter(c => c.id !== id);
-
-        // Rebuild where clause and update params
-        const whereJson = buildWhereClause(newConditions);
-        const newParams = { ...params };
-        if (whereJson) {
-          newParams.where = whereJson;
-        } else {
-          delete newParams.where;
-        }
-        onChange(newParams);
-
-        return newConditions;
-      });
+      applyConditions(whereConditions.filter(c => c.id !== id));
     },
-    [params, onChange]
+    [whereConditions, applyConditions]
   );
 
   return (
