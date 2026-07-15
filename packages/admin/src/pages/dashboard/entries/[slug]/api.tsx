@@ -126,7 +126,11 @@ export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
 
       {/* API Playground component */}
       <div className="min-h-0 flex-1">
-        <APIPlayground collectionSlug={slug} />
+        <APIPlayground
+          collectionSlug={slug}
+          fields={collection?.fields}
+          hasStatus={collection?.status === true}
+        />
       </div>
     </PageContainer>
   );

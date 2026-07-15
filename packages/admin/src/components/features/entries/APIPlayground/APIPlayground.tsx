@@ -46,6 +46,8 @@ import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { cn } from "@admin/lib/utils";
 
 import { generateCode } from "./generate-code";
+import type { PlaygroundField, WhereCondition } from "./query-fields";
+import { formatWhere } from "./query-fields";
 import { QueryBuilder } from "./QueryBuilder";
 import { METHOD_TONE, RequestBar } from "./RequestBar";
 import { ResponseViewer } from "./ResponseViewer";
@@ -82,6 +84,15 @@ export interface APIPlaygroundProps {
   baseUrl?: string;
   /** Is this playground for a Single? */
   isSingle?: boolean;
+  /**
+   * The collection's fields, so the parameter controls can offer them.
+   *
+   * The pages that render this already hold the schema, so passing it means
+   * nobody has to recall a field name to build a request.
+   */
+  fields?: PlaygroundField[];
+  /** Whether Draft/Published is enabled, which makes `status` filterable. */
+  hasStatus?: boolean;
 }
 
 export interface QueryParams {
@@ -239,6 +250,8 @@ export function APIPlayground({
   collectionSlug,
   baseUrl = "",
   isSingle = false,
+  fields,
+  hasStatus = false,
 }: APIPlaygroundProps) {
   // Structured endpoint state
   const [action, setAction] = useState<EndpointAction>(
@@ -246,6 +259,9 @@ export function APIPlayground({
   );
   const [entryId, setEntryId] = useState("");
   const [queryParams, setQueryParams] = useState<QueryParams>({});
+  // The where rows live here rather than in the builder: they are part of the
+  // request, so Reset has to reach them, and the URL is derived from them.
+  const [whereConditions, setWhereConditions] = useState<WhereCondition[]>([]);
   const [requestBody, setRequestBody] = useState("");
 
   // Response state
@@ -274,6 +290,18 @@ export function APIPlayground({
    * The HTTP method is derived from the action
    */
   const method = currentAction.method;
+
+  /**
+   * The parameters as they go on the wire.
+   *
+   * `where` is derived from the rows here rather than stored beside them, so
+   * there is only one thing to keep true. Everything downstream — the URL, the
+   * request, the snippets — reads this instead of the raw state.
+   */
+  const effectiveParams = useMemo((): QueryParams => {
+    const where = formatWhere(whereConditions);
+    return where ? { ...queryParams, where } : queryParams;
+  }, [queryParams, whereConditions]);
 
   /**
    * Build the endpoint path from structured components
@@ -311,7 +339,7 @@ export function APIPlayground({
   const apiUrl = useMemo(() => {
     // Build query string
     const params = new URLSearchParams();
-    Object.entries(queryParams).forEach(([key, value]) => {
+    Object.entries(effectiveParams).forEach(([key, value]) => {
       if (value && value.trim()) {
         params.set(key, value.trim());
       }
@@ -319,7 +347,7 @@ export function APIPlayground({
 
     const queryString = params.toString();
     return queryString ? `${endpointPath}?${queryString}` : endpointPath;
-  }, [endpointPath, queryParams]);
+  }, [endpointPath, effectiveParams]);
 
   /**
    * Full URL including origin
@@ -485,6 +513,7 @@ export function APIPlayground({
     setAction(isSingle ? "get" : "list");
     setEntryId("");
     setQueryParams({});
+    setWhereConditions([]);
     setRequestBody("");
     setResponse(null);
     setError(null);
@@ -552,7 +581,7 @@ export function APIPlayground({
         collection: collectionSlug,
         isSingle,
         params: Object.fromEntries(
-          Object.entries(queryParams).filter(([, v]) => v && v.trim())
+          Object.entries(effectiveParams).filter(([, v]) => v && v.trim())
         ),
       }),
     [
@@ -562,7 +591,7 @@ export function APIPlayground({
       requestBody,
       collectionSlug,
       isSingle,
-      queryParams,
+      effectiveParams,
     ]
   );
 
@@ -740,7 +769,10 @@ export function APIPlayground({
                   <QueryBuilder
                     params={queryParams}
                     onChange={setQueryParams}
-                    collectionSlug={collectionSlug}
+                    conditions={whereConditions}
+                    onConditionsChange={setWhereConditions}
+                    fields={fields}
+                    hasStatus={hasStatus}
                     isSingle={isSingle}
                   />
                 </TabsContent>
@@ -750,7 +782,10 @@ export function APIPlayground({
                 <QueryBuilder
                   params={queryParams}
                   onChange={setQueryParams}
-                  collectionSlug={collectionSlug}
+                  conditions={whereConditions}
+                  onConditionsChange={setWhereConditions}
+                  fields={fields}
+                  hasStatus={hasStatus}
                   isSingle={isSingle}
                 />
               </div>
