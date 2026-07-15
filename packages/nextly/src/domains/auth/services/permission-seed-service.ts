@@ -198,11 +198,11 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to delete email templates",
   },
   {
-    name: "Manage API Keys",
-    slug: "manage-api-keys",
+    name: "Update API Keys",
+    slug: "update-api-keys",
     action: "update",
     resource: "api-keys",
-    description: "Permission to create and manage API keys",
+    description: "Permission to update API keys",
   },
   {
     name: "Create API Keys",

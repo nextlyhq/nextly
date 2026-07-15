@@ -429,7 +429,11 @@ export class PermissionService extends BaseService {
     // Case-insensitive matching to align with listPermissions behavior
 
     const existing = await this.db
-      .select({ id: permissions.id, owner: permissions.owner })
+      .select({
+        id: permissions.id,
+        owner: permissions.owner,
+        slug: permissions.slug,
+      })
       .from(permissions)
       .where(
         and(
@@ -440,19 +444,36 @@ export class PermissionService extends BaseService {
       .limit(1)
       .then((rows: unknown[]) => rows[0] || null);
     if (existing) {
-      // Adopt the row's provenance if it is out of step with the declaration.
-      // Create-if-missing alone would leave every permission seeded before
-      // provenance existed permanently unattributed, which is most of them on
-      // any database that has already run — and the declaration is the truth
-      // about who owns a permission, not whatever was true when it was first
-      // written.
+      // Adopt the row's provenance and slug if either is out of step with the
+      // declaration. Create-if-missing alone would leave every permission
+      // seeded before provenance existed permanently unattributed, which is
+      // most of them on any database that has already run — and the
+      // declaration is the truth about a permission, not whatever was true
+      // when it was first written.
+      //
+      // The slug is a label, not a key: identity is (action, resource) and
+      // grants reference the row by id, so bringing a stale slug into line
+      // renames without revoking. Without this, a corrected slug would reach
+      // new installs only, and existing databases would keep answering to a
+      // name no caller asks for.
+      const patch: { owner?: string | null; slug?: string } = {};
+
       const currentOwner =
         (existing as { owner?: string | null }).owner ?? null;
       const declaredOwner = owner ?? null;
       if (currentOwner !== declaredOwner) {
+        patch.owner = declaredOwner;
+      }
+
+      const currentSlug = (existing as { slug?: string | null }).slug ?? null;
+      if (currentSlug !== slug) {
+        patch.slug = slug;
+      }
+
+      if (Object.keys(patch).length > 0) {
         await this.db
           .update(permissions)
-          .set({ owner: declaredOwner })
+          .set(patch)
           .where(eq(permissions.id, String(existing.id)));
       }
       return { id: String(existing.id), created: false };
