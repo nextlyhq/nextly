@@ -9,7 +9,6 @@ import type { RoleFormProps } from "@admin/types/ui/form";
 import { RoleBasicInfo } from "./RoleBasicInfo";
 import { RoleInheritance } from "./RoleInheritance";
 import { RolePermissionsSection } from "./RolePermissionsSection";
-import { RoleStatusSection } from "./RoleStatusSection";
 
 /**
  * Form id used by external buttons (e.g. page-header actions)
@@ -25,7 +24,6 @@ export const ROLE_FORM_ID = "role-form";
  * - Basic info fields → RoleBasicInfo component
  * - Role inheritance → RoleInheritance component
  * - Permission selection → RolePermissionsSection component
- * - Status fields → RoleStatusSection component
  *
  * The component now focuses solely on layout and composition.
  */
@@ -42,12 +40,10 @@ export function RoleForm({ roleId }: RoleFormProps) {
     setSelectedBaseRoleIds,
     lockedPermissionIds,
     setLockedPermissionIds,
-    rolePermissionsMap,
     setRolePermissionsMap,
     onSubmit,
     handleNameChange,
     handleCancel,
-    statusOptions,
     formRef,
   } = useRoleForm(roleId);
 
@@ -149,19 +145,9 @@ export function RoleForm({ roleId }: RoleFormProps) {
                   allRoles={allRoles}
                   selectedBaseRoleIds={selectedBaseRoleIds}
                   setSelectedBaseRoleIds={setSelectedBaseRoleIds}
-                  rolePermissionsMap={rolePermissionsMap}
                   setRolePermissionsMap={setRolePermissionsMap}
                   lockedPermissionIds={lockedPermissionIds}
                   setLockedPermissionIds={setLockedPermissionIds}
-                />
-
-                {/* Status and Priority (only in create mode for non-system roles) */}
-                <RoleStatusSection
-                  form={form}
-                  isLoading={isLoading}
-                  isSystemRole={isSystemRole}
-                  isEditMode={isEditMode}
-                  statusOptions={statusOptions}
                 />
               </div>
             </SettingsSection>
@@ -170,7 +156,8 @@ export function RoleForm({ roleId }: RoleFormProps) {
             <SettingsSection label="Permissions">
               <div className="py-5 -mx-6">
                 <p className="px-6 text-sm text-muted-foreground mb-4">
-                  Only actions bound by a route are listed below.
+                  Choose what this role can do. Each tab groups a kind of
+                  resource, and each column is an action it allows.
                 </p>
                 <RolePermissionsSection
                   form={form}

@@ -191,7 +191,15 @@ export function formBuilder(
           resource: "submissions",
           label: "Export Submissions",
           description: "Export form submissions as CSV/JSON",
-          group: "Form Builder",
+          // No `group`: the admin already files this under the plugin that
+          // declared it, so naming the plugin again would nest it inside
+          // itself. `group` is for a plugin with enough permissions to sort
+          // its own into headings, which one is not.
+          //
+          // `danger` because the point of the permission is to take
+          // submissions — names, emails, whatever a form asked for — out of
+          // the site in a file.
+          danger: true,
         },
       ],
       // HTTP route — exported at

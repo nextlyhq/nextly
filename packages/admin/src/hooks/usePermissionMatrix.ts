@@ -9,6 +9,8 @@ import {
   isPartiallySelected,
   isAllSelectedForAction,
   isPartiallySelectedForAction,
+  permissionIdsForAction,
+  permissionIdsForContentType,
 } from "@admin/lib/permissions/calculations";
 
 import { PERMISSION_CATEGORIES } from "../constants/permissions";
@@ -67,9 +69,7 @@ export function usePermissionMatrix({
   // Function to toggle all permissions in a row (for a content type)
   const toggleAllForContentType = useCallback(
     (contentType: ContentTypePermissions, checked: boolean) => {
-      const permissionIds = Object.values(contentType.permissions)
-        .filter(Boolean)
-        .map(permission => permission?.id as string);
+      const permissionIds = permissionIdsForContentType(contentType);
 
       let newValue = [...value];
 
@@ -96,13 +96,10 @@ export function usePermissionMatrix({
   const toggleAllForAction = useCallback(
     (
       contentTypes: ContentTypePermissions[],
-      action: keyof ContentTypePermissions["permissions"],
+      action: string,
       checked: boolean
     ) => {
-      const permissionIds = contentTypes
-        .map(ct => ct.permissions[action])
-        .filter(Boolean)
-        .map(permission => permission?.id as string);
+      const permissionIds = permissionIdsForAction(contentTypes, action);
 
       let newValue = [...value];
 
@@ -138,18 +135,14 @@ export function usePermissionMatrix({
   );
 
   const checkIsAllSelectedForAction = useCallback(
-    (
-      contentTypes: ContentTypePermissions[],
-      action: keyof ContentTypePermissions["permissions"]
-    ) => isAllSelectedForAction(contentTypes, action, value),
+    (contentTypes: ContentTypePermissions[], action: string) =>
+      isAllSelectedForAction(contentTypes, action, value),
     [value]
   );
 
   const checkIsPartiallySelectedForAction = useCallback(
-    (
-      contentTypes: ContentTypePermissions[],
-      action: keyof ContentTypePermissions["permissions"]
-    ) => isPartiallySelectedForAction(contentTypes, action, value),
+    (contentTypes: ContentTypePermissions[], action: string) =>
+      isPartiallySelectedForAction(contentTypes, action, value),
     [value]
   );
 

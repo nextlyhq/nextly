@@ -33,7 +33,6 @@ import {
   useDeleteRole,
   useBulkDeleteRoles,
 } from "@admin/hooks/queries/useRoles";
-import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { navigateTo } from "@admin/lib/navigation";
@@ -261,29 +260,6 @@ export default function RoleTable() {
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
             {row.permissions.length} Permissions
-          </span>
-        ),
-      },
-      {
-        name: "status",
-        header: "Status",
-        cell: ({ row }) => (
-          <Badge variant={row.status === "Active" ? "success" : "default"}>
-            {row.status}
-          </Badge>
-        ),
-      },
-      {
-        name: "created",
-        header: "Created",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm">
-            {formatDateWithAdminTimezone(
-              value as string,
-              { year: "numeric", month: "short", day: "numeric" },
-              "N/A"
-            )}
           </span>
         ),
       },
