@@ -56,8 +56,16 @@ jobs:
       # requires npm >=11.5.1 to exchange the OIDC token at the registry for
       # publish auth. Without this upgrade the PUT request goes out without
       # a valid trusted-publisher token and the registry returns 404.
+      #
+      # Pin an exact, tested version rather than @latest: npm 12.x raised its
+      # engine floor to Node ^22.22 || ^24.15 || >=26, which the .nvmrc pin
+      # (22.14) does not satisfy, so `npm@latest` fails with EBADENGINE and
+      # aborts the whole release. 11.18.0 meets the >=11.5.1 trusted-publishing
+      # requirement and runs on Node 22.14. Keep this exact so a future npm
+      # release can never silently re-break publishing; bump it deliberately
+      # alongside a Node bump in .nvmrc.
       - name: Upgrade npm to >=11.5.1 for trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.18.0
 
       - name: Cache Turbo
         uses: actions/cache@v5
