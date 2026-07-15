@@ -209,7 +209,12 @@ function applyTextFormat(text: string, format: number): string {
     result = `<strong style="font-weight:700">${result}</strong>`;
   }
   if (format & TEXT_FORMAT.HIGHLIGHT) {
-    result = `<mark style="background-color:#fef08a;padding:0.125rem 0.25rem">${result}</mark>`;
+    // Class, not an inline style, for the same reason as the code format
+    // above: a baked-in colour outranks the site's stylesheet, and this one
+    // was a light yellow that a dark page could neither restyle nor read.
+    // `mark` carries a highlight of its own even unstyled, so dropping the
+    // colour leaves the meaning intact rather than the text bare.
+    result = `<mark class="nextly-rich-text-highlight">${result}</mark>`;
   }
 
   return result;
