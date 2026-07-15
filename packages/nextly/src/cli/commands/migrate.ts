@@ -425,7 +425,13 @@ async function loadTargetSnapshot(
     const content = await readFile(resolve(metaDir, file), "utf-8");
     return parseSnapshotFile(content, file).snapshot;
   } catch (err) {
+    // File not found - treat as no snapshot (apply SQL verbatim)
     if ((err as { code?: string }).code === "ENOENT") return null;
+    // Snapshot parse error - may be custom format (e.g., blog template metadata).
+    // Treat as no snapshot so migration runs verbatim instead of failing.
+    if (err instanceof Error && err.message.includes("migrationHash")) {
+      return null;
+    }
     throw err;
   }
 }
@@ -648,11 +654,21 @@ export function parseSqlSections(content: string): {
   for (const line of lines) {
     const trimmedLine = line.trim();
 
-    if (trimmedLine === "-- UP" || trimmedLine.startsWith("-- UP ")) {
+    // Handle both "-- UP" and "-- UP:" formats
+    if (
+      trimmedLine === "-- UP" ||
+      trimmedLine.startsWith("-- UP ") ||
+      trimmedLine.startsWith("-- UP:")
+    ) {
       currentSection = "up";
       continue;
     }
-    if (trimmedLine === "-- DOWN" || trimmedLine.startsWith("-- DOWN ")) {
+    // Handle both "-- DOWN" and "-- DOWN:" formats
+    if (
+      trimmedLine === "-- DOWN" ||
+      trimmedLine.startsWith("-- DOWN ") ||
+      trimmedLine.startsWith("-- DOWN:")
+    ) {
       currentSection = "down";
       continue;
     }

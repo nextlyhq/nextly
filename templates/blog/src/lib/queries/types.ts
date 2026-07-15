@@ -81,6 +81,8 @@ export interface Post {
   seo?: PostSeo | null;
   readingTime?: number | null;
   wordCount?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface SiteSettings {

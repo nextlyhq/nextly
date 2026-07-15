@@ -723,6 +723,16 @@ export async function copyTemplate(
   // dashboard's SeedDemoContentCard after running /admin/setup — the
   // CLI no longer asks about it.)
 
+  // Step 4b: Copy migrations directory if present (for SQL-based templates)
+  // This includes both the migration SQL files and metadata snapshots
+  // that are used by boot-apply to register collections at runtime
+  const templateMigrationsDir = path.join(typeDir, "migrations");
+  if (await fs.pathExists(templateMigrationsDir)) {
+    await fs.copy(templateMigrationsDir, path.join(targetDir, "migrations"), {
+      overwrite: false,
+    });
+  }
+
   // Step 5: Remove base template's page.tsx if blog template has (frontend) route group
   // Both can't coexist since (frontend)/page.tsx also serves the / route
   const frontendPagePath = path.join(

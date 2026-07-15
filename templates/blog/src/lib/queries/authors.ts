@@ -35,22 +35,32 @@ function toAuthor(doc: Record<string, unknown>): Author {
 }
 
 export async function getAuthorBySlug(slug: string): Promise<Author | null> {
-  // nextly.users.find() doesn't support a `where` filter - it only exposes
-  // full-text `search`. For a slug (which must be exact) we list users
-  // and filter client-side. Author counts on a blog template are small
-  // (typically <50) so the full page fetch is cheap.
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.users.find({ limit: 1000 });
-  const match = (result.items as unknown as Record<string, unknown>[]).find(
-    d => (d.slug as string | undefined) === slug
-  );
-  return match ? toAuthor(match) : null;
+  try {
+    // nextly.users.find() doesn't support a `where` filter - it only exposes
+    // full-text `search`. For a slug (which must be exact) we list users
+    // and filter client-side. Author counts on a blog template are small
+    // (typically <50) so the full page fetch is cheap.
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.users.find({ limit: 1000 });
+    const match = (result.items as unknown as Record<string, unknown>[]).find(
+      d => (d.slug as string | undefined) === slug
+    );
+    return match ? toAuthor(match) : null;
+  } catch (error) {
+    console.error(`Error fetching author by slug ${slug}:`, error);
+    return null;
+  }
 }
 
 export async function getAllAuthorSlugs(): Promise<string[]> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.users.find({ limit: 1000 });
-  return (result.items as unknown as Record<string, unknown>[])
-    .map(d => d.slug as string | undefined)
-    .filter((s): s is string => typeof s === "string" && s.length > 0);
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.users.find({ limit: 1000 });
+    return (result.items as unknown as Record<string, unknown>[])
+      .map(d => d.slug as string | undefined)
+      .filter((s): s is string => typeof s === "string" && s.length > 0);
+  } catch (error) {
+    console.error("Error fetching all author slugs:", error);
+    return [];
+  }
 }

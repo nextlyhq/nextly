@@ -57,6 +57,24 @@ export function buildNextConfigTemplate(database: DatabaseConfig): string {
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ${packagesArray},
+
+  // Configure Next.js Image to accept local uploads and localhost URLs
+  // This is needed for the blog template which serves images from /uploads/
+  images: {
+    remotePatterns: [
+      {
+        protocol: "http",
+        hostname: "localhost",
+        port: "3000",
+        pathname: "/uploads/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**", // Allow any hostname for production deployments
+        pathname: "/uploads/**",
+      },
+    ],
+  },
 };
 
 export default nextConfig;

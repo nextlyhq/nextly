@@ -9,10 +9,13 @@
  * "feature missing." 404 (route not present) means the template
  * doesn't ship a seed at all (e.g., blank template).
  *
- * POST runs the three-phase seed (see src/endpoints/seed/index.ts) and
+ * POST runs the content seed (see src/endpoints/seed/index.ts) and
  * writes seed.completedAt to nextly_meta on success so the dashboard
  * card hides on next probe. Returns the full SeedResult so the card
  * can render success summary / partial-success warnings.
+ *
+ * Schema is created via SQL migrations (boot-time auto-apply).
+ * This route only populates demo content.
  *
  * Why a POST and not boot-time magic: prior versions of the blog
  * template ran the seed automatically when `next dev` first registered

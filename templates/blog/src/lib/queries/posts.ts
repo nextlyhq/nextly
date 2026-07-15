@@ -44,15 +44,20 @@ function coercePosts(docs: unknown[]): Post[] {
  * detail page, which serializes to HTML.
  */
 export async function getLatestPosts(limit = 3): Promise<Post[]> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: PUBLISHED,
-    sort: "-publishedAt",
-    limit,
-    depth: 2,
-  });
-  return coercePosts(result.items);
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: PUBLISHED,
+      sort: "-publishedAt",
+      limit,
+      depth: 2,
+    });
+    return coercePosts(result.items);
+  } catch (error) {
+    console.error("Error fetching latest posts:", error);
+    return [];
+  }
 }
 
 /**
@@ -62,17 +67,22 @@ export async function getLatestPosts(limit = 3): Promise<Post[]> {
  * the `featured` flag appear meaningless to template users.
  */
 export async function getFeaturedPost(): Promise<Post | null> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: {
-      and: [PUBLISHED, { featured: { equals: true } }],
-    },
-    sort: "-publishedAt",
-    limit: 1,
-    depth: 2,
-  });
-  return result.items[0] ? coercePost(result.items[0]) : null;
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: {
+        and: [PUBLISHED, { featured: { equals: true } }],
+      },
+      sort: "-publishedAt",
+      limit: 1,
+      depth: 2,
+    });
+    return result.items[0] ? coercePost(result.items[0]) : null;
+  } catch (error) {
+    console.error("Error fetching featured post:", error);
+    return null;
+  }
 }
 
 export interface PostListOptions {
@@ -104,23 +114,28 @@ export async function getPosts({
   page = 1,
   limit = 9,
 }: PostListOptions = {}): Promise<PostListResult> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: PUBLISHED,
-    sort: "-publishedAt",
-    page,
-    limit,
-    depth: 2,
-  });
-  return {
-    items: coercePosts(result.items),
-    meta: {
-      total: result.meta.total,
-      totalPages: result.meta.totalPages,
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: PUBLISHED,
+      sort: "-publishedAt",
       page,
-    },
-  };
+      limit,
+      depth: 2,
+    });
+    return {
+      items: coercePosts(result.items),
+      meta: {
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+        page,
+      },
+    };
+  } catch (error) {
+    console.error("Error fetching posts:", error);
+    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+  }
 }
 
 /**
@@ -131,17 +146,22 @@ export async function getPosts({
  * Returns null when the slug doesn't match or the post is not published.
  */
 export async function getPostBySlug(slug: string): Promise<Post | null> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: {
-      and: [PUBLISHED, { slug: { equals: slug } }],
-    },
-    limit: 1,
-    depth: 2,
-    richTextFormat: "html",
-  });
-  return result.items[0] ? coercePost(result.items[0]) : null;
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: {
+        and: [PUBLISHED, { slug: { equals: slug } }],
+      },
+      limit: 1,
+      depth: 2,
+      richTextFormat: "html",
+    });
+    return result.items[0] ? coercePost(result.items[0]) : null;
+  } catch (error) {
+    console.error(`Error fetching post by slug ${slug}:`, error);
+    return null;
+  }
 }
 
 /**
@@ -150,14 +170,19 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
  * Cap at 1000 — plenty for typical blogs; if you exceed this, paginate.
  */
 export async function getAllPostSlugs(): Promise<string[]> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: PUBLISHED,
-    limit: 1000,
-    depth: 0,
-  });
-  return result.items.map(d => d.slug as string);
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: PUBLISHED,
+      limit: 1000,
+      depth: 0,
+    });
+    return result.items.map(d => d.slug as string);
+  } catch (error) {
+    console.error("Error fetching all post slugs:", error);
+    return [];
+  }
 }
 
 export interface ArchiveEntry {
@@ -174,20 +199,25 @@ export interface ArchiveEntry {
  * exceed this, paginate the archive.
  */
 export async function getAllPublishedForArchive(): Promise<ArchiveEntry[]> {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: PUBLISHED,
-    sort: "-publishedAt",
-    limit: 1000,
-    depth: 0,
-  });
-  return result.items.map(d => ({
-    id: d.id as string,
-    title: d.title as string,
-    slug: d.slug as string,
-    publishedAt: (d.publishedAt as string | null) ?? null,
-  }));
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: PUBLISHED,
+      sort: "-publishedAt",
+      limit: 1000,
+      depth: 0,
+    });
+    return result.items.map(d => ({
+      id: d.id as string,
+      title: d.title as string,
+      slug: d.slug as string,
+      publishedAt: (d.publishedAt as string | null) ?? null,
+    }));
+  } catch (error) {
+    console.error("Error fetching archive posts:", error);
+    return [];
+  }
 }
 
 /**
@@ -198,25 +228,30 @@ export async function getPostsByAuthor(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 20 } = opts;
-  const nextly = await getNextly({ config: nextlyConfig });
-  const result = await nextly.find({
-    collection: "posts",
-    where: {
-      and: [PUBLISHED, { author: { equals: authorId } }],
-    },
-    sort: "-publishedAt",
-    page,
-    limit,
-    depth: 2,
-  });
-  return {
-    items: coercePosts(result.items),
-    meta: {
-      total: result.meta.total,
-      totalPages: result.meta.totalPages,
+  try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const result = await nextly.find({
+      collection: "posts",
+      where: {
+        and: [PUBLISHED, { author: { equals: authorId } }],
+      },
+      sort: "-publishedAt",
       page,
-    },
-  };
+      limit,
+      depth: 2,
+    });
+    return {
+      items: coercePosts(result.items),
+      meta: {
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+        page,
+      },
+    };
+  } catch (error) {
+    console.error(`Error fetching posts by author ${authorId}:`, error);
+    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+  }
 }
 
 /**
@@ -240,24 +275,29 @@ export async function getPostsByCategory(
 
   const categoryId = String(category.id);
 
-  const result = await nextly.find({
-    collection: "posts",
-    where: {
-      and: [PUBLISHED, { categories: { contains: categoryId } }],
-    },
-    sort: "-publishedAt",
-    page,
-    limit,
-    depth: 2,
-  });
-  return {
-    items: coercePosts(result.items),
-    meta: {
-      total: result.meta.total,
-      totalPages: result.meta.totalPages,
+  try {
+    const result = await nextly.find({
+      collection: "posts",
+      where: {
+        and: [PUBLISHED, { categories: { contains: categoryId } }],
+      },
+      sort: "-publishedAt",
       page,
-    },
-  };
+      limit,
+      depth: 2,
+    });
+    return {
+      items: coercePosts(result.items),
+      meta: {
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+        page,
+      },
+    };
+  } catch (error) {
+    console.error(`Error fetching posts for category ${categorySlug}:`, error);
+    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+  }
 }
 
 /**
@@ -276,24 +316,29 @@ export async function getPostsByTag(
 
   const tagId = String(tag.id);
 
-  const result = await nextly.find({
-    collection: "posts",
-    where: {
-      and: [PUBLISHED, { tags: { contains: tagId } }],
-    },
-    sort: "-publishedAt",
-    page,
-    limit,
-    depth: 2,
-  });
-  return {
-    items: coercePosts(result.items),
-    meta: {
-      total: result.meta.total,
-      totalPages: result.meta.totalPages,
+  try {
+    const result = await nextly.find({
+      collection: "posts",
+      where: {
+        and: [PUBLISHED, { tags: { contains: tagId } }],
+      },
+      sort: "-publishedAt",
       page,
-    },
-  };
+      limit,
+      depth: 2,
+    });
+    return {
+      items: coercePosts(result.items),
+      meta: {
+        total: result.meta.total,
+        totalPages: result.meta.totalPages,
+        page,
+      },
+    };
+  } catch (error) {
+    console.error(`Error fetching posts for tag ${tagSlug}:`, error);
+    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+  }
 }
 
 /**
