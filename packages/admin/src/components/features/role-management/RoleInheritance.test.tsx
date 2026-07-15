@@ -51,7 +51,6 @@ function RoleInheritanceWrapper({
       slug: "",
       description: "",
       permissions: [],
-      status: "active",
       ...defaultValues,
     },
   });

@@ -49,8 +49,6 @@ const transformRole = (
   permissions: normalizePermissions(
     apiRole.permissionIds ?? (apiRole as { permissions?: unknown }).permissions
   ),
-  status: "Active",
-  created: new Date().toISOString().split("T")[0],
 });
 
 // Build query string for pagination and search using shared utility

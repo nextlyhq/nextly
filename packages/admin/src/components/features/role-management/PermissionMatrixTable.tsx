@@ -110,7 +110,26 @@ export function PermissionMatrixTable({
     <>
       {/* Desktop Table View (≥ 1024px) */}
       <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-border relative">
-        <table className="w-full border-collapse">
+        <table className="w-full border-collapse table-fixed">
+          {/*
+            Widths declared once, here, instead of letting the browser
+            distribute them. Left to itself it gave Name every spare pixel —
+            over a thousand of them for words like "Categories" — and pushed
+            the first checkbox a thousand more from the label it belongs to.
+            Proximity is what says these things are related, so that gap was
+            actively claiming they were not.
+
+            The trailing column has no content and exists to absorb the slack
+            that Name used to. `table-fixed` is what makes these hold; without
+            it the browser still negotiates from content.
+          */}
+          <colgroup>
+            <col className="w-70" />
+            {actions.map(action => (
+              <col key={action} className="w-28" />
+            ))}
+            <col />
+          </colgroup>
           <PermissionMatrixHeader
             contentTypes={contentTypes}
             actions={actions}

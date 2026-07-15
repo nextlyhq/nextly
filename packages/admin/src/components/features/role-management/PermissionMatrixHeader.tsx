@@ -34,18 +34,16 @@ export function PermissionMatrixHeader({
   isAllSelectedForAction,
   isPartiallySelectedForAction,
 }: PermissionMatrixHeaderProps) {
+  // Widths come from the table's colgroup, not from here, so the header and
+  // body cannot disagree about them.
   const headerClass =
     "p-4 align-middle text-sm font-medium text-foreground  border-b border-border bg-primary/5 backdrop-blur-sm sticky top-0 z-10";
-  const actionClass =
-    "p-4 align-middle text-sm font-medium text-foreground  border-b border-border bg-primary/5 backdrop-blur-sm w-[120px] sticky top-0 z-10";
+  const actionClass = `${headerClass} px-2`;
 
   return (
     <thead>
       <tr>
-        <th
-          id="permission-matrix-name"
-          className={`text-left ${headerClass} min-w-[200px]`}
-        >
+        <th id="permission-matrix-name" className={`text-left ${headerClass}`}>
           <div className="flex items-center h-full">Name</div>
         </th>
 
@@ -82,6 +80,10 @@ export function PermissionMatrixHeader({
             </th>
           );
         })}
+
+        {/* Absorbs the width the action columns don't need, so it lands here
+            rather than inside Name. */}
+        <th aria-hidden="true" className={headerClass} />
       </tr>
     </thead>
   );

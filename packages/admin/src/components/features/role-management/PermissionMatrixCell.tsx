@@ -27,7 +27,8 @@ export function PermissionMatrixCell({
   columnHeaderId,
   rowHeaderId,
   onToggle,
-  className = "p-4 text-center  border-b border-border align-middle w-[120px]",
+  // Width comes from the table's colgroup; this only handles spacing.
+  className = "px-2 py-4 text-center  border-b border-border align-middle",
 }: PermissionMatrixCellProps) {
   // No such permission, as opposed to one that exists and is not granted.
   // The dash is decorative: a screen reader voices "-" as nothing at all, so

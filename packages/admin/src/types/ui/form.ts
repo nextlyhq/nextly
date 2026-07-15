@@ -18,7 +18,6 @@ export type RoleFormValues = {
   name: string;
   slug: string;
   description?: string;
-  status: "active" | "inactive" | "deprecated";
   isSystemRole?: boolean;
   permissions: string[];
   baseRoleId?: string;
@@ -49,7 +48,6 @@ export interface RoleWithPermissions extends EntityBase {
   name: string;
   slug?: string;
   description?: string;
-  status?: "active" | "inactive" | "deprecated";
   priority?: number;
   isSystemRole?: boolean;
   permissions?: { id: string }[];

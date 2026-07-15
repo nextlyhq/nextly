@@ -17,8 +17,6 @@ export interface Role {
   description: string;
   type: "System" | "Custom";
   permissions: string[];
-  status: "Active" | "Inactive";
-  created: string;
   slug?: string;
 }
 

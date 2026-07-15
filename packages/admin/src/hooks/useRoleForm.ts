@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -99,7 +99,6 @@ const roleFormSchema = z.object({
         "Slug must contain only lowercase letters, numbers, underscores, and hyphens.",
     }),
   description: z.string().optional(),
-  status: z.enum(["active", "inactive", "deprecated"]),
   permissions: z.array(z.string()),
   baseRoleId: z.string().optional(),
 });
@@ -125,7 +124,6 @@ export interface UseRoleFormReturn {
   onSubmit: (e?: React.BaseSyntheticEvent) => Promise<void>;
   handleNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleCancel: () => void;
-  statusOptions: Array<{ id: string; name: string; description: string }>;
   formRef: React.RefObject<HTMLFormElement | null>;
   ignoreFormChanges: boolean;
   setIgnoreFormChanges: (value: boolean) => void;
@@ -149,7 +147,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       name: "",
       slug: "",
       description: "",
-      status: "active",
       permissions: [],
       baseRoleId: undefined,
     },
@@ -193,13 +190,14 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setIsLoading(true);
 
     try {
-      const roleType: "Custom" | "System" =
-        values.status === "active" ? "Custom" : "System";
-
+      // A role someone creates here is theirs, not the framework's. System
+      // roles are seeded, and being one locks the name and slug — which the
+      // status field used to hand out by accident, since anything other than
+      // "active" was read as System.
       const roleData = {
         roleName: values.name,
         description: values.description || "",
-        type: roleType,
+        type: "Custom" as const,
         permissions: values.permissions,
         slug: values.slug,
         childRoleIds: selectedBaseRoleIds,
@@ -362,10 +360,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           name: roleData.roleName,
           slug: roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
           description: roleData.description,
-          status: roleData.status.toLowerCase() as
-            | "active"
-            | "inactive"
-            | "deprecated",
           isSystemRole: roleData.type === "System",
           permissions: normalizedRolePermissionIds.map(id => ({ id })),
           users: [],
@@ -380,7 +374,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           name: roleWithPermissions.name,
           slug: roleWithPermissions.slug,
           description: roleWithPermissions.description || "",
-          status: roleWithPermissions.status,
           permissions: normalizedRolePermissionIds,
         });
 
@@ -522,27 +515,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     [form, isEditMode]
   );
 
-  const statusOptions = useMemo(
-    () => [
-      {
-        id: "active",
-        name: "Active",
-        description: "Role is active and can be assigned to users",
-      },
-      {
-        id: "inactive",
-        name: "Inactive",
-        description: "Role is inactive and cannot be assigned to new users",
-      },
-      {
-        id: "deprecated",
-        name: "Deprecated",
-        description: "Role is deprecated and will be removed in the future",
-      },
-    ],
-    []
-  );
-
   return {
     form,
     role,
@@ -562,7 +534,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     onSubmit: form.handleSubmit(onSubmitHandler),
     handleNameChange,
     handleCancel,
-    statusOptions,
     formRef,
     ignoreFormChanges,
     setIgnoreFormChanges,

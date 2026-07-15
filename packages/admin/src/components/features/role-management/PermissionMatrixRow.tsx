@@ -42,7 +42,7 @@ export function PermissionMatrixRow({
         isAllSelected && "bg-primary/5 hover-unified"
       )}
     >
-      <td className="p-4 align-middle  border-b border-border min-w-[200px]">
+      <td className="p-4 align-middle  border-b border-border">
         <div className="flex items-center space-x-4">
           <Checkbox
             checked={isAllSelected}
@@ -79,6 +79,9 @@ export function PermissionMatrixRow({
           />
         );
       })}
+
+      {/* Pairs with the header's spacer; carries the row's rule to the edge. */}
+      <td className="border-b border-border" />
     </tr>
   );
 }
