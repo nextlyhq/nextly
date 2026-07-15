@@ -95,6 +95,27 @@ describe("DashboardHeader default-button visibility", () => {
     expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
   });
 
+  it("hides the bell where the builder is disabled", () => {
+    mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    // Only the bell is builder-dependent; the rest of the bar is unaffected.
+    expect(screen.getByTitle("GitHub Repository")).toBeInTheDocument();
+    expect(screen.getByTitle("Documentation")).toBeInTheDocument();
+  });
+
+  it("shows the bell where the builder is enabled", () => {
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.getByTestId("bell")).toBeInTheDocument();
+  });
+
+  it("keeps the bell while the builder flag is still in flight", () => {
+    mockBranding = { plugins: [] } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.getByTestId("bell")).toBeInTheDocument();
+  });
+
   it("renders a header.slot component (supersedes headerSlot)", () => {
     registerComponent("@acme/p/admin#Publish", () => <div>publish btn</div>);
     mockBranding = {

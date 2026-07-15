@@ -83,9 +83,16 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
 
         <ThemeToggle />
 
-        {/* F10 PR 5: bell renders only for super-admins (component
-            self-gates via useCurrentUserPermissions). */}
-        {!hidden.has("notifications") && <NotificationBell />}
+        {/* Bell renders only for super-admins (self-gated via
+            useCurrentUserPermissions), and only where the builder runs: the
+            dropdown lists schema changes, which are journaled by the builder
+            and the dev-time code-first push. Elsewhere the schema arrives
+            through committed migrations, which write no journal, so the
+            dropdown would have nothing to list. Gated on an explicit `false`
+            so the in-flight `undefined` does not hide it mid-load. */}
+        {!hidden.has("notifications") && branding?.showBuilder !== false && (
+          <NotificationBell />
+        )}
         <div className="ml-2">
           <UserProfileDropdown
             user={user}
