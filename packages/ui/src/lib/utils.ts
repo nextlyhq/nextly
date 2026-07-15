@@ -10,7 +10,7 @@ import { twMerge } from "tailwind-merge";
  * @example
  * ```typescript
  * cn('px-2 py-1', 'px-4') // => 'py-1 px-4'
- * cn('text-red-500', condition && 'text-blue-500')
+ * cn('text-destructive-500', condition && 'text-blue-500')
  * ```
  */
 export function cn(...inputs: ClassValue[]) {
