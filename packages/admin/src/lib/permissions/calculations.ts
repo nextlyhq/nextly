@@ -102,6 +102,25 @@ export function permissionIdsForAction(
 }
 
 /**
+ * Whether a select-all control over `permissionIds` has nothing left to offer.
+ *
+ * A locked permission comes from the base role and cannot be revoked here, but
+ * the toggle handlers keep locked ids when clearing, so a group holding both
+ * locked and free permissions is still worth operating: the control grants or
+ * clears the free ones and leaves the rest. Only a group that is locked all the
+ * way through has no effect to give, and only that one is disabled.
+ *
+ * An empty group is treated as locked — there is nothing to toggle.
+ */
+export function isEveryPermissionLocked(
+  permissionIds: string[],
+  lockedIds: string[]
+): boolean {
+  if (permissionIds.length === 0) return true;
+  return permissionIds.every(id => lockedIds.includes(id));
+}
+
+/**
  * Check if all permissions for a content type are selected
  */
 export function isAllSelected(

@@ -194,14 +194,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setIsLoading(true);
 
     try {
-      // A role someone creates here is theirs, not the framework's. System
-      // roles are seeded, and being one locks the name and slug — which the
-      // status field used to hand out by accident, since anything other than
-      // "active" was read as System.
       const roleData = {
         roleName: values.name,
         description: values.description || "",
-        type: "Custom" as const,
         permissions: values.permissions,
         slug: values.slug,
         childRoleIds: selectedBaseRoleIds,
@@ -209,6 +204,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
 
       if (isEditMode && roleId) {
         debugLog("useRoleForm", "Updating role...");
+        // No `type`: this form has no control for it, and `updateRole` turns
+        // one into `isSystem`, so naming it here would answer a question
+        // nobody asked — and answering "Custom" would demote a seeded role to
+        // a custom one on any save, including a description-only edit.
         await roleApi.updateRole(roleId, roleData);
         const currentIds = (role?.permissions || []).map(p => p.id);
         const nextIds = values.permissions;
@@ -217,7 +216,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         toast.success("Role updated successfully");
       } else {
         debugLog("useRoleForm", "Creating role...");
-        await roleApi.createRole(roleData);
+        // A role someone creates here is theirs, not the framework's. Being a
+        // system role locks the name and slug, and the seeder is the only
+        // thing that should hand that out.
+        await roleApi.createRole({ ...roleData, type: "Custom" });
         await queryClient.invalidateQueries({ queryKey: ["roles"] });
         toast.success("Role created successfully");
       }

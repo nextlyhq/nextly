@@ -5,10 +5,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import type { UseFormReturn } from "react-hook-form";
+import { useRef } from "react";
+import { useWatch, type UseFormReturn } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
 import {
+  FormControl,
   FormField,
   FormItem,
   FormLabel,
@@ -57,19 +59,35 @@ export function RoleInheritance({
   lockedPermissionIds,
   setLockedPermissionIds,
 }: RoleInheritanceProps) {
-  if (allRoles.length === 0) {
-    return null;
-  }
+  // Subscribed, not sampled. `getValues` reads once per render and nothing
+  // above this component renders on a permission change — the permission
+  // matrix is its own controller, and the only form state anyone here
+  // subscribes to is `isDirty`, which flips once and never again. So a sampled
+  // read went stale after the first tick: the summary below kept reporting the
+  // count from that first render, and changing the base afterwards dropped
+  // every permission ticked since.
+  const watchedPermissions = useWatch({
+    control: form.control,
+    name: "permissions",
+  });
+
+  // Only rendered when a base can be chosen — but after the hooks above, which
+  // must run on every render.
+  const selectedIds = watchedPermissions ?? [];
 
   const baseRoleId = selectedBaseRoleIds[0];
   const baseRole = allRoles.find(r => r.id === baseRoleId);
 
   /** Permissions ticked on top of whatever the base already grants. */
-  const extras = (form.getValues("permissions") || []).filter(
-    id => !lockedPermissionIds.includes(id)
-  );
+  const extras = selectedIds.filter(id => !lockedPermissionIds.includes(id));
+
+  // Only the newest selection may commit. Two selections in quick succession
+  // race, and the loser landing last would restore the base the user just
+  // moved away from — along with its locks and permissions.
+  const selectionRef = useRef(0);
 
   const clearBase = () => {
+    selectionRef.current += 1;
     setLockedPermissionIds([]);
     setSelectedBaseRoleIds([]);
     setRolePermissionsMap({});
@@ -77,10 +95,14 @@ export function RoleInheritance({
   };
 
   const chooseBase = async (roleId: string) => {
+    const selection = ++selectionRef.current;
+
     try {
       // Read the base's permissions now rather than trusting the list, which
       // was loaded when the page was.
       const fresh = await roleApi.getRoleById(roleId);
+      if (selection !== selectionRef.current) return;
+
       const inherited = normalizePermissions(fresh.permissions);
 
       setRolePermissionsMap({ [roleId]: inherited });
@@ -97,6 +119,7 @@ export function RoleInheritance({
         }
       );
     } catch {
+      if (selection !== selectionRef.current) return;
       const name = allRoles.find(r => r.id === roleId)?.name ?? roleId;
       toast.error(`Failed to load permissions for role ${name}`);
     }
@@ -110,6 +133,10 @@ export function RoleInheritance({
     if (value === baseRoleId) return;
     await chooseBase(value);
   };
+
+  if (allRoles.length === 0) {
+    return null;
+  }
 
   return (
     <FormField
@@ -130,9 +157,15 @@ export function RoleInheritance({
               void handleSelection(value);
             }}
           >
-            <SelectTrigger>
-              <SelectValue placeholder="Nothing — choose every permission by hand" />
-            </SelectTrigger>
+            {/*
+              Wrapped so the trigger takes the form item's id: the label points
+              at that id, and without it the combobox announces with no name.
+            */}
+            <FormControl>
+              <SelectTrigger>
+                <SelectValue placeholder="Nothing — choose every permission by hand" />
+              </SelectTrigger>
+            </FormControl>
             <SelectContent>
               <SelectItem value={NONE_VALUE}>
                 Nothing — choose every permission by hand

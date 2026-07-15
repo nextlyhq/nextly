@@ -539,10 +539,18 @@ export class PermissionService extends BaseService {
       }
 
       if (Object.keys(patch).length > 0) {
-        await this.db
-          .update(permissions)
-          .set(patch)
-          .where(eq(permissions.id, String(existing.id)));
+        try {
+          await this.db
+            .update(permissions)
+            .set(patch)
+            .where(eq(permissions.id, String(existing.id)));
+        } catch (err) {
+          // Same contract as the insert below: a raw driver error never leaves
+          // this service. The reachable case is the slug — it carries a unique
+          // index, so adopting a declared slug already taken by another row
+          // fails here rather than at insert.
+          throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+        }
       }
       return { id: String(existing.id), created: false };
     }

@@ -22,6 +22,7 @@ import {
   filterContentTypes,
   isAllSelected,
   isAllSelectedForAction,
+  isEveryPermissionLocked,
   isPartiallySelected,
   isPartiallySelectedForAction,
   organizePermissions,
@@ -321,5 +322,27 @@ describe("column selection", () => {
 
   it("is not all-selected for a column no row has", () => {
     expect(isAllSelectedForAction(rows, "delete", [])).toBe(false);
+  });
+});
+
+describe("isEveryPermissionLocked", () => {
+  it("is not locked when nothing is inherited", () => {
+    expect(isEveryPermissionLocked(["a", "b"], [])).toBe(false);
+  });
+
+  it("is not locked when only some are inherited", () => {
+    // The bug this pins: one inherited permission used to disable the whole
+    // select-all, so the free ones alongside it could not be granted in bulk.
+    // The toggle handlers keep locked ids when clearing, so the group is safe
+    // to operate and the control stays live.
+    expect(isEveryPermissionLocked(["a", "b", "c"], ["b"])).toBe(false);
+  });
+
+  it("is locked when every one is inherited", () => {
+    expect(isEveryPermissionLocked(["a", "b"], ["a", "b", "z"])).toBe(true);
+  });
+
+  it("treats an empty group as locked, having nothing to toggle", () => {
+    expect(isEveryPermissionLocked([], [])).toBe(true);
   });
 });

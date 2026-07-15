@@ -540,6 +540,41 @@ export class EmailService extends BaseService {
     }
   }
 
+  /**
+   * Whether a specific template could be sent right now.
+   *
+   * A template may name its own provider, and `sendWithTemplate` prefers it
+   * over the default — so "is anything configured" is the wrong question for a
+   * caller about to send one particular template. An install whose only
+   * provider is the one that template names would answer no to `isConfigured`
+   * and still send perfectly well.
+   *
+   * Resolves the provider by the same precedence as the send itself, so the
+   * answer matches what would happen. A template that cannot be looked up, or
+   * is inactive, falls through to the default — again as the send does.
+   */
+  async canSendTemplate(templateSlug: string): Promise<boolean> {
+    let providerId: string | undefined;
+
+    try {
+      const template =
+        await this.templateService.getTemplateBySlug(templateSlug);
+      if (template?.isActive) {
+        providerId = template.providerId ?? undefined;
+      }
+    } catch {
+      // The template lookup failing is not an answer about the provider: the
+      // send would fall back to the default here, so ask about that instead.
+    }
+
+    try {
+      await this.resolveProvider(providerId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ============================================================
   // Private: Provider Resolution
   // ============================================================

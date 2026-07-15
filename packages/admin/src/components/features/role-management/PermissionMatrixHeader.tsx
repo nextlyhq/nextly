@@ -1,7 +1,10 @@
 import { Checkbox } from "@nextlyhq/ui";
 
 import { actionLabel } from "@admin/constants/permissions";
-import { permissionIdsForAction } from "@admin/lib/permissions/calculations";
+import {
+  isEveryPermissionLocked,
+  permissionIdsForAction,
+} from "@admin/lib/permissions/calculations";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
 
 export interface PermissionMatrixHeaderProps {
@@ -48,8 +51,9 @@ export function PermissionMatrixHeader({
         </th>
 
         {actions.map(action => {
-          const hasLocked = permissionIdsForAction(contentTypes, action).some(
-            id => lockedIds.includes(id)
+          const allLocked = isEveryPermissionLocked(
+            permissionIdsForAction(contentTypes, action),
+            lockedIds
           );
 
           return (
@@ -71,7 +75,7 @@ export function PermissionMatrixHeader({
                   onCheckedChange={checked =>
                     onToggleAction(contentTypes, action, !!checked)
                   }
-                  disabled={disabled || hasLocked}
+                  disabled={disabled || allLocked}
                   aria-label={`Toggle all ${action} permissions`}
                 />
                 <span>{actionLabel(action)}</span>

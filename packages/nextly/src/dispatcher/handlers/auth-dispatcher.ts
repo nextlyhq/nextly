@@ -201,11 +201,11 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       }
 
       // No permission check here. There was one, demanding at least one
-      // permission always, which contradicted the service: a role built on two
-      // or more base roles needs none of its own, and the service says so.
-      // Two copies of a rule, one of them wrong, and the wrong one ran first —
-      // so a role composed purely of base roles could not be created at all.
-      // The rule lives with the service that owns it.
+      // permission always, which contradicted the service: a role built on a
+      // base role needs none of its own, and the service says so. Two copies
+      // of a rule, one of them wrong, and the wrong one ran first — so a role
+      // that only takes its permissions from its base could not be created at
+      // all. The rule lives with the service that owns it.
       const role = await c.roles.createRole(
         b as Parameters<typeof c.roles.createRole>[0]
       );

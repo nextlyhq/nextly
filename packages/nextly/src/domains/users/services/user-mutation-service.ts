@@ -427,8 +427,13 @@ export class UserMutationService extends BaseService {
       // Refusing here costs the admin an error and no user; the alternative
       // cost them a user they had to notice was broken.
       if (userData.sendWelcomeEmail) {
+        // Ask about the template that will actually be sent, not about mail in
+        // general: the `email-verification` template may name its own
+        // provider, which the send prefers over the default. Asking whether a
+        // default exists would refuse an install whose only provider is the
+        // one that template names — a user it could have created.
         const canSend = this.emailService
-          ? await this.emailService.isConfigured()
+          ? await this.emailService.canSendTemplate("email-verification")
           : false;
 
         if (!canSend) {
@@ -588,11 +593,17 @@ export class UserMutationService extends BaseService {
             );
           }
         } catch (err) {
+          // The address and the provider's reason go to logContext, not into
+          // the message: the recipient is personal data, and a provider's
+          // error text is untrusted output that often quotes the address back.
+          // Keeping both structured lets a log pipeline redact them, and keeps
+          // the message itself a stable, greppable sentence.
           this.logger.error(
-            `Created ${user.email} but could not send their verification email; they cannot sign in until one reaches them: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            { userId: String(user.id) }
+            "Created a user but could not send their verification email; they cannot sign in until one reaches them.",
+            {
+              userId: String(user.id),
+              reason: err instanceof Error ? err.message : String(err),
+            }
           );
         }
       }

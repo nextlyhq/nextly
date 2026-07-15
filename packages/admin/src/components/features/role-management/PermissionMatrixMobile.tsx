@@ -16,7 +16,10 @@ import {
   actionLabel,
   actionsForContentTypes,
 } from "@admin/constants/permissions";
-import { permissionIdsForContentType } from "@admin/lib/permissions/calculations";
+import {
+  isEveryPermissionLocked,
+  permissionIdsForContentType,
+} from "@admin/lib/permissions/calculations";
 import type { ContentTypePermissions, Permission } from "@admin/types/ui/form";
 
 /**
@@ -230,9 +233,10 @@ export function PermissionMatrixMobile({
       {contentTypes.map((contentType, index) => {
         const { selected: selectedCount, total: totalCount } =
           contentTypeCounts[index];
-        const hasLockedPermissions = Object.values(
-          contentType.permissions
-        ).some(permission => permission && lockedIds.includes(permission.id));
+        const allLocked = isEveryPermissionLocked(
+          permissionIdsForContentType(contentType),
+          lockedIds
+        );
 
         return (
           <AccordionItem
@@ -252,7 +256,7 @@ export function PermissionMatrixMobile({
                   onCheckedChange={checked =>
                     onToggleAllForContentType(contentType, !!checked)
                   }
-                  disabled={disabled || hasLockedPermissions}
+                  disabled={disabled || allLocked}
                   aria-label={`Toggle all permissions for ${contentType.name}`}
                 />
                 <span className="font-medium capitalize text-left truncate">

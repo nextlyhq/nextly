@@ -16,6 +16,7 @@
 
 import {
   mysqlTable,
+  boolean,
   int,
   varchar,
   datetime,
@@ -86,7 +87,7 @@ export const permissions = mysqlTable(
      * added to a table that already has rows without a SQL default, and
      * drizzle-kit refuses the change rather than guess. Absent reads as false.
      */
-    danger: int("danger"),
+    danger: boolean("danger"),
     createdAt: datetime("created_at").notNull().default(new Date()),
     updatedAt: datetime("updated_at").notNull().default(new Date()),
   },

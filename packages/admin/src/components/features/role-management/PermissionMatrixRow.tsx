@@ -1,6 +1,9 @@
 import { Checkbox } from "@nextlyhq/ui";
 
-import { permissionIdsForContentType } from "@admin/lib/permissions/calculations";
+import {
+  isEveryPermissionLocked,
+  permissionIdsForContentType,
+} from "@admin/lib/permissions/calculations";
 import { cn } from "@admin/lib/utils";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
 
@@ -30,8 +33,9 @@ export function PermissionMatrixRow({
   isAllSelected,
   isPartiallySelected,
 }: PermissionMatrixRowProps) {
-  const hasLockedPermissions = permissionIdsForContentType(contentType).some(
-    id => lockedIds.includes(id)
+  const allLocked = isEveryPermissionLocked(
+    permissionIdsForContentType(contentType),
+    lockedIds
   );
   const rowHeaderId = `permission-row-${contentType.id}`;
 
@@ -48,7 +52,7 @@ export function PermissionMatrixRow({
             checked={isAllSelected}
             indeterminate={isPartiallySelected}
             onCheckedChange={checked => onToggleAll(contentType, !!checked)}
-            disabled={disabled || hasLockedPermissions}
+            disabled={disabled || allLocked}
             aria-label={`Toggle all permissions for ${contentType.name}`}
           />
           <span
