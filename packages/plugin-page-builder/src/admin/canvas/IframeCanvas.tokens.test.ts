@@ -29,12 +29,18 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** Every `--nx-pb-ed-*` name the editor chrome actually reads. */
+/**
+ * Every `--nx-pb-ed-*` name the editor chrome actually reads.
+ *
+ * Stops at a comma as well as the closing paren: `var(--x, fallback)` is a
+ * usage like any other, and requiring the paren to follow the name would skip
+ * exactly the declarations most likely to hide a missing token.
+ */
 function consumedNames(): Set<string> {
   const found = new Set<string>();
   for (const file of sourceFiles(adminDir)) {
     const src = readFileSync(file, "utf-8");
-    for (const m of src.matchAll(/var\((--nx-pb-ed-[a-z0-9-]+)\)/g)) {
+    for (const m of src.matchAll(/var\(\s*(--nx-pb-ed-[a-z0-9-]+)\s*[,)]/g)) {
       found.add(m[1]);
     }
   }
