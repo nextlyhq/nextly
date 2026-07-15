@@ -137,11 +137,22 @@ const DEFAULT_CONFIG = {
 /**
  * Converts a JavaScript value to a type that better-sqlite3 can bind.
  * better-sqlite3 only accepts: number, string, bigint, Buffer, null.
+ *
+ * These conversions have to match what the schema declares, because the rows
+ * they write are read back through it. Every column here that takes a `Date`
+ * is `integer({ mode: "timestamp" })` — the system columns and user date
+ * fields in `runtime-schema-generator.ts`, and the core tables, whose date
+ * columns are all INTEGER. So a date is bound as unix seconds, which is what
+ * that mode reads.
  */
 function sanitizeSqliteValue(v: unknown): unknown {
   if (v === undefined) return null;
   if (typeof v === "boolean") return v ? 1 : 0;
-  if (v instanceof Date) return v.toISOString();
+  // Seconds, not an ISO string. SQLite stores whatever it is given regardless
+  // of the declared type, so a string lands in the column without complaint
+  // and only fails on the way back out, where the timestamp decoder reads it
+  // as a number and yields an Invalid Date.
+  if (v instanceof Date) return Math.floor(v.getTime() / 1000);
   if (v !== null && typeof v === "object") return JSON.stringify(v);
   return v;
 }
