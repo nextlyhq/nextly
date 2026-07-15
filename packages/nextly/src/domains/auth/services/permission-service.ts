@@ -405,7 +405,14 @@ export class PermissionService extends BaseService {
     resource: string,
     name: string,
     slug: string,
-    description?: string
+    description?: string,
+    /**
+     * Who declared it — a plugin name, or omitted for the framework's own
+     * per-collection seeds. Recorded so the admin can tell a plugin's custom
+     * permission from a content type's, rather than inferring one from the
+     * slug and inventing a collection that does not exist.
+     */
+    owner?: string
   ): Promise<{
     /** ID of the existing or newly created permission row. */
     id: string;
@@ -418,7 +425,7 @@ export class PermissionService extends BaseService {
     // Case-insensitive matching to align with listPermissions behavior
 
     const existing = await this.db
-      .select({ id: permissions.id })
+      .select({ id: permissions.id, owner: permissions.owner })
       .from(permissions)
       .where(
         and(
@@ -429,6 +436,21 @@ export class PermissionService extends BaseService {
       .limit(1)
       .then((rows: unknown[]) => rows[0] || null);
     if (existing) {
+      // Adopt the row's provenance if it is out of step with the declaration.
+      // Create-if-missing alone would leave every permission seeded before
+      // provenance existed permanently unattributed, which is most of them on
+      // any database that has already run — and the declaration is the truth
+      // about who owns a permission, not whatever was true when it was first
+      // written.
+      const currentOwner =
+        (existing as { owner?: string | null }).owner ?? null;
+      const declaredOwner = owner ?? null;
+      if (currentOwner !== declaredOwner) {
+        await this.db
+          .update(permissions)
+          .set({ owner: declaredOwner })
+          .where(eq(permissions.id, String(existing.id)));
+      }
       return { id: String(existing.id), created: false };
     }
     const id = randomUUID();
@@ -439,6 +461,7 @@ export class PermissionService extends BaseService {
       action,
       resource,
       description: description ?? null,
+      owner: owner ?? null,
     };
     try {
       const insertPerm = (this.db as RBACDatabaseInstance)

@@ -47,6 +47,8 @@ export interface PermissionInsertData {
   action: string;
   resource: string;
   description: string | null;
+  /** Declaring plugin, or null for the framework's own seeded permissions. */
+  owner: string | null;
 }
 
 export interface PermissionUpdateData {

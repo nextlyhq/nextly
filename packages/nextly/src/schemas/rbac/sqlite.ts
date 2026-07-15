@@ -60,6 +60,12 @@ export const permissions = sqliteTable(
     action: text("action", { length: 50 }).notNull(),
     resource: text("resource", { length: 50 }).notNull(),
     description: text("description", { length: 255 }),
+    /**
+     * Who declared this permission — a plugin name, or null for the ones the
+     * framework seeds per collection and single. See the postgres schema for
+     * why it is stored rather than inferred.
+     */
+    owner: text("owner", { length: 191 }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

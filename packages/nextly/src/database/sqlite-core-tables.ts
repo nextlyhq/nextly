@@ -105,6 +105,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "action" TEXT NOT NULL,
       "resource" TEXT NOT NULL,
       "description" TEXT,
+      "owner" TEXT,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("action", "resource")

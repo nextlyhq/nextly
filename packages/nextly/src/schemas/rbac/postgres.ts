@@ -67,6 +67,17 @@ export const permissions = pgTable(
     action: varchar("action", { length: 50 }).notNull(),
     resource: varchar("resource", { length: 50 }).notNull(),
     description: varchar("description", { length: 255 }),
+    /**
+     * Who declared this permission — a plugin name, or null for the ones the
+     * framework seeds per collection and single.
+     *
+     * Stored rather than guessed. A plugin's custom permission (D36) names a
+     * resource that is not a content type, and without provenance the admin
+     * inferred one from the slug and drew it as a collection that does not
+     * exist. It is also what a future prune would need: a permission can only
+     * be retired safely if it is known who stopped declaring it.
+     */
+    owner: varchar("owner", { length: 191 }),
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),

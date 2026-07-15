@@ -12,7 +12,7 @@ export interface CollectedPermission {
   slug: string;
   name: string;
   description?: string;
-  /** Declaring plugin name — provenance for logs (not persisted in P3a). */
+  /** Declaring plugin name ("app" for app-declared). Persisted on the row. */
   owner: string;
 }
 

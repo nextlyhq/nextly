@@ -54,6 +54,12 @@ export const permissions = mysqlTable(
     action: varchar("action", { length: 50 }).notNull(),
     resource: varchar("resource", { length: 50 }).notNull(),
     description: varchar("description", { length: 255 }),
+    /**
+     * Who declared this permission — a plugin name, or null for the ones the
+     * framework seeds per collection and single. See the postgres schema for
+     * why it is stored rather than inferred.
+     */
+    owner: varchar("owner", { length: 191 }),
     createdAt: datetime("created_at").notNull().default(new Date()),
     updatedAt: datetime("updated_at").notNull().default(new Date()),
   },

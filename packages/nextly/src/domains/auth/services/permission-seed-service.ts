@@ -469,7 +469,11 @@ export class PermissionSeedService extends BaseService {
           perm.resource,
           perm.name,
           perm.slug,
-          perm.description
+          perm.description,
+          // Provenance was collected and then thrown away, so a plugin's
+          // custom permission arrived indistinguishable from a collection's
+          // and the admin drew it as a content type that does not exist.
+          perm.owner
         );
         if (ensured.created) {
           result.created++;
