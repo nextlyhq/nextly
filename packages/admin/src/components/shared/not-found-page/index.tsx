@@ -19,9 +19,10 @@ export function NotFoundPage() {
           </span>
         </div>
 
-        {/* Badge */}
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-success-50 text-success-700 mb-6">
-          <span className="h-1.5 w-1.5 rounded-none bg-success-500" />
+        {/* Neutral: a missing page is a state, not an outcome. This read as
+            success — the same green the admin uses to say something worked. */}
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-muted text-muted-foreground mb-6">
+          <span className="h-1.5 w-1.5 rounded-none bg-muted-foreground" />
           Page Not Found
         </div>
 
