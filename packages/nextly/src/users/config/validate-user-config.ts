@@ -165,6 +165,90 @@ function isReservedUserFieldName(name: string): boolean {
 }
 
 /**
+ * A reason a user field name cannot be used, or `null` when it is usable.
+ *
+ * `message` is safe to show to whoever supplied the name: it names the
+ * offending value and says what to do instead, and carries nothing about
+ * the caller or the surrounding config.
+ */
+export interface UserFieldNameRejection {
+  code: UserValidationErrorCode;
+  message: string;
+}
+
+/**
+ * Decide whether a single name may be used for a custom user field.
+ *
+ * Duplicate detection is deliberately excluded: it needs the set of sibling
+ * names, which only the caller has. `defineConfig()` compares against the
+ * other fields in the config; the database compares via a unique index.
+ *
+ * @returns the first reason the name is unusable, or `null` if it is fine
+ */
+export function checkUserFieldName(
+  name: unknown
+): UserFieldNameRejection | null {
+  if (!name || typeof name !== "string") {
+    return {
+      code: "USER_FIELD_NAME_REQUIRED",
+      message: "Field name is required",
+    };
+  }
+
+  if (!FIELD_NAME_PATTERN.test(name)) {
+    return {
+      code: "USER_FIELD_NAME_INVALID_FORMAT",
+      message: `Field name '${name}' must start with a letter and contain only letters, numbers, and underscores`,
+    };
+  }
+
+  if (isReservedUserFieldName(name)) {
+    return {
+      code: "USER_FIELD_NAME_RESERVED",
+      message: `Field name '${name}' conflicts with a built-in user field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
+    };
+  }
+
+  if (isSQLKeyword(name)) {
+    return {
+      code: "USER_FIELD_NAME_SQL_KEYWORD",
+      message: `Field name '${name}' is a SQL reserved keyword. Consider using a different name like '${name}Field' or '${name}Value'`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Decide whether a type may be used for a custom user field.
+ *
+ * @returns a reason the type is unusable, or `null` if it is fine
+ */
+export function checkUserFieldType(
+  type: unknown
+): UserFieldNameRejection | null {
+  if (!type) {
+    return {
+      code: "USER_FIELD_TYPE_REQUIRED",
+      message: "Field type is required",
+    };
+  }
+
+  // Reported as its own type name rather than its value: a non-string type
+  // is arbitrary caller data and must not be stringified into a message.
+  const described = typeof type === "string" ? type : typeof type;
+
+  if (typeof type !== "string" || !ALLOWED_TYPES_SET.has(type)) {
+    return {
+      code: "USER_FIELD_TYPE_NOT_ALLOWED",
+      message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}`,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Validates a single user field's name.
  */
 function validateUserFieldName(
@@ -173,47 +257,14 @@ function validateUserFieldName(
   errors: UserValidationError[],
   seenNames: Set<string>
 ): void {
-  if (!name) {
-    errors.push({
-      path: `${path}.name`,
-      message: "Field name is required",
-      code: "USER_FIELD_NAME_REQUIRED",
-    });
-    return;
+  const rejection = checkUserFieldName(name);
+  if (rejection) {
+    errors.push({ path: `${path}.name`, ...rejection });
   }
 
-  if (typeof name !== "string") {
-    errors.push({
-      path: `${path}.name`,
-      message: "Field name must be a string",
-      code: "USER_FIELD_NAME_REQUIRED",
-    });
-    return;
-  }
-
-  if (!FIELD_NAME_PATTERN.test(name)) {
-    errors.push({
-      path: `${path}.name`,
-      message: `Field name '${name}' must start with a letter and contain only letters, numbers, and underscores`,
-      code: "USER_FIELD_NAME_INVALID_FORMAT",
-    });
-  }
-
-  if (isReservedUserFieldName(name)) {
-    errors.push({
-      path: `${path}.name`,
-      message: `Field name '${name}' conflicts with a built-in user field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
-      code: "USER_FIELD_NAME_RESERVED",
-    });
-  }
-
-  if (isSQLKeyword(name)) {
-    errors.push({
-      path: `${path}.name`,
-      message: `Field name '${name}' is a SQL reserved keyword. Consider using a different name like '${name}Field' or '${name}Value'`,
-      code: "USER_FIELD_NAME_SQL_KEYWORD",
-    });
-  }
+  // A non-string name cannot participate in duplicate detection, and
+  // checkUserFieldName has already reported it.
+  if (typeof name !== "string") return;
 
   const nameLower = name.toLowerCase();
   if (seenNames.has(nameLower)) {
@@ -235,24 +286,9 @@ function validateUserFieldType(
   path: string,
   errors: UserValidationError[]
 ): void {
-  const fieldType = field.type;
-
-  if (!fieldType) {
-    errors.push({
-      path: `${path}.type`,
-      message: "Field type is required",
-      code: "USER_FIELD_TYPE_REQUIRED",
-    });
-    return;
-  }
-
-  if (typeof fieldType !== "string" || !ALLOWED_TYPES_SET.has(fieldType)) {
-    errors.push({
-      path: `${path}.type`,
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      message: `User custom fields do not support type '${String(fieldType)}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}`,
-      code: "USER_FIELD_TYPE_NOT_ALLOWED",
-    });
+  const rejection = checkUserFieldType(field.type);
+  if (rejection) {
+    errors.push({ path: `${path}.type`, ...rejection });
   }
 }
 

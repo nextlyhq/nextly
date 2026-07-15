@@ -28,8 +28,13 @@ export interface UserFieldFormValues {
 // ============================================================
 
 /**
- * Reserved user field names matching the backend RESERVED_USER_FIELD_NAMES.
+ * Reserved user field names mirroring the backend's RESERVED_USER_FIELD_NAMES.
  * Compared case-insensitively.
+ *
+ * Duplicated rather than imported: the canonical list lives in `nextly`, whose
+ * root entry point is server-only, and this schema runs in the browser. The
+ * copy exists to answer before a round trip — the server rejects a reserved
+ * name regardless, so the two drifting costs a worse message, not a hole.
  */
 const RESERVED_FIELD_NAMES = new Set([
   "id",
@@ -179,7 +184,10 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
       isActive: z.boolean(),
     })
     .superRefine((data, ctx) => {
-      // Reserved name check (only in create mode since name is immutable in edit)
+      // Answers before a round trip; the server decides. Edit mode is exempt
+      // because the name is fixed once the field exists and is submitted back
+      // unchanged — a stored name that predates the server guard would
+      // otherwise fail here with no way to correct it from this form.
       if (
         mode === "create" &&
         RESERVED_FIELD_NAMES.has(data.name.toLowerCase())
