@@ -1,14 +1,13 @@
-// Tests for the lazy drizzle-kit/api accessor.
+// Tests for the lazy drizzle-kit per-dialect accessor.
 // What: verifies the async accessors return functions and cache correctly.
-// Why: drizzle-kit-lazy.ts replaces the older drizzle-kit-api.ts createRequire
-// pattern with a magic-comment-protected dynamic import. The cache must
-// survive across calls (single load per process) so callers can rely on
-// fast subsequent lookups.
+// Why: drizzle-kit-lazy.ts is the single chokepoint between Nextly and
+// drizzle-kit v1's payload/* per-dialect modules. The caches must survive
+// across calls (single load per dialect per process) so callers can rely
+// on fast subsequent lookups under Turbopack HMR.
 //
-// Note: this test imports the real drizzle-kit/api (no mocks). drizzle-kit
-// is a regular dependency, so the dynamic import resolves cleanly in
-// Node-based vitest. The same pattern is used by other consumers of
-// drizzle-kit/api in this package.
+// Note: this test loads the real drizzle-kit payload modules (no mocks).
+// drizzle-kit is a regular dependency, so createRequire resolves cleanly
+// in Node-based vitest.
 
 import { describe, it, expect, beforeEach } from "vitest";
 
@@ -19,11 +18,15 @@ import {
   getDrizzleKitForDialect,
 } from "../drizzle-kit-lazy";
 
-// Why typed cache shape: the lazy module stashes its cache on globalThis
-// so it survives Turbopack HMR module re-execution. Tests inspect the
-// cache slots to confirm the single-load invariant.
+// Why typed cache shape: the lazy module stashes its caches on globalThis
+// so they survive Turbopack HMR module re-execution. Tests inspect the
+// cache slots to confirm the load-once invariant. v1 loads one module PER
+// DIALECT (payload/postgres, payload/mysql, payload/sqlite) instead of the
+// removed single drizzle-kit/api module.
 type DrizzleKitCacheSlots = {
-  __nextly_drizzleKitModule?: unknown;
+  __nextly_drizzleKitPgMod?: unknown;
+  __nextly_drizzleKitMySqlMod?: unknown;
+  __nextly_drizzleKitSqliteMod?: unknown;
   __nextly_drizzleKitPg?: unknown;
   __nextly_drizzleKitMySQL?: unknown;
   __nextly_drizzleKitSQLite?: unknown;
@@ -31,11 +34,13 @@ type DrizzleKitCacheSlots = {
 
 describe("drizzle-kit-lazy", () => {
   beforeEach(() => {
-    // Reset cache between tests so each starts clean. Without this, the
-    // first test loads the module and subsequent tests cannot verify
+    // Reset caches between tests so each starts clean. Without this, the
+    // first test loads the modules and subsequent tests cannot verify
     // load-once behavior.
     const g = globalThis as DrizzleKitCacheSlots;
-    g.__nextly_drizzleKitModule = undefined;
+    g.__nextly_drizzleKitPgMod = undefined;
+    g.__nextly_drizzleKitMySqlMod = undefined;
+    g.__nextly_drizzleKitSqliteMod = undefined;
     g.__nextly_drizzleKitPg = undefined;
     g.__nextly_drizzleKitMySQL = undefined;
     g.__nextly_drizzleKitSQLite = undefined;
@@ -57,7 +62,7 @@ describe("drizzle-kit-lazy", () => {
       expect(typeof kit.generateMigration).toBe("function");
     });
 
-    it("returns upSnapshot function", async () => {
+    it("returns upSnapshot function (v1 renamed upPgSnapshot → up)", async () => {
       const kit = await getPgDrizzleKit();
       expect(typeof kit.upSnapshot).toBe("function");
     });
@@ -142,16 +147,20 @@ describe("drizzle-kit-lazy", () => {
       expect(a).toBe(b);
     });
 
-    it("loads the underlying drizzle-kit module exactly once across all dialects", async () => {
-      // Why: the per-dialect kits share a single underlying module load,
-      // tracked at __nextly_drizzleKitModule on globalThis. After all three
-      // accessors run, the module slot is populated and is the same object
-      // that backs every kit.
+    it("loads each per-dialect module exactly once and only on demand", async () => {
+      // Why: v1 splits the kit per dialect; a consumer app has ONE dialect,
+      // so accessing PG must not load the mysql/sqlite modules (they pull
+      // dialect-specific dep trees).
+      const g = globalThis as DrizzleKitCacheSlots;
       await getPgDrizzleKit();
+      expect(g.__nextly_drizzleKitPgMod).toBeDefined();
+      expect(g.__nextly_drizzleKitMySqlMod).toBeUndefined();
+      expect(g.__nextly_drizzleKitSqliteMod).toBeUndefined();
+
       await getMySQLDrizzleKit();
       await getSQLiteDrizzleKit();
-      const g = globalThis as DrizzleKitCacheSlots;
-      expect(g.__nextly_drizzleKitModule).toBeDefined();
+      expect(g.__nextly_drizzleKitMySqlMod).toBeDefined();
+      expect(g.__nextly_drizzleKitSqliteMod).toBeDefined();
     });
 
     it("populates the per-dialect cache slot on first access", async () => {
