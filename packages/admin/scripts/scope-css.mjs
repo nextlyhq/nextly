@@ -3,13 +3,13 @@
 /**
  * Scope CSS Script
  *
- * Post-processes the compiled Tailwind CSS to scope ALL rules under .adminapp
+ * Post-processes the compiled Tailwind CSS to scope ALL rules under .nextly-admin
  * This ensures complete isolation from consumer app styles.
  *
  * Rules:
- * 1. All selectors get prefixed with .adminapp (e.g., .flex -> .adminapp .flex)
- * 2. :root variables get moved to .adminapp
- * 3. *, html, body selectors get scoped to .adminapp
+ * 1. All selectors get prefixed with .nextly-admin (e.g., .flex -> .nextly-admin .flex)
+ * 2. :root variables get moved to .nextly-admin
+ * 3. *, html, body selectors get scoped to .nextly-admin
  * 4. @keyframes and @font-face remain global (they're namespaced by their names)
  */
 
@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const cssFile = path.join(rootDir, "dist/styles/globals.css");
 
-console.log("🔒 Scoping CSS to .adminapp...");
+console.log("🔒 Scoping CSS to .nextly-admin...");
 
 try {
   let css = fs.readFileSync(cssFile, "utf-8");
@@ -33,14 +33,14 @@ try {
   // Process the CSS line by line for simple transformations
   // For complex transformations, we use regex
 
-  // 1. Scope :root to .adminapp
-  css = css.replace(/:root\s*\{/g, ".adminapp {");
+  // 1. Scope :root to .nextly-admin
+  css = css.replace(/:root\s*\{/g, ".nextly-admin {");
 
-  // 2. Scope * selector to .adminapp *
+  // 2. Scope * selector to .nextly-admin *
   // But be careful not to match inside property values or comments
   css = css.replace(
     /(\{[^}]*)\*\s*,\s*:before\s*,\s*:after\s*,\s*::backdrop\s*\{/g,
-    "$1.adminapp *,.adminapp *:before,.adminapp *:after,.adminapp *::backdrop{"
+    "$1.nextly-admin *,.nextly-admin *:before,.nextly-admin *:after,.nextly-admin *::backdrop{"
   );
 
   // 3. Replace the Tailwind preflight reset that targets *, :before, :after
@@ -52,14 +52,14 @@ try {
 
   css = css.replace(
     /\*\s*,\s*:before\s*,\s*:after\s*,\s*::backdrop\s*\{/g,
-    ".adminapp *,.adminapp *:before,.adminapp *:after,.adminapp *::backdrop{"
+    ".nextly-admin *,.nextly-admin *:before,.nextly-admin *:after,.nextly-admin *::backdrop{"
   );
 
   // 4. Scope html and body selectors
-  css = css.replace(/\bhtml\s*\{/g, ".adminapp {");
-  css = css.replace(/\bbody\s*\{/g, ".adminapp {");
+  css = css.replace(/\bhtml\s*\{/g, ".nextly-admin {");
+  css = css.replace(/\bbody\s*\{/g, ".nextly-admin {");
 
-  // 5. Add .adminapp prefix to utility classes in @layer utilities
+  // 5. Add .nextly-admin prefix to utility classes in @layer utilities
   // This is complex because we need to handle the layer structure
 
   // For Tailwind v4, utilities are in @layer utilities
@@ -74,7 +74,7 @@ try {
     // Scope all class selectors within utilities layer
     const scopedContent = content.replace(
       /(?<=^|[,\s{}])\.([a-zA-Z_-][\w-]*)/gm,
-      ".adminapp .$1"
+      ".nextly-admin .$1"
     );
     return layerStart + scopedContent + layerEnd;
   });
@@ -83,12 +83,12 @@ try {
   // Be conservative - only scope obvious utility-like classes
   // This regex finds class selectors at the start of a rule
   css = css.replace(
-    /(?<=[,{}\s])\.(?!adminapp)([\w-]+)(?=\s*[,{:])/g,
+    /(?<=[,{}\s])\.(?!nextly-admin)([\w-]+)(?=\s*[,{:])/g,
     (match, className) => {
-      // Skip if already inside .adminapp context
+      // Skip if already inside .nextly-admin context
       // Skip animation names and other special classes
       const skipClasses = [
-        "adminapp",
+        "nextly-admin",
         "dark",
         "light",
         "animate-",
@@ -97,7 +97,7 @@ try {
       if (skipClasses.some((s) => className.startsWith(s))) {
         return match;
       }
-      return `.adminapp .${className}`;
+      return `.nextly-admin .${className}`;
     }
   );
 

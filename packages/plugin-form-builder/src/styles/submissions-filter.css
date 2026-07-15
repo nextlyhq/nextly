@@ -8,8 +8,8 @@
 .submissions-filter {
   margin-bottom: 1rem;
   padding: 1rem;
-  background: var(--muted);
-  border: 1px solid var(--border);
+  background: var(--nx-muted);
+  border: 1px solid var(--nx-border);
   border-radius: var(--radius);
 }
 
@@ -23,16 +23,16 @@
 .submissions-filter-label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--muted-foreground);
+  color: var(--nx-muted-foreground);
 }
 
 .submissions-filter-select {
   padding: 0.5rem 2rem 0.5rem 0.75rem;
   font-size: 0.875rem;
-  border: 1px solid var(--input);
+  border: 1px solid var(--nx-input);
   border-radius: var(--radius);
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: var(--nx-background);
+  color: var(--nx-foreground);
   min-width: 200px;
   cursor: pointer;
   appearance: none;
@@ -43,12 +43,12 @@
 }
 
 .submissions-filter-select:hover {
-  border-color: var(--border-strong);
+  border-color: var(--nx-border-strong);
 }
 
 .submissions-filter-select:focus {
   outline: none;
-  border-color: var(--ring);
+  border-color: var(--nx-ring);
 }
 
 .submissions-filter-select:disabled {
@@ -60,15 +60,15 @@
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--muted-foreground);
-  background: var(--background);
-  border: 1px solid var(--input);
+  color: var(--nx-muted-foreground);
+  background: var(--nx-background);
+  border: 1px solid var(--nx-input);
   border-radius: var(--radius);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .submissions-filter-clear:hover {
-  background: var(--muted);
-  color: var(--foreground);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
 }

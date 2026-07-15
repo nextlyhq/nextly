@@ -58,7 +58,7 @@ function AdminAppContent() {
   // Render an empty themed container so the layout doesn't flash a mismatched
   // background during the cold-load gap.
   if (!isHydrated || !route) {
-    return <div className="min-h-screen bg-background adminapp" />;
+    return <div className="min-h-screen bg-background nextly-admin" />;
   }
 
   const { Component, params, searchParams, routeType, requiredPermission } =
@@ -100,7 +100,10 @@ function AdminAppContent() {
   };
 
   return (
-    <div className={cn("adminapp", isDark && "dark")} suppressHydrationWarning>
+    <div
+      className={cn("nextly-admin", isDark && "dark")}
+      suppressHydrationWarning
+    >
       <PortalProvider container={portalRoot}>
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
@@ -124,9 +127,9 @@ function AdminAppContent() {
             <Toaster richColors />
             {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
             <div
-              id="adminapp-portal-root"
+              id="nextly-admin-portal-root"
               ref={setPortalRoot}
-              className={cn("adminapp", isDark && "dark")}
+              className={cn("nextly-admin", isDark && "dark")}
             />
           </GeneralSettingsSyncProvider>
         </BrandingProvider>

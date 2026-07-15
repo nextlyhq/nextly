@@ -4,7 +4,7 @@
  * Fast in-process CSS build for the admin dev loop.
  *
  * Same semantics as scripts/build-css.mjs (Tailwind v4 compile +
- * .adminapp scoping post-process) but runs everything in-process —
+ * .nextly-admin scoping post-process) but runs everything in-process —
  * no `npx` spawn, no separate `--minify` pass — and reuses the
  * postcss processor across calls so Tailwind v4's content-scan
  * caches stick between rebuilds.
@@ -42,14 +42,14 @@ const outputFile = path.join(outputDir, "globals.css");
 // live inside the plugin instance and amortise across rebuilds.
 const processor = postcss([tailwindcss()]);
 
-// .adminapp scoping — same logic as scripts/build-css.mjs. Duplicated
+// .nextly-admin scoping — same logic as scripts/build-css.mjs. Duplicated
 // here on purpose so the dev and production build pipelines can evolve
 // independently if we ever need different isolation behaviour. If/when
 // they stabilise, this can be hoisted into a shared module.
 const ALREADY_SCOPED = [
-  /^\.adminapp/,
-  /^\.dark\s*\.adminapp/,
-  /^\.adminapp\.dark/,
+  /^\.nextly-admin/,
+  /^\.dark\s*\.nextly-admin/,
+  /^\.nextly-admin\.dark/,
   /^:root/,
   /^\*/,
   /^html/,
@@ -68,9 +68,9 @@ function scopeSelector(selector) {
     if (p.test(selector)) return selector;
   }
   if (selector.startsWith("@")) return selector;
-  if (selector === ":root") return ".adminapp";
+  if (selector === ":root") return ".nextly-admin";
   if (selector === "*" || selector === "*::before" || selector === "*::after") {
-    return `.adminapp ${selector}`;
+    return `.nextly-admin ${selector}`;
   }
   if (selector.includes(",")) {
     return selector
@@ -78,7 +78,7 @@ function scopeSelector(selector) {
       .map(s => scopeSelector(s.trim()))
       .join(", ");
   }
-  return `.adminapp ${selector}`;
+  return `.nextly-admin ${selector}`;
 }
 
 function scopeCss(css) {
@@ -116,7 +116,7 @@ function scopeCss(css) {
     }
     if (line.includes("{") && !trimmed.startsWith("@")) {
       const [selector, ...rest] = line.split("{");
-      if (selector.includes(".adminapp") || selector.trim().startsWith("--")) {
+      if (selector.includes(".nextly-admin") || selector.trim().startsWith("--")) {
         out.push(line);
         continue;
       }

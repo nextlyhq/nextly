@@ -30,7 +30,7 @@ export function useBranding(): AdminBranding {
 
 /**
  * Injects a <style> tag that overrides the Tailwind CSS custom properties on
- * `.adminapp` and `.adminapp.dark` with user-supplied brand colors.
+ * `.nextly-admin` and `.nextly-admin.dark` with user-supplied brand colors.
  *
  * This handles DB-level overrides (e.g. logoText set via admin Settings UI).
  * For the initial config-based colors, a server-side <style> tag is injected
@@ -49,29 +49,29 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
     const accentHsl = colors.accent;
 
     if (primaryHsl) {
-      rules.push(`--primary: ${primaryHsl};`);
+      rules.push(`--nx-primary: ${primaryHsl};`);
       rules.push(
-        `--primary-foreground: ${colors.primaryForeground ?? "0 0% 100%"};`
+        `--nx-primary-foreground: ${colors.primaryForeground ?? "0 0% 100%"};`
       );
-      // Derived tokens that reference --primary HSL triplet
-      rules.push(`--ring: ${primaryHsl};`);
-      rules.push(`--focus-ring: ${primaryHsl};`);
-      rules.push(`--sidebar-ring: ${primaryHsl};`);
-      rules.push(`--chart-1: ${primaryHsl};`);
+      // Derived tokens that reference --nx-primary HSL triplet
+      rules.push(`--nx-ring: ${primaryHsl};`);
+      rules.push(`--nx-focus-ring: ${primaryHsl};`);
+      rules.push(`--nx-sidebar-ring: ${primaryHsl};`);
+      rules.push(`--nx-chart-1: ${primaryHsl};`);
     }
 
     if (accentHsl) {
-      rules.push(`--accent: ${accentHsl};`);
+      rules.push(`--nx-accent: ${accentHsl};`);
       rules.push(
-        `--accent-foreground: ${colors.accentForeground ?? "0 0% 100%"};`
+        `--nx-accent-foreground: ${colors.accentForeground ?? "0 0% 100%"};`
       );
-      rules.push(`--chart-2: ${accentHsl};`);
+      rules.push(`--nx-chart-2: ${accentHsl};`);
     }
 
-    // Scoped to .adminapp so we never leak styles to the host application.
+    // Scoped to .nextly-admin so we never leak styles to the host application.
     // Applied to both light and dark variants since the user's brand colors
     // are injected as the same HSL values in both modes.
-    const css = `.adminapp, .adminapp.dark { ${rules.join(" ")} }`;
+    const css = `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} }`;
 
     const style = document.createElement("style");
     style.id = "nextly-branding-colors";

@@ -8,7 +8,7 @@
  *
  * Isolation Strategy:
  * 1. Compile CSS with Tailwind CLI
- * 2. Post-process to scope ALL utility classes within .adminapp
+ * 2. Post-process to scope ALL utility classes within .nextly-admin
  * 3. This prevents any style conflicts with consumer app's Tailwind/CSS
  */
 
@@ -39,72 +39,82 @@ try {
     stdio: "inherit",
   });
 
-  console.log("🔒 Scoping CSS utilities within .adminapp...");
+  console.log("🔒 Scoping CSS utilities within .nextly-admin...");
 
-  // Step 2: Post-process CSS to scope utilities within .adminapp
+  // Step 2: Post-process CSS to scope utilities within .nextly-admin
   let css = fs.readFileSync(tempFile, "utf-8");
 
-  // Classes that are already scoped or should not be scoped
-  const alreadyScopedPatterns = [
-    /^\.adminapp/,
-    /^\.dark\s*\.adminapp/,
-    /^\.adminapp\.dark/,
-    /^:root/,
-    /^\*/,
-    /^html/,
-    /^body/,
-    /^@keyframes/,
-    /^@font-face/,
-    /^@media/,
-    /^@supports/,
-    /^@layer/,
-    /^@property/,
-  ];
+  /**
+   * Split a selector list on top-level commas only, so commas inside
+   * functional pseudo-classes (e.g. `:where(.dark, .dark *)`) stay intact.
+   */
+  function splitTopLevel(selector) {
+    const parts = [];
+    let depth = 0;
+    let cur = "";
+    for (const ch of selector) {
+      if (ch === "(" || ch === "[") depth++;
+      else if (ch === ")" || ch === "]") depth--;
+      if (ch === "," && depth === 0) {
+        parts.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    if (cur.trim()) parts.push(cur);
+    return parts;
+  }
 
   /**
-   * Scope a CSS selector within .adminapp
+   * Scope a CSS selector within .nextly-admin
    * Handles complex selectors including pseudo-classes, combinators, etc.
    */
   function scopeSelector(selector) {
     selector = selector.trim();
+    if (!selector) return selector;
 
-    // Skip if already scoped or is a special selector
-    for (const pattern of alreadyScopedPatterns) {
-      if (pattern.test(selector)) {
-        return selector;
-      }
+    // @-rules are not selectors.
+    if (selector.startsWith("@")) return selector;
+
+    // Nested selector: Tailwind v4 emits variants as `&:where(.dark, .dark *)`
+    // inside an already-scoped parent rule. Scoping it again would corrupt the
+    // variant, so leave nested selectors untouched.
+    if (selector.startsWith("&")) return selector;
+
+    // Selector lists: split on top-level commas so grouped preflight selectors
+    // (`*, ::after, ::before, ::backdrop`, `html, :host`, `:root, :host`) each
+    // get scoped, while `:where(...)` internals are preserved. Branch on the
+    // split result, not on the presence of a comma — a selector whose only
+    // commas sit inside parens yields one part and must not re-recurse.
+    const parts = splitTopLevel(selector);
+    if (parts.length > 1) {
+      return parts.map((s) => scopeSelector(s.trim())).join(", ");
     }
 
-    // Skip @-rules that aren't selectors
-    if (selector.startsWith("@")) {
-      return selector;
+    // Already scoped.
+    if (selector.includes(".nextly-admin")) return selector;
+
+    // Document-root selectors collapse onto the admin root so the theme and
+    // the preflight reset apply inside the admin and never leak to the host.
+    if (
+      selector === ":root" ||
+      selector === "html" ||
+      selector === ":host" ||
+      selector === "body"
+    ) {
+      return ".nextly-admin";
     }
 
-    // Handle :root - convert to .adminapp
-    if (selector === ":root") {
-      return ".adminapp";
-    }
+    // The dark class sits on the admin root itself, not a descendant.
+    if (selector === ".dark") return ".nextly-admin.dark";
 
-    // Handle * selector
-    if (selector === "*" || selector === "*::before" || selector === "*::after") {
-      return `.adminapp ${selector}`;
-    }
-
-    // For regular selectors, prepend .adminapp
-    // Handle comma-separated selectors
-    if (selector.includes(",")) {
-      return selector
-        .split(",")
-        .map((s) => scopeSelector(s.trim()))
-        .join(", ");
-    }
-
-    // Prepend .adminapp to the selector
-    return `.adminapp ${selector}`;
+    // Prepend .nextly-admin to the selector (covers `*`, elements, pseudos).
+    return `.nextly-admin ${selector}`;
   }
 
   /**
-   * Process CSS and scope all rules within .adminapp
+   * Process CSS and scope all rules within .nextly-admin
    * This is a simple regex-based approach that handles most cases
    */
   function scopeCSS(css) {
@@ -160,16 +170,16 @@ try {
         // theme block and the `.dark:where(...)` utilities are left untouched.
         const bareSelector = selector.trim();
         if (bareSelector === ":root") {
-          result.push(`.adminapp{${rest}`);
+          result.push(`.nextly-admin{${rest}`);
           continue;
         }
         if (bareSelector === ".dark") {
-          result.push(`.adminapp.dark{${rest}`);
+          result.push(`.nextly-admin.dark{${rest}`);
           continue;
         }
 
-        // Skip if already has .adminapp
-        if (selector.includes(".adminapp")) {
+        // Skip if already has .nextly-admin
+        if (selector.includes(".nextly-admin")) {
           result.push(line);
           continue;
         }
@@ -217,7 +227,7 @@ try {
 
   console.log(`✅ CSS compiled and scoped successfully (${sizeKB} KB)`);
   console.log(`   Output: ${outputFile}`);
-  console.log(`   All utility classes are now scoped within .adminapp`);
+  console.log(`   All utility classes are now scoped within .nextly-admin`);
 } catch (error) {
   console.error("❌ Failed to build CSS:", error.message);
   process.exit(1);

@@ -288,7 +288,7 @@ export function EntryTablePagination({
     <nav
       aria-label="Entry table pagination"
       className={cn(
-        "flex flex-col @2xl/content:flex-row items-center justify-between gap-4 p-4 border-t border-border bg-[var(--table-header-bg)]",
+        "flex flex-col @2xl/content:flex-row items-center justify-between gap-4 p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
         className
       )}
       onKeyDown={handleKeyDown}

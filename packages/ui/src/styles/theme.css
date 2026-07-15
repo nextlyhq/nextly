@@ -11,7 +11,7 @@
  *     build so plugins get styled components with zero setup.
  *
  * Selectors are unscoped (`:root` / `.dark`); a consumer that embeds the UI in a
- * host page scopes them at build time (admin rewrites to `.adminapp`).
+ * host page scopes them at build time (admin rewrites to `.nextly-admin`).
  */
 
 /**
@@ -132,74 +132,74 @@
    * ============================================ */
 
   /* shadcn/ui semantic colors - reference CSS variables defined below */
-  --color-border: var(--border);
-  --color-border-subtle: var(--border-subtle);
-  --color-border-strong: var(--border-strong);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-border: var(--nx-border);
+  --color-border-subtle: var(--nx-border-subtle);
+  --color-border-strong: var(--nx-border-strong);
+  --color-input: var(--nx-input);
+  --color-ring: var(--nx-ring);
+  --color-background: var(--nx-background);
+  --color-foreground: var(--nx-foreground);
 
-  --color-primary: var(--primary);
-  --color-primary-50: color-mix(in srgb, var(--primary), white 95%);
-  --color-primary-100: color-mix(in srgb, var(--primary), white 90%);
-  --color-primary-200: color-mix(in srgb, var(--primary), white 70%);
-  --color-primary-300: color-mix(in srgb, var(--primary), white 50%);
-  --color-primary-400: color-mix(in srgb, var(--primary), white 30%);
-  --color-primary-500: var(--primary);
-  --color-primary-600: color-mix(in srgb, var(--primary), black 10%);
-  --color-primary-700: color-mix(in srgb, var(--primary), black 30%);
-  --color-primary-800: color-mix(in srgb, var(--primary), black 50%);
-  --color-primary-900: color-mix(in srgb, var(--primary), black 70%);
-  --color-primary-950: color-mix(in srgb, var(--primary), black 85%);
-  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--nx-primary);
+  --color-primary-50: color-mix(in srgb, var(--nx-primary), white 95%);
+  --color-primary-100: color-mix(in srgb, var(--nx-primary), white 90%);
+  --color-primary-200: color-mix(in srgb, var(--nx-primary), white 70%);
+  --color-primary-300: color-mix(in srgb, var(--nx-primary), white 50%);
+  --color-primary-400: color-mix(in srgb, var(--nx-primary), white 30%);
+  --color-primary-500: var(--nx-primary);
+  --color-primary-600: color-mix(in srgb, var(--nx-primary), black 10%);
+  --color-primary-700: color-mix(in srgb, var(--nx-primary), black 30%);
+  --color-primary-800: color-mix(in srgb, var(--nx-primary), black 50%);
+  --color-primary-900: color-mix(in srgb, var(--nx-primary), black 70%);
+  --color-primary-950: color-mix(in srgb, var(--nx-primary), black 85%);
+  --color-primary-foreground: var(--nx-primary-foreground);
 
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--nx-secondary);
+  --color-secondary-foreground: var(--nx-secondary-foreground);
 
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive: var(--nx-destructive);
+  --color-destructive-foreground: var(--nx-destructive-foreground);
 
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--nx-success);
+  --color-success-foreground: var(--nx-success-foreground);
 
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--nx-warning);
+  --color-warning-foreground: var(--nx-warning-foreground);
 
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--nx-muted);
+  --color-muted-foreground: var(--nx-muted-foreground);
 
-  --color-accent: var(--accent);
-  --color-accent-50: color-mix(in srgb, var(--accent), white 95%);
-  --color-accent-100: color-mix(in srgb, var(--accent), white 90%);
-  --color-accent-200: color-mix(in srgb, var(--accent), white 70%);
-  --color-accent-300: color-mix(in srgb, var(--accent), white 50%);
-  --color-accent-400: color-mix(in srgb, var(--accent), white 30%);
-  --color-accent-500: var(--accent);
-  --color-accent-600: color-mix(in srgb, var(--accent), black 10%);
-  --color-accent-700: color-mix(in srgb, var(--accent), black 30%);
-  --color-accent-800: color-mix(in srgb, var(--accent), black 50%);
-  --color-accent-900: color-mix(in srgb, var(--accent), black 70%);
-  --color-accent-950: color-mix(in srgb, var(--accent), black 85%);
-  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--nx-accent);
+  --color-accent-50: color-mix(in srgb, var(--nx-accent), white 95%);
+  --color-accent-100: color-mix(in srgb, var(--nx-accent), white 90%);
+  --color-accent-200: color-mix(in srgb, var(--nx-accent), white 70%);
+  --color-accent-300: color-mix(in srgb, var(--nx-accent), white 50%);
+  --color-accent-400: color-mix(in srgb, var(--nx-accent), white 30%);
+  --color-accent-500: var(--nx-accent);
+  --color-accent-600: color-mix(in srgb, var(--nx-accent), black 10%);
+  --color-accent-700: color-mix(in srgb, var(--nx-accent), black 30%);
+  --color-accent-800: color-mix(in srgb, var(--nx-accent), black 50%);
+  --color-accent-900: color-mix(in srgb, var(--nx-accent), black 70%);
+  --color-accent-950: color-mix(in srgb, var(--nx-accent), black 85%);
+  --color-accent-foreground: var(--nx-accent-foreground);
 
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--nx-card);
+  --color-card-foreground: var(--nx-card-foreground);
 
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--nx-popover);
+  --color-popover-foreground: var(--nx-popover-foreground);
 
   /* Sidebar semantic tokens */
-  --color-sidebar: var(--sidebar-background);
-  --color-sidebar-background: var(--sidebar-background);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-background: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar: var(--nx-sidebar-background);
+  --color-sidebar-background: var(--nx-sidebar-background);
+  --color-sidebar-foreground: var(--nx-sidebar-foreground);
+  --color-sidebar-primary: var(--nx-sidebar-primary);
+  --color-sidebar-primary-foreground: var(--nx-sidebar-primary-foreground);
+  --color-sidebar-accent: var(--nx-sidebar-accent);
+  --color-sidebar-accent-background: var(--nx-sidebar-accent);
+  --color-sidebar-accent-foreground: var(--nx-sidebar-accent-foreground);
+  --color-sidebar-border: var(--nx-sidebar-border);
+  --color-sidebar-ring: var(--nx-sidebar-ring);
 
   /* ============================================
    * TYPOGRAPHY (Tailwind v4.1)
@@ -348,13 +348,13 @@
   /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
   --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
   --shadow-glow-success: 0 0 10px
-    color-mix(in srgb, var(--success) 10%, transparent);
+    color-mix(in srgb, var(--nx-success) 10%, transparent);
   --shadow-glow-primary: 0 0 15px
-    color-mix(in srgb, var(--primary) 50%, transparent);
+    color-mix(in srgb, var(--nx-primary) 50%, transparent);
   --shadow-elevation-primary: 0 8px 20px -8px
-    color-mix(in srgb, var(--primary) 40%, transparent);
+    color-mix(in srgb, var(--nx-primary) 40%, transparent);
   --shadow-soft-primary: 0 8px 30px
-    color-mix(in srgb, var(--primary) 6%, transparent);
+    color-mix(in srgb, var(--nx-primary) 6%, transparent);
   --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 0.1);
 
   /* ============================================
@@ -409,13 +409,13 @@
   100% {
     transform: scale(0.97);
     filter: drop-shadow(
-      0 0 10px color-mix(in srgb, var(--primary) 8%, transparent)
+      0 0 10px color-mix(in srgb, var(--nx-primary) 8%, transparent)
     );
   }
   50% {
     transform: scale(1.03);
     filter: drop-shadow(
-      0 0 20px color-mix(in srgb, var(--primary) 22%, transparent)
+      0 0 20px color-mix(in srgb, var(--nx-primary) 22%, transparent)
     );
   }
 }
@@ -526,79 +526,79 @@
 
 :root {
   /* Base colors - using Slate neutral scale */
-  --background: oklch(1 0 0);
+  --nx-background: oklch(1 0 0);
   /* Pure white for weightless aesthetic */
-  --page-background: oklch(0.9818 0 0);
+  --nx-page-background: oklch(0.9818 0 0);
   /* #f9f9f9 for page content area */
-  --foreground: oklch(0.2079 0.0399 265.73);
+  --nx-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Component colors */
-  --card: oklch(1 0 0);
+  --nx-card: oklch(1 0 0);
   /* pure white for cards to pop on off-white bg */
-  --card-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-card-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --popover: oklch(1 0 0);
+  --nx-popover: oklch(1 0 0);
   /* white */
-  --popover-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-popover-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Brand colors - Blue-Cyan Professional Palette */
-  --primary: oklch(0 0 0);
+  --nx-primary: oklch(0 0 0);
   /* Black for premium minimalist aesthetic */
-  --primary-foreground: oklch(1 0 0);
+  --nx-primary-foreground: oklch(1 0 0);
   /* white */
 
   /* Secondary colors - using slate-100 for subtle backgrounds */
-  --secondary: oklch(0.9684 0.0068 247.9);
+  --nx-secondary: oklch(0.9684 0.0068 247.9);
   /* slate-100 */
-  --secondary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-secondary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Utility colors */
-  --muted: oklch(0.9696 0 0);
-  --muted-foreground: oklch(0.5547 0.0407 257.44);
+  --nx-muted: oklch(0.9696 0 0);
+  --nx-muted-foreground: oklch(0.5547 0.0407 257.44);
   /* slate-500 */
-  --accent: oklch(0.5547 0.0407 257.44);
+  --nx-accent: oklch(0.5547 0.0407 257.44);
   /* Slate-500 per user request #64748b */
-  --accent-foreground: oklch(1 0 0);
+  --nx-accent-foreground: oklch(1 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant */
-  --destructive: oklch(0.6368 0.2078 25.33);
+  --nx-destructive: oklch(0.6368 0.2078 25.33);
   /* red-500 (#ef4444) */
-  --destructive-foreground: oklch(1 0 0);
+  --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  --success: oklch(0.6273 0.17 149.2);
+  --nx-success: oklch(0.6273 0.17 149.2);
   /* green-600 (#16a34a) - AA compliant */
-  --success-foreground: oklch(1 0 0);
+  --nx-success-foreground: oklch(1 0 0);
   /* white */
-  --warning: oklch(0.7686 0.1646 70.11);
+  --nx-warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 (#f59e0b) */
-  --warning-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
   /* Element colors — 3-tier translucent border scale (monochrome).
-   * Was a single --border at 5% black (~1.05:1, effectively invisible).
+   * Was a single --nx-border at 5% black (~1.05:1, effectively invisible).
    * subtle = decorative dividers/cards; default = tables/groups;
    * strong = interactive control edges (inputs/checkbox) for prominence. */
-  --border-subtle: oklch(0 0 0 / 0.08);
-  --border: oklch(0 0 0 / 0.13);
-  --border-strong: oklch(0 0 0 / 0.3);
-  --input: oklch(
+  --nx-border-subtle: oklch(0 0 0 / 0.08);
+  --nx-border: oklch(0 0 0 / 0.13);
+  --nx-border-strong: oklch(0 0 0 / 0.3);
+  --nx-input: oklch(
     0.7384 0.0116 286.11
   ); /* zinc-400: stronger visible field border (was zinc-300, too faint) */
-  --ring: var(--primary);
+  --nx-ring: var(--nx-primary);
 
   /* Chart colors for data visualization */
-  --chart-1: var(--primary);
-  --chart-2: oklch(0.7399 0.1277 209.34);
+  --nx-chart-1: var(--nx-primary);
+  --nx-chart-2: oklch(0.7399 0.1277 209.34);
   /* cyan-500 */
-  --chart-3: oklch(0.6273 0.17 149.2);
+  --nx-chart-3: oklch(0.6273 0.17 149.2);
   /* green-600 */
-  --chart-4: oklch(0.7686 0.1646 70.11);
+  --nx-chart-4: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --chart-5: oklch(0.6368 0.2078 25.33);
+  --nx-chart-5: oklch(0.6368 0.2078 25.33);
   /* red-500 */
 
   /* Design tokens */
@@ -607,139 +607,139 @@
   /* Control sizing — derived from a single height knob so control density
    * scales from one place. Steps map to the control size variants:
    * sm 32px, md 36px, default 40px, lg 44px. */
-  --control-height: 2.5rem;
-  --control-height-sm: calc(var(--control-height) - 0.5rem);
-  --control-height-md: calc(var(--control-height) - 0.25rem);
-  --control-height-lg: calc(var(--control-height) + 0.25rem);
+  --nx-control-height: 2.5rem;
+  --nx-control-height-sm: calc(var(--nx-control-height) - 0.5rem);
+  --nx-control-height-md: calc(var(--nx-control-height) - 0.25rem);
+  --nx-control-height-lg: calc(var(--nx-control-height) + 0.25rem);
 
   /* Focus ring colors */
-  --focus-ring: var(--primary);
-  --focus-ring-offset: oklch(1 0 0);
+  --nx-focus-ring: var(--nx-primary);
+  --nx-focus-ring-offset: oklch(1 0 0);
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --sidebar-background: var(--background);
+  --nx-sidebar-background: var(--nx-background);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --sidebar-foreground: oklch(0.372 0.0392 257.3);
+  --nx-sidebar-foreground: oklch(0.372 0.0392 257.3);
   /* slate-700 */
-  --sidebar-primary: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-primary: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-primary-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-primary-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-accent: oklch(0.9684 0.0068 247.9);
+  --nx-sidebar-accent: oklch(0.9684 0.0068 247.9);
   /* slate-100 */
-  --sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-border: oklch(0.929 0.0126 255.53);
+  --nx-sidebar-border: oklch(0.929 0.0126 255.53);
   /* slate-200 */
-  --sidebar-ring: var(--primary);
+  --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
-  --table-row-hover: oklch(0.9848 0 0);
-  --table-row-selected: var(--primary);
-  --table-border: var(--border);
+  --nx-table-row-hover: oklch(0.9848 0 0);
+  --nx-table-row-selected: var(--nx-primary);
+  --nx-table-border: var(--nx-border);
 }
 
 /* Dark theme overrides when using class-based theming */
 .dark {
   /* Base colors - using Slate dark scale */
-  --background: oklch(0.1358 0.0163 262.71);
+  --nx-background: oklch(0.1358 0.0163 262.71);
   /* ultra deep dark background (darker than slate-950) */
-  --page-background: oklch(0.1358 0.0163 262.71);
+  --nx-page-background: oklch(0.1358 0.0163 262.71);
   /* Matches background in dark mode */
-  --foreground: oklch(0.9838 0.0035 247.86);
+  --nx-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Component colors */
-  --card: oklch(0.1916 0.0228 266.36);
-  /* raised one tonal step above --background (222 47% 4%) so panels/cards
+  --nx-card: oklch(0.1916 0.0228 266.36);
+  /* raised one tonal step above --nx-background (222 47% 4%) so panels/cards
    * read as distinct surfaces in dark mode instead of merging into the page */
-  --card-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-card-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --popover: oklch(0.369 0.0249 257.44);
+  --nx-popover: oklch(0.369 0.0249 257.44);
   /* slate-800 */
-  --popover-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-popover-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
-  --primary: oklch(1 0 0); /* High contrast White for dark mode */
-  --primary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-primary: oklch(1 0 0); /* High contrast White for dark mode */
+  --nx-primary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Secondary colors - using slate-800 for dark backgrounds */
-  --secondary: oklch(0.28 0.0369 259.97);
+  --nx-secondary: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --secondary-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-secondary-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
 
   /* Utility colors */
-  --muted: oklch(0.28 0.0369 259.97);
+  --nx-muted: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --muted-foreground: oklch(0.7107 0.0351 256.79);
+  --nx-muted-foreground: oklch(0.7107 0.0351 256.79);
   /* slate-400 */
-  --accent: oklch(
+  --nx-accent: oklch(
     0.5547 0.0407 257.44
   ); /* Slate-500 per user request #64748b */
-  --accent-foreground: oklch(1 0 0);
+  --nx-accent-foreground: oklch(1 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant (Dark Mode) */
-  --destructive: oklch(0.6368 0.2078 25.33);
+  --nx-destructive: oklch(0.6368 0.2078 25.33);
   /* red-500 */
-  --destructive-foreground: oklch(1 0 0);
+  --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  --success: oklch(0.7229 0.1921 149.58);
+  --nx-success: oklch(0.7229 0.1921 149.58);
   /* green-500 - brighter for dark mode */
-  --success-foreground: oklch(1 0 0);
+  --nx-success-foreground: oklch(1 0 0);
   /* white */
-  --warning: oklch(0.7686 0.1646 70.11);
+  --nx-warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --warning-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
 
   /* Element colors — 3-tier translucent border scale (white-alpha for dark).
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
    * on the deep background without glowing. Was ~1.2:1 (too faint). */
-  --border-subtle: oklch(1 0 0 / 0.08);
-  --border: oklch(1 0 0 / 0.13);
-  --border-strong: oklch(1 0 0 / 0.34);
-  --input: oklch(
+  --nx-border-subtle: oklch(1 0 0 / 0.08);
+  --nx-border: oklch(1 0 0 / 0.13);
+  --nx-border-strong: oklch(1 0 0 / 0.34);
+  --nx-input: oklch(
     0.4987 0.0128 285.92
   ); /* stronger visible field border (was zinc-700, too faint) */
-  --ring: var(--primary);
+  --nx-ring: var(--nx-primary);
 
   /* Chart colors for data visualization (same as light mode) */
-  --chart-1: var(--primary);
-  --chart-2: oklch(0.7399 0.1277 209.34);
+  --nx-chart-1: var(--nx-primary);
+  --nx-chart-2: oklch(0.7399 0.1277 209.34);
   /* cyan-500 */
-  --chart-3: oklch(0.7229 0.1921 149.58);
+  --nx-chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */
-  --chart-4: oklch(0.7686 0.1646 70.11);
+  --nx-chart-4: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
-  --chart-5: oklch(0.6368 0.2078 25.33);
+  --nx-chart-5: oklch(0.6368 0.2078 25.33);
   /* red-500 */
 
   /* Sidebar specific colors - dark mode */
-  --sidebar-background: var(--background);
+  --nx-sidebar-background: var(--nx-background);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --sidebar-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-primary: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-primary: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --sidebar-accent: oklch(0.28 0.0369 259.97);
+  --nx-sidebar-accent: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --sidebar-border: oklch(0.2321 0.0129 257.43);
+  --nx-sidebar-border: oklch(0.2321 0.0129 257.43);
   /* subtle slate-900 */
-  --sidebar-ring: var(--primary);
+  --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors - dark mode */
-  --table-row-hover: oklch(0.28 0.0369 259.97);
+  --nx-table-row-hover: oklch(0.28 0.0369 259.97);
   /* slate-800 */
-  --table-row-selected: var(--primary);
-  --table-border: var(--border);
+  --nx-table-row-selected: var(--nx-primary);
+  --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
 }

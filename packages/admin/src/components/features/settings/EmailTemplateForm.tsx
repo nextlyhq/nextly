@@ -384,16 +384,16 @@ function highlightHtml(code: string): string {
 }
 
 const PRISM_THEME_CSS = `
-.adminapp .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(220 38 38); }
-.adminapp .html-code-editor .token.attr-name { color: rgb(124 58 237); }
-.adminapp .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(22 101 52); }
-.adminapp .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(107 114 128); font-style: italic; }
-.adminapp .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(75 85 99); }
-.adminapp .dark .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(252 165 165); }
-.adminapp .dark .html-code-editor .token.attr-name { color: rgb(196 181 253); }
-.adminapp .dark .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(134 239 172); }
-.adminapp .dark .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(156 163 175); font-style: italic; }
-.adminapp .dark .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(209 213 219); }
+.nextly-admin .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(220 38 38); }
+.nextly-admin .html-code-editor .token.attr-name { color: rgb(124 58 237); }
+.nextly-admin .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(22 101 52); }
+.nextly-admin .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(107 114 128); font-style: italic; }
+.nextly-admin .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(75 85 99); }
+.nextly-admin .dark .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(252 165 165); }
+.nextly-admin .dark .html-code-editor .token.attr-name { color: rgb(196 181 253); }
+.nextly-admin .dark .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(134 239 172); }
+.nextly-admin .dark .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(156 163 175); font-style: italic; }
+.nextly-admin .dark .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(209 213 219); }
 `;
 
 // ============================================================

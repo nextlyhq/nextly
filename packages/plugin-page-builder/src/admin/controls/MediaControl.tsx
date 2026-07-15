@@ -51,7 +51,7 @@ export function MediaControl({ value, onChange, label }: ControlProps) {
             maxWidth: "100%",
             maxHeight: 120,
             borderRadius: "var(--radius)",
-            border: "1px solid var(--border)",
+            border: "1px solid var(--nx-border)",
             marginBottom: 6,
           }}
         />

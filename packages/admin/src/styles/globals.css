@@ -1,13 +1,13 @@
 /**
  * Nextly Admin CSS - Complete Isolation Strategy
  *
- * This file uses CSS @layer to scope ALL Tailwind utilities within .adminapp
+ * This file uses CSS @layer to scope ALL Tailwind utilities within .nextly-admin
  * This ensures zero style leakage between admin package and consumer app.
  *
  * How it works:
  * 1. Import Tailwind normally
  * 2. Use CSS @layer to control cascade order
- * 3. Wrap utilities with .adminapp scope in build-css.mjs post-processing
+ * 3. Wrap utilities with .nextly-admin scope in build-css.mjs post-processing
  */
 @import "tailwindcss";
 
@@ -17,16 +17,16 @@
 /* Scan @nextlyhq/ui source so Tailwind includes utility classes used by extracted components */
 @source "../../../ui/src";
 
-/* Scope overflow fix to adminapp only */
-.adminapp {
+/* Scope overflow fix to nextly-admin only */
+.nextly-admin {
   overflow-x: hidden;
   --sidebar-width-safe: var(--sidebar-width, 20.5rem);
 }
 
 /* Enhanced Calendar Styling */
 [data-slot="calendar"] {
-  background-color: var(--popover);
-  color: var(--popover-foreground);
+  background-color: var(--nx-popover);
+  color: var(--nx-popover-foreground);
 }
 
 [data-slot="calendar"] button[role="gridcell"] {
@@ -34,27 +34,27 @@
 }
 
 [data-slot="calendar"] button[role="gridcell"][aria-selected="true"] {
-  background-color: var(--primary) !important;
-  color: var(--primary-foreground) !important;
+  background-color: var(--nx-primary) !important;
+  color: var(--nx-primary-foreground) !important;
   font-weight: 500;
 }
 
 [data-slot="calendar"] button[role="gridcell"][data-today="true"] {
-  background-color: var(--accent);
-  color: var(--accent-foreground);
-  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  background-color: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+  border: 1px solid color-mix(in srgb, var(--nx-primary) 20%, transparent);
   font-weight: 500;
 }
 
 /* DatePicker specific styling */
 [data-slot="date-picker-trigger"] {
-  background-color: var(--background);
-  border-color: var(--border);
+  background-color: var(--nx-background);
+  border-color: var(--nx-border);
 }
 
-.adminapp {
-  background-color: var(--background);
-  color: var(--foreground);
+.nextly-admin {
+  background-color: var(--nx-background);
+  color: var(--nx-foreground);
   /* Font handled by CSS variable override in globals.css */
 }
 
@@ -66,45 +66,45 @@
  * pre-compiled bundle for standalone consumers.
  */
 @layer base {
-  .adminapp *,
-  .adminapp ::before,
-  .adminapp ::after {
-    border-color: var(--border);
+  .nextly-admin *,
+  .nextly-admin ::before,
+  .nextly-admin ::after {
+    border-color: var(--nx-border);
   }
 }
 
 /**
  * Table Header & Footer Background + Border System
  */
-.adminapp {
-  --table-header-bg: oklch(1 0 0);
+.nextly-admin {
+  --nx-table-header-bg: oklch(1 0 0);
 }
 
-.adminapp.dark {
-  --table-header-bg: oklch(0.1573 0.0228 265.66);
+.nextly-admin.dark {
+  --nx-table-header-bg: oklch(0.1573 0.0228 265.66);
 }
 
-.adminapp thead {
-  background-color: var(--table-header-bg);
+.nextly-admin thead {
+  background-color: var(--nx-table-header-bg);
 }
 
-.adminapp tfoot {
-  background-color: var(--table-header-bg);
+.nextly-admin tfoot {
+  background-color: var(--nx-table-header-bg);
 }
 
-.adminapp .table-footer {
-  background-color: var(--table-header-bg);
+.nextly-admin .table-footer {
+  background-color: var(--nx-table-header-bg);
 }
 
 /**
  * Text Selection Styling
  * 
  * Ensures text selection is visible and matches brand colors
- * Scoped to adminapp to prevent leakage
+ * Scoped to nextly-admin to prevent leakage
  */
-.adminapp *::selection {
-  background-color: var(--primary);
-  color: var(--primary-foreground);
+.nextly-admin *::selection {
+  background-color: var(--nx-primary);
+  color: var(--nx-primary-foreground);
 }
 
 /* Global cursor pointer for interactive elements */
@@ -136,10 +136,10 @@
     *
     * Special styles for authentication pages (login, signup, etc.)
     */
-.adminapp[data-auth-page] {
+.nextly-admin[data-auth-page] {
   width: 100vw;
   min-height: 100vh;
-  background-color: var(--muted);
+  background-color: var(--nx-muted);
 }
 
 /**
@@ -160,10 +160,10 @@
 }
 
 /* Prevent global data-state animations from affecting sidebar */
-.adminapp [data-sidebar] [data-state="open"],
-.adminapp [data-sidebar] [data-state="closed"],
-.adminapp [data-sidebar] [data-state="expanded"],
-.adminapp [data-sidebar] [data-state="collapsed"] {
+.nextly-admin [data-sidebar] [data-state="open"],
+.nextly-admin [data-sidebar] [data-state="closed"],
+.nextly-admin [data-sidebar] [data-state="expanded"],
+.nextly-admin [data-sidebar] [data-state="collapsed"] {
   animation: none !important;
   transition: none !important;
 }
@@ -186,7 +186,7 @@
     */
 .admin-card {
   border-width: 1px;
-  background-color: var(--card);
+  background-color: var(--nx-card);
   padding: 1.25rem;
   /* box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); */
   transition-property: all;
@@ -209,7 +209,7 @@
 .admin-text {
   font-size: 0.875rem;
   line-height: 1.25rem;
-  color: var(--muted-foreground);
+  color: var(--nx-muted-foreground);
 }
 
 /**
@@ -235,28 +235,20 @@
   transition: all 0.2s ease;
 }
 
-/* Form component enhancements */
-[data-slot="input"]:focus,
-/**
-    * Form & Input Enhancements
-    * 
-    * Enhanced form styling with better focus states
-    */
-
 /* Neutralize browser-forced autocomplete highlights (the "yellow" box) */
-.adminapp input:-webkit-autofill,
-.adminapp input:-webkit-autofill:hover,
-.adminapp input:-webkit-autofill:focus,
-.adminapp textarea:-webkit-autofill,
-.adminapp textarea:-webkit-autofill:hover,
-.adminapp textarea:-webkit-autofill:focus,
-.adminapp select:-webkit-autofill,
-.adminapp select:-webkit-autofill:hover,
-.adminapp select:-webkit-autofill:focus {
-  -webkit-text-fill-color: var(--foreground) !important;
+.nextly-admin input:-webkit-autofill,
+.nextly-admin input:-webkit-autofill:hover,
+.nextly-admin input:-webkit-autofill:focus,
+.nextly-admin textarea:-webkit-autofill,
+.nextly-admin textarea:-webkit-autofill:hover,
+.nextly-admin textarea:-webkit-autofill:focus,
+.nextly-admin select:-webkit-autofill,
+.nextly-admin select:-webkit-autofill:hover,
+.nextly-admin select:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--nx-foreground) !important;
   /* Use a box-shadow inset to effectively "replace" the background color.
    * The token inverts for dark mode, so no separate dark rule is needed. */
-  box-shadow: 0 0 0px 1000px var(--background) inset !important;
+  box-shadow: 0 0 0px 1000px var(--nx-background) inset !important;
   /* Very long transition delay to prevent the background-color from changing */
   transition: background-color 5000s ease-in-out 0s;
   background-clip: content-box !important;
@@ -275,21 +267,21 @@
   font-size: 0.875rem;
   font-weight: 500;
   line-height: 1.25rem;
-  color: var(--foreground);
+  color: var(--nx-foreground);
   margin-bottom: 0.375rem;
 }
 
 .form-description {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--muted-foreground);
+  color: var(--nx-muted-foreground);
   margin-top: 0.25rem;
 }
 
 .form-error {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--destructive);
+  color: var(--nx-destructive);
   margin-top: 0.25rem;
   font-weight: 500;
 }
@@ -309,15 +301,15 @@
 /* Applies at all widths: `.border-input` is used app-wide, so it must not be
    gated behind a breakpoint or narrow viewports fall back to the default border. */
 .border-input {
-  border-color: var(--input);
+  border-color: var(--nx-input);
 }
 
 .text-primary {
-  color: var(--primary);
+  color: var(--nx-primary);
 }
 
 .ring-offset-background {
-  --tw-ring-offset-color: var(--background);
+  --tw-ring-offset-color: var(--nx-background);
 }
 
 /**
@@ -326,8 +318,8 @@
  * Styles for the slash command menu and other typeahead components
  */
 .typeahead-popover {
-  background: var(--popover);
-  border: 1px solid var(--border);
+  background: var(--nx-popover);
+  border: 1px solid var(--nx-border);
   border-radius: 0px !important;
   max-height: 300px;
   overflow-y: auto;
@@ -355,24 +347,24 @@
   border-radius: 0px !important;
   cursor: pointer;
   font-size: 0.875rem;
-  color: var(--foreground);
+  color: var(--nx-foreground);
   transition: background-color 0.15s ease;
 }
 
 .typeahead-popover .item.selected {
-  background-color: var(--accent);
-  color: var(--accent-foreground);
+  background-color: var(--nx-accent);
+  color: var(--nx-accent-foreground);
 }
 
 .typeahead-popover .item .icon {
   width: 1rem;
   height: 1rem;
   flex-shrink: 0;
-  color: var(--muted-foreground);
+  color: var(--nx-muted-foreground);
 }
 
 .typeahead-popover .item.selected .icon {
-  color: var(--accent-foreground);
+  color: var(--nx-accent-foreground);
 }
 
 .typeahead-popover .item .text {
@@ -383,60 +375,60 @@
 }
 
 /* Page Container Background System */
-.adminapp .admin-page-container {
-  background-color: var(--page-background);
+.nextly-admin .admin-page-container {
+  background-color: var(--nx-page-background);
 }
 
-.adminapp.dark .admin-page-container {
-  background-color: var(--page-background);
+.nextly-admin.dark .admin-page-container {
+  background-color: var(--nx-page-background);
 }
 
 /* Admin Dropdown Styling (Antigravity Standard: 0px Radius) */
-.adminapp .admin-dropdown-content {
-  background-color: color-mix(in srgb, var(--background) 95%, transparent);
+.nextly-admin .admin-dropdown-content {
+  background-color: color-mix(in srgb, var(--nx-background) 95%, transparent);
   backdrop-filter: blur(12px);
 }
 
-.adminapp.dark .admin-dropdown-content {
-  background-color: var(--card) !important;
-  border-color: var(--border);
+.nextly-admin.dark .admin-dropdown-content {
+  background-color: var(--nx-card) !important;
+  border-color: var(--nx-border);
 }
 
 /* Dropdown Item Interaction States */
-.adminapp .admin-dropdown-item[data-highlighted],
-.adminapp .admin-dropdown-item[data-active="true"],
-.adminapp .admin-dropdown-item:focus,
-.adminapp .admin-dropdown-item:focus-visible {
+.nextly-admin .admin-dropdown-item[data-highlighted],
+.nextly-admin .admin-dropdown-item[data-active="true"],
+.nextly-admin .admin-dropdown-item:focus,
+.nextly-admin .admin-dropdown-item:focus-visible {
   background-color: color-mix(
     in srgb,
-    var(--primary) 5%,
+    var(--nx-primary) 5%,
     transparent
   ) !important;
-  color: var(--primary) !important;
+  color: var(--nx-primary) !important;
 }
 
-.adminapp .admin-dropdown-item:focus svg,
-.adminapp .admin-dropdown-item[data-active="true"] svg,
-.adminapp .admin-dropdown-item[data-highlighted] svg {
-  color: var(--primary) !important;
+.nextly-admin .admin-dropdown-item:focus svg,
+.nextly-admin .admin-dropdown-item[data-active="true"] svg,
+.nextly-admin .admin-dropdown-item[data-highlighted] svg {
+  color: var(--nx-primary) !important;
 }
 
-.adminapp.dark .admin-dropdown-item[data-highlighted],
-.adminapp.dark .admin-dropdown-item[data-active="true"],
-.adminapp.dark .admin-dropdown-item:focus,
-.adminapp.dark .admin-dropdown-item:focus-visible {
+.nextly-admin.dark .admin-dropdown-item[data-highlighted],
+.nextly-admin.dark .admin-dropdown-item[data-active="true"],
+.nextly-admin.dark .admin-dropdown-item:focus,
+.nextly-admin.dark .admin-dropdown-item:focus-visible {
   background-color: color-mix(
     in srgb,
-    var(--primary) 10%,
+    var(--nx-primary) 10%,
     transparent
   ) !important;
-  color: var(--primary) !important;
+  color: var(--nx-primary) !important;
 }
 
-.adminapp.dark .admin-dropdown-item:focus svg,
-.adminapp.dark .admin-dropdown-item[data-active="true"] svg,
-.adminapp.dark .admin-dropdown-item[data-highlighted] svg {
-  color: var(--primary) !important;
+.nextly-admin.dark .admin-dropdown-item:focus svg,
+.nextly-admin.dark .admin-dropdown-item[data-active="true"] svg,
+.nextly-admin.dark .admin-dropdown-item[data-highlighted] svg {
+  color: var(--nx-primary) !important;
 }
 
 /* ============================================
@@ -470,7 +462,7 @@
 /* Keep badges readable instead of inheriting the row's hover text color. */
 .hover-subtle-row:hover [data-testid*="badge"],
 .hover-subtle-row:hover .badge {
-  color: var(--foreground) !important;
+  color: var(--nx-foreground) !important;
 }
 
 .hover-subtle-row:hover svg {
@@ -515,30 +507,30 @@
 }
 
 /* Normalize table pills/badges to one monochrome look across all tables. */
-.adminapp table [data-slot^="badge."] {
+.nextly-admin table [data-slot^="badge."] {
   background-color: color-mix(
     in srgb,
-    var(--foreground) 6%,
+    var(--nx-foreground) 6%,
     transparent
   ) !important;
-  color: var(--foreground) !important;
+  color: var(--nx-foreground) !important;
   border-color: color-mix(
     in srgb,
-    var(--foreground) 8%,
+    var(--nx-foreground) 8%,
     transparent
   ) !important;
   box-shadow: none !important;
 }
 
-.adminapp.dark table [data-slot^="badge."] {
+.nextly-admin.dark table [data-slot^="badge."] {
   background-color: color-mix(
     in srgb,
-    var(--foreground) 12%,
+    var(--nx-foreground) 12%,
     transparent
   ) !important;
   border-color: color-mix(
     in srgb,
-    var(--foreground) 20%,
+    var(--nx-foreground) 20%,
     transparent
   ) !important;
 }
@@ -553,5 +545,5 @@
 .hover-muted:hover svg,
 .hover-primary:hover svg,
 .hover-primary-light:hover svg {
-  color: var(--primary-foreground) !important;
+  color: var(--nx-primary-foreground) !important;
 }

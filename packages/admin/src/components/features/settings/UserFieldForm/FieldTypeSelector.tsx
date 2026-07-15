@@ -102,7 +102,7 @@ export function FieldTypePicker({
             `}
             style={{
               border:
-                "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
+                "1px solid color-mix(in srgb, var(--nx-primary) 25%, transparent)",
             }}
           >
             {isSelected && (
