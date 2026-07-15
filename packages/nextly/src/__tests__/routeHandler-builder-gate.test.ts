@@ -20,17 +20,29 @@ import { sanitizeConfig } from "../shared/types/config";
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_DB_DIALECT = process.env.DB_DIALECT;
 
+/**
+ * Put a variable back as it was, including having been absent.
+ *
+ * Assigning `undefined` to `process.env` stores the string "undefined", which
+ * reads as a set value to everything downstream — so an unset variable has to
+ * be deleted rather than restored.
+ */
+function restoreEnv(key: string, original: string | undefined): void {
+  if (original === undefined) delete process.env[key];
+  else process.env[key] = original;
+}
+
 // Requests that get past the gate reach authentication, which validates the
 // environment. sqlite is the one dialect that needs no connection string, and
 // an unauthenticated request is refused before any connection is opened.
 process.env.DB_DIALECT = "sqlite";
 
 afterEach(() => {
-  process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
 });
 
 afterAll(() => {
-  process.env.DB_DIALECT = ORIGINAL_DB_DIALECT;
+  restoreEnv("DB_DIALECT", ORIGINAL_DB_DIALECT);
 });
 
 /** Handlers wired to a config whose builder flag is set as given. */

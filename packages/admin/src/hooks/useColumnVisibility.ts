@@ -301,8 +301,19 @@ export function useColumnVisibility({
    * before the collection ever resolves.
    */
   const userChanged = useRef(false);
+  /** The collection `userChanged` refers to; intent does not carry across slugs. */
+  const intentSlug = useRef(collectionSlug);
 
   useEffect(() => {
+    // The list re-renders under a new slug rather than remounting, so a ref set
+    // on the previous collection is still armed here. Writing now would save
+    // that collection's choice — or this one's not-yet-loaded placeholder —
+    // under the new slug, which is the same clobber this ref exists to stop.
+    if (intentSlug.current !== collectionSlug) {
+      intentSlug.current = collectionSlug;
+      userChanged.current = false;
+      return;
+    }
     if (!userChanged.current) return;
     saveToStorage(collectionSlug, visibleColumns, defaultColumns);
   }, [collectionSlug, visibleColumns, defaultColumns]);

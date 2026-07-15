@@ -141,6 +141,20 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
     const handleKeyDown = React.useCallback(
       (e: React.KeyboardEvent) => {
         if (isLoading) return;
+
+        // These keys already mean something inside a form control — a select
+        // jumps between its options with them — and keydown reaches this nav
+        // by bubbling from its own children. Taking the key there would both
+        // block the control and move the page out from under whoever is using
+        // it.
+        if (
+          (e.target as HTMLElement | null)?.closest(
+            "select, input, textarea, [contenteditable='true']"
+          )
+        ) {
+          return;
+        }
+
         switch (e.key) {
           case "ArrowLeft":
             if (canGoPrevious) {

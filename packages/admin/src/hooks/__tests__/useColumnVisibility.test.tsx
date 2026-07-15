@@ -86,6 +86,51 @@ describe("useColumnVisibility", () => {
     expect(readStored().defaultsHash).toBe(hash(LOADED));
   });
 
+  it("does not carry one collection's intent onto the next", () => {
+    // The list re-renders under a new slug instead of remounting, so the hook
+    // survives the switch with its "the user changed something" ref still set.
+    storeUserPreference();
+    const otherKey = "nextly-column-visibility-pages";
+    localStorage.setItem(
+      otherKey,
+      JSON.stringify({
+        columns: ["select", "title"],
+        defaultsHash: hash(LOADED),
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ collectionSlug, availableColumns, defaultVisible }) =>
+        useColumnVisibility({
+          collectionSlug,
+          availableColumns,
+          defaultVisible,
+        }),
+      {
+        initialProps: {
+          collectionSlug: SLUG,
+          availableColumns: LOADED,
+          defaultVisible: LOADED,
+        },
+      }
+    );
+
+    // A real toggle on the first collection arms the ref.
+    act(() => result.current.toggleColumn("excerpt"));
+
+    // Now move to another collection, whose columns have not loaded yet.
+    rerender({
+      collectionSlug: "pages",
+      availableColumns: PRELOAD,
+      defaultVisible: PRELOAD,
+    });
+
+    // The second collection's stored choice must survive untouched.
+    expect(
+      JSON.parse(localStorage.getItem(otherKey) ?? "null").columns
+    ).toEqual(["select", "title"]);
+  });
+
   it("persists a user toggle", () => {
     const { result } = renderHook(() =>
       useColumnVisibility({
