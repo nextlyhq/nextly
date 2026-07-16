@@ -258,8 +258,16 @@ export function describeFileError(error: FileError, maxSize: number): string {
 /** Row reason for files beyond the batch cap. */
 const BATCH_SKIP_MESSAGE = `Skipped: only ${MAX_FILES} files can be uploaded at once`;
 
-/** A queue row: upload progress plus a stable identity for updates/retry. */
-type UploadQueueItem = UploadProgress & { id: string };
+/**
+ * A queue row: upload progress plus a stable identity for updates/retry and
+ * the folder the file was dropped into. The folder is snapshotted at drop
+ * time so a retry lands in the folder the user originally targeted, even if
+ * they navigated elsewhere while the failure sat in the queue.
+ */
+type UploadQueueItem = UploadProgress & {
+  id: string;
+  folderId: string | null;
+};
 
 // Stable row ids for React keys and targeted state updates; a module counter
 // avoids collisions across drops without needing crypto APIs.
@@ -276,8 +284,11 @@ function nextQueueItemId(): string {
 export function buildQueueFromDrop(
   acceptedFiles: File[],
   fileRejections: Pick<FileRejection, "file" | "errors">[],
-  maxSize: number
+  maxSize: number,
+  folderId: string | null
 ): { toUpload: UploadQueueItem[]; failed: UploadQueueItem[] } {
+  // The cap applies to VALID files: a batch with rejections still uploads up
+  // to MAX_FILES valid files (rejected files never consume cap slots).
   const withinCap = acceptedFiles.slice(0, MAX_FILES);
   const overCap = acceptedFiles.slice(MAX_FILES);
 
@@ -287,6 +298,7 @@ export function buildQueueFromDrop(
     filename: file.name,
     status: "pending",
     progress: 0,
+    folderId,
   }));
 
   const failed: UploadQueueItem[] = [
@@ -296,6 +308,7 @@ export function buildQueueFromDrop(
       filename: file.name,
       status: "rejected" as const,
       error: errors.map(e => describeFileError(e, maxSize)).join(", "),
+      folderId,
     })),
     ...overCap.map(file => ({
       id: nextQueueItemId(),
@@ -304,6 +317,7 @@ export function buildQueueFromDrop(
       status: "rejected" as const,
       skipped: true,
       error: BATCH_SKIP_MESSAGE,
+      folderId,
     })),
   ];
 
@@ -361,12 +375,13 @@ export function MediaUploadDropzone({
   const queryClient = useQueryClient();
 
   // Upload a single queue row, updating only that row by id. Shared by the
-  // initial batch and per-row retry.
+  // initial batch and per-row retry; the destination is the row's own
+  // drop-time folder, never the folder currently open in the UI.
   const uploadQueueItem = React.useCallback(
     (item: UploadQueueItem): Promise<Media | null> => {
       return uploadMediaAsync({
         file: item.file,
-        folderId: activeFolderId,
+        folderId: item.folderId,
         onProgress: progress => {
           setUploadQueue(prevQueue =>
             prevQueue.map(row =>
@@ -403,7 +418,7 @@ export function MediaUploadDropzone({
           return null; // Return null for failed uploads
         });
     },
-    [uploadMediaAsync, activeFolderId]
+    [uploadMediaAsync]
   );
 
   // Handle file drop: build the queue (including pre-failed rows), then
@@ -413,7 +428,8 @@ export function MediaUploadDropzone({
       const { toUpload, failed } = buildQueueFromDrop(
         acceptedFiles,
         fileRejections,
-        maxSize
+        maxSize,
+        activeFolderId ?? null
       );
 
       // Starting a new drop replaces the previous batch's results
@@ -439,7 +455,14 @@ export function MediaUploadDropzone({
         onUploadComplete?.(successfulUploads);
       }
     },
-    [maxSize, onUploadStart, uploadQueueItem, queryClient, onUploadComplete]
+    [
+      maxSize,
+      activeFolderId,
+      onUploadStart,
+      uploadQueueItem,
+      queryClient,
+      onUploadComplete,
+    ]
   );
 
   // Retry a server-failed row in place. Client-rejected rows never retry
@@ -591,12 +614,15 @@ export function MediaUploadDropzone({
     .filter(Boolean)
     .join(", ");
   // The live denominator counts only rows that will actually upload;
-  // pre-rejected rows sit in the same queue but were never attempted.
+  // pre-rejected rows sit in the same queue but were never attempted. The
+  // numerator counts finished rows so the label climbs (0 -> N) instead of
+  // counting down the remaining work.
   const uploadableCount = uploadQueue.filter(
     item => item.status !== "rejected"
   ).length;
+  const finishedCount = uploadableCount - inProgressCount;
   const queueSummary = isUploading
-    ? `Uploading ${inProgressCount} of ${uploadableCount} files...`
+    ? `Uploading files: ${finishedCount} of ${uploadableCount} done`
     : settledSummary;
 
   return (
@@ -719,12 +745,18 @@ export function MediaUploadDropzone({
         </>
       )}
 
-      {/* ARIA live region for upload status */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {isUploading && `Uploading ${inProgressCount} files...`}
-        {!isUploading &&
-          uploadQueue.length > 0 &&
-          `Upload finished. ${settledSummary}.`}
+      {/* The single ARIA live region for upload status. Always mounted so
+          screen readers announce the first status too; the visible summary
+          below is deliberately NOT a live region, so each state change is
+          announced exactly once. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {uploadQueue.length > 0 &&
+          (isUploading ? queueSummary : `Upload finished. ${settledSummary}.`)}
       </div>
 
       {/* Upload queue: renders regardless of isCollapsed so progress and
@@ -737,7 +769,7 @@ export function MediaUploadDropzone({
           )}
         >
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-            <p className="text-sm font-medium text-foreground" role="status">
+            <p className="text-sm font-medium text-foreground">
               {queueSummary}
             </p>
             {!isUploading && (

@@ -92,12 +92,13 @@ test("a batch with one oversized file uploads the rest and reports the failure p
   ]);
 
   // Partial success is reported as such, never as a whole-batch error. The
-  // summary is asserted via its status role because an sr-only live region
-  // announces the same text. The dev server compiles routes on first hit, so
-  // the settled summary can take a while on a cold run.
+  // sr-only live region is the queue's single status source; the media
+  // grid's loading skeleton also carries role=status, hence the filter. The
+  // dev server compiles routes on first hit, so the settled summary can take
+  // a while on a cold run.
   await expect(
     page.getByRole("status").filter({ hasText: /uploaded/ })
-  ).toHaveText("3 uploaded, 1 failed", {
+  ).toContainText("3 uploaded, 1 failed", {
     timeout: 30_000,
   });
 
@@ -134,7 +135,7 @@ test("a batch over the 10-file cap uploads the first 10 and marks the rest skipp
   // 10 upload, the overflow is skipped and says so.
   await expect(
     page.getByRole("status").filter({ hasText: /uploaded/ })
-  ).toHaveText("10 uploaded, 2 skipped", {
+  ).toContainText("10 uploaded, 2 skipped", {
     timeout: 30_000,
   });
   await expect(

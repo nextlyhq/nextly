@@ -69,7 +69,8 @@ describe("buildQueueFromDrop", () => {
     const { toUpload, failed } = buildQueueFromDrop(
       accepted,
       rejections,
-      5 * MB
+      5 * MB,
+      null
     );
 
     expect(toUpload).toHaveLength(9);
@@ -84,12 +85,58 @@ describe("buildQueueFromDrop", () => {
     expect(failed[0].skipped).toBeUndefined();
   });
 
+  it("lets rejected files never consume batch-cap slots (mixed rejection + overflow)", () => {
+    // 11 valid + 1 oversized: the cap applies to VALID files, so 10 upload,
+    // 1 valid file is skipped, and the oversized one fails on its own row.
+    // A rejected file "ahead of" valid files in the drop must not push a
+    // valid file out of the batch.
+    const accepted = Array.from({ length: 11 }, (_, i) =>
+      makeFile(`valid-${i + 1}.png`, 100)
+    );
+    const rejections = [
+      {
+        file: makeFile("big.png", 7 * MB),
+        errors: [{ code: "file-too-large", message: "" }],
+      },
+    ];
+
+    const { toUpload, failed } = buildQueueFromDrop(
+      accepted,
+      rejections,
+      5 * MB,
+      null
+    );
+
+    expect(toUpload).toHaveLength(10);
+    expect(failed).toHaveLength(2);
+    expect(failed.filter(row => row.skipped)).toHaveLength(1);
+    expect(failed.find(row => row.skipped)?.filename).toBe("valid-11.png");
+    expect(failed.find(row => !row.skipped)?.filename).toBe("big.png");
+  });
+
+  it("snapshots the drop-time folder on every row", () => {
+    const { toUpload, failed } = buildQueueFromDrop(
+      [makeFile("a.png", 1)],
+      [
+        {
+          file: makeFile("bad.exe", 1),
+          errors: [{ code: "file-invalid-type", message: "" }],
+        },
+      ],
+      5 * MB,
+      "folder-123"
+    );
+
+    expect(toUpload[0].folderId).toBe("folder-123");
+    expect(failed[0].folderId).toBe("folder-123");
+  });
+
   it("takes the first 10 of an over-cap drop and marks the rest skipped", () => {
     const accepted = Array.from({ length: 14 }, (_, i) =>
       makeFile(`file-${i + 1}.png`, 100)
     );
 
-    const { toUpload, failed } = buildQueueFromDrop(accepted, [], 5 * MB);
+    const { toUpload, failed } = buildQueueFromDrop(accepted, [], 5 * MB, null);
 
     expect(toUpload).toHaveLength(10);
     expect(toUpload.map(row => row.filename)).toEqual(
@@ -112,7 +159,12 @@ describe("buildQueueFromDrop", () => {
       },
     ];
 
-    const { toUpload, failed } = buildQueueFromDrop([], rejections, 5 * MB);
+    const { toUpload, failed } = buildQueueFromDrop(
+      [],
+      rejections,
+      5 * MB,
+      null
+    );
 
     expect(toUpload).toHaveLength(0);
     expect(failed).toHaveLength(1);
@@ -123,7 +175,7 @@ describe("buildQueueFromDrop", () => {
     const accepted = Array.from({ length: 12 }, (_, i) =>
       makeFile(`f-${i}.png`, 1)
     );
-    const { toUpload, failed } = buildQueueFromDrop(accepted, [], 5 * MB);
+    const { toUpload, failed } = buildQueueFromDrop(accepted, [], 5 * MB, null);
     const ids = [...toUpload, ...failed].map(row => row.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -139,7 +191,7 @@ describe("buildQueueFromDrop", () => {
       },
     ];
 
-    const { failed } = buildQueueFromDrop([], rejections, 10 * MB);
+    const { failed } = buildQueueFromDrop([], rejections, 10 * MB, null);
     expect(failed[0].error).toBe(
       "File type is not supported, File is too large (max 10 MB)"
     );
