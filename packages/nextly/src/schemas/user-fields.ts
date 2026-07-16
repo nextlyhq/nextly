@@ -36,6 +36,27 @@ function fieldConfigToZod(field: UserFieldConfig): z.ZodTypeAny {
     case "email":
       return z.string().email();
 
+    case "url":
+      return z.string().url();
+
+    case "phone": {
+      // Deliberately permissive: digits with common separators and an
+      // optional leading +. Strict national formats belong to the app.
+      let schema = z
+        .string()
+        .regex(
+          /^\+?[\d\s().-]{3,32}$/,
+          "Must be a phone number (digits, spaces, and + ( ) . - only)"
+        );
+      if ("minLength" in field && typeof field.minLength === "number") {
+        schema = schema.min(field.minLength);
+      }
+      if ("maxLength" in field && typeof field.maxLength === "number") {
+        schema = schema.max(field.maxLength);
+      }
+      return schema;
+    }
+
     case "number": {
       let schema = z.number();
       if ("min" in field && typeof field.min === "number") {

@@ -26,10 +26,14 @@ export type FieldTypeCategory =
   | "Relational"
   | "Structured";
 
-/** One catalog row describing a field type for pickers and docs. */
-export interface FieldTypeCatalogEntry {
-  /** The canonical type key field instances reference. */
-  type: FieldType;
+/**
+ * One catalog row describing a field type for pickers and docs. Generic over
+ * the key so a surface's own types (see the user-surface entries below) carry
+ * their narrower union end to end.
+ */
+export interface FieldTypeCatalogEntry<T extends string = FieldType> {
+  /** The type key field instances reference. */
+  type: T;
   /** Human label shown in pickers. */
   label: string;
   /** Picker grouping. */
@@ -174,6 +178,66 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     icon: "Puzzle",
   },
 ];
+
+/**
+ * Field types that exist only on the user-profile surface. They are NOT part
+ * of the canonical `FieldType` union: a collection cannot declare them, so
+ * they can never reach the schema pipeline's column mappers. Both store as
+ * text; their meaning is validation (a URL shape, a phone shape).
+ */
+export type UserSurfaceFieldType = "url" | "phone";
+
+/** The user-profile surface's field types: flat scalars plus url/phone. */
+export type UserFieldCatalogType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "email"
+  | "url"
+  | "phone"
+  | "select"
+  | "radio"
+  | "checkbox"
+  | "date";
+
+/**
+ * The user-profile picker's catalog: the flat-scalar subset of the shared
+ * catalog with the two user-surface types slotted beside email, where a
+ * profile author expects contact-shaped fields together.
+ */
+export const USER_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<UserFieldCatalogType>[] =
+  (() => {
+    const scalars = narrowFieldTypeCatalog([
+      "text",
+      "textarea",
+      "number",
+      "email",
+      "select",
+      "radio",
+      "checkbox",
+      "date",
+    ] as const);
+    const url: FieldTypeCatalogEntry<UserFieldCatalogType> = {
+      type: "url",
+      label: "URL",
+      category: "Basic",
+      hint: "Validated web address",
+      icon: "Link2",
+    };
+    const phone: FieldTypeCatalogEntry<UserFieldCatalogType> = {
+      type: "phone",
+      label: "Phone",
+      category: "Basic",
+      hint: "Phone number",
+      icon: "Phone",
+    };
+    const combined: FieldTypeCatalogEntry<UserFieldCatalogType>[] = [];
+    for (const entry of scalars) {
+      combined.push(entry);
+      if (entry.type === "email") combined.push(url, phone);
+    }
+    return combined;
+  })();
 
 /** Look up one catalog entry by its type key. */
 export function getFieldTypeCatalogEntry(

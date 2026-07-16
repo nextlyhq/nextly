@@ -63,6 +63,8 @@ const createFieldSchema = z.object({
       "textarea",
       "number",
       "email",
+      "url",
+      "phone",
       "select",
       "radio",
       "checkbox",
@@ -70,12 +72,17 @@ const createFieldSchema = z.object({
     ],
     {
       message:
-        "Type must be one of: text, textarea, number, email, select, radio, checkbox, date",
+        "Type must be one of: text, textarea, number, email, url, phone, select, radio, checkbox, date",
     }
   ),
   required: z.boolean().optional(),
   defaultValue: z.string().optional().nullable(),
   options: z.array(optionSchema).optional().nullable(),
+  hasMany: z.boolean().optional().nullable(),
+  minLength: z.number().int().min(0).optional().nullable(),
+  maxLength: z.number().int().min(1).optional().nullable(),
+  minValue: z.number().optional().nullable(),
+  maxValue: z.number().optional().nullable(),
   placeholder: z.string().max(255).optional().nullable(),
   description: z.string().optional().nullable(),
   sortOrder: z.number().int().min(0).optional(),

@@ -31,6 +31,7 @@ import {
   sqliteTable,
   text,
   integer,
+  real,
   index,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
@@ -129,6 +130,31 @@ export const userFieldDefinitionsSqlite = sqliteTable(
      * Placeholder text shown in the input field.
      * @example 'Enter your phone number'
      */
+    /**
+     * Whether a `select` field stores multiple values. Fixed at creation:
+     * it decides the backing column's type (json when multiple, varchar
+     * otherwise), and the reconciler only ever adds columns.
+     */
+    hasMany: integer("has_many", { mode: "boolean" }),
+
+    // --------------------------------------------------------
+    // Validation bounds (nullable: unset means unconstrained, and a
+    // NOT NULL DEFAULT column added to a populated table is refused
+    // by the migration tooling as data-losing)
+    // --------------------------------------------------------
+
+    /** Minimum string length for text/textarea values. */
+    minLength: integer("min_length"),
+
+    /** Maximum string length for text/textarea values; also sizes new varchar columns. */
+    maxLength: integer("max_length"),
+
+    /** Minimum numeric value for number fields. */
+    minValue: real("min_value"),
+
+    /** Maximum numeric value for number fields. */
+    maxValue: real("max_value"),
+
     placeholder: text("placeholder"),
 
     /**
