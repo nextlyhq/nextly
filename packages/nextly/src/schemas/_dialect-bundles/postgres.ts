@@ -35,6 +35,7 @@ export {
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/postgres";
 export { refreshTokensRelations } from "../auth-tokens/postgres-relations";

@@ -20,6 +20,7 @@ export {
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/sqlite";
 export { refreshTokensRelations } from "../auth-tokens/sqlite-relations";

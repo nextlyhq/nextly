@@ -43,6 +43,32 @@ interface ConsumeResetTokenResult {
   email: string;
 }
 
+/** Result of {@link AuthService.generateInviteToken}. */
+interface InviteTokenResult {
+  /** The raw, single-use token. Returned once and never stored. */
+  token: string;
+  /** When the link stops working. */
+  expiresAt: Date;
+}
+
+/** Result of {@link AuthService.acceptInvite} on success. */
+interface AcceptInviteResult {
+  userId: string;
+}
+
+/**
+ * The fluent slice of a Drizzle transaction this service uses.
+ *
+ * `withTransaction` hands back `unknown` because the concrete transaction type
+ * is dialect-specific; narrowing to the methods actually called keeps the body
+ * typed without an `any`.
+ */
+interface TransactionLike {
+  update(table: unknown): {
+    set(data: unknown): { where(condition: unknown): Promise<unknown> };
+  };
+}
+
 /**
  * Authentication Service
  *
@@ -67,6 +93,11 @@ interface ConsumeResetTokenResult {
  */
 export class AuthService extends BaseService {
   private readonly TOKEN_EXPIRY_HOURS = 24;
+
+  // Seven days, the industry convention for an invite (GitHub, Vercel,
+  // Directus). Longer than a password-reset link because it is the first
+  // thing a new person receives and may sit unread over a weekend.
+  private readonly INVITE_TOKEN_EXPIRY_HOURS = 24 * 7;
 
   readonly emailService?: EmailService;
 
@@ -682,6 +713,147 @@ export class AuthService extends BaseService {
   }
 
   /**
+   * Mint a single-use set-password link for an existing account.
+   *
+   * The link is the artifact an admin hands to a new user; email is only ever
+   * one way to deliver it. Follows the same shape as a password-reset token —
+   * a 256-bit random value of which only the SHA-256 hash is stored, one active
+   * token per account — but keyed on the user id and given a longer life.
+   *
+   * The raw token is returned to the caller and never persisted. There is no
+   * way to recover it afterwards; mint a new one instead.
+   */
+  async generateInviteToken(userId: string): Promise<InviteTokenResult> {
+    const user = await this.db.query.users.findFirst({
+      where: eq(this.tables.users.id, userId),
+      columns: { id: true },
+    });
+    if (!user) {
+      throw NextlyError.notFound({ logContext: { userId } });
+    }
+
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+
+    const expiresAt = new Date(
+      Date.now() + this.INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
+    );
+
+    try {
+      // One active invite per account: a freshly minted link supersedes any
+      // earlier one, so a re-invite cannot leave two working links.
+      await this.db
+        .delete(this.tables.userInviteTokens)
+        .where(eq(this.tables.userInviteTokens.userId, userId));
+
+      await this.db.insert(this.tables.userInviteTokens).values({
+        userId,
+        tokenHash,
+        expires: expiresAt,
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    return { token: rawToken, expiresAt };
+  }
+
+  /**
+   * Accept an invite: set the account's password and let it sign in.
+   *
+   * Clicking a link that was delivered to an address is itself proof of the
+   * address, so acceptance sets `emailVerified` and `isActive` alongside the
+   * password in one transaction — there is no separate verification round trip,
+   * and no window where the account has a password but still cannot sign in.
+   *
+   * The failure messages do not distinguish "never existed" from "already
+   * used" from "expired-by-a-second", to avoid confirming which invites are
+   * live to whoever holds a guessed token.
+   */
+  async acceptInvite(
+    token: string,
+    newPassword: string
+  ): Promise<AcceptInviteResult> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+
+    let invite: { id: number; userId: string; expires: Date } | undefined;
+    try {
+      invite = await this.db.query.userInviteTokens.findFirst({
+        where: and(
+          eq(this.tables.userInviteTokens.tokenHash, tokenHash),
+          isNull(this.tables.userInviteTokens.usedAt)
+        ),
+        columns: { id: true, userId: true, expires: true },
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    if (!invite) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "token",
+            code: "INVALID_INVITE",
+            message: "This invite link is invalid or has already been used.",
+          },
+        ],
+      });
+    }
+
+    if (invite.expires < new Date()) {
+      throw new NextlyError({
+        code: "TOKEN_EXPIRED",
+        statusCode: 400,
+        publicMessage: "This invite link has expired.",
+        logContext: { inviteId: invite.id, expiredAt: invite.expires },
+      });
+    }
+
+    const passwordStrength = validatePasswordStrength(newPassword);
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
+      });
+    }
+
+    const passwordHash = await hashPasswordBcrypt(newPassword);
+
+    try {
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+        await tx
+          .update(this.tables.users)
+          .set({
+            passwordHash,
+            passwordUpdatedAt: new Date(),
+            emailVerified: new Date(),
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(this.tables.users.id, invite.userId));
+
+        await tx
+          .update(this.tables.userInviteTokens)
+          .set({ usedAt: new Date() })
+          .where(eq(this.tables.userInviteTokens.id, invite.id));
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    // No auth event is emitted: the closest existing one, passwordChanged,
+    // carries "an established password was rotated" semantics and its listeners
+    // (e.g. a security-notification email) would be wrong for a first set.
+
+    return { userId: invite.userId };
+  }
+
+  /**
    * Clean up expired tokens
    */
   async cleanupExpiredTokens(): Promise<void> {
@@ -695,6 +867,10 @@ export class AuthService extends BaseService {
       await this.db
         .delete(this.tables.emailVerificationTokens)
         .where(lt(this.tables.emailVerificationTokens.expires, now));
+
+      await this.db
+        .delete(this.tables.userInviteTokens)
+        .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
       console.error("Failed to cleanup expired tokens:", error);
     }

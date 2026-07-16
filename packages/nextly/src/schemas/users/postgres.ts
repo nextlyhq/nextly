@@ -37,7 +37,11 @@ export const users = pgTable(
       withTimezone: false,
     }),
     image: text("image"),
-    passwordHash: text("password_hash").notNull(),
+    // Nullable, matching SQLite and MySQL. An invited user has no password
+    // until they accept and set one, so the account has to exist without a
+    // hash. Loosening a NOT NULL constraint is not data-losing, so drizzle-kit
+    // applies it cleanly.
+    passwordHash: text("password_hash"),
     isActive: boolean("is_active").notNull().default(false),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
