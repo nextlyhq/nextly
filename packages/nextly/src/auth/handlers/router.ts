@@ -18,6 +18,7 @@ import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
+import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup } from "./setup";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
@@ -37,6 +38,9 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   // grind-able by an attacker holding no token at all.
   "accept-invite",
   "challenge/resolve",
+  // Consumes a single-purpose pending token and sets a password — same
+  // grind/replay surface as the other token-consuming paths.
+  "set-initial-password",
 ]);
 
 /**
@@ -121,6 +125,7 @@ export interface AuthRouterDeps {
     passwordHash: string;
     emailVerified: Date | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
     failedLoginAttempts: number;
     lockedUntil: Date | null;
   } | null>;
@@ -130,6 +135,7 @@ export interface AuthRouterDeps {
     name: string;
     image: string | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
   } | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;
@@ -184,6 +190,10 @@ export interface AuthRouterDeps {
   ) => Promise<{ email: string }>;
   acceptInvite: (
     token: string,
+    newPassword: string
+  ) => Promise<{ userId: string }>;
+  setInitialPassword: (
+    userId: string,
     newPassword: string
   ) => Promise<{ userId: string }>;
   changePassword: (
@@ -265,6 +275,8 @@ async function dispatchAuthRequest(
           return handleResetPassword(request, deps);
         case "accept-invite":
           return handleAcceptInvite(request, deps);
+        case "set-initial-password":
+          return handleSetInitialPassword(request, deps);
         case "verify-email":
           return handleVerifyEmail(request, deps);
         case "verify-email/resend":

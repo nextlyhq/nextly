@@ -8,6 +8,14 @@ import { verifyAccessToken } from "../jwt/verify";
  */
 export const PENDING_AUTH_TYP = "pending-auth";
 
+/**
+ * Sentinel `challengeId` for the forced first-sign-in password change. A user
+ * whose account still holds an admin-set password is issued a pending token
+ * carrying this id instead of a session; `handleSetInitialPassword` accepts
+ * only tokens marked with it.
+ */
+export const MUST_CHANGE_PASSWORD_CHALLENGE = "must-change-password";
+
 export interface PendingClaims {
   userId: string;
   challengeId: string;
