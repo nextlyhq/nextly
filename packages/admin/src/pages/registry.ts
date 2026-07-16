@@ -3,6 +3,7 @@ import { lazy } from "react";
 import { ROUTES } from "../constants/routes";
 import type { PageProps } from "../lib/routing";
 
+import AcceptInvitePage from "./(auth)/accept-invite";
 import ForgotPasswordPage from "./(auth)/forgot-password";
 import LoginPage from "./(auth)/login";
 import RegisterPage from "./(auth)/register";
@@ -93,6 +94,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.FORGOT_PASSWORD]: { component: ForgotPasswordPage, type: "public" },
   [ROUTES.RESET_PASSWORD]: { component: ResetPasswordPage, type: "public" },
   [ROUTES.VERIFY_EMAIL]: { component: VerifyEmailPage, type: "public" },
+  [ROUTES.ACCEPT_INVITE]: { component: AcceptInvitePage, type: "public" },
 
   // Dashboard route (homepage)
   [ROUTES.DASHBOARD]: { component: DashboardPage, type: "private" },

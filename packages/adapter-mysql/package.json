@@ -36,14 +36,14 @@
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "mysql2": "^3.9.2"
+    "mysql2": "^3.15.0"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
-    "eslint": "^9.34.0",
+    "eslint": "^9.39.1",
     "mysql2": "^3.15.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",

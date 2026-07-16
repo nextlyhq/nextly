@@ -64,10 +64,9 @@ jobs:
         run: pnpm lint:design
 
       # Workspace manifest consistency across all 19 packages (sherif):
-      # unordered keys, unsynced sibling versions, malformed manifests.
-      # The multiple-dependency-versions rule is ignored until the existing
-      # cross-package version drift is aligned dependency-by-dependency;
-      # everything else gates. Runs in milliseconds, fails fast.
+      # unordered keys, unsynced sibling versions, cross-package version
+      # drift, malformed manifests. All rules gate. Runs in milliseconds,
+      # fails fast.
       - name: Workspace consistency
         run: pnpm lint:workspace
 
