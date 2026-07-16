@@ -51,6 +51,7 @@ import {
 import {
   pgTable,
   text as pgText,
+  varchar as pgVarchar,
   boolean as pgBoolean,
   timestamp as pgTimestamp,
   jsonb as pgJsonb,
@@ -1057,11 +1058,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (
-      isTextField(field) ||
-      isEmailField(field) ||
-      this.isUserSurfaceTextField(field)
-    ) {
+    if (this.isUserSurfaceTextField(field)) {
+      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
+      const column = pgVarchar(colName, { length: field.maxLength ?? 255 });
+      return isRequired ? column.notNull() : column;
+    }
+    if (isTextField(field) || isEmailField(field)) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (isTextareaField(field)) {
@@ -1096,11 +1098,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (
-      isTextField(field) ||
-      isEmailField(field) ||
-      this.isUserSurfaceTextField(field)
-    ) {
+    if (this.isUserSurfaceTextField(field)) {
+      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
+      const column = mysqlVarchar(colName, { length: field.maxLength ?? 255 });
+      return isRequired ? column.notNull() : column;
+    }
+    if (isTextField(field) || isEmailField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
@@ -1191,6 +1194,9 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     field: UserFieldConfig,
     colName: string
   ): string {
+    if (this.isUserSurfaceTextField(field)) {
+      return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
+    }
     if (isTextField(field)) {
       return field.maxLength
         ? `varchar('${colName}', { length: ${field.maxLength} })`
@@ -1221,6 +1227,9 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private mapFieldToMySQLCode(field: UserFieldConfig, colName: string): string {
+    if (this.isUserSurfaceTextField(field)) {
+      return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
+    }
     if (
       isTextField(field) ||
       isEmailField(field) ||
