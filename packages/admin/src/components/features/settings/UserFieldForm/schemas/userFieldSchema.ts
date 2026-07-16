@@ -316,10 +316,13 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
         const check = (raw: string, path: keyof UserFieldFormValues) => {
           if (!raw.trim()) return null;
           const parsed = Number(raw);
+          // maxLength has a floor of 1 (a zero-length maximum admits nothing
+          // and the API refuses it); minLength's floor stays 0.
+          const floor = path === "maxLength" ? 1 : 0;
           if (
             !Number.isFinite(parsed) ||
             (integer && !Number.isInteger(parsed)) ||
-            (integer && parsed < 0)
+            (integer && parsed < floor)
           ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

@@ -500,8 +500,16 @@ export class UserFieldDefinitionService extends BaseService {
         const defaultValue = (field.defaultValue as string) ?? null;
         const options =
           (field.options as { label: string; value: string }[]) ?? null;
-        const placeholder = (field.placeholder as string) ?? null;
-        const description = (field.description as string) ?? null;
+        // Presentation options live under `admin` on field configs; the flat
+        // spelling is kept for older configs that carried them at top level.
+        const admin = (field.admin ?? {}) as {
+          placeholder?: string;
+          description?: string;
+        };
+        const placeholder =
+          (field.placeholder as string) ?? admin.placeholder ?? null;
+        const description =
+          (field.description as string) ?? admin.description ?? null;
         // Persist the multi-value flag and the validation bounds: dropping
         // them here made a code-declared maxLength silently inert, because
         // the checker reads configs back from these rows, not from code.

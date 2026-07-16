@@ -47,47 +47,74 @@ const optionSchema = z.object({
   value: z.string().min(1, "Option value is required"),
 });
 
-const createFieldSchema = z.object({
-  name: z
-    .string()
-    .min(1, "Name is required")
-    .max(255)
-    .regex(
-      /^[a-zA-Z][a-zA-Z0-9]*$/,
-      "Name must start with a letter and contain only alphanumeric characters"
+const createFieldSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1, "Name is required")
+      .max(255)
+      .regex(
+        /^[a-zA-Z][a-zA-Z0-9]*$/,
+        "Name must start with a letter and contain only alphanumeric characters"
+      ),
+    label: z.string().min(1, "Label is required").max(255),
+    type: z.enum(
+      [
+        "text",
+        "textarea",
+        "number",
+        "email",
+        "url",
+        "phone",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+      ],
+      {
+        message:
+          "Type must be one of: text, textarea, number, email, url, phone, select, radio, checkbox, date",
+      }
     ),
-  label: z.string().min(1, "Label is required").max(255),
-  type: z.enum(
-    [
-      "text",
-      "textarea",
-      "number",
-      "email",
-      "url",
-      "phone",
-      "select",
-      "radio",
-      "checkbox",
-      "date",
-    ],
-    {
-      message:
-        "Type must be one of: text, textarea, number, email, url, phone, select, radio, checkbox, date",
+    required: z.boolean().optional(),
+    defaultValue: z.string().optional().nullable(),
+    options: z.array(optionSchema).optional().nullable(),
+    hasMany: z.boolean().optional().nullable(),
+    minLength: z.number().int().min(0).optional().nullable(),
+    maxLength: z.number().int().min(1).optional().nullable(),
+    minValue: z.number().optional().nullable(),
+    maxValue: z.number().optional().nullable(),
+    placeholder: z.string().max(255).optional().nullable(),
+    description: z.string().optional().nullable(),
+    sortOrder: z.number().int().min(0).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    // An inverted range would make every value invalid; refuse it at the
+    // boundary instead of persisting a field nobody can satisfy.
+    if (
+      data.minLength != null &&
+      data.maxLength != null &&
+      data.minLength > data.maxLength
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minLength"],
+        message: "minLength cannot exceed maxLength",
+      });
     }
-  ),
-  required: z.boolean().optional(),
-  defaultValue: z.string().optional().nullable(),
-  options: z.array(optionSchema).optional().nullable(),
-  hasMany: z.boolean().optional().nullable(),
-  minLength: z.number().int().min(0).optional().nullable(),
-  maxLength: z.number().int().min(1).optional().nullable(),
-  minValue: z.number().optional().nullable(),
-  maxValue: z.number().optional().nullable(),
-  placeholder: z.string().max(255).optional().nullable(),
-  description: z.string().optional().nullable(),
-  sortOrder: z.number().int().min(0).optional(),
-  isActive: z.boolean().optional(),
-});
+    if (
+      data.minValue != null &&
+      data.maxValue != null &&
+      data.minValue > data.maxValue
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minValue"],
+        message: "minValue cannot exceed maxValue",
+      });
+    }
+  });
 
 /**
  * GET handler for listing all user field definitions.
