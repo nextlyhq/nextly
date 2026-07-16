@@ -1,21 +1,18 @@
 /**
  * Plugins List Page
  *
- * Displays all installed plugins in a unified view.
- * Provides plugin management capabilities including:
- * - Viewing installed plugins (name, version, placement)
- * - Filtering and search
- * - Column management
- * - Multi-select bulk actions
+ * Displays all installed plugins in a unified view: name with description and
+ * author, installed version, category, and enabled state, with search and a
+ * status filter. Rows navigate to each plugin's detail page. Installing,
+ * updating, and removing plugins happen through npm + the Nextly config, so
+ * this page reports state rather than mutating it.
  *
  * @module pages/dashboard/plugins
  */
 
-import { Alert, AlertDescription, AlertTitle } from "@nextlyhq/ui";
 import type React from "react";
 import { Suspense } from "react";
 
-import { Info } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -50,24 +47,11 @@ const PluginsOverviewPage: React.FC = () => {
               Installed Plugins
             </h1>
             <p className="text-sm font-normal text-primary/50 mt-1">
-              View and manage the plugins currently installed in your
-              application.
+              The plugins installed in your application, what each one adds, and
+              whether it is enabled.
             </p>
           </div>
         </div>
-
-        {/* In-development banner */}
-        <Alert variant="info" role="status" className="mb-6">
-          <Info className="h-4 w-4" />
-          <div>
-            <AlertTitle>Plugins are in development</AlertTitle>
-            <AlertDescription>
-              Plugin installation and management is coming soon. The current
-              view is a preview &mdash; some features may not be fully
-              functional.
-            </AlertDescription>
-          </div>
-        </Alert>
 
         {/* Plugins table */}
         <Suspense fallback={<PluginsTableSkeleton />}>

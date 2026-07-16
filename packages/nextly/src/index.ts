@@ -343,6 +343,7 @@ export {
   createPluginContext,
   type PluginAdminAppearance,
   type PluginAdminConfig,
+  type PluginCategory,
   type PluginContext,
   type PluginContributions,
   type PluginDefinition,

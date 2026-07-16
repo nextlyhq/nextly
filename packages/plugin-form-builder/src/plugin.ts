@@ -178,6 +178,13 @@ export function formBuilder(
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
+    // Identity metadata for the admin plugins page, mirroring package.json.
+    author: "Nextly",
+    homepage: "https://nextlyhq.com",
+    repository: "https://github.com/nextlyhq/nextly",
+    license: "MIT",
+    category: "forms",
+    tags: ["forms", "submissions", "email-notifications"],
 
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
