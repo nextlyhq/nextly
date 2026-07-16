@@ -57,10 +57,7 @@ export class RolePermissionService extends BaseService {
     const existing = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
-      where: and(
-        eq(this.tables.permissions.action, perm.action),
-        eq(this.tables.permissions.resource, perm.resource)
-      ),
+      where: { action: perm.action, resource: perm.resource },
       columns: {
         id: true,
       },
@@ -143,10 +140,7 @@ export class RolePermissionService extends BaseService {
     const permission = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
-      where: and(
-        eq(this.tables.permissions.action, perm.action),
-        eq(this.tables.permissions.resource, perm.resource)
-      ),
+      where: { action: perm.action, resource: perm.resource },
       columns: {
         id: true,
       },
@@ -220,7 +214,7 @@ export class RolePermissionService extends BaseService {
     const rolePermissions = await (
       this.db as RBACDatabaseInstance
     ).query.rolePermissions.findMany({
-      where: eq(this.tables.rolePermissions.roleId, roleId),
+      where: { roleId: roleId },
       with: {
         permission: {
           columns: {

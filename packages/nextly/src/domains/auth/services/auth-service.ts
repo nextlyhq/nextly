@@ -1,7 +1,7 @@
 import { randomBytes, createHash } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, lt, isNull } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 
 import {
   verifyPassword as verifyPasswordBcrypt,
@@ -172,7 +172,7 @@ export class AuthService extends BaseService {
       ? normalizedEmailResult.data
       : String(email).trim().toLowerCase();
     const user = await this.db.query.users.findFirst({
-      where: eq(this.tables.users.email, normalizedEmail),
+      where: { email: normalizedEmail },
       columns: {
         id: true,
         email: true,
@@ -231,7 +231,7 @@ export class AuthService extends BaseService {
     let user;
     try {
       user = await this.db.query.users.findFirst({
-        where: eq(this.tables.users.id, userId),
+        where: { id: userId },
         columns: {
           passwordHash: true,
         },
@@ -307,7 +307,7 @@ export class AuthService extends BaseService {
 
     try {
       const user = await this.db.query.users.findFirst({
-        where: eq(this.tables.users.email, normalizedEmail),
+        where: { email: normalizedEmail },
         columns: {
           id: true,
           email: true,
@@ -397,10 +397,7 @@ export class AuthService extends BaseService {
       const tokenHash = createHash("sha256").update(token).digest("hex");
 
       resetToken = await this.db.query.passwordResetTokens.findFirst({
-        where: and(
-          eq(this.tables.passwordResetTokens.tokenHash, tokenHash),
-          isNull(this.tables.passwordResetTokens.usedAt)
-        ),
+        where: { tokenHash: tokenHash, usedAt: { isNull: true } },
         columns: {
           id: true,
           identifier: true,
@@ -445,7 +442,7 @@ export class AuthService extends BaseService {
     const email = resetToken.identifier;
 
     const targetUser = await this.db.query.users.findFirst({
-      where: eq(this.tables.users.email, email),
+      where: { email: email },
       columns: { id: true },
     });
 
@@ -521,7 +518,7 @@ export class AuthService extends BaseService {
   ): Promise<{ token?: string }> {
     try {
       const user = await this.db.query.users.findFirst({
-        where: eq(this.tables.users.email, email),
+        where: { email: email },
         columns: {
           id: true,
           email: true,
@@ -605,7 +602,7 @@ export class AuthService extends BaseService {
 
       verificationToken = await this.db.query.emailVerificationTokens.findFirst(
         {
-          where: eq(this.tables.emailVerificationTokens.tokenHash, tokenHash),
+          where: { tokenHash: tokenHash },
           columns: {
             id: true,
             identifier: true,

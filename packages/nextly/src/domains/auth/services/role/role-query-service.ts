@@ -285,9 +285,8 @@ export class RoleQueryService extends BaseService {
         });
       }
 
-      const { roles } = this.tables;
       const role = await this.db.query.roles.findFirst({
-        where: eq(roles.id, roleId),
+        where: { id: roleId },
         columns: {
           id: true,
           name: true,
@@ -325,9 +324,8 @@ export class RoleQueryService extends BaseService {
    * @returns Role ID or null if not found
    */
   async getRoleByName(name: string): Promise<{ id: string } | null> {
-    const { roles } = this.tables;
     const role = await this.db.query.roles.findFirst({
-      where: eq(roles.name, name),
+      where: { name: name },
       columns: { id: true },
     });
     return role ? { id: String(role.id) } : null;
@@ -341,7 +339,6 @@ export class RoleQueryService extends BaseService {
    */
   async findRoleIdBySlug(slug: string): Promise<{ id: string } | null> {
     const { roles } = this.tables;
-
     const role = await this.db
       .selectDistinct({ id: roles.id })
       .from(roles)

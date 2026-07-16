@@ -5,8 +5,10 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import * as schema from "./sqlite-schema";
 
-// v1 relations config over the fixture tables. Edge-less for now — RQB
-// tests that traverse `with:` add their edges here as they convert.
+// v1 relations config over the fixture tables. Deliberately edge-less:
+// several legacy suites mock service internals in ways that break under
+// the full bundle relations; RQB `with:` traversal is validated by the
+// dedicated rqb-v2-conversions integration suite instead.
 export const testRelations = defineRelations(schema);
 export type TestDrizzleDb = BetterSQLite3Database<typeof testRelations>;
 

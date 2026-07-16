@@ -192,8 +192,7 @@ export class UserExtSchemaService {
     dialect?: SupportedDialect,
     fieldDefService?: UserFieldDefinitionService
   ) {
-    this.dialect =
-      dialect || env.DB_DIALECT || "postgresql";
+    this.dialect = dialect || env.DB_DIALECT || "postgresql";
     this.q = QUOTE_CHAR[this.dialect];
     this.fieldDefService = fieldDefService;
   }
@@ -723,7 +722,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   private generateMySQLSchema(fields: UserFieldConfig[]): DrizzleRuntimeTable {
@@ -756,7 +755,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   private generateSQLiteSchema(fields: UserFieldConfig[]): DrizzleRuntimeTable {
@@ -793,7 +792,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   // ============================================================
@@ -926,10 +925,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       parts.push("NOT NULL");
     }
 
-    if (
-      isCheckboxField(field) &&
-      field.defaultValue !== undefined
-    ) {
+    if (isCheckboxField(field) && field.defaultValue !== undefined) {
       const defaultVal =
         this.dialect === "sqlite"
           ? field.defaultValue

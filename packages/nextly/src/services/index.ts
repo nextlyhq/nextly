@@ -1,7 +1,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { getDialectTables, getStaticRelations } from "../database/index";
+import { getDialectTables } from "../database/index";
 import type { SchemaRegistry } from "../database/schema-registry";
+import { getStaticRelations } from "../database/static-relations";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
 import { AuthService } from "../domains/auth/services/auth-service";

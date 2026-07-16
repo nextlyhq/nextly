@@ -412,7 +412,7 @@ describe("UsersService", () => {
 
       // Verify password was hashed
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, userData.email),
+        where: { email: userData.email },
       });
       expect(user!.passwordHash).toBeDefined();
       expect(user!.passwordHash).not.toBe(userData.password);
@@ -434,7 +434,7 @@ describe("UsersService", () => {
       expectSuccessResponse(result, 201);
 
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, userData.email),
+        where: { email: userData.email },
       });
       expect(user!.passwordHash).toBe(hashedPassword);
     });
@@ -460,7 +460,7 @@ describe("UsersService", () => {
 
       // Verify role assignment in database
       const userRole = await testDb.db.query.userRoles.findFirst({
-        where: eq(testDb.schema.userRoles.userId, result.data!.id),
+        where: { userId: result.data!.id },
       });
       expect(userRole).toBeDefined();
       expect(userRole!.roleId).toBe(role.id);
@@ -482,7 +482,7 @@ describe("UsersService", () => {
 
       // Verify super-admin role was assigned
       const userRoles = await testDb.db.query.userRoles.findMany({
-        where: eq(testDb.schema.userRoles.userId, result.data!.id),
+        where: { userId: result.data!.id },
       });
       expect(userRoles.length).toBeGreaterThan(0);
     });
@@ -554,7 +554,7 @@ describe("UsersService", () => {
       expectSuccessResponse(result, 201);
 
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, userData.email),
+        where: { email: userData.email },
       });
       expect(user!.passwordHash).toBeNull();
     });
@@ -612,7 +612,7 @@ describe("UsersService", () => {
       expectSuccessResponse(result, 200);
 
       const updatedUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.id, user.id),
+        where: { id: user.id },
       });
 
       expect(updatedUser).toBeDefined();
@@ -755,7 +755,7 @@ describe("UsersService", () => {
 
       // Verify user was deleted
       const deletedUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.id, user.id),
+        where: { id: user.id },
       });
       expect(deletedUser).toBeUndefined();
     });
@@ -776,7 +776,7 @@ describe("UsersService", () => {
 
       // Assert - verify userRole was deleted
       const userRole = await testDb.db.query.userRoles.findFirst({
-        where: eq(testDb.schema.userRoles.userId, user.id),
+        where: { userId: user.id },
       });
       expect(userRole).toBeUndefined();
     });
@@ -907,7 +907,7 @@ describe("UsersService", () => {
 
       // Verify password was updated
       const updatedUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.id, user.id),
+        where: { id: user.id },
       });
       expect(updatedUser!.passwordHash).toBe(newHash);
     });

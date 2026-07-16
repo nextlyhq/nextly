@@ -7,6 +7,9 @@ import type {
 import { sql } from "drizzle-orm";
 
 import { getDialectTables } from "../database/index";
+import type { SchemaRegistry } from "../database/schema-registry";
+import { getStaticRelations } from "../database/static-relations";
+import { container } from "../di/container";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
 import type { Logger } from "./types";
@@ -167,15 +170,19 @@ export abstract class BaseService<
    * Prefer this.adapter methods for simple CRUD; use this.db only when you need
    * Drizzle's query builder directly (JOINs, relational queries, aggregations).
    *
-   * Schema is passed to getDrizzle() so that the relational query API
-   * (db.query.users.findFirst, etc.) has access to table definitions.
+   * The v1 relational query API (db.query.users.findFirst with object
+   * filters) is powered by a relations config (defineRelations output),
+   * not a table map. Prefer the schema registry's assembly (static bundle
+   * edges + dynamic-entity edges); fall back to the static bundle
+   * relations when the registry singleton isn't registered yet.
    * Cached after first access.
    */
   protected get db(): TAdapter["db"] {
     if (!this._db) {
-      this._db = this.adapter.getDrizzle<TAdapter["db"]>(
-        this.tables
-      );
+      const relations = container.has("schemaRegistry")
+        ? container.get<SchemaRegistry>("schemaRegistry").getRelations()
+        : getStaticRelations(this.adapter.getCapabilities().dialect);
+      this._db = this.adapter.getDrizzle<TAdapter["db"]>(relations);
     }
     return this._db;
   }
@@ -186,9 +193,7 @@ export abstract class BaseService<
    */
   protected get tables(): TAdapter["tables"] {
     if (!this._tables) {
-      this._tables = getDialectTables(
-        this.adapter.getCapabilities().dialect
-      );
+      this._tables = getDialectTables(this.adapter.getCapabilities().dialect);
     }
     return this._tables;
   }
