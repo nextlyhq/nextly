@@ -198,17 +198,19 @@ function sqliteKitClient(drizzleInstance: unknown): SqliteKitClient {
     }
   ).$client;
   return {
-    query: async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
+    query: <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
       const stmt = db.prepare(sql);
-      if (stmt.reader) return stmt.all(...params) as T[];
+      if (stmt.reader) return Promise.resolve(stmt.all(...params) as T[]);
       stmt.run(...params);
-      return [] as T[];
+      return Promise.resolve([] as T[]);
     },
-    run: async (query: string): Promise<void> => {
+    run: (query: string): Promise<void> => {
       db.prepare(query).run();
+      return Promise.resolve();
     },
-    batch: async (statements: string[]): Promise<void> => {
+    batch: (statements: string[]): Promise<void> => {
       for (const s of statements) db.prepare(s).run();
+      return Promise.resolve();
     },
   };
 }
@@ -229,11 +231,11 @@ const g = globalThis as DrizzleKitCache;
 const requireKit = (subpath: string): unknown =>
   createRequire(import.meta.url)(subpath);
 
-// Accessors stay async even though `require()` is sync — callers already
-// `await` them, and keeping the signature stable avoids churn.
+// Accessors keep a Promise signature even though `require()` is sync —
+// callers already `await` them, and keeping the signature stable avoids churn.
 
-export async function getPgDrizzleKit(): Promise<PgDrizzleKit> {
-  if (g.__nextly_drizzleKitPg) return g.__nextly_drizzleKitPg;
+export function getPgDrizzleKit(): Promise<PgDrizzleKit> {
+  if (g.__nextly_drizzleKitPg) return Promise.resolve(g.__nextly_drizzleKitPg);
   const m = (g.__nextly_drizzleKitPgMod ??= requireKit(
     "drizzle-kit/payload/postgres"
   ) as PayloadPgModule);
@@ -243,11 +245,12 @@ export async function getPgDrizzleKit(): Promise<PgDrizzleKit> {
     generateDrizzleJson: m.generateDrizzleJson,
     generateMigration: m.generateMigration,
   };
-  return g.__nextly_drizzleKitPg;
+  return Promise.resolve(g.__nextly_drizzleKitPg);
 }
 
-export async function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
-  if (g.__nextly_drizzleKitMySQL) return g.__nextly_drizzleKitMySQL;
+export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
+  if (g.__nextly_drizzleKitMySQL)
+    return Promise.resolve(g.__nextly_drizzleKitMySQL);
   const m = (g.__nextly_drizzleKitMySqlMod ??= requireKit(
     "drizzle-kit/payload/mysql"
   ) as PayloadMySqlModule);
@@ -257,11 +260,12 @@ export async function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
     generateDrizzleJson: m.generateDrizzleJson,
     generateMigration: m.generateMigration,
   };
-  return g.__nextly_drizzleKitMySQL;
+  return Promise.resolve(g.__nextly_drizzleKitMySQL);
 }
 
-export async function getSQLiteDrizzleKit(): Promise<SQLiteDrizzleKit> {
-  if (g.__nextly_drizzleKitSQLite) return g.__nextly_drizzleKitSQLite;
+export function getSQLiteDrizzleKit(): Promise<SQLiteDrizzleKit> {
+  if (g.__nextly_drizzleKitSQLite)
+    return Promise.resolve(g.__nextly_drizzleKitSQLite);
   const m = (g.__nextly_drizzleKitSqliteMod ??= requireKit(
     "drizzle-kit/payload/sqlite"
   ) as PayloadSqliteModule);
@@ -270,7 +274,7 @@ export async function getSQLiteDrizzleKit(): Promise<SQLiteDrizzleKit> {
     generateDrizzleJson: m.generateDrizzleJson,
     generateMigration: m.generateMigration,
   };
-  return g.__nextly_drizzleKitSQLite;
+  return Promise.resolve(g.__nextly_drizzleKitSQLite);
 }
 
 export async function getDrizzleKitForDialect(
