@@ -1,74 +1,34 @@
 "use client";
 
-import {
-  AlignLeft,
-  Calendar,
-  Check,
-  CheckSquare,
-  Circle,
-  Hash,
-  List,
-  Mail,
-  Type,
-  type LucideIcon,
-} from "@admin/components/icons";
+import { narrowFieldTypeCatalog } from "nextly/field-catalog";
+import type React from "react";
+
+import * as Icons from "@admin/components/icons";
+import { Check, Type } from "@admin/components/icons";
 import type { UserFieldType } from "@admin/services/userFieldsApi";
 
-const FIELD_TYPE_OPTIONS: {
-  value: UserFieldType;
-  label: string;
-  description: string;
-  icon: LucideIcon;
-}[] = [
-  {
-    value: "text",
-    label: "Text",
-    description: "Single line of text",
-    icon: Type,
-  },
-  {
-    value: "textarea",
-    label: "Textarea",
-    description: "Multi-line text content",
-    icon: AlignLeft,
-  },
-  {
-    value: "number",
-    label: "Number",
-    description: "Numeric values",
-    icon: Hash,
-  },
-  {
-    value: "email",
-    label: "Email",
-    description: "Email address",
-    icon: Mail,
-  },
-  {
-    value: "select",
-    label: "Select",
-    description: "Dropdown with options",
-    icon: List,
-  },
-  {
-    value: "radio",
-    label: "Radio",
-    description: "Single choice from options",
-    icon: Circle,
-  },
-  {
-    value: "checkbox",
-    label: "Checkbox",
-    description: "True/false toggle",
-    icon: CheckSquare,
-  },
-  {
-    value: "date",
-    label: "Date",
-    description: "Date picker",
-    icon: Calendar,
-  },
+// The profile-field subset of the shared catalog: flat scalar types only.
+// Labels, hints, and icon names come from the catalog so this picker cannot
+// drift from the schema builder's description of the same types.
+const USER_FIELD_TYPE_KEYS: readonly UserFieldType[] = [
+  "text",
+  "textarea",
+  "number",
+  "email",
+  "select",
+  "radio",
+  "checkbox",
+  "date",
 ];
+
+const FIELD_TYPE_OPTIONS = narrowFieldTypeCatalog(USER_FIELD_TYPE_KEYS).map(
+  entry => ({
+    value: entry.type,
+    label: entry.label,
+    description: entry.hint,
+    icon: (Icons as Record<string, React.ElementType>)[entry.icon] ?? Type,
+  })
+);
 
 /** Visual grid picker for selecting a field type */
 export function FieldTypePicker({
