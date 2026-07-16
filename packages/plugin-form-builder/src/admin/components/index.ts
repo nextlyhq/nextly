@@ -8,37 +8,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// Form Field List
-// ---------------------------------------------------------------------------
-
-export { FormFieldList, type FormFieldListProps } from "./FormFieldList";
-
-// ---------------------------------------------------------------------------
-// Sortable Field Row
-// ---------------------------------------------------------------------------
-
-export {
-  SortableFieldRow,
-  type SortableFieldRowProps,
-} from "./SortableFieldRow";
-
-// ---------------------------------------------------------------------------
-// Add Field Button
-// ---------------------------------------------------------------------------
-
-export { AddFieldButton, type AddFieldButtonProps } from "./AddFieldButton";
-
-// ---------------------------------------------------------------------------
-// Field Editor Panel
-// ---------------------------------------------------------------------------
-
-export {
-  FieldEditorPanel,
-  type FieldEditorPanelProps,
-} from "./FieldEditorPanel";
-
-// ---------------------------------------------------------------------------
-// Builder Components (Legacy - to be deprecated)
+// Builder Components (the live form builder)
 // ---------------------------------------------------------------------------
 
 export {

@@ -54,21 +54,6 @@ export {
 } from "./components/builder";
 
 // ============================================================================
-// New Components
-// ============================================================================
-
-export {
-  FormFieldList,
-  type FormFieldListProps,
-  SortableFieldRow,
-  type SortableFieldRowProps,
-  AddFieldButton,
-  type AddFieldButtonProps,
-  FieldEditorPanel,
-  type FieldEditorPanelProps,
-} from "./components";
-
-// ============================================================================
 // Context & Hooks
 // ============================================================================
 
