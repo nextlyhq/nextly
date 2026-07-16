@@ -1,6 +1,12 @@
 "use client";
 
-import { Checkbox, Input, Label } from "@nextlyhq/ui";
+import {
+  Checkbox,
+  Input,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
+} from "@nextlyhq/ui";
 import { useState } from "react";
 import type { Control, FieldErrors, UseFormRegister } from "react-hook-form";
 import { Controller, useWatch } from "react-hook-form";
@@ -73,13 +79,12 @@ interface UserFormFieldsProps {
  * Handles the ~80% code duplication between the two forms.
  *
  * Features:
- * - Full Name, Email, Password inputs
+ * - Full Name, Email inputs
+ * - Sign-in method choice (create mode): send a set-password link or set a
+ *   password now. The password fields appear only when setting one now.
+ * - Password input (always in edit mode; create mode only when setting one now)
  * - Roles selection with checkboxes
  * - Active Account toggle
- * - Require Email Verification toggle (create mode only). Disabled when
- *   the account is inactive, and shows an inline note when both flags are
- *   on so the admin understands login is gated on the verification link.
- * - Conditional password field (required in create, optional in edit)
  * - Loading and error states for roles (edit mode)
  *
  * @example
@@ -121,20 +126,11 @@ export function UserFormFields({
   const isCreateMode = mode === "create";
   const [showPassword, setShowPassword] = useState(false);
 
-  // Cross-checkbox interaction (create mode only): "Require email
-  // verification" is meaningless for a disabled account, so we disable it
-  // when "Active" is off. We also surface an inline note when an admin
-  // checks both -- the user will only be able to sign in *after* clicking
-  // the verification link, which the simple "Active" label doesn't telegraph
-  // on its own.
-  const watchedActive = useWatch({ control, name: "active" });
-  const watchedRequireVerification = useWatch({
-    control,
-    name: "requireEmailVerification",
-  });
-  const verificationDisabled = !watchedActive;
-  const showVerificationGateNote =
-    !!watchedActive && !!watchedRequireVerification;
+  // Create mode only: the sign-in method decides whether the password fields
+  // are shown at all. Edit mode always shows an (optional) password field.
+  const signInMethod = useWatch({ control, name: "signInMethod" });
+  const isInviteMode = isCreateMode && signInMethod === "invite";
+  const showPasswordField = !isInviteMode;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-y-12 md:gap-x-[10rem] w-full">
@@ -183,49 +179,112 @@ export function UserFormFields({
           )}
         </div>
 
-        {/* Password Field - Required in create, optional in edit */}
-        <div>
-          <Label htmlFor="password" className="mb-2">
-            Password{" "}
-            {isCreateMode && <span className="text-destructive">*</span>}
-            {!isCreateMode && " (optional)"}
-          </Label>
-          <div className="relative">
-            <Input
-              id="password"
-              type={showPassword ? "text" : "password"}
-              placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
-              aria-invalid={!!errors.password}
-              aria-required={isCreateMode}
-              {...register("password")}
-              className="pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              tabIndex={-1}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              aria-label={showPassword ? "Hide password" : "Show password"}
-            >
-              {showPassword ? (
-                <EyeOff className="h-4 w-4" />
-              ) : (
-                <Eye className="h-4 w-4" />
+        {/* Sign-in method (create only). The choice changes what the form
+            means: an invite link the person redeems, or a password the admin
+            hands over — so it is asked up front, not tucked into settings. */}
+        {isCreateMode && (
+          <div>
+            <Label className="mb-2">How should this person sign in?</Label>
+            <Controller
+              control={control}
+              name="signInMethod"
+              render={({ field }) => (
+                <RadioGroup
+                  value={(field.value as string) ?? "invite"}
+                  onValueChange={field.onChange}
+                  className="gap-3"
+                >
+                  <label
+                    htmlFor="sign-in-invite"
+                    className="flex items-start gap-3 rounded-none border border-border p-3 cursor-pointer"
+                  >
+                    <RadioGroupItem
+                      value="invite"
+                      id="sign-in-invite"
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <div className="text-sm font-medium">
+                        Send a set-password link{" "}
+                        <span className="font-normal text-muted-foreground">
+                          (recommended)
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        They choose their own password from a secure link. You
+                        never see it.
+                      </p>
+                    </div>
+                  </label>
+                  <label
+                    htmlFor="sign-in-password"
+                    className="flex items-start gap-3 rounded-none border border-border p-3 cursor-pointer"
+                  >
+                    <RadioGroupItem
+                      value="password"
+                      id="sign-in-password"
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <div className="text-sm font-medium">
+                        Set a password now
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        For handing over credentials directly. They can change
+                        it after signing in.
+                      </p>
+                    </div>
+                  </label>
+                </RadioGroup>
               )}
-            </button>
+            />
           </div>
-          {!isCreateMode && (
-            <p className="text-xs text-muted-foreground mt-1">
-              Only enter a new password if you want to reset it. Leave empty to
-              keep the current password.
-            </p>
-          )}
-          {errors.password && (
-            <p className="text-sm text-destructive mt-1">
-              {errors.password.message}
-            </p>
-          )}
-        </div>
+        )}
+
+        {/* Password Field - always in edit; create only when setting one now */}
+        {showPasswordField && (
+          <div>
+            <Label htmlFor="password" className="mb-2">
+              Password{" "}
+              {isCreateMode && <span className="text-destructive">*</span>}
+              {!isCreateMode && " (optional)"}
+            </Label>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
+                aria-invalid={!!errors.password}
+                aria-required={isCreateMode}
+                {...register("password")}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            {!isCreateMode && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Only enter a new password if you want to reset it. Leave empty
+                to keep the current password.
+              </p>
+            )}
+            {errors.password && (
+              <p className="text-sm text-destructive mt-1">
+                {errors.password.message}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Right Column - Roles & Settings */}
@@ -251,89 +310,36 @@ export function UserFormFields({
           )}
         />
 
-        {/* Account Settings */}
-        {(showActiveAccount || isCreateMode) && (
+        {/* Account Settings. Hidden in invite mode: accepting the invite
+            activates the account, so an "inactive" choice here would not hold —
+            we do not offer a control the redemption step silently overrides. */}
+        {showActiveAccount && !isInviteMode && (
           <div className="space-y-3">
             {/* Active Account Checkbox */}
-            {showActiveAccount && (
-              <div className="rounded-none  border border-border dark:border-primary/30 bg-primary/5 p-3 shadow-none">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <Controller
-                    control={control}
-                    name="active"
-                    render={({ field }) => (
-                      <Checkbox
-                        checked={!!field.value}
-                        onCheckedChange={val => field.onChange(!!val)}
-                        className="mt-0.5"
-                      />
-                    )}
-                  />
-                  <div>
-                    <div className="text-sm font-semibold text-primary">
-                      Active Account (Default: Yes)
-                    </div>
-                    <p className="text-xs text-primary/70">
-                      User will be able to log in immediately after creation.
-                      Uncheck to require manual activation later.
-                    </p>
+            <div className="rounded-none  border border-border dark:border-primary/30 bg-primary/5 p-3 shadow-none">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <Controller
+                  control={control}
+                  name="active"
+                  render={({ field }) => (
+                    <Checkbox
+                      checked={!!field.value}
+                      onCheckedChange={val => field.onChange(!!val)}
+                      className="mt-0.5"
+                    />
+                  )}
+                />
+                <div>
+                  <div className="text-sm font-semibold text-primary">
+                    Active Account (Default: Yes)
                   </div>
-                </label>
-              </div>
-            )}
-
-            {/* Require Email Verification (create mode only) */}
-            {isCreateMode && (
-              <div
-                className={
-                  "rounded-none border border-border p-3" +
-                  (verificationDisabled ? " opacity-60" : "")
-                }
-              >
-                <label
-                  className={
-                    "flex items-start gap-3 " +
-                    (verificationDisabled
-                      ? "cursor-not-allowed"
-                      : "cursor-pointer")
-                  }
-                >
-                  <Controller
-                    control={control}
-                    name="requireEmailVerification"
-                    render={({ field }) => (
-                      <Checkbox
-                        checked={!!field.value && !verificationDisabled}
-                        onCheckedChange={val => field.onChange(!!val)}
-                        disabled={verificationDisabled}
-                        aria-disabled={verificationDisabled}
-                        className="mt-0.5"
-                      />
-                    )}
-                  />
-                  <div>
-                    <div className="text-sm font-medium">
-                      Require Email Verification
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {verificationDisabled
-                        ? "Disabled while the account is inactive — verification only matters for accounts that are allowed to sign in."
-                        : "Sends a verification link. The user can sign in only after clicking the link. Uncheck to mark the email as verified immediately."}
-                    </p>
-                    {showVerificationGateNote && (
-                      <p
-                        className="text-xs text-warning-700 dark:text-warning-400 mt-2"
-                        role="note"
-                      >
-                        Note: the account is active, but the user will need to
-                        click the link in the verification email before they can
-                        sign in.
-                      </p>
-                    )}
-                  </div>
-                </label>
-              </div>
-            )}
+                  <p className="text-xs text-primary/70">
+                    User will be able to log in immediately after creation.
+                    Uncheck to require manual activation later.
+                  </p>
+                </div>
+              </label>
+            </div>
           </div>
         )}
       </div>

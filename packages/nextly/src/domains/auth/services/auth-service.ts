@@ -22,6 +22,7 @@ import { emitAuthEvent } from "../../../events/domain-events";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
+import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
 interface RegisterUserData {
   email: string;
@@ -122,11 +123,6 @@ export function affectedRowCount(
  */
 export class AuthService extends BaseService {
   private readonly TOKEN_EXPIRY_HOURS = 24;
-
-  // Seven days, the industry convention for an invite (GitHub, Vercel,
-  // Directus). Longer than a password-reset link because it is the first
-  // thing a new person receives and may sit unread over a weekend.
-  private readonly INVITE_TOKEN_EXPIRY_HOURS = 24 * 7;
 
   readonly emailService?: EmailService;
 
@@ -761,12 +757,11 @@ export class AuthService extends BaseService {
       throw NextlyError.notFound({ logContext: { userId } });
     }
 
-    const rawToken = randomBytes(32).toString("hex");
-    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-
-    const expiresAt = new Date(
-      Date.now() + this.INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
-    );
+    const {
+      token: rawToken,
+      tokenHash,
+      expiresAt,
+    } = generateInviteTokenValue();
 
     try {
       // One active invite per account, in one transaction: a freshly minted
@@ -825,7 +820,7 @@ export class AuthService extends BaseService {
     token: string,
     newPassword: string
   ): Promise<AcceptInviteResult> {
-    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const tokenHash = hashInviteToken(token);
 
     let invite: { id: number; userId: string; expires: Date } | undefined;
     try {

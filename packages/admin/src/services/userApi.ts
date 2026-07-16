@@ -53,13 +53,29 @@ export const updateUser = async (
 };
 
 /**
- * Create a user. Returns `{ id }` to match the projection callers
- * expect.
+ * The set-password link returned when a user is created in invite mode
+ * (no password). `expiresAt` arrives as an ISO string over the wire.
+ */
+export interface CreatedUserInvite {
+  link: string;
+  expiresAt: string;
+}
+
+/** What {@link createUser} projects for its callers. */
+export interface CreatedUser {
+  id: string;
+  /** Present only when the account was created in invite mode. */
+  invite?: CreatedUserInvite;
+}
+
+/**
+ * Create a user. Returns `{ id }`, plus the invite link when the account was
+ * created without a password (invite mode).
  */
 export const createUser = async (
   updates: CreateUserPayload
-): Promise<{ id: string }> => {
-  const result = await fetcher<MutationResponse<{ id: string }>>(
+): Promise<CreatedUser> => {
+  const result = await fetcher<MutationResponse<CreatedUser>>(
     `/users`,
     {
       method: "POST",
@@ -67,7 +83,7 @@ export const createUser = async (
     },
     true
   );
-  return { id: result.item.id };
+  return { id: result.item.id, invite: result.item.invite };
 };
 
 /**

@@ -9,7 +9,7 @@ import {
   Spinner,
 } from "@nextlyhq/ui";
 import type { ReactElement } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   useForm,
   FormProvider,
@@ -20,6 +20,7 @@ import {
 import { AvatarUploader } from "@admin/components/features/user-management/avatar-uploader";
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
 import { UserFormFields } from "@admin/components/features/user-management/form-fields";
+import { InviteLinkPanel } from "@admin/components/features/user-management/invite-link-panel";
 import { UserCustomFields } from "@admin/components/features/users/UserCustomFields";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -77,9 +78,19 @@ import {
  * <CreateUserPage />
  * ```
  */
+interface InviteResult {
+  userName: string;
+  link: string;
+  expiresAt: string;
+}
+
 export default function CreateUserPage(): ReactElement {
   // TanStack Query: Create user mutation
   const { mutate: createUser, isPending: isCreating } = useCreateUser();
+
+  // Set once an invite-mode create succeeds — swaps the form for the panel
+  // that shows the set-password link the admin needs to deliver.
+  const [invite, setInvite] = useState<InviteResult | null>(null);
 
   // TanStack Query: Fetch roles
   const {
@@ -98,11 +109,10 @@ export default function CreateUserPage(): ReactElement {
       password: "",
       avatarUrl: "",
       active: true,
-      // Default to skipping verification so the form's "Active + immediate
-      // login" promise actually holds end-to-end. An admin who needs the
-      // user to verify before signing in opts in explicitly via the
-      // "Require email verification" checkbox.
-      requireEmailVerification: false,
+      // Default to the invite flow: the new person sets their own password
+      // from a link, so nothing here depends on the admin knowing or the mail
+      // provider working.
+      signInMethod: "invite",
       roles: [],
     },
   });
@@ -137,18 +147,23 @@ export default function CreateUserPage(): ReactElement {
   function onSubmit(values: CreateUserFormValues) {
     // Type-safe roles handling (validated by Zod schema - minimum 1 role required)
     const roles = filterStringArray(values.roles);
+    const isInvite = values.signInMethod !== "password";
 
     /**
      * Security Note: Password Handling
      *
-     * The password is transmitted as plain text to the backend API, but this is acceptable
-     * under the following conditions (which MUST be verified in production):
+     * In "set a password now" mode the password is transmitted as plain text
+     * to the backend, which is acceptable only under these conditions (verify
+     * in production):
      *
      * 1. ✅ HTTPS/TLS: All API requests MUST use HTTPS to encrypt data in transit
      * 2. ✅ Backend Hashing: The backend MUST hash passwords using bcrypt/argon2 before storage
      * 3. ✅ Never Store Plain Text: Passwords are NEVER stored in plain text in the database
      * 4. ✅ Rate Limiting: The user creation endpoint should have rate limiting to prevent brute force
      * 5. ✅ Strong Validation: Password requirements enforced by Zod schema (8+ chars, complexity)
+     *
+     * In invite mode no password is sent at all: the person sets their own via
+     * the returned link.
      *
      * @see packages/nextly/src/services/users/user-service.ts for backend password hashing implementation
      */
@@ -161,7 +176,9 @@ export default function CreateUserPage(): ReactElement {
       {
         name: values.fullName,
         email: values.email,
-        password: values.password, // Transmitted over HTTPS, hashed by backend
+        // Invite mode sends no password — the account is created without a
+        // credential and the returned link is how the person sets one.
+        ...(isInvite ? {} : { password: values.password }),
         roles,
         image: values.avatarUrl,
         // `isActive` is load-bearing on the backend: self-registered users
@@ -171,16 +188,21 @@ export default function CreateUserPage(): ReactElement {
         // Yes") to match the documented UX; an admin can uncheck it to
         // provision a disabled account.
         isActive: values.active ?? true,
-        // The UI calls this "Require email verification" because that is
-        // what it actually does -- the backend reads `sendWelcomeEmail`
-        // to decide whether to leave `emailVerified` null and dispatch a
-        // verification email. Map the renamed form field back to the
-        // historical wire shape so existing API consumers keep working.
-        sendWelcomeEmail: values.requireEmailVerification ?? false,
         ...customFields,
       },
       {
-        onSuccess: () => {
+        onSuccess: result => {
+          // Invite mode returns a set-password link — the artifact the admin
+          // must deliver, so we surface it instead of navigating away.
+          if (result.invite) {
+            setInvite({
+              userName: values.fullName,
+              link: result.invite.link,
+              expiresAt: result.invite.expiresAt,
+            });
+            return;
+          }
+
           toast.success(USER_MESSAGES.CREATE_SUCCESS_TITLE, {
             description: USER_MESSAGES.CREATE_SUCCESS_DESC(values.fullName),
           });
@@ -254,6 +276,29 @@ export default function CreateUserPage(): ReactElement {
           </Link>
         </div>
       </PageContainer>
+    );
+  }
+
+  // Invite created: show the copyable set-password link in place of the form.
+  if (invite) {
+    return (
+      <QueryErrorBoundary fallback={<PageErrorFallback />}>
+        <PageContainer>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="create" />
+          </div>
+          <InviteLinkPanel
+            userName={invite.userName}
+            link={invite.link}
+            expiresAt={invite.expiresAt}
+            onCreateAnother={() => {
+              setInvite(null);
+              form.reset();
+            }}
+            onDone={() => navigateTo(ROUTES.USERS)}
+          />
+        </PageContainer>
+      </QueryErrorBoundary>
     );
   }
 

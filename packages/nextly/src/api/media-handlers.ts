@@ -54,6 +54,11 @@
 
 import { z } from "zod";
 
+import {
+  createJsonErrorResponse,
+  isErrorResponse,
+  requirePermission,
+} from "../auth/middleware";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
@@ -99,25 +104,120 @@ export interface MediaHandlerOptions {
    * instrumentation hasn't run in this worker process.
    */
   config?: SanitizedNextlyConfig;
+  /**
+   * Gate every operation behind a media permission and take the acting
+   * identity from the authenticated session/API key rather than the request
+   * body. Use this for the admin-facing mount (`/admin/api/media`), where the
+   * `Path=/admin` session cookie can reach. The public mount omits it and
+   * serves reads only. Off by default so existing public mounts are unchanged
+   * in shape (their write verbs stop serving — see below).
+   */
+  requireAuth?: boolean;
 }
 
 let handlerConfig: GetNextlyOptions | undefined;
 
 // ============================================================
+// Authorization
+// ============================================================
+
+/**
+ * The media permission action each route requires. Reads gate on `read`,
+ * writes on the verb they perform. `move-media` is an update (it changes the
+ * file's folder), and every `*-folder` mutation gates on the same action as
+ * the equivalent media mutation.
+ */
+const MEDIA_ACTION_BY_ROUTE: Partial<
+  Record<ParsedMediaRoute["type"], "create" | "read" | "update" | "delete">
+> = {
+  "list-media": "read",
+  "get-media": "read",
+  "list-folders": "read",
+  "get-folder": "read",
+  "get-folder-contents": "read",
+  "get-root-contents": "read",
+  "upload-media": "create",
+  "create-folder": "create",
+  "update-media": "update",
+  "move-media": "update",
+  "update-folder": "update",
+  "delete-media": "delete",
+  "delete-folder": "delete",
+  "bulk-delete-media": "delete",
+};
+
+/** Route types that only read — the sole surface the public mount serves. */
+const READ_ROUTE_TYPES = new Set<ParsedMediaRoute["type"]>([
+  "list-media",
+  "get-media",
+  "list-folders",
+  "get-folder",
+  "get-folder-contents",
+  "get-root-contents",
+]);
+
+/**
+ * Gate a parsed route.
+ *
+ * - Public mount (`requireAuth` false): reads pass; any write is not served
+ *   here at all — it 404s exactly like an unknown path, so the public surface
+ *   never exposes a write endpoint. Writes live only on the gated admin mount.
+ * - Admin mount (`requireAuth` true): every operation is checked with
+ *   `requirePermission(req, action, "media")`, which authenticates the session
+ *   or API key and verifies the matching `{action}-media` permission. On
+ *   success the acting user id is returned so writes attribute to the real
+ *   caller, never a client-supplied `uploadedBy`/`createdBy`.
+ *
+ * Returns a `Response` to short-circuit (401/403), or the acting identity.
+ */
+async function gateMediaRoute(
+  request: Request,
+  route: ParsedMediaRoute,
+  path: string[] | undefined,
+  method: string,
+  requireAuth: boolean
+): Promise<{ authUserId?: string } | Response> {
+  if (!requireAuth) {
+    if (!READ_ROUTE_TYPES.has(route.type)) {
+      throwUnmatchedRoute(path, method);
+    }
+    return {};
+  }
+
+  const action = MEDIA_ACTION_BY_ROUTE[route.type];
+  // Unknown/unsupported route type: let the verb switch produce its 404.
+  if (!action) {
+    return {};
+  }
+
+  // The permission check reads from the DI container, so make sure Nextly is
+  // initialised on this worker before it runs.
+  await ensureInitialized();
+  const auth = await requirePermission(request, action, "media");
+  if (isErrorResponse(auth)) {
+    return createJsonErrorResponse(auth);
+  }
+  return { authUserId: auth.userId };
+}
+
+// ============================================================
 // Helper Functions
 // ============================================================
 
-async function getMediaService(): Promise<MediaService> {
-  // Two paths after: if the host called createMediaHandlers({
-  // config }) we have a config to bootstrap with — use getNextly to
-  // initialise the storage plugins on this worker. Otherwise we rely
-  // on whoever set up instrumentation.ts and just look up the cached
-  // instance via getCachedNextly().
+async function ensureInitialized(): Promise<void> {
+  // Two paths: if the host called createMediaHandlers({ config }) we have a
+  // config to bootstrap with — use getNextly to initialise the storage plugins
+  // on this worker. Otherwise we rely on whoever set up instrumentation.ts and
+  // just resolve the cached instance via getCachedNextly().
   if (handlerConfig?.config) {
     await getNextly(handlerConfig);
   } else {
     await getCachedNextly();
   }
+}
+
+async function getMediaService(): Promise<MediaService> {
+  await ensureInitialized();
   return getService("mediaService");
 }
 
@@ -286,43 +386,36 @@ async function handleListMedia(request: Request): Promise<Response> {
   });
 }
 
-async function handleUploadMedia(request: Request): Promise<Response> {
+async function handleUploadMedia(
+  request: Request,
+  authUserId: string
+): Promise<Response> {
   const mediaService = await getMediaService();
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
-  const uploadedBy = formData.get("uploadedBy") as string | null;
   const folderId = formData.get("folderId") as string | null;
 
-  const errors: Array<{ path: string; code: string; message: string }> = [];
+  // The uploader is the authenticated caller, resolved from the session/API
+  // key — never a client-supplied `uploadedBy`, which could name anyone.
+  const uploadedByEnsured = authUserId;
+
   if (!file) {
-    errors.push({
-      path: "file",
-      code: "REQUIRED",
-      message: "file is required.",
+    throw NextlyError.validation({
+      errors: [
+        { path: "file", code: "REQUIRED", message: "file is required." },
+      ],
     });
   }
-  if (!uploadedBy) {
-    errors.push({
-      path: "uploadedBy",
-      code: "REQUIRED",
-      message: "uploadedBy is required.",
-    });
-  }
-  if (errors.length > 0) {
-    throw NextlyError.validation({ errors });
-  }
 
-  const fileEnsured = file as File;
-  const uploadedByEnsured = uploadedBy as string;
-
-  const arrayBuffer = await fileEnsured.arrayBuffer();
+  // `file` is narrowed to File past the guard above.
+  const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
   const input = {
     file: buffer,
-    filename: fileEnsured.name,
-    mimeType: fileEnsured.type,
-    size: fileEnsured.size,
+    filename: file.name,
+    mimeType: file.type,
+    size: file.size,
     uploadedBy: uploadedByEnsured,
   };
 
@@ -338,9 +431,9 @@ async function handleUploadMedia(request: Request): Promise<Response> {
   const mediaFile = await mediaService.upload(
     {
       buffer,
-      filename: fileEnsured.name,
-      mimeType: fileEnsured.type,
-      size: fileEnsured.size,
+      filename: file.name,
+      mimeType: file.type,
+      size: file.size,
       folderId: folderId || undefined,
     },
     context
@@ -438,36 +531,30 @@ async function handleListFolders(request: Request): Promise<Response> {
   return respondData({ folders });
 }
 
-async function handleCreateFolder(request: Request): Promise<Response> {
+async function handleCreateFolder(
+  request: Request,
+  authUserId: string
+): Promise<Response> {
   const mediaService = await getMediaService();
   const body = await readJsonBody<Record<string, unknown>>(request);
 
-  const { createdBy, ...folderInput } = body as {
+  // Ignore any client-supplied `createdBy`; the creator is the authenticated
+  // caller.
+  const { createdBy: _ignoredCreatedBy, ...folderInput } = body as {
     createdBy?: string;
     name?: string;
     [k: string]: unknown;
   };
 
-  const errors: Array<{ path: string; code: string; message: string }> = [];
-  if (!createdBy) {
-    errors.push({
-      path: "createdBy",
-      code: "REQUIRED",
-      message: "createdBy is required.",
-    });
-  }
   if (!folderInput.name) {
-    errors.push({
-      path: "name",
-      code: "REQUIRED",
-      message: "name is required.",
+    throw NextlyError.validation({
+      errors: [
+        { path: "name", code: "REQUIRED", message: "name is required." },
+      ],
     });
-  }
-  if (errors.length > 0) {
-    throw NextlyError.validation({ errors });
   }
 
-  const context = createAuthenticatedContext(createdBy as string);
+  const context = createAuthenticatedContext(authUserId);
   const folder = await mediaService.createFolder(
     folderInput as Parameters<MediaService["createFolder"]>[0],
     context
@@ -551,11 +638,24 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
   if (options?.config) {
     handlerConfig = { config: options.config };
   }
+  // Captured per-instance, not module-level: one process can mount both a
+  // public (reads only) and an admin (gated) instance, so this must not leak
+  // between them.
+  const requireAuth = options?.requireAuth ?? false;
+
   return {
     GET: withErrorHandler(
       async (request: Request, ctx: RouteContext): Promise<Response> => {
         const resolvedParams = await ctx.params;
         const route = parseMediaRoute(resolvedParams.path, "GET");
+        const gate = await gateMediaRoute(
+          request,
+          route,
+          resolvedParams.path,
+          "GET",
+          requireAuth
+        );
+        if (gate instanceof Response) return gate;
 
         let response: Response;
         switch (route.type) {
@@ -589,14 +689,22 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
       async (request: Request, ctx: RouteContext): Promise<Response> => {
         const resolvedParams = await ctx.params;
         const route = parseMediaRoute(resolvedParams.path, "POST");
+        const gate = await gateMediaRoute(
+          request,
+          route,
+          resolvedParams.path,
+          "POST",
+          requireAuth
+        );
+        if (gate instanceof Response) return gate;
 
         let response: Response;
         switch (route.type) {
           case "upload-media":
-            response = await handleUploadMedia(request);
+            response = await handleUploadMedia(request, gate.authUserId!);
             break;
           case "create-folder":
-            response = await handleCreateFolder(request);
+            response = await handleCreateFolder(request, gate.authUserId!);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "POST");
@@ -610,6 +718,14 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
       async (request: Request, ctx: RouteContext): Promise<Response> => {
         const resolvedParams = await ctx.params;
         const route = parseMediaRoute(resolvedParams.path, "PATCH");
+        const gate = await gateMediaRoute(
+          request,
+          route,
+          resolvedParams.path,
+          "PATCH",
+          requireAuth
+        );
+        if (gate instanceof Response) return gate;
 
         let response: Response;
         switch (route.type) {
@@ -634,6 +750,14 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
       async (request: Request, ctx: RouteContext): Promise<Response> => {
         const resolvedParams = await ctx.params;
         const route = parseMediaRoute(resolvedParams.path, "DELETE");
+        const gate = await gateMediaRoute(
+          request,
+          route,
+          resolvedParams.path,
+          "DELETE",
+          requireAuth
+        );
+        if (gate instanceof Response) return gate;
 
         let response: Response;
         switch (route.type) {

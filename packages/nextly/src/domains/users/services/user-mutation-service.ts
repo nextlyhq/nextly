@@ -48,6 +48,10 @@ import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
+import {
+  buildAcceptInviteLink,
+  generateInviteTokenValue,
+} from "../../auth/lib/invite-token";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
@@ -100,10 +104,14 @@ export interface CreateLocalUserData {
   email: string;
   name: string;
   image?: string | null;
+  /**
+   * Omit (or leave empty) to create the account in invite mode: no credential
+   * is set and a single-use set-password link is returned for the admin to
+   * deliver. Provide a password to set the credential directly.
+   */
   password?: string | null;
   roles?: string[];
   isActive?: boolean;
-  sendWelcomeEmail?: boolean;
   /** Custom field values from user_ext */
   [key: string]: unknown;
 }
@@ -126,12 +134,27 @@ export interface UpdateUserData {
 }
 
 /**
+ * The set-password link handed back when a user is created in invite mode
+ * (no password): the copyable link is the artifact, and delivery by email is
+ * an optional convenience on top of it.
+ */
+export interface InviteArtifact {
+  /** The copyable set-password link to give to the new user. */
+  link: string;
+  /** When the link stops working. */
+  expiresAt: Date;
+}
+
+/**
  * Response type for user mutation operations.
  *
  * Post-migration (PR 4): no `success`/`statusCode`/`message` envelope —
  * methods return the user directly on success or throw NextlyError.
+ *
+ * `invite` is present only when the account was created in invite mode; the
+ * admin needs the link back to deliver it however they choose.
  */
-export type UserMutationResponse = MinimalUser;
+export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
 
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
@@ -414,38 +437,14 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // Asked before the user exists, not after the send fails.
-      //
-      // `sendWelcomeEmail` leaves emailVerified null, and login refuses an
-      // unverified user by default — so the emailed link is the account's only
-      // way in. The send was attempted after the insert and its failure was
-      // caught and logged, which meant a site with no mail provider answered
-      // "User created." and produced someone who could never sign in. What
-      // they saw on the way in was "invalid credentials", indistinguishable
-      // from a wrong password.
-      //
-      // Refusing here costs the admin an error and no user; the alternative
-      // cost them a user they had to notice was broken.
-      if (userData.sendWelcomeEmail) {
-        // Ask about the template that will actually be sent, not about mail in
-        // general: the `email-verification` template may name its own
-        // provider, which the send prefers over the default. Asking whether a
-        // default exists would refuse an install whose only provider is the
-        // one that template names — a user it could have created.
-        const canSend = this.emailService
-          ? await this.emailService.canSendTemplate("email-verification")
-          : false;
-
-        if (!canSend) {
-          throw new NextlyError({
-            code: "BUSINESS_RULE_VIOLATION",
-            statusCode: 422,
-            publicMessage:
-              "This user would need an email to sign in, and no email provider is configured. Add one in Settings > Email Providers, or create the user with a password instead.",
-            logContext: { reason: "verification-email-unsendable" },
-          });
-        }
-      }
+      // Two ways to provision sign-in, decided by whether a password was
+      // given. No password → invite mode: the account is created without a
+      // credential and a single-use set-password link is minted in the same
+      // transaction, so an admin can never be handed a user that has no way
+      // in. A password → the admin set it directly and the account is usable
+      // at once. The link is the artifact; delivering it by email is optional
+      // and left to the caller, so nothing about creation depends on mail.
+      const isInvite = passwordHash === null;
 
       // Insert new user (and user_ext if custom fields are configured)
       const now = new Date();
@@ -455,13 +454,22 @@ export class UserMutationService extends BaseService {
         email: userData.email,
         name: userData.name,
         passwordHash,
-        // Auto-verify email unless sendWelcomeEmail is checked (requires user to confirm)
-        emailVerified: userData.sendWelcomeEmail ? null : now,
+        // An invited account has not proven its address yet; accepting the
+        // invite (which requires receiving the link) sets emailVerified in the
+        // same step. An admin-set password vouches for the account, so it is
+        // verified at creation.
+        emailVerified: isInvite ? null : now,
         image: userData.image ?? null,
         isActive: userData.isActive ?? false,
         createdAt: now,
         updatedAt: now,
       };
+
+      // Mint the invite token value up front (pure computation) so the hash can
+      // be written inside the same transaction as the account. Storing only the
+      // hash, atomically with the user, guarantees the two never diverge:
+      // either the user and their live link both exist, or neither does.
+      const inviteValue = isInvite ? generateInviteTokenValue() : null;
 
       // Extract custom field values before the transaction
       const hasExt = this.hasCustomFields();
@@ -471,7 +479,19 @@ export class UserMutationService extends BaseService {
         customFieldValues = this.extractCustomFieldValues(userData);
       }
 
-      // Wrap user + user_ext inserts in a transaction for atomicity.
+      // Write the invite-token row alongside the user. Shared by the main path
+      // and the user_ext self-healing retry so an invited account keeps its
+      // link whichever path commits it.
+      const insertInviteToken = async (txDb: DrizzleTransactionLike) => {
+        if (!inviteValue) return;
+        await txDb.insert(this.tables.userInviteTokens).values({
+          userId: newUserId,
+          tokenHash: inviteValue.tokenHash,
+          expires: inviteValue.expiresAt,
+        });
+      };
+
+      // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
       // fluent query API as this.db. See BaseService.withTransaction.
@@ -490,6 +510,8 @@ export class UserMutationService extends BaseService {
               updated_at: now,
             });
           }
+
+          await insertInviteToken(txDb);
         });
       } catch (txErr) {
         // Self-healing: if user_ext is configured but the user_ext insert blew
@@ -507,6 +529,7 @@ export class UserMutationService extends BaseService {
           await this.withTransaction(async tx => {
             const txDb = tx as DrizzleTransactionLike;
             await txDb.insert(users).values(values);
+            await insertInviteToken(txDb);
           });
         } else {
           throw txErr;
@@ -565,48 +588,17 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // Send the verification link the account needs to be usable.
-      //
-      // The unsendable case is refused before the insert, so reaching here and
-      // failing means something transient — the provider was configured and
-      // did not answer. The row is already committed, so throwing now would
-      // report a failure that did not happen and send the admin back to a
-      // form that answers "email already exists" on the retry.
-      //
-      // Logged at error, not console: this leaves a real person unable to sign
-      // in until someone sends them a link, so it belongs where the operator's
-      // errors are, with the address that needs repairing.
-      if (userData.sendWelcomeEmail && this.emailService) {
-        try {
-          // Generate verification token (without sending a separate email)
-          const services = new ServiceContainer(this.adapter);
-          const tokenResult =
-            await services.auth.generateEmailVerificationToken(user.email, {
-              disableEmail: true,
-            });
-
-          if (tokenResult.token) {
-            await this.emailService.sendEmailVerificationEmail(
-              user.email,
-              { name: user.name ?? null, email: user.email },
-              tokenResult.token
-            );
+      // Hand the invite link back to the admin. The token was committed with
+      // the account, so the raw value generated up front is guaranteed to
+      // match a live row — building the link here is pure string work that
+      // cannot fail. Delivery (email, chat, read it aloud) is the admin's
+      // choice; the artifact is the link itself.
+      const invite = inviteValue
+        ? {
+            link: buildAcceptInviteLink(inviteValue.token),
+            expiresAt: inviteValue.expiresAt,
           }
-        } catch (err) {
-          // The address and the provider's reason go to logContext, not into
-          // the message: the recipient is personal data, and a provider's
-          // error text is untrusted output that often quotes the address back.
-          // Keeping both structured lets a log pipeline redact them, and keeps
-          // the message itself a stable, greppable sentence.
-          this.logger.error(
-            "Created a user but could not send their verification email; they cannot sign in until one reaches them.",
-            {
-              userId: String(user.id),
-              reason: err instanceof Error ? err.message : String(err),
-            }
-          );
-        }
-      }
+        : undefined;
 
       return {
         id: user.id,
@@ -620,6 +612,7 @@ export class UserMutationService extends BaseService {
         updatedAt: user.updatedAt ?? undefined,
         // Merge custom field values as top-level properties
         ...(hasExt && !this.userExtDisabled ? customFieldValues : {}),
+        ...(invite ? { invite } : {}),
       };
     } catch (err) {
       // Re-throw NextlyError unchanged (validation, duplicate, internal, ...).
