@@ -46,8 +46,26 @@ export async function verifyEmail(token: string): Promise<void> {
   await publicApi.post<ActionResponse>("/auth/verify-email", { token });
 }
 
+/**
+ * Accept an invite: set the account's initial password using the token from
+ * the set-password link. Accepting also verifies the email and activates the
+ * account server-side, so the person can sign in immediately afterwards.
+ */
+export async function acceptInvite(
+  token: string,
+  newPassword: string,
+  csrfToken: string
+): Promise<void> {
+  await publicApi.post<ActionResponse>("/auth/accept-invite", {
+    token,
+    newPassword,
+    csrfToken,
+  });
+}
+
 export const authApi = {
   requestPasswordReset,
   resetPassword,
   verifyEmail,
+  acceptInvite,
 } as const;
