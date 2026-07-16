@@ -9,6 +9,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import {
   mintPendingToken,
   verifyPendingToken,
+  MUST_CHANGE_PASSWORD_CHALLENGE,
 } from "../pipeline/pending-token";
 
 import {
@@ -33,6 +34,7 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     name: string;
     image: string | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
   } | null>;
 }
 
@@ -141,6 +143,29 @@ export async function handleChallengeResolve(
         logContext: { reason: "challenge-user-missing" },
       });
     }
+
+    // Forced first-sign-in password change (ASVS 6.4.1) applies here too: a
+    // must-change account that clears a post-auth challenge (e.g. 2FA) must
+    // still replace its admin-set password before any session is issued, or the
+    // challenge path would bypass the gate the login path enforces.
+    if (u.mustChangePassword) {
+      const pwPendingToken = await mintPendingToken(
+        {
+          userId: u.id,
+          challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
+          attempts: 0,
+        },
+        deps.secret,
+        deps.challengeTokenTTL
+      );
+      await stallResponse(startTime, deps.loginStallTimeMs);
+      return jsonResponse(
+        200,
+        { status: "password_change_required", pendingToken: pwPendingToken },
+        { "x-request-id": requestId }
+      );
+    }
+
     const user: AuthUser = {
       id: u.id as AuthUser["id"],
       email: u.email,

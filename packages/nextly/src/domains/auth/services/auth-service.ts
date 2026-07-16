@@ -943,6 +943,38 @@ export class AuthService extends BaseService {
       });
     }
 
+    // The admin-set password must actually be replaced. A fresh bcrypt salt
+    // makes the same plaintext hash differently, so without this check a person
+    // could "set" the temporary password again — clearing the flag while
+    // leaving the password the admin knows (ASVS 6.4.1). Reject a match, and
+    // reject an account that is not (or no longer) in the must-change state.
+    const current = await this.db.query.users.findFirst({
+      where: eq(this.tables.users.id, userId),
+      columns: { passwordHash: true, mustChangePassword: true },
+    });
+    if (!current || current.mustChangePassword !== true) {
+      throw new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage: "This request is no longer valid. Please sign in again.",
+        logContext: { userId, reason: "not-in-must-change-state" },
+      });
+    }
+    if (
+      current.passwordHash &&
+      (await verifyPasswordBcrypt(newPassword, current.passwordHash))
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "newPassword",
+            code: "PASSWORD_REUSED",
+            message:
+              "Choose a password different from the temporary one you were given.",
+          },
+        ],
+      });
+    }
+
     const passwordHash = await hashPasswordBcrypt(newPassword);
 
     let changed = false;

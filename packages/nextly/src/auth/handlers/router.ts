@@ -135,6 +135,7 @@ export interface AuthRouterDeps {
     name: string;
     image: string | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
   } | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;

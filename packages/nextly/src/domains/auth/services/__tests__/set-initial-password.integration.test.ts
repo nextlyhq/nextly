@@ -98,6 +98,26 @@ describe("must-change-password / setInitialPassword", () => {
     expect(afterSecond.passwordHash).toBe(afterFirst.passwordHash);
   });
 
+  it("rejects reusing the admin-set password, leaving the flag set", async () => {
+    const { container, auth, db } = await setup();
+
+    const created = await container.users.createLocalUser({
+      email: "reuse@example.com",
+      name: "Reuse",
+      password: STRONG,
+      mustChangePassword: true,
+    });
+
+    // Re-entering the temporary password would clear the flag while leaving
+    // the admin-known password in place — it must be rejected.
+    await expect(auth.setInitialPassword(created.id, STRONG)).rejects.toSatisfy(
+      (err: unknown) => NextlyError.is(err) && err.code === "VALIDATION_ERROR"
+    );
+
+    const row = await readUser(db, "reuse@example.com");
+    expect(row.mustChangePassword).toBeTruthy();
+  });
+
   it("rejects a weak password with a validation error, without changing anything", async () => {
     const { container, auth, db } = await setup();
 

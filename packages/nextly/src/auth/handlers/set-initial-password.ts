@@ -126,18 +126,20 @@ export async function handleSetInitialPassword(
     try {
       await deps.setInitialPassword(pending.userId, newPassword);
     } catch (err) {
-      // A weak-password complaint is actionable — pass it through untouched.
-      // Anything else (account no longer in the must-change state, DB error)
-      // collapses to the generic invalid-credentials response.
-      if (NextlyError.is(err) && err.code === "VALIDATION_ERROR") {
-        throw err;
+      // Only a stale/replayed flow (the account is no longer in the must-change
+      // state) collapses to the generic invalid-credentials response. A
+      // validation error (weak or reused password) is actionable and passes
+      // through; a database or unexpected error keeps its real status and
+      // operator context rather than being masked as a 401.
+      if (NextlyError.is(err) && err.code === "INVALID_INPUT") {
+        throw NextlyError.invalidCredentials({
+          logContext: {
+            userId: pending.userId,
+            reason: "not-in-must-change-state",
+          },
+        });
       }
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          userId: pending.userId,
-          reason: "set-initial-password-rejected",
-        },
-      });
+      throw err;
     }
 
     const u = await deps.findUserById(pending.userId);

@@ -736,6 +736,10 @@ export class UserMutationService extends BaseService {
           typeof changes.password === "string" ? changes.password.trim() : "";
         if (rawPassword.length > 0) {
           updateData.passwordHash = await hashPassword(rawPassword);
+          // Changing the password satisfies any admin-set must-change
+          // requirement, so this update must not leave the account forced
+          // through the first-sign-in flow again.
+          updateData.mustChangePassword = false;
         }
       }
 
