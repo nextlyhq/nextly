@@ -18,6 +18,13 @@ export interface UserFieldFormValues {
   required: boolean;
   defaultValue: string;
   options: { label: string; value: string }[];
+  /** Multi-value select; fixed at creation because it picks the column type. */
+  hasMany: boolean;
+  /** Validation bounds as strings ("" = unconstrained), parsed at submit. */
+  minLength: string;
+  maxLength: string;
+  minValue: string;
+  maxValue: string;
   placeholder: string;
   description: string;
   isActive: boolean;
@@ -70,6 +77,38 @@ export function generateFieldName(label: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+/** Types whose values are strings with length bounds. */
+export const LENGTH_BOUND_TYPES: readonly UserFieldType[] = [
+  "text",
+  "textarea",
+  "url",
+  "phone",
+];
+
+/** Parse a bound input: "" means unconstrained (null). */
+function parseBound(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** The bounds that apply to the chosen type; others are cleared to null. */
+function boundsForType(values: UserFieldFormValues): {
+  minLength: number | null;
+  maxLength: number | null;
+  minValue: number | null;
+  maxValue: number | null;
+} {
+  const lengthy = LENGTH_BOUND_TYPES.includes(values.type);
+  const numeric = values.type === "number";
+  return {
+    minLength: lengthy ? parseBound(values.minLength) : null,
+    maxLength: lengthy ? parseBound(values.maxLength) : null,
+    minValue: numeric ? parseBound(values.minValue) : null,
+    maxValue: numeric ? parseBound(values.maxValue) : null,
+  };
+}
+
 /**
  * Transform flat form values into the create API payload shape.
  */
@@ -82,6 +121,8 @@ export function formValuesToCreatePayload(
     type: values.type,
     required: values.required,
     defaultValue: values.defaultValue || null,
+    hasMany: values.type === "select" ? values.hasMany : null,
+    ...boundsForType(values),
     placeholder: values.placeholder || null,
     description: values.description || null,
     isActive: values.isActive,
@@ -110,6 +151,7 @@ export function formValuesToUpdatePayload(
     type: values.type,
     required: values.required,
     defaultValue: values.defaultValue || null,
+    ...boundsForType(values),
     placeholder: values.placeholder || null,
     description: values.description || null,
     isActive: values.isActive,
@@ -139,6 +181,11 @@ export function fieldToFormValues(
     required: field.required,
     defaultValue: field.defaultValue ?? "",
     options: field.options ?? [],
+    hasMany: field.hasMany ?? false,
+    minLength: field.minLength != null ? String(field.minLength) : "",
+    maxLength: field.maxLength != null ? String(field.maxLength) : "",
+    minValue: field.minValue != null ? String(field.minValue) : "",
+    maxValue: field.maxValue != null ? String(field.maxValue) : "",
     placeholder: field.placeholder ?? "",
     description: field.description ?? "",
     isActive: field.isActive,
@@ -185,6 +232,8 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
         "textarea",
         "number",
         "email",
+        "url",
+        "phone",
         "select",
         "radio",
         "checkbox",
@@ -198,6 +247,11 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
           value: z.string(),
         })
       ),
+      hasMany: z.boolean(),
+      minLength: z.string(),
+      maxLength: z.string(),
+      minValue: z.string(),
+      maxValue: z.string(),
       placeholder: z.string().optional().or(z.literal("")),
       description: z.string().optional().or(z.literal("")),
       isActive: z.boolean(),
@@ -232,19 +286,73 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
           });
         }
 
-        // Check for duplicate option values
-        const seen = new Set<string>();
+        // Report every duplicated value at once — fixing one collision
+        // must not reveal the next as a surprise on resubmit.
+        const counts = new Map<string, number>();
         for (const opt of validOptions) {
-          if (seen.has(opt.value)) {
+          counts.set(opt.value, (counts.get(opt.value) ?? 0) + 1);
+        }
+        const duplicates = [...counts.entries()]
+          .filter(([, count]) => count > 1)
+          .map(([value]) => `"${value}"`);
+        if (duplicates.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Duplicate option values: ${duplicates.join(", ")}`,
+            path: ["options"],
+          });
+        }
+      }
+
+      // Bounds: blank means unconstrained; otherwise a number, and the pair
+      // must not cross.
+      const checkPair = (
+        minRaw: string,
+        maxRaw: string,
+        minPath: keyof UserFieldFormValues,
+        maxPath: keyof UserFieldFormValues,
+        integer: boolean
+      ) => {
+        const check = (raw: string, path: keyof UserFieldFormValues) => {
+          if (!raw.trim()) return null;
+          const parsed = Number(raw);
+          if (
+            !Number.isFinite(parsed) ||
+            (integer && !Number.isInteger(parsed)) ||
+            (integer && parsed < 0)
+          ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
-              message: `Duplicate option value: "${opt.value}"`,
-              path: ["options"],
+              message: integer
+                ? "Must be a whole number of characters"
+                : "Must be a number",
+              path: [path],
             });
-            break;
+            return null;
           }
-          seen.add(opt.value);
+          return parsed;
+        };
+        const minParsed = check(minRaw, minPath);
+        const maxParsed = check(maxRaw, maxPath);
+        if (minParsed != null && maxParsed != null && minParsed > maxParsed) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Minimum cannot exceed maximum",
+            path: [minPath],
+          });
         }
+      };
+      if (LENGTH_BOUND_TYPES.includes(data.type)) {
+        checkPair(
+          data.minLength,
+          data.maxLength,
+          "minLength",
+          "maxLength",
+          true
+        );
+      }
+      if (data.type === "number") {
+        checkPair(data.minValue, data.maxValue, "minValue", "maxValue", false);
       }
     });
 }
@@ -260,6 +368,11 @@ export const DEFAULT_VALUES: UserFieldFormValues = {
   required: false,
   defaultValue: "",
   options: [],
+  hasMany: false,
+  minLength: "",
+  maxLength: "",
+  minValue: "",
+  maxValue: "",
   placeholder: "",
   description: "",
   isActive: true,

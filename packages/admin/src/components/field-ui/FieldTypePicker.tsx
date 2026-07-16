@@ -10,16 +10,25 @@ import { Check, Type } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 /**
- * The catalog's `FieldType` union, re-derived here so the picker can be
- * generic over any surface's subset without importing server types.
+ * The catalog's canonical `FieldType` union, re-derived here so the picker
+ * stays generic without importing server types.
  */
 type CatalogFieldType = FieldTypeCatalogEntry["type"];
 
-export interface FieldTypePickerProps<T extends CatalogFieldType> {
-  /** The surface's allowed types; entries render in catalog order. */
-  types: readonly T[];
-  /** The selected type. */
-  value: T;
+export interface FieldTypePickerProps<T extends string> {
+  /**
+   * The surface's allowed canonical types, rendered in catalog order.
+   * Surfaces with their own catalog (extra surface-only types) pass
+   * `entries` instead.
+   */
+  types?: readonly (T & CatalogFieldType)[];
+  /**
+   * Pre-narrowed catalog rows — a surface's own catalog. Takes precedence
+   * over `types`.
+   */
+  entries?: readonly FieldTypeCatalogEntry<T>[];
+  /** The selected type. (`NoInfer`: the generic comes from types/entries.) */
+  value: NoInfer<T>;
   /** Called with the newly selected type. */
   onChange: (type: T) => void;
   /** Disable every card (read-only surfaces, locked identity in edit). */
@@ -36,15 +45,19 @@ export interface FieldTypePickerProps<T extends CatalogFieldType> {
  * label, hint, and icon for the same type. Controlled and form-library
  * agnostic — wrap it in react-hook-form or plain state alike.
  */
-export function FieldTypePicker<T extends CatalogFieldType>({
+export function FieldTypePicker<T extends string>({
   types,
+  entries: entriesProp,
   value,
   onChange,
   disabled,
   columns = 2,
   ariaLabel = "Field type",
 }: FieldTypePickerProps<T>) {
-  const entries = useMemo(() => narrowFieldTypeCatalog(types), [types]);
+  const entries: readonly FieldTypeCatalogEntry<T>[] = useMemo(
+    () => entriesProp ?? narrowFieldTypeCatalog(types ?? []),
+    [entriesProp, types]
+  );
 
   const gridColumns = {
     2: "grid-cols-2",
