@@ -343,6 +343,11 @@ export function buildAuthRouterDeps(
       return { email: result.email };
     },
 
+    acceptInvite: async (token, newPassword) => {
+      const authService = getService("authService");
+      return await authService.acceptInvite(token, newPassword);
+    },
+
     changePassword: async (userId, currentPassword, newPassword) => {
       const authService = getService("authService");
       try {

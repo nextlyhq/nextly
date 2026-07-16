@@ -6,6 +6,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
 
+import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
 import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
@@ -178,6 +179,10 @@ export interface AuthRouterDeps {
     token: string,
     newPassword: string
   ) => Promise<{ email: string }>;
+  acceptInvite: (
+    token: string,
+    newPassword: string
+  ) => Promise<{ userId: string }>;
   changePassword: (
     userId: string,
     currentPassword: string,
@@ -255,6 +260,8 @@ async function dispatchAuthRequest(
           return handleForgotPassword(request, deps);
         case "reset-password":
           return handleResetPassword(request, deps);
+        case "accept-invite":
+          return handleAcceptInvite(request, deps);
         case "verify-email":
           return handleVerifyEmail(request, deps);
         case "verify-email/resend":
