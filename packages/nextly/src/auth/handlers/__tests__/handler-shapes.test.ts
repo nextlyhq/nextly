@@ -543,6 +543,33 @@ describe("accept-invite handler", () => {
     expect(deps.acceptInvite).not.toHaveBeenCalled();
   });
 
+  it("400s on non-string fields rather than passing them to the service", async () => {
+    const deps = baseDeps();
+    const req = makeRequest("POST", { token: 123, newPassword: { a: 1 } });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("400s on an empty body instead of a 500", async () => {
+    const deps = baseDeps();
+    // No JSON body at all — the parse falls back to {} and both fields fail.
+    const req = new Request("http://localhost:3000/admin/api/auth/x", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        cookie: "nextly_csrf=csrf-test-token",
+        "x-csrf-token": "csrf-test-token",
+      },
+    });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
   it("collapses a bad token into one generic message", async () => {
     const deps = baseDeps();
     deps.acceptInvite.mockRejectedValue(

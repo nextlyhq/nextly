@@ -33,6 +33,9 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   "register",
   "forgot-password",
   "reset-password",
+  // Same bucket as reset-password: both consume a token, so both are
+  // grind-able by an attacker holding no token at all.
+  "accept-invite",
   "challenge/resolve",
 ]);
 

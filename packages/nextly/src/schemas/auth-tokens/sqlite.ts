@@ -66,10 +66,12 @@ export const userInviteTokens = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   t => [
-    uniqueIndex("uit_user_id_token_hash_unique").on(t.userId, t.tokenHash),
-    index("uit_user_id_idx").on(t.userId),
+    // One invite row per account, enforced by the database: two concurrent
+    // re-invites cannot both leave a live link, and superseding an earlier
+    // invite holds without a read-modify-write race.
+    uniqueIndex("uit_user_id_unique").on(t.userId),
+    index("uit_token_hash_idx").on(t.tokenHash),
     index("uit_expires_idx").on(t.expires),
-    index("uit_used_at_idx").on(t.usedAt),
   ]
 );
 

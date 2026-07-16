@@ -145,6 +145,35 @@ describe("acceptInvite", () => {
     );
   });
 
+  it("lets only one of two concurrent acceptances win", async () => {
+    // The race the atomic claim exists to stop: both calls read the token as
+    // unused, and without the claim both would set a password — last writer
+    // wins. Exactly one must succeed; the token is consumed once.
+    const { auth, db, userId } = await setup();
+    const { token } = await auth.generateInviteToken(userId);
+
+    const results = await Promise.allSettled([
+      auth.acceptInvite(token, STRONG),
+      auth.acceptInvite(token, "D1fferent!Pass"),
+    ]);
+
+    const fulfilled = results.filter(r => r.status === "fulfilled");
+    const rejected = results.filter(r => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+      NextlyError
+    );
+
+    const invites = await db.select().from(userInviteTokens);
+    expect(invites).toHaveLength(1);
+    expect(invites[0].usedAt).toBeTruthy();
+
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    expect(user.passwordHash).toBeTruthy();
+    expect(user.isActive).toBe(true);
+  });
+
   it("refuses a weak password and leaves both the token and the account untouched", async () => {
     const { auth, db, userId } = await setup();
     const { token } = await auth.generateInviteToken(userId);

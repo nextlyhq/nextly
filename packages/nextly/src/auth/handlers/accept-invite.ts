@@ -92,7 +92,14 @@ export async function handleAcceptInvite(
   const requestId = readOrGenerateRequestId(request);
 
   try {
-    const body = await request.json();
+    // Untrusted input: a non-object body (null, an array, a number) must not
+    // reach the destructure below, where it would throw an internal 500, and a
+    // non-string token or password must not reach the service.
+    const raw: unknown = await request.json().catch(() => null);
+    const body: Record<string, unknown> =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {};
 
     const csrfCookie = readCsrfCookie(request);
     const csrfToken = readCsrfFromRequest(body, request);
@@ -111,18 +118,22 @@ export async function handleAcceptInvite(
     }
 
     const { token, newPassword } = body;
-    if (!token || !newPassword) {
+    const tokenMissing = typeof token !== "string" || token.length === 0;
+    const passwordMissing =
+      typeof newPassword !== "string" || newPassword.length === 0;
+    if (tokenMissing || passwordMissing) {
       throw NextlyError.validation({
         errors: [
-          ...(!token
+          ...(tokenMissing
             ? [{ path: "token", code: "REQUIRED", message: "Required." }]
             : []),
-          ...(!newPassword
+          ...(passwordMissing
             ? [{ path: "newPassword", code: "REQUIRED", message: "Required." }]
             : []),
         ],
       });
     }
+    // token and newPassword are non-empty strings past this point.
 
     try {
       await deps.acceptInvite(token, newPassword);

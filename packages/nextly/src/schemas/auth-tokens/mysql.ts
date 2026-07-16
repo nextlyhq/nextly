@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   int,
@@ -61,13 +62,19 @@ export const userInviteTokens = mysqlTable(
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
     usedAt: datetime("used_at"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    // Database-side default: `new Date()` would bake one JS timestamp into the
+    // schema and reuse it for every insert.
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
-    uniqueIndex("uit_user_id_token_hash_unique").on(t.userId, t.tokenHash),
-    index("uit_user_id_idx").on(t.userId),
+    // One invite row per account, enforced by the database: two concurrent
+    // re-invites cannot both leave a live link, and superseding an earlier
+    // invite holds without a read-modify-write race.
+    uniqueIndex("uit_user_id_unique").on(t.userId),
+    index("uit_token_hash_idx").on(t.tokenHash),
     index("uit_expires_idx").on(t.expires),
-    index("uit_used_at_idx").on(t.usedAt),
   ]
 );
 

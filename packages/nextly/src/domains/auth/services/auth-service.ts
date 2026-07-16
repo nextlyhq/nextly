@@ -1,7 +1,8 @@
 import { randomBytes, createHash } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, lt, isNull } from "drizzle-orm";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { eq, and, gt, lt, isNull } from "drizzle-orm";
 
 import {
   verifyPassword as verifyPasswordBcrypt,
@@ -67,6 +68,34 @@ interface TransactionLike {
   update(table: unknown): {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+}
+
+/**
+ * The number of rows a Drizzle write affected, read from the right field for
+ * the running dialect.
+ *
+ * Each driver reports it differently — better-sqlite3 as `changes`,
+ * node-postgres as `rowCount`, mysql2 as a `ResultSetHeader.affectedRows` (in
+ * an array on newer versions) — so an atomic claim that needs to know whether
+ * it won a race cannot read a single field. Exported for its own unit test:
+ * this is the one piece of the invite flow that is genuinely dialect-specific.
+ */
+export function affectedRowCount(
+  result: unknown,
+  dialect: SupportedDialect
+): number {
+  if (dialect === "sqlite") {
+    return (result as { changes?: number }).changes ?? 0;
+  }
+  if (dialect === "postgresql") {
+    return (result as { rowCount?: number }).rowCount ?? 0;
+  }
+  const header = Array.isArray(result)
+    ? (result[0] as { affectedRows?: number } | undefined)
+    : (result as { affectedRows?: number });
+  return header?.affectedRows ?? 0;
 }
 
 /**
@@ -740,22 +769,44 @@ export class AuthService extends BaseService {
     );
 
     try {
-      // One active invite per account: a freshly minted link supersedes any
-      // earlier one, so a re-invite cannot leave two working links.
-      await this.db
-        .delete(this.tables.userInviteTokens)
-        .where(eq(this.tables.userInviteTokens.userId, userId));
+      // One active invite per account, in one transaction: a freshly minted
+      // link supersedes any earlier one, and if the insert fails the delete
+      // rolls back so the previous link stays valid rather than the account
+      // being left with none. The unique index on user_id serialises two
+      // concurrent re-invites so they cannot both leave a live link.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+        await tx
+          .delete(this.tables.userInviteTokens)
+          .where(eq(this.tables.userInviteTokens.userId, userId));
 
-      await this.db.insert(this.tables.userInviteTokens).values({
-        userId,
-        tokenHash,
-        expires: expiresAt,
+        await tx.insert(this.tables.userInviteTokens).values({
+          userId,
+          tokenHash,
+          expires: expiresAt,
+        });
       });
     } catch (error) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return { token: rawToken, expiresAt };
+  }
+
+  /** The one public error every unusable-invite path returns. */
+  private invalidInviteError(
+    logContext?: Record<string, unknown>
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: "token",
+          code: "INVALID_INVITE",
+          message: "This invite link is invalid or has expired.",
+        },
+      ],
+      logContext,
+    });
   }
 
   /**
@@ -789,25 +840,13 @@ export class AuthService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    if (!invite) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID_INVITE",
-            message: "This invite link is invalid or has already been used.",
-          },
-        ],
-      });
-    }
-
-    if (invite.expires < new Date()) {
-      throw new NextlyError({
-        code: "TOKEN_EXPIRED",
-        statusCode: 400,
-        publicMessage: "This invite link has expired.",
-        logContext: { inviteId: invite.id, expiredAt: invite.expires },
-      });
+    // Unknown, already used, and expired all return the same error, so a
+    // guessed token cannot tell a live invite from a dead one. The expiry
+    // detail is kept for the log only.
+    if (!invite || invite.expires < new Date()) {
+      throw this.invalidInviteError(
+        invite ? { inviteId: invite.id, expiredAt: invite.expires } : undefined
+      );
     }
 
     const passwordStrength = validatePasswordStrength(newPassword);
@@ -823,9 +862,31 @@ export class AuthService extends BaseService {
 
     const passwordHash = await hashPasswordBcrypt(newPassword);
 
+    // Claim the token before touching the account. Two acceptances can both
+    // pass the read above; the conditional update lets exactly one flip
+    // usedAt from null, and only that one goes on to set the password — so a
+    // race cannot end with two different passwords, last-writer-wins.
+    let claimed = false;
     try {
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TransactionLike;
+
+        const claim = await tx
+          .update(this.tables.userInviteTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(this.tables.userInviteTokens.id, invite.id),
+              isNull(this.tables.userInviteTokens.usedAt),
+              gt(this.tables.userInviteTokens.expires, new Date())
+            )
+          );
+
+        // Zero rows: another acceptance already claimed it, or it expired
+        // between the read and here. Leave the account untouched.
+        if (affectedRowCount(claim, this.dialect) !== 1) return;
+        claimed = true;
+
         await tx
           .update(this.tables.users)
           .set({
@@ -836,14 +897,16 @@ export class AuthService extends BaseService {
             updatedAt: new Date(),
           })
           .where(eq(this.tables.users.id, invite.userId));
-
-        await tx
-          .update(this.tables.userInviteTokens)
-          .set({ usedAt: new Date() })
-          .where(eq(this.tables.userInviteTokens.id, invite.id));
       });
     } catch (error) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    if (!claimed) {
+      throw this.invalidInviteError({
+        inviteId: invite.id,
+        reason: "already-claimed",
+      });
     }
 
     // No auth event is emitted: the closest existing one, passwordChanged,
