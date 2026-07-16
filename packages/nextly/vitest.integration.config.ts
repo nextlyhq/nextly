@@ -36,5 +36,13 @@ export default defineConfig({
         singleFork: true,
       },
     },
+    // singleFork keeps everything in one process, but vitest still interleaves
+    // test files within it by default. The suites that exercise system tables
+    // with a fixed name (`nextly_schema_events`) cannot use the per-file table
+    // prefix, so two of them running at once drop and recreate the same table
+    // out from under each other. Running files sequentially is the "conservative"
+    // behavior the note above intends and makes that class of collision
+    // impossible.
+    fileParallelism: false,
   },
 });
