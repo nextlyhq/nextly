@@ -60,6 +60,11 @@ export function UserFieldForm({
 }: UserFieldFormProps) {
   const isEdit = mode === "edit";
   const isCodeSourced = isEdit && userField?.source === "code";
+  // Name and type identify the backing database column, which the schema
+  // reconciler only ever adds to — changing either would strand the existing
+  // column and its data. The server refuses both; the form matches it rather
+  // than offering an edit that cannot succeed.
+  const isIdentityLocked = isEdit || isCodeSourced;
   const nameTouchedRef = useRef(false);
   const schema = buildUserFieldSchema(mode);
 
@@ -208,7 +213,7 @@ export function UserFieldForm({
                           <FormControl>
                             <Input
                               placeholder="e.g. phone_number"
-                              disabled={isCodeSourced}
+                              disabled={isIdentityLocked}
                               {...field}
                               onChange={e => {
                                 field.onChange(e.target.value);
@@ -220,7 +225,7 @@ export function UserFieldForm({
                           </FormControl>
                           <FormDescription>
                             {isEdit
-                              ? "Field name for database column"
+                              ? "Names the database column, so it cannot change once the field exists. Create a new field instead."
                               : "Auto-generated from label (snake_case)"}
                           </FormDescription>
                           <FormMessage />
@@ -310,9 +315,15 @@ export function UserFieldForm({
                               field.onChange(val);
                               handleTypeChange(val);
                             }}
-                            disabled={isCodeSourced}
+                            disabled={isIdentityLocked}
                           />
                         </FormControl>
+                        {isEdit && (
+                          <FormDescription>
+                            Sets the database column type, so it cannot change
+                            once the field exists. Create a new field instead.
+                          </FormDescription>
+                        )}
                         <FormMessage />
                       </FormItem>
                     )}

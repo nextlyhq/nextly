@@ -82,7 +82,9 @@ import type {
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+import type { Logger } from "../../../services/shared";
 import type { UserFieldConfig } from "../../../users/config/types";
+import { checkUserFieldName } from "../../../users/config/validate-user-config";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { UserFieldDefinitionService } from "./user-field-definition-service";
@@ -184,17 +186,20 @@ export class UserExtSchemaService {
   private readonly dialect: SupportedDialect;
   private readonly q: string;
   private readonly fieldDefService?: UserFieldDefinitionService;
+  private readonly logger?: Logger;
 
   /** Cached merged fields from both code and UI sources */
   private mergedFields: UserFieldConfig[] | null = null;
 
   constructor(
     dialect?: SupportedDialect,
-    fieldDefService?: UserFieldDefinitionService
+    fieldDefService?: UserFieldDefinitionService,
+    logger?: Logger
   ) {
     this.dialect = dialect || env.DB_DIALECT || "postgresql";
     this.q = QUOTE_CHAR[this.dialect];
     this.fieldDefService = fieldDefService;
+    this.logger = logger;
   }
 
   // ============================================================
@@ -215,7 +220,27 @@ export class UserExtSchemaService {
     if (!this.fieldDefService) return;
 
     const records = await this.fieldDefService.getMergedFields();
-    this.mergedFields = records.map(r => this.convertRecordToFieldConfig(r));
+
+    // A custom field's name is assigned over the built-ins on the user object
+    // and replaces the built-in's validation in the merged schema, so one
+    // named `email` or `id` displaces the real one. Creating such a field is
+    // refused, but a row predating that check must not be honoured: dropping
+    // it here keeps it out of the column list, the select and both schemas at
+    // once. The row is left alone so the name can be recovered by hand.
+    const usable: UserFieldConfig[] = [];
+    for (const record of records) {
+      const rejection = checkUserFieldName(record.name);
+      if (rejection) {
+        this.logger?.warn(
+          "[UserExtSchemaService] Ignoring user field with an unusable name",
+          { name: record.name, reason: rejection.code }
+        );
+        continue;
+      }
+      usable.push(this.convertRecordToFieldConfig(record));
+    }
+
+    this.mergedFields = usable;
   }
 
   /**
