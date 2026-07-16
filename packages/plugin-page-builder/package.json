@@ -54,15 +54,15 @@
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "nextly": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
-    "react-hook-form": ">=7.0.0",
+    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
+    "nextly": "workspace:*",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
+    "react-hook-form": ">=7.0.0"
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
