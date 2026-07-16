@@ -180,12 +180,60 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
 ];
 
 /**
- * Field types that exist only on the user-profile surface. They are NOT part
+ * Field types that exist only on specific admin surfaces. They are NOT part
  * of the canonical `FieldType` union: a collection cannot declare them, so
- * they can never reach the schema pipeline's column mappers. Both store as
- * text; their meaning is validation (a URL shape, a phone shape).
+ * they can never reach the schema pipeline's column mappers. Their storage
+ * is either text with validation semantics (url, phone, time, hidden) or the
+ * surface's own blob handling (file inside a form's JSON).
  */
 export type UserSurfaceFieldType = "url" | "phone";
+
+/** Field types that exist only on the form-builder surface. */
+export type FormSurfaceFieldType = "url" | "phone" | "file" | "time" | "hidden";
+
+/**
+ * Surface-only catalog entries, described once so every surface that admits
+ * them shares one label/icon/hint. Slotted into per-surface catalogs below.
+ */
+const URL_SURFACE_ENTRY = {
+  type: "url",
+  label: "URL",
+  category: "Basic",
+  hint: "Validated web address",
+  icon: "Link2",
+} as const satisfies FieldTypeCatalogEntry<"url">;
+
+const PHONE_SURFACE_ENTRY = {
+  type: "phone",
+  label: "Phone",
+  category: "Basic",
+  hint: "Phone number",
+  icon: "Phone",
+} as const satisfies FieldTypeCatalogEntry<"phone">;
+
+const TIME_SURFACE_ENTRY = {
+  type: "time",
+  label: "Time",
+  category: "Basic",
+  hint: "Time of day",
+  icon: "Clock",
+} as const satisfies FieldTypeCatalogEntry<"time">;
+
+const FILE_SURFACE_ENTRY = {
+  type: "file",
+  label: "File upload",
+  category: "Media",
+  hint: "File attached by the visitor",
+  icon: "Upload",
+} as const satisfies FieldTypeCatalogEntry<"file">;
+
+const HIDDEN_SURFACE_ENTRY = {
+  type: "hidden",
+  label: "Hidden",
+  category: "Advanced",
+  hint: "Invisible value submitted with the form",
+  icon: "EyeOff",
+} as const satisfies FieldTypeCatalogEntry<"hidden">;
 
 /** The user-profile surface's field types: flat scalars plus url/phone. */
 export type UserFieldCatalogType =
@@ -217,25 +265,62 @@ export const USER_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<UserFieldCa
       "checkbox",
       "date",
     ] as const);
-    const url: FieldTypeCatalogEntry<UserFieldCatalogType> = {
-      type: "url",
-      label: "URL",
-      category: "Basic",
-      hint: "Validated web address",
-      icon: "Link2",
-    };
-    const phone: FieldTypeCatalogEntry<UserFieldCatalogType> = {
-      type: "phone",
-      label: "Phone",
-      category: "Basic",
-      hint: "Phone number",
-      icon: "Phone",
-    };
     const combined: FieldTypeCatalogEntry<UserFieldCatalogType>[] = [];
     for (const entry of scalars) {
       combined.push(entry);
-      if (entry.type === "email") combined.push(url, phone);
+      if (entry.type === "email") {
+        combined.push(URL_SURFACE_ENTRY, PHONE_SURFACE_ENTRY);
+      }
     }
+    return combined;
+  })();
+
+/** The form-builder surface's field types: flat inputs plus its own five. */
+export type FormFieldCatalogType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "email"
+  | "url"
+  | "phone"
+  | "select"
+  | "radio"
+  | "checkbox"
+  | "date"
+  | "time"
+  | "file"
+  | "hidden";
+
+/**
+ * The form-builder picker's catalog: the flat-input subset of the shared
+ * catalog plus the form-surface types — url/phone beside email (contact
+ * shapes together, matching the user surface), time beside date, and
+ * file/hidden appended in their own categories. Form fields live in the
+ * form's JSON blob, so none of these touch the schema pipeline.
+ */
+export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCatalogType>[] =
+  (() => {
+    const scalars = narrowFieldTypeCatalog([
+      "text",
+      "textarea",
+      "number",
+      "email",
+      "select",
+      "radio",
+      "checkbox",
+      "date",
+    ] as const);
+    const combined: FieldTypeCatalogEntry<FormFieldCatalogType>[] = [];
+    for (const entry of scalars) {
+      combined.push(entry);
+      if (entry.type === "email") {
+        combined.push(URL_SURFACE_ENTRY, PHONE_SURFACE_ENTRY);
+      }
+      if (entry.type === "date") {
+        combined.push(TIME_SURFACE_ENTRY);
+      }
+    }
+    combined.push(FILE_SURFACE_ENTRY, HIDDEN_SURFACE_ENTRY);
     return combined;
   })();
 

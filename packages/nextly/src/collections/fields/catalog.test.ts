@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   FIELD_TYPE_CATALOG,
+  FORM_FIELD_TYPE_CATALOG,
+  USER_FIELD_TYPE_CATALOG,
   getFieldTypeCatalogEntry,
   narrowFieldTypeCatalog,
 } from "./catalog";
@@ -42,5 +44,62 @@ describe("FIELD_TYPE_CATALOG", () => {
   it("narrows to a surface's subset in catalog order", () => {
     const subset = narrowFieldTypeCatalog(["date", "text", "select"]);
     expect(subset.map(entry => entry.type)).toEqual(["text", "date", "select"]);
+  });
+});
+
+describe("FORM_FIELD_TYPE_CATALOG", () => {
+  it("describes the form surface's thirteen types exactly once", () => {
+    const types = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
+    expect(new Set(types).size).toBe(types.length);
+    expect([...types].sort()).toEqual(
+      [
+        "text",
+        "textarea",
+        "number",
+        "email",
+        "url",
+        "phone",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+        "time",
+        "file",
+        "hidden",
+      ].sort()
+    );
+  });
+
+  it("slots url and phone beside email, and time beside date", () => {
+    const types = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
+    const email = types.indexOf("email");
+    expect(types[email + 1]).toBe("url");
+    expect(types[email + 2]).toBe("phone");
+    const date = types.indexOf("date");
+    expect(types[date + 1]).toBe("time");
+  });
+
+  it("keeps the surface-only types out of the canonical catalog", () => {
+    for (const surfaceOnly of ["time", "file", "hidden"]) {
+      expect(
+        FIELD_TYPE_CATALOG.find(entry => entry.type === surfaceOnly)
+      ).toBeUndefined();
+    }
+  });
+
+  it("shares the url and phone descriptions with the user surface", () => {
+    for (const shared of ["url", "phone"] as const) {
+      const formEntry = FORM_FIELD_TYPE_CATALOG.find(e => e.type === shared);
+      const userEntry = USER_FIELD_TYPE_CATALOG.find(e => e.type === shared);
+      expect(formEntry).toEqual(userEntry);
+    }
+  });
+
+  it("gives every entry a non-empty label, hint, and icon name", () => {
+    for (const entry of FORM_FIELD_TYPE_CATALOG) {
+      expect(entry.label.length).toBeGreaterThan(0);
+      expect(entry.hint.length).toBeGreaterThan(0);
+      expect(entry.icon.length).toBeGreaterThan(0);
+    }
   });
 });
