@@ -62,9 +62,9 @@ describe("drizzle-kit-lazy", () => {
       expect(typeof kit.generateMigration).toBe("function");
     });
 
-    it("returns upSnapshot function (v1 renamed upPgSnapshot → up)", async () => {
+    it("does NOT expose upSnapshot (dropped per D-2.1 — zero production callers)", async () => {
       const kit = await getPgDrizzleKit();
-      expect(typeof kit.upSnapshot).toBe("function");
+      expect(kit).not.toHaveProperty("upSnapshot");
     });
   });
 

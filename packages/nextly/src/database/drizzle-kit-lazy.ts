@@ -76,7 +76,6 @@ export interface PgDrizzleKit {
     schemaFilters?: string[]
   ) => Promise<unknown>;
   generateMigration: (prev: unknown, cur: unknown) => Promise<string[]>;
-  upSnapshot: (snapshot: Record<string, unknown>) => unknown;
 }
 
 // MySQL drizzle-kit API surface (drizzle-kit/payload/mysql).
@@ -121,7 +120,7 @@ type PayloadPgModule = {
   ) => Promise<PushSchemaResult>;
   generateDrizzleJson: PgDrizzleKit["generateDrizzleJson"];
   generateMigration: PgDrizzleKit["generateMigration"];
-  up: PgDrizzleKit["upSnapshot"];
+  up: (snapshot: Record<string, unknown>) => unknown; // present upstream; deliberately not exposed (no Nextly caller — D-2.1)
 };
 
 type PayloadMySqlModule = {
@@ -240,7 +239,6 @@ export async function getPgDrizzleKit(): Promise<PgDrizzleKit> {
       m.pushSchema(imports, db, entitiesConfig),
     generateDrizzleJson: m.generateDrizzleJson,
     generateMigration: m.generateMigration,
-    upSnapshot: m.up,
   };
   return g.__nextly_drizzleKitPg;
 }
