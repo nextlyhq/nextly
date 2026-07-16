@@ -207,7 +207,12 @@ export function DynamicPluginNav({
     return <PluginSkeleton />;
   }
 
-  if (error || plugins.length === 0) {
+  // `plugins` is derived from plugin-owned collections, but a plugin that
+  // only contributes pages/settings/slots owns none — the overview must stay
+  // reachable whenever anything is installed, or those plugins are invisible.
+  const hasInstalledPlugins = (pluginMetadata?.length ?? 0) > 0;
+
+  if (error || (plugins.length === 0 && !hasInstalledPlugins)) {
     return null;
   }
 
@@ -217,15 +222,17 @@ export function DynamicPluginNav({
   const getCollectionUrl = (collection: ApiCollection) =>
     buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name });
 
-  const isAnyPluginActive = plugins.some(p => {
-    if (isActive(getPluginUrl(p.slug))) return true;
-    if (!p.isPlaced) {
-      return p.collections.some(c => isActive(getCollectionUrl(c)));
-    }
-    return false;
-  });
+  const isAnyPluginActive =
+    isActive("/admin/plugins") ||
+    plugins.some(p => {
+      if (isActive(getPluginUrl(p.slug))) return true;
+      if (!p.isPlaced) {
+        return p.collections.some(c => isActive(getCollectionUrl(c)));
+      }
+      return false;
+    });
 
-  // Collapsed mode: single icon with dropdown listing plugin names
+  // Collapsed mode: single icon with dropdown listing the overview + plugin names
   if (isCollapsed) {
     return (
       <CollapsedPluginDropdown
@@ -366,7 +373,7 @@ function CollapsedPluginDropdown({
         <DropdownMenuTrigger asChild>
           <SidebarMenuButton
             isActive={isAnyActive}
-            className="transition-none group-data-[collapsible=icon]:!p-2"
+            className="transition-none group-data-[collapsible=icon]:p-2!"
           >
             <Package
               className={cn(
@@ -386,6 +393,21 @@ function CollapsedPluginDropdown({
         >
           <DropdownMenuLabel>Plugins</DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {/* The overview stays reachable even when no plugin owns a
+              collection — metadata-only plugins are listed there. */}
+          <DropdownMenuItem asChild>
+            <Link
+              href={ROUTES.PLUGINS}
+              data-active={isActive(ROUTES.PLUGINS) ? "true" : undefined}
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                isActive(ROUTES.PLUGINS) && "font-bold!"
+              )}
+            >
+              <Package className="h-4 w-4" />
+              <span>Installed Plugins</span>
+            </Link>
+          </DropdownMenuItem>
           {plugins.map(plugin => {
             const href = getPluginUrl(plugin.slug);
             const active = isActive(href);
@@ -396,7 +418,7 @@ function CollapsedPluginDropdown({
                   data-active={active ? "true" : undefined}
                   className={cn(
                     "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
-                    active && "!font-bold"
+                    active && "font-bold!"
                   )}
                 >
                   <Package className="h-4 w-4" />
