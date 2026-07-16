@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
@@ -38,7 +39,9 @@ export const auditLog = mysqlTable(
     ipAddress: varchar("ip_address", { length: 45 }),
     userAgent: text("user_agent"),
     metadata: json("metadata"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),

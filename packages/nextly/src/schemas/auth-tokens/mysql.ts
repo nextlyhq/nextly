@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   int,
@@ -34,7 +35,9 @@ export const passwordResetTokens = mysqlTable(
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
     usedAt: datetime("used_at"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("prt_identifier_token_hash_unique").on(
@@ -54,7 +57,9 @@ export const emailVerificationTokens = mysqlTable(
     identifier: varchar("identifier", { length: 255 }).notNull(),
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("evt_identifier_token_hash_unique").on(
@@ -80,7 +85,9 @@ export const refreshTokens = mysqlTable(
     userAgent: text("user_agent"),
     ipAddress: varchar("ip_address", { length: 45 }),
     expiresAt: datetime("expires_at").notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     index("refresh_tokens_token_hash_idx").on(t.tokenHash),

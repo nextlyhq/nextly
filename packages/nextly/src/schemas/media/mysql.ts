@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   int,
@@ -86,8 +87,12 @@ export const media = mysqlTable(
       () => users.id,
       { onDelete: "cascade" }
     ),
-    uploadedAt: datetime("uploaded_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    uploadedAt: datetime("uploaded_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     index("media_uploaded_by_idx").on(t.uploadedBy),
@@ -124,8 +129,12 @@ export const mediaFolders = mysqlTable(
     createdBy: varchar("created_by", { length: 191 })
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     index("media_folders_parent_id_idx").on(t.parentId),

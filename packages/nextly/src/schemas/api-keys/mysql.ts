@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
@@ -56,8 +57,12 @@ export const apiKeys = mysqlTable(
     expiresAt: datetime("expires_at"),
     lastUsedAt: datetime("last_used_at"),
     isActive: boolean("is_active").notNull().default(true),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("api_keys_key_hash_unique").on(t.keyHash),
