@@ -19,7 +19,6 @@ import {
   Button,
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
   Select,
   SelectContent,
@@ -35,15 +34,9 @@ import * as React from "react";
 
 import {
   List,
-  Folder as FolderIconComponent,
-  FolderPlus,
   LayoutGrid,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
-  Pencil,
-  Trash2,
-  LayoutDashboard,
   Upload,
   Columns,
 } from "@admin/components/icons";
@@ -60,6 +53,10 @@ import {
   useSubfolders,
   useRootFolders,
 } from "@admin/hooks/queries/useMedia";
+import {
+  usePersistedState,
+  usePersistedStringSet,
+} from "@admin/hooks/usePersistedState";
 import { cn } from "@admin/lib/utils";
 import type {
   Media,
@@ -72,6 +69,7 @@ import { CreateFolderDialog } from "./CreateFolderDialog";
 import { DeleteFolderDialog } from "./DeleteFolderDialog";
 import { EditFolderDialog } from "./EditFolderDialog";
 import { FolderBreadcrumbs } from "./FolderBreadcrumbs";
+import { FolderCardsRow } from "./FolderCardsRow";
 import { MediaBulkActionBar } from "./MediaBulkActionBar";
 import { MediaDeleteDialog } from "./MediaDeleteDialog";
 import { MediaEditDialog } from "./MediaEditDialog";
@@ -114,6 +112,9 @@ export interface MediaLibraryProps {
   className?: string;
 }
 
+const isViewMode = (value: string): value is "grid" | "list" =>
+  value === "grid" || value === "list";
+
 /**
  * MediaLibrary component
  *
@@ -129,12 +130,14 @@ export function MediaLibrary({
   // State: Pagination
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(defaultPageSize);
-  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
-    new Set()
+  // Hidden list-view columns persist across visits. Functional updates so
+  // two quick toggles both land instead of the second reading stale state.
+  const [hiddenColumns, updateHiddenColumns] = usePersistedStringSet(
+    "nextly:admin:media:hidden-columns"
   );
 
   const toggleColumn = (key: string) => {
-    setHiddenColumns(prev => {
+    updateHiddenColumns(prev => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
@@ -149,15 +152,20 @@ export function MediaLibrary({
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<MediaType | "all">("all");
-  const [sortBy, _setSortBy] = React.useState<
+  const [sortBy, setSortBy] = React.useState<
     "filename" | "uploadedAt" | "size"
   >(defaultSortBy);
-  const [sortOrder, _setSortOrder] = React.useState<"asc" | "desc">(
+  const [sortOrder, setSortOrder] = React.useState<"asc" | "desc">(
     defaultSortOrder
   );
 
-  // State: UI
-  const [viewMode, setViewMode] = React.useState<"grid" | "list">("grid");
+  // State: UI. List view is the default (admins scan tables faster than
+  // grids); the choice persists per browser.
+  const [viewMode, setViewMode] = usePersistedState<"grid" | "list">(
+    "nextly:admin:media:view-mode",
+    "list",
+    isViewMode
+  );
   const [openMenuId, setOpenMenuId] = React.useState<string | null>(null);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [isUploadCollapsed, setIsUploadCollapsed] = React.useState(true);
@@ -175,8 +183,8 @@ export function MediaLibrary({
   const {
     activeFolderId,
     setActiveFolderId,
-    folderViewMode,
-    setFolderViewMode,
+    isFolderTreeVisible,
+    setIsFolderTreeVisible,
     pendingAction,
     triggerAction,
   } = useMediaContext();
@@ -398,6 +406,22 @@ export function MediaLibrary({
     setPage(0); // Reset to page 1 when filter changes
   }, []);
 
+  const handleSortChange = React.useCallback((value: string) => {
+    // Narrow the "<field>-<order>" select value by comparison; the option
+    // list is closed, so anything else is ignored rather than cast through.
+    const [newSortBy, newSortOrder] = value.split("-");
+    if (
+      (newSortBy === "uploadedAt" ||
+        newSortBy === "filename" ||
+        newSortBy === "size") &&
+      (newSortOrder === "asc" || newSortOrder === "desc")
+    ) {
+      setSortBy(newSortBy);
+      setSortOrder(newSortOrder);
+      setPage(0); // Reset to page 1 when ordering changes
+    }
+  }, []);
+
   // Handlers: Folders
 
   const handleDeleteFolderSuccess = React.useCallback(() => {
@@ -479,35 +503,30 @@ export function MediaLibrary({
             </p>
           </div>
           <div className="flex items-center gap-4">
-            {/* Sidebar Toggle Group */}
+            {/* Folder tree toggle: one button that shows/hides the tree
+                sub-sidebar. Inline folder navigation stays on the page either
+                way, so this never changes where folders live. */}
             <div className="flex items-center bg-background border border-border rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
-                  folderViewMode === "sidebar"
+                  "h-8 w-8 rounded-none transition-all duration-200 cursor-pointer!",
+                  isFolderTreeVisible
                     ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
-                onClick={() => setFolderViewMode("sidebar")}
-                title="Show Sidebar"
+                onClick={() => setIsFolderTreeVisible(!isFolderTreeVisible)}
+                aria-pressed={isFolderTreeVisible}
+                title={
+                  isFolderTreeVisible ? "Hide folder tree" : "Show folder tree"
+                }
               >
-                <PanelLeftOpen className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={cn(
-                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
-                  folderViewMode === "grid"
-                    ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
-                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
+                {isFolderTreeVisible ? (
+                  <PanelLeftClose className="h-4 w-4" />
+                ) : (
+                  <PanelLeftOpen className="h-4 w-4" />
                 )}
-                onClick={() => setFolderViewMode("grid")}
-                title="Hide Sidebar"
-              >
-                <PanelLeftClose className="h-4 w-4" />
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
@@ -608,6 +627,24 @@ export function MediaLibrary({
             </SelectContent>
           </Select>
 
+          {/* Sort (same vocabulary as the media picker) */}
+          <Select
+            value={`${sortBy}-${sortOrder}`}
+            onValueChange={handleSortChange}
+          >
+            <SelectTrigger className="w-full sm:w-[180px] shrink-0 hover-unified bg-background text-foreground border-border hover:bg-accent/10">
+              <SelectValue placeholder="Sort by..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="uploadedAt-desc">Newest First</SelectItem>
+              <SelectItem value="uploadedAt-asc">Oldest First</SelectItem>
+              <SelectItem value="filename-asc">Name A-Z</SelectItem>
+              <SelectItem value="filename-desc">Name Z-A</SelectItem>
+              <SelectItem value="size-desc">Largest First</SelectItem>
+              <SelectItem value="size-asc">Smallest First</SelectItem>
+            </SelectContent>
+          </Select>
+
           {/* Columns Toggle (Only for List View) */}
           {viewMode === "list" && (
             <DropdownMenu>
@@ -674,269 +711,38 @@ export function MediaLibrary({
           </div>
         )}
 
-        {/* Folder Breadcrumbs & Grid (Moved under search and filters) */}
-        {folderViewMode === "grid" && (
+        {/* Inline folder navigation: breadcrumbs + the current level's
+            folders. Always rendered (independent of the folder tree toggle)
+            so drill-down navigation never moves. */}
+        {(activeFolderId || hasFoldersToDisplay) && (
           <div className="mb-6">
-            <FolderBreadcrumbs
+            {activeFolderId && (
+              <FolderBreadcrumbs
+                activeFolderId={activeFolderId}
+                onFolderSelect={setActiveFolderId}
+                className="mb-4"
+              />
+            )}
+            <FolderCardsRow
+              folders={foldersToDisplay ?? []}
               activeFolderId={activeFolderId}
               onFolderSelect={setActiveFolderId}
-              showRoot={false}
-              className="mb-4"
+              onCreateSubfolder={parentId => {
+                setCreateFolderParentId(parentId);
+                setIsCreateFolderDialogOpen(true);
+              }}
+              onRenameFolder={folderId => {
+                setEditFolderId(folderId);
+                setIsEditFolderDialogOpen(true);
+              }}
+              onDeleteFolder={(folderId, folderName) => {
+                setDeleteFolderId(folderId);
+                setDeleteFolderName(folderName);
+                setIsDeleteFolderDialogOpen(true);
+              }}
+              openMenuId={openMenuId}
+              onOpenMenuChange={setOpenMenuId}
             />
-            {/* Root Folders Row */}
-            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-4">
-                {/* All Media (Root) Card */}
-                <button
-                  type="button"
-                  onClick={() => setActiveFolderId(null)}
-                  className={cn(
-                    "group flex items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
-                    !activeFolderId
-                      ? "border-border bg-primary/5"
-                      : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
-                  )}
-                >
-                  <LayoutDashboard
-                    className={cn(
-                      "h-4 w-4 shrink-0 transition-colors",
-                      !activeFolderId
-                        ? "text-primary"
-                        : "text-muted-foreground/70 group-hover:text-primary"
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className={cn(
-                        "truncate text-xs font-semibold transition-colors",
-                        !activeFolderId ? "text-primary" : "text-foreground"
-                      )}
-                    >
-                      All Media
-                    </p>
-                  </div>
-                </button>
-
-                {/* Root Folders */}
-                {rootFoldersList?.map(folder => {
-                  const isActive = activeFolderId === folder.id;
-                  return (
-                    <div key={folder.id} className="group relative">
-                      <button
-                        type="button"
-                        onClick={() => setActiveFolderId(folder.id)}
-                        className={cn(
-                          "flex w-full items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
-                          isActive
-                            ? "border-border bg-primary/5 ring-1 ring-primary/20"
-                            : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
-                        )}
-                      >
-                        <FolderIconComponent
-                          className={cn(
-                            "h-4 w-4 shrink-0 transition-colors",
-                            isActive
-                              ? "text-primary"
-                              : "text-muted-foreground/70 group-hover:text-foreground"
-                          )}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className={cn(
-                              "truncate text-xs font-semibold transition-colors",
-                              isActive
-                                ? "text-primary"
-                                : "text-muted-foreground group-hover:text-foreground"
-                            )}
-                          >
-                            {folder.name}
-                          </p>
-                        </div>
-                      </button>
-
-                      {/* Folder Context Menu */}
-                      <div
-                        className={cn(
-                          "absolute top-2 right-2 transition-opacity",
-                          isActive || openMenuId === folder.id
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
-                        )}
-                      >
-                        <DropdownMenu
-                          onOpenChange={open =>
-                            setOpenMenuId(open ? folder.id : null)
-                          }
-                        >
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors !cursor-pointer"
-                              onClick={e => e.stopPropagation()}
-                            >
-                              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            align="end"
-                            className="w-48 shadow-none border-border"
-                          >
-                            <DropdownMenuItem
-                              onClick={e => {
-                                e.stopPropagation();
-                                setCreateFolderParentId(folder.id);
-                                setIsCreateFolderDialogOpen(true);
-                              }}
-                              className="gap-2"
-                            >
-                              <FolderPlus className="h-4 w-4 text-muted-foreground" />
-                              <span>New subfolder</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={e => {
-                                e.stopPropagation();
-                                setEditFolderId(folder.id);
-                                setIsEditFolderDialogOpen(true);
-                              }}
-                              className="gap-2"
-                            >
-                              <Pencil className="h-4 w-4 text-muted-foreground" />
-                              <span>Rename</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={e => {
-                                e.stopPropagation();
-                                setDeleteFolderId(folder.id);
-                                setDeleteFolderName(folder.name);
-                                setIsDeleteFolderDialogOpen(true);
-                              }}
-                              className="gap-2"
-                            >
-                              <Trash2 className="h-4 w-4 text-muted-foreground" />
-                              <span>Delete</span>
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Subfolders Row (Only shown when inside a folder) */}
-            {activeFolderId && hasFoldersToDisplay && (
-              <div className="animate-in fade-in slide-in-from-top-2 duration-300  border-t border-border pt-4 mt-2">
-                <div className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-3 px-1">
-                  {activeFolderId ? "Subfolders" : "Folders"}
-                </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-6">
-                  {foldersToDisplay.map(folder => {
-                    const isActive = activeFolderId === folder.id;
-                    return (
-                      <div key={folder.id} className="group relative">
-                        <button
-                          type="button"
-                          onClick={() => setActiveFolderId(folder.id)}
-                          className={cn(
-                            "flex w-full items-center gap-3 rounded-none  border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
-                            isActive
-                              ? "border-border bg-primary/5 ring-1 ring-primary/20"
-                              : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
-                          )}
-                        >
-                          <FolderIconComponent
-                            className={cn(
-                              "h-4 w-4 shrink-0 transition-colors",
-                              isActive
-                                ? "text-primary"
-                                : "text-muted-foreground/70 group-hover:text-foreground"
-                            )}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={cn(
-                                "truncate text-xs font-semibold transition-colors",
-                                isActive
-                                  ? "text-primary"
-                                  : "text-muted-foreground group-hover:text-foreground"
-                              )}
-                            >
-                              {folder.name}
-                            </p>
-                          </div>
-                        </button>
-
-                        {/* Folder Context Menu */}
-                        <div
-                          className={cn(
-                            "absolute top-2 right-2 transition-opacity",
-                            isActive || openMenuId === folder.id
-                              ? "opacity-100"
-                              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
-                          )}
-                        >
-                          <DropdownMenu
-                            onOpenChange={open =>
-                              setOpenMenuId(open ? folder.id : null)
-                            }
-                          >
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                type="button"
-                                className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors !cursor-pointer"
-                                onClick={e => e.stopPropagation()}
-                              >
-                                <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                              align="end"
-                              className="w-48 shadow-none border-border"
-                            >
-                              <DropdownMenuItem
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  setCreateFolderParentId(folder.id);
-                                  setIsCreateFolderDialogOpen(true);
-                                }}
-                                className="gap-2 cursor-pointer"
-                              >
-                                <FolderPlus className="h-4 w-4 text-muted-foreground" />
-                                <span>New subfolder</span>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  setEditFolderId(folder.id);
-                                  setIsEditFolderDialogOpen(true);
-                                }}
-                                className="gap-2 cursor-pointer"
-                              >
-                                <Pencil className="h-4 w-4 text-muted-foreground" />
-                                <span>Rename</span>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  setDeleteFolderId(folder.id);
-                                  setDeleteFolderName(folder.name);
-                                  setIsDeleteFolderDialogOpen(true);
-                                }}
-                                className="gap-2 cursor-pointer"
-                              >
-                                <Trash2 className="h-4 w-4 text-muted-foreground" />
-                                <span>Delete</span>
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
