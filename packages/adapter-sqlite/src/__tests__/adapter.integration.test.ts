@@ -10,7 +10,8 @@
 // WAL mode is enabled, foreign keys are enabled.
 
 import { existsSync, mkdirSync, rmSync } from "fs";
-import { resolve } from "path";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
 
 import BetterSqlite3 from "better-sqlite3";
 import { eq, and } from "drizzle-orm";
@@ -23,8 +24,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // The directory is created in beforeAll and cleaned up in afterAll.
 // ============================================================
 
+// Resolved from this file's location so the test runs on any machine and
+// in CI, not just the checkout it was first written in.
 const TEST_DB_DIR = resolve(
-  "/Users/mobeen/Work/Products/nextly-integrations/nextly-dev/packages/adapter-sqlite",
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
   "test-data"
 );
 const TEST_DB_PATH = resolve(TEST_DB_DIR, "sqlite-integration-test.db");
