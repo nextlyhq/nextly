@@ -49,7 +49,7 @@ import {
   TabsTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
@@ -247,6 +247,21 @@ export function SelectOptionsEditor({
     })
   );
 
+  // Every stored value that appears more than once, so a batch of collisions
+  // is reported whole — fixing one duplicate must not reveal the next as a
+  // surprise on resubmit.
+  const duplicateValues = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const option of options) {
+      const value = option.value.trim();
+      if (!value) continue;
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([value]) => value);
+  }, [options]);
+
   // Add a new empty option
   const handleAddOption = useCallback(() => {
     const newOption: SelectOption = {
@@ -398,6 +413,16 @@ export function SelectOptionsEditor({
         // 2026-05-04 Option B locked this shape.
         <p className="text-xs text-muted-foreground">
           No options yet -- click + Add or Import above.
+        </p>
+      )}
+
+      {/* Duplicate stored values make a select ambiguous; name every
+          collision at once rather than the first one found. */}
+      {duplicateValues.length > 0 && (
+        <p role="alert" className="text-xs text-destructive">
+          Duplicate values:{" "}
+          {duplicateValues.map(value => `"${value}"`).join(", ")}. Each
+          option&apos;s stored value must be unique.
         </p>
       )}
 

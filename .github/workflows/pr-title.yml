@@ -47,10 +47,13 @@ jobs:
             storage-vercel-blob
             storage-uploadthing
             plugin-form-builder
+            plugin-page-builder
+            plugin-sdk
             create-nextly-app
             eslint-config
             prettier-config
             tsconfig
+            telemetry
             playground
             root
             ci
