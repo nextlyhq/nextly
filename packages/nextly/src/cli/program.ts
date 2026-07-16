@@ -18,6 +18,7 @@ import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
+import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
 import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
@@ -212,6 +213,9 @@ function registerCommands(program: Command): void {
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
+
+  // i18n recovery — replay translations archived by a localization disable (spec §5.3).
+  registerI18nRestoreCommand(program);
 
   // Plan B — one-shot bookkeeping consolidation.
   registerUpgradeCommand(program);
