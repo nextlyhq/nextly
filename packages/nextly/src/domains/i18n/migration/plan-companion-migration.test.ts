@@ -49,4 +49,71 @@ describe("planCompanionMigration", () => {
     expect(plan.upSql).toBe("");
     expect(plan.downSql).toBe("");
   });
+
+  // i18n H5 — the DISABLE transition (spec §5.3 / locked decision #6).
+  describe("DISABLE (localized true → false)", () => {
+    it("restores the default locale, archives the rest, then drops the companion", () => {
+      const plan = planCompanionMigration({
+        spec,
+        prevMainColumnNames: [],
+        companionExisted: false,
+        localized: false,
+        previouslyLocalized: true,
+      });
+      expect(plan.kind).toBe("disable");
+      // Guarded, recoverable order: re-add → restore default → archive others → drop.
+      expect(plan.upSql).toContain("ADD COLUMN");
+      expect(plan.upSql).toContain("UPDATE");
+      expect(plan.upSql).toContain("nextly_i18n_archive");
+      expect(plan.upSql).toContain("DROP TABLE");
+    });
+
+    it("is reversible — its DOWN re-enables (re-creates + re-seeds the companion)", () => {
+      const plan = planCompanionMigration({
+        spec,
+        prevMainColumnNames: [],
+        companionExisted: false,
+        localized: false,
+        previouslyLocalized: true,
+      });
+      expect(plan.downSql).toContain("CREATE TABLE");
+      expect(plan.downSql).toContain("INSERT INTO");
+    });
+
+    it("archives only the NON-default locales (the default is restored onto main)", () => {
+      const plan = planCompanionMigration({
+        spec,
+        prevMainColumnNames: [],
+        companionExisted: false,
+        localized: false,
+        previouslyLocalized: true,
+      });
+      expect(plan.upSql).toContain("<> 'en'");
+    });
+
+    it("NONE when the previous snapshot never recorded it as localized (no false-positive)", () => {
+      // This is the "someone added fields to a non-localized collection" case — the shape
+      // looks identical to a disable, so only the explicit marker may trigger one.
+      const plan = planCompanionMigration({
+        spec,
+        prevMainColumnNames: ["id", "title", "price"],
+        companionExisted: false,
+        localized: false,
+        previouslyLocalized: false,
+      });
+      expect(plan.kind).toBe("none");
+      expect(plan.upSql).toBe("");
+    });
+
+    it("NONE on a pre-marker snapshot (marker undefined = unknown, never destructive)", () => {
+      const plan = planCompanionMigration({
+        spec,
+        prevMainColumnNames: ["id", "title"],
+        companionExisted: false,
+        localized: false,
+        // previouslyLocalized omitted — an older snapshot that predates the marker.
+      });
+      expect(plan.kind).toBe("none");
+    });
+  });
 });

@@ -12,9 +12,12 @@ export interface CompanionMigrationPlan {
    *   them and drop them from main (M1's create+seed+drop). Reversible.
    * - `create-only`: a fresh localized collection whose main table never held the columns →
    *   just CREATE the companion (no seed, no drop). Reversible.
+   * - `disable`: the entity was localized in the previous snapshot and is not anymore →
+   *   restore the default locale onto main, archive the other languages, drop the companion
+   *   (spec §5.3, locked decision #6). Reversible (its DOWN re-enables).
    * - `none`: the companion already exists / nothing to relocate → emit nothing.
    */
-  kind: "enable" | "create-only" | "none";
+  kind: "enable" | "create-only" | "disable" | "none";
   upSql: string;
   downSql: string;
 }
@@ -25,17 +28,46 @@ export interface PlanCompanionArgs {
   prevMainColumnNames: string[];
   /** Whether the companion table already existed in the previous snapshot. */
   companionExisted: boolean;
+  /**
+   * i18n H5 — whether the entity is localized in the NEW config. Defaults to `true` (the
+   * historical behavior: this planner was only ever called for localized entities).
+   */
+  localized?: boolean;
+  /**
+   * i18n H5 — whether the PREVIOUS committed snapshot explicitly recorded this entity as
+   * localized (`TableSpec.localized === true`). Only an explicit `true` here can produce a
+   * DISABLE plan, so a pre-marker snapshot (undefined) never triggers a destructive
+   * transition.
+   */
+  previouslyLocalized?: boolean;
 }
 
 /**
- * Decide the companion migration shape for a localized collection, comparing the previous
- * snapshot against the new localized spec. Pure — no DB access. The `downSql` reverses the
- * companion creation (drop it), restoring the main columns for the enable case.
+ * Decide the companion migration shape for a collection, comparing the previous snapshot
+ * against the new localized spec. Pure — no DB access. The `downSql` reverses the `upSql`,
+ * so every plan is rollback-able.
  */
 export function planCompanionMigration(
   args: PlanCompanionArgs
 ): CompanionMigrationPlan {
   const { spec, prevMainColumnNames, companionExisted } = args;
+  const localized = args.localized ?? true;
+
+  // i18n H5 — DISABLE (spec §5.3): localization was on and is now off. The transition is
+  // gated on the previous snapshot's explicit marker, never inferred from column shape,
+  // because "the main table gained columns" is also what a plain field-add looks like.
+  if (!localized) {
+    if (args.previouslyLocalized !== true) {
+      return { kind: "none", upSql: "", downSql: "" };
+    }
+    return {
+      // UP restores the default locale onto main, archives non-default translations into
+      // `nextly_i18n_archive`, then drops the companion. DOWN is the inverse (re-enable).
+      kind: "disable",
+      upSql: buildLocalizationDownSql(spec),
+      downSql: buildLocalizationUpSql(spec),
+    };
+  }
 
   if (companionExisted) {
     return { kind: "none", upSql: "", downSql: "" };

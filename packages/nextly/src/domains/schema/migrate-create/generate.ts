@@ -26,11 +26,15 @@ import { resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
-import type { CompanionMigrationSpec } from "../../i18n/migration/types";
+import type {
+  CompanionMigrationSpec,
+  LocalizedColumnSpec,
+} from "../../i18n/migration/types";
 import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
 import {
   buildDesiredTableFromComponentFields,
@@ -275,7 +279,8 @@ export async function generateMigration(
   //    strictly after the main file — give each a timestamp a few ms later.
   companionPlans.forEach(({ spec, plan }, i) => {
     writeCompanionMigrationFile(args.migrationsDir, spec, {
-      kind: plan.kind === "enable" ? "enable" : "create-only",
+      // `none` plans are filtered out by the planner, so the kind is always writable here.
+      kind: plan.kind === "none" ? "create-only" : plan.kind,
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() + i + 1),
@@ -287,6 +292,46 @@ export async function generateMigration(
     snapshotPath,
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
+  };
+}
+
+/**
+ * i18n H5: build the companion spec for a DISABLE from the columns the PREVIOUS snapshot
+ * recorded, rather than from the current config's classification.
+ *
+ * The snapshot's `localizedColumns` is the only trustworthy statement of what the `_locales`
+ * table physically holds at this point, so the restore/archive SQL is generated against exactly
+ * those columns. Each recorded column still needs a DDL type, which is read from the field that
+ * owns it — the fields themselves survive a disable (only the flag changes), so this resolves
+ * for the realistic cases. A recorded column whose field was deleted in the same edit has no
+ * type to restore and is skipped: its translations stay archived rather than emitting SQL for a
+ * column that has nowhere to land.
+ */
+function buildDisableSpec(
+  entity: MinimalConfigEntity,
+  prevMain: TableSpec,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionMigrationSpec | null {
+  const recorded = prevMain.localizedColumns;
+  if (!recorded || recorded.length === 0) return null;
+
+  const columns: LocalizedColumnSpec[] = [];
+  for (const f of entity.fields) {
+    const col = fieldToLocalizedColumnSpec(f, dialect);
+    if (col && recorded.includes(col.name)) columns.push(col);
+  }
+  if (columns.length === 0) return null;
+
+  return {
+    dialect,
+    collection: entity.slug,
+    mainTable: prevMain.name,
+    companionTable: `${prevMain.name}_locales`,
+    defaultLocale,
+    parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+    columns,
+    status: entity.status === true,
   };
 }
 
@@ -316,17 +361,10 @@ function planCompanionMigrations(
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const c of entities) {
-    // i18n H5 (known limitation): the DISABLE transition (localized `true → false`) is not
-    // auto-migrated here. migrate:create compares the config against the previous committed
-    // snapshot, which — by design — does not record companion `_locales` tables, so a former
-    // companion cannot be reliably detected at this layer. A snapshot-only heuristic would
-    // false-positive on the common "add fields to a non-localized collection" case and block
-    // legitimate migrations, which is worse than the rare disable. Disabling localization
-    // therefore leaves the companion data in place (not restored to main, not archived); the
-    // archive/restore machinery exists (write-migration-file `direction:"disable"` +
-    // buildLocalizationDownSql) and must currently be run manually. Wiring this safely needs the
-    // migration snapshot to carry a per-collection `localized` marker — tracked as follow-up.
-    if (c.localized !== true) continue;
+    // i18n H5: derive the companion spec with `collectionLocalized: true` regardless of the
+    // entity's CURRENT flag. For a localized entity this describes the companion to create;
+    // for one being DISABLED it is the starting point that the previous snapshot's recorded
+    // column list then corrects (see below). Returns null when no field is translatable.
     const spec = deriveCompanionSpec({
       slug: c.slug,
       dbName: c.tableName,
@@ -336,6 +374,42 @@ function planCompanionMigrations(
       collectionLocalized: true,
       status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
+
+    // i18n H5 — the DISABLE transition (localized `true → false`), spec §5.3 / decision #6.
+    // Detection is gated on the previous snapshot's explicit `localized: true` marker rather
+    // than inferred from column shape: a shape-only heuristic cannot tell "this collection
+    // was localized" apart from "someone added fields to a non-localized collection", and
+    // false-positively archiving + dropping a table is far worse than not automating a rare
+    // disable. A pre-marker snapshot records no marker, so it reads as unknown and no
+    // transition is emitted — that self-heals as soon as one migrate:create runs while the
+    // entity is still localized.
+    if (c.localized !== true) {
+      const prevMain = previousSnapshot.tables.find(
+        t => t.name === (spec?.mainTable ?? c.tableName)
+      );
+      if (prevMain?.localized !== true) continue;
+      // The snapshot's recorded column list is the AUTHORITATIVE description of what the
+      // companion actually holds; the current config is not, because the same edit that
+      // flipped the switch may also have added or unflagged fields. Restoring exactly the
+      // recorded columns keeps the transition correct in both directions:
+      //   - a field whose `localized: true` was removed alongside the switch is still brought
+      //     home (it is in the recorded list even though it no longer classifies);
+      //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
+      //     being restored from a companion that never had that column (which emitted SQL that
+      //     failed on apply).
+      const disableSpec = buildDisableSpec(c, prevMain, dialect, defaultLocale);
+      if (!disableSpec) continue;
+      const plan = planCompanionMigration({
+        spec: disableSpec,
+        prevMainColumnNames: [],
+        companionExisted: false,
+        localized: false,
+        previouslyLocalized: true,
+      });
+      if (plan.kind !== "none") entries.push({ spec: disableSpec, plan });
+      continue;
+    }
+
     if (!spec) continue;
 
     const prevTable = previousSnapshot.tables.find(
@@ -362,29 +436,86 @@ function planCompanionMigrations(
 }
 
 /**
+ * i18n H5: stamp the snapshot's localization marker on a desired table.
+ *
+ * Records both that the entity is localized AND which columns its companion holds. The column
+ * list is what makes a later DISABLE exact: it states what is really in the `_locales` table at
+ * this point in time, so the disable brings back precisely those columns instead of guessing
+ * from a config that has since changed.
+ *
+ * Recorded ONLY when the entity is localized, so a non-localized table's snapshot JSON is
+ * byte-identical to what it was before this marker existed (no churn in committed snapshots).
+ * The absent/`undefined` case is deliberately indistinguishable from a pre-marker snapshot —
+ * both mean "we cannot prove this was localized", and the DISABLE planner only fires on an
+ * explicit `true`, so an unknown never triggers a destructive transition.
+ */
+function withLocalizedMarker(
+  table: TableSpec,
+  entity: MinimalConfigEntity,
+  dialect: SupportedDialect
+): TableSpec {
+  if (entity.localized !== true) return table;
+  // `defaultLocale` does not affect column names, so any value works here.
+  const spec = deriveCompanionSpec({
+    slug: entity.slug,
+    dbName: entity.tableName,
+    fields: entity.fields,
+    dialect,
+    defaultLocale: "en",
+    collectionLocalized: true,
+    status: entity.status === true,
+  });
+  return {
+    ...table,
+    localized: true,
+    ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
+  };
+}
+
+/**
  * Remove the main-table `drop_column` operations that a companion ENABLE migration already
  * performs (create + seed + drop). Without this, the localized columns would be dropped twice
  * — once by the main migration's diff, once by the companion — and the second drop fails.
+ *
+ * The DISABLE transition is the mirror image: its SQL re-adds the columns to the main table
+ * itself, so the diff's `add_column` ops for those same columns are stripped too (otherwise
+ * the column is added twice and the second ALTER fails).
  */
 function stripRelocatedDrops(
   operations: Operation[],
   companionPlans: CompanionPlanEntry[]
 ): Operation[] {
   const relocated = new Set<string>();
+  const restored = new Set<string>();
   for (const { spec, plan } of companionPlans) {
-    if (plan.kind !== "enable") continue; // create-only has no main-table drops
-    for (const col of spec.columns) {
-      relocated.add(`${spec.mainTable}::${col.name}`);
+    // create-only has no main-table drops
+    if (plan.kind === "enable") {
+      for (const col of spec.columns) {
+        relocated.add(`${spec.mainTable}::${col.name}`);
+      }
+    } else if (plan.kind === "disable") {
+      // The disable SQL re-adds these columns itself (step 1 of buildLocalizationDownSql).
+      for (const col of spec.columns) {
+        restored.add(`${spec.mainTable}::${col.name}`);
+      }
     }
   }
-  if (relocated.size === 0) return operations;
-  return operations.filter(
-    op =>
-      !(
-        op.type === "drop_column" &&
-        relocated.has(`${op.tableName}::${op.columnName}`)
-      )
-  );
+  if (relocated.size === 0 && restored.size === 0) return operations;
+  return operations.filter(op => {
+    if (
+      op.type === "drop_column" &&
+      relocated.has(`${op.tableName}::${op.columnName}`)
+    ) {
+      return false;
+    }
+    if (
+      op.type === "add_column" &&
+      restored.has(`${op.tableName}::${op.column.name}`)
+    ) {
+      return false;
+    }
+    return true;
+  });
 }
 
 /**
@@ -410,10 +541,14 @@ export function buildDesiredSnapshotFromConfig(
     // forwarding pushschema-pipeline.ts already does for the diff path.
     // `localized` omits translatable columns (they live in the companion).
     tables.push(
-      buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
-        hasStatus: c.status === true,
-        localized: c.localized === true,
-      })
+      withLocalizedMarker(
+        buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          hasStatus: c.status === true,
+          localized: c.localized === true,
+        }),
+        c,
+        dialect
+      )
     );
   }
   for (const c of singles) {
@@ -422,10 +557,14 @@ export function buildDesiredSnapshotFromConfig(
     // Omit translatable columns from the main table; the companion (planned below)
     // holds them.
     tables.push(
-      buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
-        hasStatus: c.status === true,
-        localized: c.localized === true,
-      })
+      withLocalizedMarker(
+        buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          hasStatus: c.status === true,
+          localized: c.localized === true,
+        }),
+        c,
+        dialect
+      )
     );
   }
   for (const c of components) {
@@ -437,9 +576,13 @@ export function buildDesiredSnapshotFromConfig(
     // i18n: a localized component omits its translatable columns too — they live
     // in the companion `comp_<slug>_locales` (planned below).
     tables.push(
-      buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
-        localized: c.localized === true,
-      })
+      withLocalizedMarker(
+        buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
+          localized: c.localized === true,
+        }),
+        c,
+        dialect
+      )
     );
   }
   return { tables };
