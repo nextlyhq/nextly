@@ -50,7 +50,7 @@
     "@types/tar": "^6.1.13",
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
-    "eslint": "^9.34.0",
+    "eslint": "^9.39.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

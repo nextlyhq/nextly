@@ -38,7 +38,7 @@
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.17",
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
     "nextly": "workspace:*",

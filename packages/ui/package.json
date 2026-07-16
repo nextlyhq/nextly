@@ -59,7 +59,7 @@
     "@vitejs/plugin-react": "^5.1.0",
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
-    "eslint": "^9.34.0",
+    "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
     "react": "19.2.0",
