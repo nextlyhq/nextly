@@ -35,7 +35,9 @@ import { handleLogin } from "../login";
 import { handleLogout } from "../logout";
 import { handleRefresh } from "../refresh";
 import { handleRegister } from "../register";
+import { handleAcceptInvite } from "../accept-invite";
 import { handleResetPassword } from "../reset-password";
+import { NextlyError } from "../../../errors/nextly-error";
 import { handleSession } from "../session";
 import { handleSetup, handleSetupStatus } from "../setup";
 import { handleResendVerification, handleVerifyEmail } from "../verify-email";
@@ -511,6 +513,113 @@ describe("reset-password handler: respondAction shape", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty("data");
     expect(body).toEqual({ message: "Password reset." });
+  });
+});
+
+describe("accept-invite handler", () => {
+  const baseDeps = () => ({
+    allowedOrigins: ALLOWED_ORIGINS,
+    acceptInvite: vi.fn().mockResolvedValue({ userId: "u1" }),
+  });
+
+  it("returns just { message: 'Invite accepted.' } on success", async () => {
+    const deps = baseDeps();
+    const req = makeRequest("POST", { token: "t", newPassword: "Pass1234!" });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("data");
+    expect(body).toEqual({ message: "Invite accepted." });
+    expect(deps.acceptInvite).toHaveBeenCalledWith("t", "Pass1234!");
+  });
+
+  it("400s when the token or password is missing", async () => {
+    const deps = baseDeps();
+    const req = makeRequest("POST", { token: "t" });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("400s on non-string fields rather than passing them to the service", async () => {
+    const deps = baseDeps();
+    const req = makeRequest("POST", { token: 123, newPassword: { a: 1 } });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("400s on an empty body instead of a 500", async () => {
+    const deps = baseDeps();
+    // No JSON body at all — the parse falls back to {} and both fields fail.
+    const req = new Request("http://localhost:3000/admin/api/auth/x", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        cookie: "nextly_csrf=csrf-test-token",
+        "x-csrf-token": "csrf-test-token",
+      },
+    });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("collapses a bad token into one generic message", async () => {
+    const deps = baseDeps();
+    deps.acceptInvite.mockRejectedValue(
+      NextlyError.validation({
+        errors: [{ path: "token", code: "INVALID_INVITE", message: "no" }],
+      })
+    );
+    const req = makeRequest("POST", {
+      token: "wrong",
+      newPassword: "Pass1234!",
+    });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toBe(
+      "This invite link is invalid or has expired."
+    );
+  });
+
+  it("passes a weak-password error through, since the person can act on it", async () => {
+    const deps = baseDeps();
+    deps.acceptInvite.mockRejectedValue(
+      NextlyError.validation({
+        errors: [
+          { path: "newPassword", code: "WEAK_PASSWORD", message: "Too short." },
+        ],
+      })
+    );
+    const req = makeRequest("POST", { token: "t", newPassword: "weak" });
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      error?: { data?: { errors?: Array<{ path: string }> } };
+    };
+    expect(body.error?.data?.errors?.[0]?.path).toBe("newPassword");
+  });
+
+  it("403s when the CSRF token is missing", async () => {
+    const deps = baseDeps();
+    const req = makeRequest(
+      "POST",
+      { token: "t", newPassword: "Pass1234!", csrfToken: "mismatch" },
+      { cookie: "nextly_csrf=different" }
+    );
+    const res = await handleAcceptInvite(req, deps);
+
+    expect(res.status).toBe(403);
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
   });
 });
 

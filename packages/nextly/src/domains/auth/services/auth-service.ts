@@ -1,7 +1,8 @@
 import { randomBytes, createHash } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, lt, isNull } from "drizzle-orm";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { eq, and, gt, lt, isNull } from "drizzle-orm";
 
 import {
   verifyPassword as verifyPasswordBcrypt,
@@ -43,6 +44,60 @@ interface ConsumeResetTokenResult {
   email: string;
 }
 
+/** Result of {@link AuthService.generateInviteToken}. */
+interface InviteTokenResult {
+  /** The raw, single-use token. Returned once and never stored. */
+  token: string;
+  /** When the link stops working. */
+  expiresAt: Date;
+}
+
+/** Result of {@link AuthService.acceptInvite} on success. */
+interface AcceptInviteResult {
+  userId: string;
+}
+
+/**
+ * The fluent slice of a Drizzle transaction this service uses.
+ *
+ * `withTransaction` hands back `unknown` because the concrete transaction type
+ * is dialect-specific; narrowing to the methods actually called keeps the body
+ * typed without an `any`.
+ */
+interface TransactionLike {
+  update(table: unknown): {
+    set(data: unknown): { where(condition: unknown): Promise<unknown> };
+  };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+}
+
+/**
+ * The number of rows a Drizzle write affected, read from the right field for
+ * the running dialect.
+ *
+ * Each driver reports it differently — better-sqlite3 as `changes`,
+ * node-postgres as `rowCount`, mysql2 as a `ResultSetHeader.affectedRows` (in
+ * an array on newer versions) — so an atomic claim that needs to know whether
+ * it won a race cannot read a single field. Exported for its own unit test:
+ * this is the one piece of the invite flow that is genuinely dialect-specific.
+ */
+export function affectedRowCount(
+  result: unknown,
+  dialect: SupportedDialect
+): number {
+  if (dialect === "sqlite") {
+    return (result as { changes?: number }).changes ?? 0;
+  }
+  if (dialect === "postgresql") {
+    return (result as { rowCount?: number }).rowCount ?? 0;
+  }
+  const header = Array.isArray(result)
+    ? (result[0] as { affectedRows?: number } | undefined)
+    : (result as { affectedRows?: number });
+  return header?.affectedRows ?? 0;
+}
+
 /**
  * Authentication Service
  *
@@ -67,6 +122,11 @@ interface ConsumeResetTokenResult {
  */
 export class AuthService extends BaseService {
   private readonly TOKEN_EXPIRY_HOURS = 24;
+
+  // Seven days, the industry convention for an invite (GitHub, Vercel,
+  // Directus). Longer than a password-reset link because it is the first
+  // thing a new person receives and may sit unread over a weekend.
+  private readonly INVITE_TOKEN_EXPIRY_HOURS = 24 * 7;
 
   readonly emailService?: EmailService;
 
@@ -682,6 +742,181 @@ export class AuthService extends BaseService {
   }
 
   /**
+   * Mint a single-use set-password link for an existing account.
+   *
+   * The link is the artifact an admin hands to a new user; email is only ever
+   * one way to deliver it. Follows the same shape as a password-reset token —
+   * a 256-bit random value of which only the SHA-256 hash is stored, one active
+   * token per account — but keyed on the user id and given a longer life.
+   *
+   * The raw token is returned to the caller and never persisted. There is no
+   * way to recover it afterwards; mint a new one instead.
+   */
+  async generateInviteToken(userId: string): Promise<InviteTokenResult> {
+    const user = await this.db.query.users.findFirst({
+      where: eq(this.tables.users.id, userId),
+      columns: { id: true },
+    });
+    if (!user) {
+      throw NextlyError.notFound({ logContext: { userId } });
+    }
+
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+
+    const expiresAt = new Date(
+      Date.now() + this.INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
+    );
+
+    try {
+      // One active invite per account, in one transaction: a freshly minted
+      // link supersedes any earlier one, and if the insert fails the delete
+      // rolls back so the previous link stays valid rather than the account
+      // being left with none. The unique index on user_id serialises two
+      // concurrent re-invites so they cannot both leave a live link.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+        await tx
+          .delete(this.tables.userInviteTokens)
+          .where(eq(this.tables.userInviteTokens.userId, userId));
+
+        await tx.insert(this.tables.userInviteTokens).values({
+          userId,
+          tokenHash,
+          expires: expiresAt,
+        });
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    return { token: rawToken, expiresAt };
+  }
+
+  /** The one public error every unusable-invite path returns. */
+  private invalidInviteError(
+    logContext?: Record<string, unknown>
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: "token",
+          code: "INVALID_INVITE",
+          message: "This invite link is invalid or has expired.",
+        },
+      ],
+      logContext,
+    });
+  }
+
+  /**
+   * Accept an invite: set the account's password and let it sign in.
+   *
+   * Clicking a link that was delivered to an address is itself proof of the
+   * address, so acceptance sets `emailVerified` and `isActive` alongside the
+   * password in one transaction — there is no separate verification round trip,
+   * and no window where the account has a password but still cannot sign in.
+   *
+   * The failure messages do not distinguish "never existed" from "already
+   * used" from "expired-by-a-second", to avoid confirming which invites are
+   * live to whoever holds a guessed token.
+   */
+  async acceptInvite(
+    token: string,
+    newPassword: string
+  ): Promise<AcceptInviteResult> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+
+    let invite: { id: number; userId: string; expires: Date } | undefined;
+    try {
+      invite = await this.db.query.userInviteTokens.findFirst({
+        where: and(
+          eq(this.tables.userInviteTokens.tokenHash, tokenHash),
+          isNull(this.tables.userInviteTokens.usedAt)
+        ),
+        columns: { id: true, userId: true, expires: true },
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    // Unknown, already used, and expired all return the same error, so a
+    // guessed token cannot tell a live invite from a dead one. The expiry
+    // detail is kept for the log only.
+    if (!invite || invite.expires < new Date()) {
+      throw this.invalidInviteError(
+        invite ? { inviteId: invite.id, expiredAt: invite.expires } : undefined
+      );
+    }
+
+    const passwordStrength = validatePasswordStrength(newPassword);
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
+      });
+    }
+
+    const passwordHash = await hashPasswordBcrypt(newPassword);
+
+    // Claim the token before touching the account. Two acceptances can both
+    // pass the read above; the conditional update lets exactly one flip
+    // usedAt from null, and only that one goes on to set the password — so a
+    // race cannot end with two different passwords, last-writer-wins.
+    let claimed = false;
+    try {
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+
+        const claim = await tx
+          .update(this.tables.userInviteTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(this.tables.userInviteTokens.id, invite.id),
+              isNull(this.tables.userInviteTokens.usedAt),
+              gt(this.tables.userInviteTokens.expires, new Date())
+            )
+          );
+
+        // Zero rows: another acceptance already claimed it, or it expired
+        // between the read and here. Leave the account untouched.
+        if (affectedRowCount(claim, this.dialect) !== 1) return;
+        claimed = true;
+
+        await tx
+          .update(this.tables.users)
+          .set({
+            passwordHash,
+            passwordUpdatedAt: new Date(),
+            emailVerified: new Date(),
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(this.tables.users.id, invite.userId));
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    if (!claimed) {
+      throw this.invalidInviteError({
+        inviteId: invite.id,
+        reason: "already-claimed",
+      });
+    }
+
+    // No auth event is emitted: the closest existing one, passwordChanged,
+    // carries "an established password was rotated" semantics and its listeners
+    // (e.g. a security-notification email) would be wrong for a first set.
+
+    return { userId: invite.userId };
+  }
+
+  /**
    * Clean up expired tokens
    */
   async cleanupExpiredTokens(): Promise<void> {
@@ -695,6 +930,10 @@ export class AuthService extends BaseService {
       await this.db
         .delete(this.tables.emailVerificationTokens)
         .where(lt(this.tables.emailVerificationTokens.expires, now));
+
+      await this.db
+        .delete(this.tables.userInviteTokens)
+        .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
       console.error("Failed to cleanup expired tokens:", error);
     }

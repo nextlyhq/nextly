@@ -20,6 +20,7 @@ export {
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/mysql";
 export { refreshTokensRelations } from "../auth-tokens/mysql-relations";
