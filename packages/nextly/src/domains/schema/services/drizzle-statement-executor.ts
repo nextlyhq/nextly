@@ -7,15 +7,15 @@
 // and then execute them itself. The old DrizzlePushService.apply() did
 // both push AND execute together — incompatible with interception.
 //
-// Dialect-specific behavior preserved verbatim from the old service:
-//   - SQLite: rewriteRecreateInsertForMissingCols handles drizzle-kit's
-//     recreate-table pattern where some columns don't yet exist on the
-//     source table. PR-4 layers PRAGMA foreign_keys = OFF / ON wrapping
-//     on top of this.
-//   - MySQL: no workaround needed at this layer. drizzle-kit 0.31.10's
-//     silent-drop bug only affected its apply() method; we get the
-//     correct statementsToExecute from pushSchema directly and run
-//     them straight.
+// Dialect notes (drizzle-kit v1):
+//   - SQLite: v1's recreate-table flow emits its PRAGMA foreign_keys
+//     OFF/ON choreography INSIDE the statement stream and its rebuild
+//     INSERT..SELECT lists only pre-existing columns — the pre-v1
+//     missing-column NULL-rewrite is gone. The pipeline still toggles
+//     the pragma outside any transaction (see PR-4 rationale below);
+//     passing v1's inline pragmas through is harmless and correct.
+//   - MySQL: statements from pushSchema are executed straight; MySQL
+//     DDL auto-commits regardless of the transaction wrapper.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
@@ -116,10 +116,9 @@ export class DrizzleStatementExecutor
           (s: string) =>
             s.length > 0 &&
             !s.startsWith("--") &&
-            /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
+            /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|PRAGMA)\b/i.test(s)
         );
-      for (const raw of pieces) {
-        const stmt = await this.rewriteRecreateInsertForMissingCols(raw);
+      for (const stmt of pieces) {
         try {
           dbTyped.run(sqlTag.raw(stmt));
         } catch (err) {
@@ -175,42 +174,5 @@ export class DrizzleStatementExecutor
           `First few rows: ${sample}`
       );
     }
-  }
-
-  // Preserved verbatim (with structural typing) from the old
-  // DrizzlePushService — see that class for the original rationale.
-  // Drizzle-kit 0.31.10's SQLite recreate-table strategy emits
-  //   INSERT INTO `__new_<t>`(cols) SELECT cols FROM `<t>`
-  // where `cols` includes columns that do not yet exist in `<t>`.
-  // That fails with "no such column". This rewrites the SELECT list
-  // so missing columns are substituted with NULL.
-  private async rewriteRecreateInsertForMissingCols(
-    stmt: string
-  ): Promise<string> {
-    const m = stmt.match(
-      /^INSERT\s+INTO\s+`(__new_[^`]+)`\s*\(([^)]+)\)\s+SELECT\s+([^]+?)\s+FROM\s+`([^`]+)`\s*$/i
-    );
-    if (!m) return stmt;
-    const [, , insertColsRaw, , sourceTable] = m;
-    if (/["\0]/.test(sourceTable)) return stmt;
-    const insertCols = insertColsRaw
-      .split(",")
-      .map(c => c.trim().replace(/^`|`$/g, "").replace(/^"|"$/g, ""));
-    let sourceColNames: string[];
-    try {
-      const { sql: sqlTag } = await import("drizzle-orm");
-      const dbTyped = this.db as SqliteSyncRunClient;
-      const rows = dbTyped.all(
-        sqlTag.raw(`PRAGMA table_info("${sourceTable}")`)
-      ) as Array<{ name: string }>;
-      sourceColNames = rows.map(r => r.name);
-    } catch {
-      return stmt;
-    }
-    const selectList = insertCols
-      .map(col => (sourceColNames.includes(col) ? `"${col}"` : "NULL"))
-      .join(", ");
-    const colList = insertCols.map(col => `"${col}"`).join(", ");
-    return `INSERT INTO \`__new_${sourceTable}\`(${colList}) SELECT ${selectList} FROM \`${sourceTable}\``;
   }
 }

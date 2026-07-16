@@ -1,8 +1,8 @@
 // Direct pushSchema helper for fresh / static-tables-only flows.
 //
-// What this is: a thin wrapper around drizzle-kit's pushSchema (PG +
-// SQLite paths) and generateMigration (MySQL path) with no diff engine,
-// no Classifier, no PromptDispatcher, no MigrationJournal. Used by:
+// What this is: a thin wrapper around drizzle-kit v1's per-dialect
+// pushSchema with no diff engine, no Classifier, no PromptDispatcher,
+// no MigrationJournal. Used by:
 //
 //   - `cli/commands/dev-server.ts:ensureCoreTables` — pushes the static
 //     core tables (users, permissions, dynamic_collections, etc.) on a
@@ -11,6 +11,9 @@
 //   - `cli/commands/migrate-fresh.ts:reconcileMysqlSchema` — safety net
 //     for historical MySQL drift after `migrate:fresh --seed` runs the
 //     bundled migrations. Pushes static schemas to fill any gaps.
+//   - `domains/schema/migrate/core-reconcile.ts` — `nextly migrate`
+//     Phase 1 core-table reconciliation.
+//   - `init/first-run.ts` — first-boot setup.
 //
 // Why this exists separately from `applyDesiredSchema`: per the user
 // decision Q3=A (2026-04-28), `nextly migrate:fresh` and the boot
@@ -18,14 +21,22 @@
 // never need prompts (prompts on a fresh DB would be silly), they never
 // need classifier events (no existing data to classify against), they
 // never need a journal entry (these are setup operations, not user
-// schema changes). Consolidating them into the pipeline would require
-// adding a "no-prompt at init" policy with its own user-visible
-// behavior tradeoffs — out of F8 scope per the brainstorm.
+// schema changes).
 //
-// This module REPLACES the dialect dispatch logic from the legacy
-// `DrizzlePushService.apply` (extracted verbatim in F8 PR 2; legacy
-// class deleted in F8 PR 4 once all callers had migrated).
+// All three dialects share one flow on v1: pushSchema generates the
+// statements diffed against the LIVE database, and we execute them
+// ourselves so the drop-guard + destructive-statement scan can inspect
+// the SQL first (drizzle-kit's own result.apply() would run everything
+// opaquely — including DROPs for user tables absent from a core-only
+// push, the historical data-loss bug the guard exists for).
+//
+// Boot-safety policy: unexpected destructive statements are STRIPPED
+// and reported (result.hints + console.warn), not thrown — a server
+// boot must not brick over a statement we were never going to run.
+// The interactive pipeline (pushschema-pipeline.ts) takes the opposite
+// stance and throws, because a user is present to act on the failure.
 
+import type { KitHint } from "../../../database/drizzle-kit-lazy";
 import {
   getMySQLDrizzleKit,
   getPgDrizzleKit,
@@ -35,32 +46,30 @@ import {
 import {
   drizzleTableNames,
   filterUnsafeStatements,
+  findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
 
 export type FreshPushDialect = "postgresql" | "mysql" | "sqlite";
 
 // Result shape returned to callers. `applied` is always true when no
-// error is thrown — the helper is "fire and forget" by design.
+// error is thrown — the helper is "fire and forget" by design. `hints`
+// carries drizzle-kit's own hints (empty in every observed rc.4
+// scenario) plus one entry per destructive statement the boot-safety
+// policy stripped.
 export interface FreshPushResult {
-  hasDataLoss: boolean;
-  warnings: string[];
+  hints: KitHint[];
   statementsExecuted: string[];
   applied: true;
 }
 
-// Options reserved for future per-call tweaks. Currently empty (the
-// MySQL `databaseName` extraction is dead in this helper because MySQL
-// flows through applyViaGenerate, which doesn't introspect the live DB
-// — it generates from an empty snapshot, so the DB name is irrelevant).
+// Options reserved for future per-call tweaks.
 export type FreshPushOptions = Record<string, never>;
 
 /**
- * Push a static / fresh schema directly via drizzle-kit, bypassing the
- * pipeline's diff + classifier + prompt machinery. PG uses pushSchema
- * directly; SQLite uses pushSchema with manual statement execution
- * (drizzle-kit 0.31.10's apply() uses .all() which fails on DDL); MySQL
- * uses generateDrizzleJson + generateMigration (drizzle-kit 0.31.10's
- * MySQL apply() silently drops non-destructive DDL).
+ * Push a static / fresh schema directly via drizzle-kit v1, bypassing the
+ * pipeline's diff + classifier + prompt machinery. All dialects route
+ * through pushSchema; statements are executed by Nextly (never by kit's
+ * apply()) so the drop-guard and destructive-statement scan run first.
  *
  * Throws on:
  *   - Unknown dialect (front-of-function guard, defends against callers
@@ -83,259 +92,168 @@ export async function freshPushSchema(
     throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
-  if (dialect === "mysql") {
-    return applyViaGenerate("mysql", db, schema);
-  }
-  if (dialect === "sqlite") {
-    return applyViaPushSchemaSQLite(db, schema);
+  const result = await pushForDialect(dialect, db, schema);
+
+  const desiredTableNames = drizzleTableNames(schema);
+  const pieces = splitStatements(result.sqlStatements);
+  const safe = filterUnsafeStatements(pieces, desiredTableNames);
+
+  // Boot-safety: strip (never execute) destructive statements the kit
+  // emitted unexpectedly, and surface them via hints + warn. See the
+  // header comment for why this path strips where the pipeline throws.
+  const offenders = new Set(findUnexpectedDestructiveStatements(safe));
+  const runnable = safe.filter(s => !offenders.has(s));
+  const hints: KitHint[] = [
+    ...result.hints,
+    ...[...offenders].map(statement => ({
+      hint: "blocked destructive statement on fresh-push",
+      statement,
+    })),
+  ];
+  for (const statement of offenders) {
+    console.warn(
+      `[Nextly schema] fresh-push blocked a destructive statement emitted ` +
+        `by drizzle-kit (core reconciles must never destroy data; route ` +
+        `intentional drops through migrations): ${statement}`
+    );
   }
 
-  // PostgreSQL: pushSchema computes the diff, but we execute the statements
-  // ourselves so the shared drop-guard can strip drops of tables outside the
-  // provided schema. drizzle-kit's own result.apply() would run them opaquely
-  // — including DROP TABLE for user (dc_/single_/comp_) tables that are absent
-  // from a core-only push, which is the data-loss bug this guards against. The
-  // safe set runs inside one transaction for an atomic reconcile.
-  const kit = await getPgDrizzleKit();
-  const result = await kit.pushSchema(schema, db, ["public"]);
-  const desiredTableNames = drizzleTableNames(schema);
-  const safe = filterUnsafeStatements(
-    result.statementsToExecute,
-    desiredTableNames
+  const executed = await executeStatements(dialect, db, runnable);
+
+  return { hints, statementsExecuted: executed, applied: true };
+}
+
+// Per-dialect pushSchema invocation. MySQL's v1 entrypoint requires the
+// database name positionally; resolve it from the live connection so
+// callers don't have to thread it through.
+async function pushForDialect(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>
+): Promise<{ sqlStatements: string[]; hints: KitHint[] }> {
+  switch (dialect) {
+    case "postgresql": {
+      const kit = await getPgDrizzleKit();
+      return kit.pushSchema(schema, db, { schemas: ["public"] });
+    }
+    case "mysql": {
+      const kit = await getMySQLDrizzleKit();
+      const databaseName = await currentMysqlDatabase(db);
+      return kit.pushSchema(schema, db, databaseName);
+    }
+    case "sqlite": {
+      const kit = await getSQLiteDrizzleKit();
+      return kit.pushSchema(schema, db);
+    }
+  }
+}
+
+async function currentMysqlDatabase(db: unknown): Promise<string> {
+  const { sql: sqlTag } = await import("drizzle-orm");
+  type AsyncExecuteDb = { execute: (q: unknown) => Promise<unknown> };
+  const raw = await (db as AsyncExecuteDb).execute(
+    sqlTag.raw("SELECT DATABASE() AS db")
   );
+  // drizzle-orm/mysql2 execute() resolves to [rows, fields].
+  const rows = Array.isArray(raw) ? raw[0] : raw;
+  const name = Array.isArray(rows)
+    ? (rows[0] as { db?: string } | undefined)?.db
+    : undefined;
+  if (!name) {
+    throw new Error(
+      "freshPushSchema: could not determine the current MySQL database " +
+        "(SELECT DATABASE() returned no name). Connect with a database " +
+        "selected in the connection URL."
+    );
+  }
+  return name;
+}
+
+// v1 emits one statement per array entry in every observed case, but a
+// defensive split keeps multi-statement strings executable. PRAGMA is in
+// the allow-list because v1's SQLite recreate flow emits its
+// `PRAGMA foreign_keys=OFF/ON` choreography inside the statement stream —
+// dropping those would run rebuilds with FK enforcement in an unknown
+// state (#5782 territory).
+function splitStatements(sqlStatements: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of sqlStatements) {
+    for (const piece of raw
+      .split(";")
+      .map(s => s.trim())
+      .filter(
+        s =>
+          s.length > 0 &&
+          !s.startsWith("--") &&
+          /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|PRAGMA)\b/i.test(s)
+      )) {
+      out.push(piece);
+    }
+  }
+  return out;
+}
+
+// Executes statements per dialect, swallowing idempotency errors
+// ("already exists" / duplicate column) so re-runs over an existing
+// schema reconcile instead of failing. v1 wraps driver errors in
+// DrizzleQueryError with the original error on `.cause`, so both the
+// wrapper message and the cause message are checked.
+async function executeStatements(
+  dialect: FreshPushDialect,
+  db: unknown,
+  statements: string[]
+): Promise<string[]> {
+  if (statements.length === 0) return [];
   const { sql: sqlTag } = await import("drizzle-orm");
   const executed: string[] = [];
+
+  type SqliteRunDb = { run: (q: unknown) => unknown };
+  type AsyncExecuteDb = { execute: (q: unknown) => Promise<unknown> };
   type PgTxDb = {
     transaction: (
       fn: (tx: { execute: (q: unknown) => Promise<unknown> }) => Promise<void>
     ) => Promise<void>;
   };
-  await (db as PgTxDb).transaction(async tx => {
-    for (const raw of safe) {
-      const stmt = raw.replace(/--> statement-breakpoint/g, "").trim();
-      if (!stmt) continue;
-      await tx.execute(sqlTag.raw(stmt));
-      executed.push(raw);
-    }
-  });
-  return {
-    hasDataLoss: result.hasDataLoss,
-    warnings: result.warnings,
-    statementsExecuted: executed,
-    applied: true,
+
+  const isIdempotencyError = (err: unknown): boolean => {
+    const msg = err instanceof Error ? err.message : String(err);
+    const causeMsg =
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : "";
+    return [msg, causeMsg].some(
+      m =>
+        m.includes("already exists") ||
+        m.includes("duplicate column name") ||
+        m.includes("Duplicate")
+    );
   };
-}
 
-// SQLite apply path that uses pushSchema() to get statements diffed
-// against the LIVE database, then executes them with .run() ourselves.
-// Why: drizzle-kit 0.31.10's returned apply() uses .all() for DDL which
-// fails on statements that do not return rows. The statementsToExecute
-// array, however, is correct and reflects the real ALTER TABLE / ADD
-// COLUMN needed for existing tables. The earlier approach of diffing
-// against an empty {} snapshot produced CREATE TABLE statements only,
-// so column additions against existing tables became no-ops under
-// `CREATE TABLE IF NOT EXISTS` rewriting.
-async function applyViaPushSchemaSQLite(
-  db: unknown,
-  schema: Record<string, unknown>
-): Promise<FreshPushResult> {
-  const kit = await getSQLiteDrizzleKit();
-  const result = await kit.pushSchema(schema, db);
-
-  if (!result.statementsToExecute || result.statementsToExecute.length === 0) {
-    return {
-      hasDataLoss: result.hasDataLoss ?? false,
-      warnings: result.warnings ?? [],
-      statementsExecuted: [],
-      applied: true,
-    };
-  }
-
-  // Allow-list of tables this push is responsible for, by SQL name. The guard
-  // strips any DROP for a table outside this set (e.g. user dc_/single_/comp_
-  // tables absent from a core-only push) so they are never destroyed.
-  const desiredTableNames = drizzleTableNames(schema);
-
-  const { sql: sqlTag } = await import("drizzle-orm");
-  const executed: string[] = [];
-  for (const rawStmt of result.statementsToExecute) {
-    const pieces = rawStmt
-      .split("\n")
-      .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
-      .join("\n")
-      .split(";")
-      .map((s: string) => s.trim())
-      .filter(
-        (s: string) =>
-          s.length > 0 &&
-          !s.startsWith("--") &&
-          /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
-      );
-    const safePieces = filterUnsafeStatements(pieces, desiredTableNames);
-    for (const raw of safePieces) {
-      // Drizzle-kit 0.31.10's SQLite recreate-table strategy emits
-      //   INSERT INTO `__new_<t>`(cols) SELECT cols FROM `<t>`
-      // where `cols` includes columns that do not yet exist in `<t>`.
-      // That fails with "no such column". Rewrite the SELECT list so
-      // columns missing from the live source are substituted with NULL.
-      const stmt = await rewriteRecreateInsertForMissingCols(db, raw);
-      try {
-        type SqliteRunDb = { run: (sql: unknown) => unknown };
-        (db as SqliteRunDb).run(sqlTag.raw(stmt));
+  if (dialect === "postgresql") {
+    // One transaction for an atomic reconcile (PG supports transactional
+    // DDL). Idempotency errors abort a PG transaction, so re-runs over an
+    // existing schema are expected to emit zero statements instead.
+    await (db as PgTxDb).transaction(async tx => {
+      for (const stmt of statements) {
+        await tx.execute(sqlTag.raw(stmt));
         executed.push(stmt);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (
-          msg.includes("already exists") ||
-          msg.includes("duplicate column name")
-        ) {
-          continue;
-        }
-        throw err;
       }
+    });
+    return executed;
+  }
+
+  for (const stmt of statements) {
+    try {
+      if (dialect === "sqlite") {
+        (db as SqliteRunDb).run(sqlTag.raw(stmt));
+      } else {
+        await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
+      }
+      executed.push(stmt);
+    } catch (err) {
+      if (isIdempotencyError(err)) continue;
+      throw err;
     }
   }
-
-  return {
-    hasDataLoss: result.hasDataLoss ?? false,
-    warnings: result.warnings ?? [],
-    statementsExecuted: executed,
-    applied: true,
-  };
-}
-
-// Rewrites a SQLite recreate-table INSERT to substitute NULL for any
-// column that does not exist in the source table. Returns the input
-// unchanged if it is not an INSERT of the recreate form.
-// Shape recognised:
-//   INSERT INTO `__new_<t>`("a","b",...) SELECT "a","b",... FROM `<t>`
-async function rewriteRecreateInsertForMissingCols(
-  db: unknown,
-  stmt: string
-): Promise<string> {
-  const m = stmt.match(
-    /^INSERT\s+INTO\s+`(__new_[^`]+)`\s*\(([^)]+)\)\s+SELECT\s+([^]+?)\s+FROM\s+`([^`]+)`\s*$/i
-  );
-  if (!m) return stmt;
-  const [, , insertColsRaw, , sourceTable] = m;
-  // Defence-in-depth: the capture matched `[^`]+` so it cannot contain a
-  // backtick, but `"` and NUL would still break the PRAGMA quoting below.
-  // drizzle-kit only emits `dc_<slug>` style names in practice — bail out
-  // if the identifier violates our assumptions rather than risk injection.
-  if (/["\0]/.test(sourceTable)) return stmt;
-  const insertCols = insertColsRaw
-    .split(",")
-    .map(c => c.trim().replace(/^`|`$/g, "").replace(/^"|"$/g, ""));
-  let sourceColNames: string[];
-  try {
-    const { sql: sqlTag } = await import("drizzle-orm");
-    type SqliteAllDb = { all: (sql: unknown) => Array<{ name: string }> };
-    const rows = (db as SqliteAllDb).all(
-      sqlTag.raw(`PRAGMA table_info("${sourceTable}")`)
-    );
-    sourceColNames = rows.map(r => r.name);
-  } catch {
-    // If the live pragma fails, leave the statement unchanged so the
-    // original error surfaces rather than a misleading rewrite.
-    return stmt;
-  }
-  const selectList = insertCols
-    .map(col => (sourceColNames.includes(col) ? `"${col}"` : "NULL"))
-    .join(", ");
-  const colList = insertCols.map(col => `"${col}"`).join(", ");
-  return `INSERT INTO \`__new_${sourceTable}\`(${colList}) SELECT ${selectList} FROM \`${sourceTable}\``;
-}
-
-// Dialect-agnostic apply path that bypasses the broken pushSchema().
-// Generates a Drizzle JSON snapshot of the desired schema, diffs it
-// against an empty snapshot, and executes the resulting DDL SQL.
-//
-// Used for MySQL because drizzle-kit 0.31.10's MySQL pushSchema()
-// silently drops non-destructive DDL. The generate path produces correct
-// CREATE/ALTER statements; we execute them ourselves.
-async function applyViaGenerate(
-  dialect: "mysql" | "sqlite",
-  db: unknown,
-  schema: Record<string, unknown>
-): Promise<FreshPushResult> {
-  const kit =
-    dialect === "mysql"
-      ? await getMySQLDrizzleKit()
-      : await getSQLiteDrizzleKit();
-
-  const curJson = await kit.generateDrizzleJson(schema);
-  const prevJson = await kit.generateDrizzleJson({});
-
-  const sqlStatements = await kit.generateMigration(prevJson, curJson);
-
-  if (!sqlStatements || sqlStatements.length === 0) {
-    return {
-      hasDataLoss: false,
-      warnings: [],
-      statementsExecuted: [],
-      applied: true,
-    };
-  }
-
-  // Drizzle's better-sqlite3 driver exposes synchronous .run() while the
-  // MySQL/Postgres drivers expose async .execute(). db is typed as
-  // unknown so we narrow with small structural interfaces at the call
-  // site instead of using `as any`.
-  type SqliteRunDb = { run: (sql: unknown) => unknown };
-  type AsyncExecuteDb = { execute: (sql: unknown) => Promise<unknown> };
-
-  const executedStatements: string[] = [];
-
-  for (const migrationSql of sqlStatements) {
-    const individualStatements = migrationSql
-      .split("\n")
-      .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
-      .join("\n")
-      .split(";")
-      .map((s: string) => s.trim())
-      .filter(
-        (s: string) =>
-          s.length > 0 &&
-          !s.startsWith("--") &&
-          /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
-      );
-
-    // Uniform with the other paths: strip drops of tables outside the schema.
-    // A no-op in practice (the empty-snapshot diff emits only CREATE), but it
-    // keeps the safety contract identical across dialects.
-    const safeStatements = filterUnsafeStatements(
-      individualStatements,
-      drizzleTableNames(schema)
-    );
-
-    for (let stmt of safeStatements) {
-      try {
-        stmt = stmt.replace(
-          /\bCREATE TABLE\b(?!\s+IF\s+NOT\s+EXISTS)/gi,
-          "CREATE TABLE IF NOT EXISTS"
-        );
-
-        const { sql: sqlTag } = await import("drizzle-orm");
-        if (dialect === "sqlite") {
-          (db as SqliteRunDb).run(sqlTag.raw(stmt));
-        } else {
-          await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
-        }
-        executedStatements.push(stmt);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("already exists") || msg.includes("Duplicate")) {
-          continue;
-        }
-        throw err;
-      }
-    }
-  }
-
-  return {
-    hasDataLoss: false,
-    warnings: [],
-    statementsExecuted: executedStatements,
-    applied: true,
-  };
+  return executed;
 }

@@ -183,3 +183,41 @@ export function filterUnsafeStatements(
     return true;
   });
 }
+
+/**
+ * v1 drizzle-kit INCLUDES destructive statements in sqlStatements (hints are
+ * empty even for drops — observed on SQLite, Postgres and MySQL, 2026-07).
+ * By the time the pipeline's Phase D runs, every user-approved destructive
+ * operation has already been executed by the pre-resolution executor, so any
+ * DROP TABLE / DROP COLUMN remaining in the kit's additive remainder is
+ * unexpected and must fail the apply.
+ *
+ * Exception: SQLite's table-rebuild block (CREATE `__new_x` → INSERT SELECT →
+ * DROP TABLE x → RENAME `__new_x` TO x) is data-preserving — its internal
+ * DROP targets a table that is being rebuilt, identified by a matching
+ * `__new_<table>` RENAME in the same statement set.
+ */
+export function findUnexpectedDestructiveStatements(
+  statements: string[]
+): string[] {
+  const rebuildTargets = new Set<string>();
+  for (const s of statements) {
+    const m = s.match(
+      /ALTER\s+TABLE\s+[`"]?__new_([^`"\s]+)[`"]?\s+RENAME\s+TO/i
+    );
+    if (m) rebuildTargets.add((m[1] ?? "").toLowerCase());
+  }
+  const offenders: string[] = [];
+  for (const s of statements) {
+    const dropTable = s.match(
+      /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"]?([^`"\s;]+)[`"]?/i
+    );
+    if (dropTable) {
+      const target = (dropTable[1] ?? "").toLowerCase();
+      if (!rebuildTargets.has(target)) offenders.push(s);
+      continue;
+    }
+    if (/\bDROP\s+COLUMN\b/i.test(s)) offenders.push(s);
+  }
+  return offenders;
+}
