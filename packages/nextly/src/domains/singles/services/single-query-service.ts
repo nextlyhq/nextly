@@ -39,7 +39,10 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  populateCompanionFields,
+  populateTranslationStatus,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   resolveFallbackChain,
@@ -337,8 +340,15 @@ export class SingleQueryService extends BaseService {
         singleMeta,
         doc,
         options.locale,
+        options.fallbackLocale,
         statusFilter ? statusFilter.value : undefined
       );
+
+      // i18n M7: attach the per-locale `_translations` overview for the admin's language pills
+      // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
+      if (options.translationStatus) {
+        await this.populateTranslationMeta(slug, singleMeta, doc);
+      }
 
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
@@ -381,9 +391,10 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     doc: Record<string, unknown>,
     locale: string | undefined,
+    fallbackLocale: string | false | undefined,
     statusFilterValue: string | undefined
   ): Promise<void> {
-    const localeChain = this.resolveLocaleChain(locale);
+    const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
     const companion = buildCompanionSchema({
       slug,
@@ -408,10 +419,59 @@ export class SingleQueryService extends BaseService {
     });
   }
 
-  /** Build the requested→fallback locale chain, honoring the global `fallback` flag. */
-  private resolveLocaleChain(locale: string | undefined): string[] | null {
+  /**
+   * i18n M7: attach a per-locale `_translations` map (which languages are translated + each
+   * one's draft/published status) to the document, for the admin editor's per-language status
+   * pills. No-op when localization is off or the single isn't localized. Mirrors the collection
+   * read path's `populateTranslationMeta`.
+   */
+  private async populateTranslationMeta(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.localization) return;
+    const companion = buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+    if (!companion) return;
+    await populateTranslationStatus({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [doc],
+      locales: this.localization.locales.map(l => l.code),
+      defaultLocale: this.localization.defaultLocale,
+      hasStatus: companion.hasStatus,
+      // The Single's own row id keys the companion `_parent`, same as the collection path.
+      idKey: "id",
+    });
+  }
+
+  /**
+   * Build the requested→fallback locale chain, or `null` when localization is off. A per-request
+   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale, so an
+   * untranslated field reads empty); a per-request string re-enables the chain even when the global
+   * flag is off; otherwise the global `fallback` flag decides. Mirrors the collection read path.
+   */
+  private resolveLocaleChain(
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): string[] | null {
     if (!this.localization || locale === "all") return null;
     const requested = resolveRequestedLocale(this.localization, locale);
+    // Per-request disable wins — the admin editor passes this so untranslated fields show blank.
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    // A per-request fallbackLocale string opts fallback back on even when it's globally off.
+    if (typeof fallbackLocale === "string") {
+      return resolveFallbackChain(this.localization, requested);
+    }
     if (this.localization.fallback === false) return [requested];
     return resolveFallbackChain(this.localization, requested);
   }

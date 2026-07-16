@@ -40,9 +40,14 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import {
+  EntryLocaleProvider,
+  type EntryLocaleContextValue,
+} from "@admin/components/features/entries/EntryLocaleContext";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   takeoverControllerNames,
@@ -78,6 +83,12 @@ export interface SingleSchema {
    * `dynamic_singles.status` boolean column.
    */
   status?: boolean;
+  /**
+   * Whether this Single is localized (i18n). Drives the per-language switcher
+   * and per-field translatability in the editor. Backed by
+   * `dynamic_singles.localized`.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -105,6 +116,19 @@ export interface SingleFormProps {
    *  header dropdown. Singles' API URL pattern differs from collections,
    *  so the page route handles navigation. */
   onViewApi?: () => void;
+  /**
+   * i18n: the active content language (undefined = app default). Drives the per-language
+   * switcher and per-field translatability; saves target this locale. Inert for non-localized
+   * singles. Mirrors EntryForm.
+   */
+  locale?: string;
+  /** i18n: switch the active editing language (from the in-form status pills). */
+  onLocaleChange?: (locale: string) => void;
+  /**
+   * i18n: default-language field values, so a translatable field can show its source text
+   * inline while translating a non-default language. Supplied by the page's source fetch.
+   */
+  sourceValues?: Record<string, unknown>;
   /** Additional CSS classes */
   className?: string;
 }
@@ -300,6 +324,9 @@ export function SingleForm({
   isSubmitting = false,
   onCancel,
   onViewApi,
+  locale,
+  onLocaleChange,
+  sourceValues,
   className,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations. Singles render title/slug
@@ -343,12 +370,16 @@ export function SingleForm({
   // Reason: defaultValues and form.reset are intentionally excluded — React Query
   // refetches produce new object references even for identical data, and including
   // the full object would reset the form mid-edit, discarding unsaved changes.
+  // `locale` is a dep so switching to an already-cached language (no refetch, so no
+  // unmount/remount) still resets the form to that locale's values — otherwise the previous
+  // language's inputs would linger. A first-time switch refetches and remounts via the page's
+  // loading gate, which resets naturally.
   useEffect(() => {
     if (document) {
       form.reset(defaultValues);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document?.id, document?.updatedAt]);
+  }, [document?.id, document?.updatedAt, locale]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -454,6 +485,10 @@ export function SingleForm({
   // localStorage key).
   const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
 
+  // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
+  // context passed to field components and the language pills. Inert for non-localized singles.
+  const { getLocale, defaultLocale } = useLocalization();
+
   // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -465,9 +500,28 @@ export function SingleForm({
     createdAt: (document as { createdAt?: string }).createdAt,
     updatedAt: document.updatedAt,
     title: (document as { title?: string }).title,
+    // i18n M7: forward the per-locale translation-status map so the rail's Document panel renders
+    // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
+    // singles / when translation-status wasn't requested → pills render nothing.
+    _translations: (document as { _translations?: unknown })._translations,
   } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
 
+  // i18n: content-locale context for field components + the rail's language pills. Built like
+  // EntryForm's, but `collectionSlug`/`entryId` are intentionally omitted so the collection-only
+  // in-form actions (copy-from-language, publish-all-languages) hide for singles — they return
+  // null without a collectionSlug. Inert for non-localized singles.
+  const localeCtx: EntryLocaleContextValue = {
+    locale,
+    rtl: getLocale(locale)?.rtl ?? false,
+    collectionLocalized: schema.localized === true,
+    isNonDefaultLocale:
+      !!locale && !!defaultLocale && locale !== defaultLocale,
+    sourceValues,
+    onLocaleChange,
+  };
+
   return (
+    <EntryLocaleProvider value={localeCtx}>
     <div className={cn("space-y-0", className)}>
       <EntryFormProvider form={form} onSubmit={handleSubmit}>
         <FormErrorSummary
@@ -555,5 +609,6 @@ export function SingleForm({
         </div>
       </EntryFormProvider>
     </div>
+    </EntryLocaleProvider>
   );
 }

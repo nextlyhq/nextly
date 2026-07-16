@@ -424,7 +424,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           : "all";
       const result = await svc.entry.get(slug, {
         depth: toNumber(p.depth),
+        // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
+        // disables fallback so an untranslated field reads empty (admin editor relies on
+        // this); `?translation-status=1` attaches the per-locale `_translations` map for
+        // the language pills. All no-op for non-localized singles.
         locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
+        translationStatus: p["translation-status"] === "1",
         status,
       });
 

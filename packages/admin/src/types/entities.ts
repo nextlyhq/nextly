@@ -285,6 +285,13 @@ export interface ApiSingle {
    */
   status?: boolean;
 
+  /**
+   * Whether this Single is localized (i18n). When true, its translatable
+   * fields live in the companion `single_<slug>_locales` table and the editor
+   * shows the per-language switcher. Backed by `dynamic_singles.localized`.
+   */
+  localized?: boolean;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 

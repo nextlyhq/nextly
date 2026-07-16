@@ -211,12 +211,26 @@ export const singleApi = {
    */
   getDocument: async (
     slug: string,
-    options?: { depth?: number }
+    options?: {
+      depth?: number;
+      // i18n: read the document in this content language. `fallbackLocale: "none"` returns
+      // untranslated fields empty (admin editor); `translationStatus` attaches the per-locale
+      // `_translations` map for the language pills. Omitted params no-op for non-localized singles.
+      locale?: string;
+      fallbackLocale?: string;
+      translationStatus?: boolean;
+    }
   ): Promise<SingleDocument> => {
     const params = new URLSearchParams();
     if (options?.depth !== undefined) {
       params.set("depth", String(options.depth));
     }
+    if (options?.locale) params.set("locale", options.locale);
+    // Server reads the hyphenated `fallback-locale` (see singles-detail route).
+    if (options?.fallbackLocale) {
+      params.set("fallback-locale", options.fallbackLocale);
+    }
+    if (options?.translationStatus) params.set("translation-status", "1");
     // context is trusted; pass status=all so a freshly-created Single
     // (auto-created with status='draft') is reachable. Without this
     // the user sees "Failed to load Single: Not found." on the page
@@ -233,10 +247,16 @@ export const singleApi = {
    */
   updateDocument: async (
     slug: string,
-    data: Record<string, unknown>
+    data: Record<string, unknown>,
+    // i18n: `?locale=de` stores the translatable values for German only (the shared
+    // columns are still updated). Omitted for non-localized singles.
+    options?: { locale?: string }
   ): Promise<SingleDocument> => {
+    const query = new URLSearchParams();
+    if (options?.locale) query.set("locale", options.locale);
+    const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
-      `/singles/${slug}`,
+      `/singles/${slug}${qs ? `?${qs}` : ""}`,
       data
     );
     return result.item;
