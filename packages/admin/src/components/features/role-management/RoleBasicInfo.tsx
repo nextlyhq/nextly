@@ -32,7 +32,7 @@ export function RoleBasicInfo({
         render={({ field }) => (
           <FormItem className="space-y-2">
             <FormLabel className="text-sm font-medium text-foreground">
-              Name <span className="text-red-500">*</span>
+              Name <span className="text-destructive-500">*</span>
             </FormLabel>
             <FormControl>
               <Input

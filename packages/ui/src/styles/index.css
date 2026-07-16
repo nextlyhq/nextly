@@ -1,0 +1,28 @@
+/**
+ * Pre-compiled stylesheet entry for `@nextlyhq/ui`.
+ *
+ * Bundles Tailwind + the design-system theme + the utilities emitted by this
+ * package's components into a single `dist/styles.css`. A plugin imports that
+ * file and gets styled, token-driven components with no Tailwind setup.
+ */
+@import "tailwindcss";
+@import "./theme.css";
+
+/* Scan this package's source so the components' utility classes compile. */
+@source "../";
+
+/**
+ * Base reset (shadcn convention).
+ * A bare `border` utility defaults to the theme border token instead of
+ * currentColor, so an un-tokened border can't slip through; explicit
+ * `border-*` utilities still win (this sits in the low-priority base layer).
+ * Lives in the pre-compiled bundle rather than theme.css so a consumer that
+ * compiles theme.css into its own scope owns its base layer.
+ */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--nx-border);
+  }
+}

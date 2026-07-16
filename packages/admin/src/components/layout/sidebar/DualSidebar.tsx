@@ -469,7 +469,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       {/* 1. Icon Sidebar (Main Menu) */}
       <aside
         className={cn(
-          "flex flex-col items-center py-4 bg-sidebar  border-r border-primary/5 z-50",
+          "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
           "w-[72px] shrink-0"
         )}
       >
@@ -496,8 +496,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-primary/5 text-primary"
-                : "text-primary/50 hover-unified"
+                ? "bg-muted text-primary"
+                : "text-primary/60 hover-unified"
             );
 
             const iconContent = (
@@ -530,7 +530,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                 </TooltipTrigger>
                 <TooltipContent
                   side="right"
-                  className="bg-slate-900 border-primary/5 text-white"
+                  className="bg-primary border-border text-primary-foreground"
                 >
                   {item.label}
                 </TooltipContent>
@@ -545,8 +545,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         className={cn(
           "flex flex-col bg-background overflow-hidden shrink-0",
           isMobile
-            ? "relative flex  border-l border-primary/5"
-            : "border-r border-primary/5 fixed inset-y-0 left-[72px] z-45 lg:static lg:flex", // Absolute on tablet, static on desktop
+            ? "relative flex  border-l border-border"
+            : "border-r border-border fixed inset-y-0 left-[72px] z-45 lg:static lg:flex", // Absolute on tablet, static on desktop
           hasSubSidebar
             ? "w-64 opacity-100 translate-x-0"
             : "w-0 opacity-0 -translate-x-full pointer-events-none lg:w-0 lg:-translate-x-0",
@@ -554,7 +554,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         )}
       >
         {/* Sub Sidebar Header */}
-        <div className="h-16 px-6 flex items-center  border-b border-primary/5">
+        <div className="h-16 px-6 flex items-center  border-b border-border">
           <span className="font-bold text-base tracking-tight capitalize text-foreground">
             {selectedMain.startsWith("standalone-")
               ? standaloneLabel

@@ -29,6 +29,8 @@ import { useEffect, useState } from "react";
 import { getPath } from "../../core/bindings";
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
+import { normalizeSupports } from "../../core/supports";
+import { tokenSwatches } from "../../core/tokens";
 import { findNode } from "../../core/tree";
 import type { Binding, BlockNode, ControlRef } from "../../core/types";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
@@ -41,11 +43,16 @@ import {
   narrowContentFields,
   type ContentField,
 } from "../content/contentFields";
+import { AttributesControl } from "../controls/advanced/AttributesControl";
+import { CustomCssControl } from "../controls/advanced/CustomCssControl";
+import { MotionControl } from "../controls/advanced/MotionControl";
 import {
   registerDefaultControls,
   renderControl,
 } from "../controls/registerDefaultControls";
+import { supportsToControls } from "../controls/supportsToControls";
 import { ArrowDown, ArrowUp, blockIcon, Copy, Trash2 } from "../icons";
+import { clipboard } from "../logic/clipboard";
 import { locateNode } from "../logic/locate";
 import { findEnclosingLoop } from "../logic/queryLoop";
 import { useEditor } from "../store/EditorProvider";
@@ -315,13 +322,40 @@ function StyleTab({
 }) {
   const { state, dispatch } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
-  const controls = def?.styleControls ?? [];
+  const legacy = def?.styleControls ?? [];
+  const groups = supportsToControls(def?.supports);
   const bp = state.activeBreakpoint;
   const tree = styleState === "hover" ? node.styleHover : node.style;
 
-  if (controls.length === 0) {
+  if (legacy.length === 0 && groups.length === 0) {
     return <Empty>This block has no style options.</Empty>;
   }
+
+  const renderRef = (ref: ControlRef) => (
+    <div key={`${ref.control}:${ref.styleKey}`}>
+      {renderControl(ref.control, {
+        label: ref.label,
+        value: readStyleValue(tree, ref.styleKey, bp),
+        tokens: ref.control === "color" ? tokenSwatches() : undefined,
+        field: ref.options
+          ? {
+              name: ref.styleKey,
+              type: "select",
+              label: ref.label,
+              options: ref.options,
+            }
+          : undefined,
+        onChange: value =>
+          dispatch({
+            type: "UPDATE_STYLE",
+            id: node.id,
+            breakpoint: bp,
+            styleState,
+            style: { [ref.styleKey]: value },
+          }),
+      })}
+    </div>
+  );
 
   return (
     <div>
@@ -357,29 +391,33 @@ function StyleTab({
         </p>
       ) : null}
 
-      <SectionLabel>Style</SectionLabel>
-      {controls.map((ref: ControlRef) => (
-        <div key={`${ref.control}:${ref.styleKey}`}>
-          {renderControl(ref.control, {
-            label: ref.label,
-            value: readStyleValue(tree, ref.styleKey, bp),
-            onChange: value =>
-              dispatch({
-                type: "UPDATE_STYLE",
-                id: node.id,
-                breakpoint: bp,
-                styleState,
-                style: { [ref.styleKey]: value },
-              }),
-          })}
+      {groups.map(g => (
+        <div key={g.group}>
+          <SectionLabel>{g.group}</SectionLabel>
+          {g.controls.map(renderRef)}
         </div>
       ))}
+
+      {legacy.length ? (
+        <>
+          <SectionLabel>Style</SectionLabel>
+          {legacy.map(renderRef)}
+        </>
+      ) : null}
     </div>
   );
 }
 
+const VISIBILITY_BREAKPOINTS: { id: string; label: string }[] = [
+  { id: "base", label: "desktop" },
+  { id: "tablet", label: "tablet" },
+  { id: "mobile", label: "mobile" },
+];
+
 function AdvancedTab({ node }: { node: BlockNode }) {
   const { state, dispatch } = useEditor();
+  const def = defaultBlockRegistry.get(node.type);
+  const sup = normalizeSupports(def?.supports);
   const loc = locateNode(state.document.root, node.id);
   const move = (delta: number) => {
     if (!loc) return;
@@ -426,6 +464,63 @@ function AdvancedTab({ node }: { node: BlockNode }) {
               <Copy size={15} aria-hidden /> Duplicate
             </button>
           </div>
+          <div
+            style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}
+          >
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Copy block"
+              onClick={() => clipboard.copyNode(node)}
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Paste block after"
+              onClick={() => {
+                const clip = clipboard.getNode();
+                if (clip && loc) {
+                  dispatch({
+                    type: "PASTE_NODE",
+                    parentId: loc.parentId,
+                    slot: loc.slot,
+                    index: loc.index + 1,
+                    node: clip,
+                  });
+                }
+              }}
+            >
+              Paste
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Copy style"
+              onClick={() => clipboard.copyStyle(node)}
+            >
+              Copy style
+            </button>
+            <button
+              type="button"
+              className="nx-pb-icon-btn"
+              aria-label="Paste style"
+              onClick={() => {
+                const s = clipboard.getStyle();
+                if (s) {
+                  dispatch({
+                    type: "PASTE_STYLE",
+                    id: node.id,
+                    style: s.style,
+                    styleHover: s.styleHover,
+                  });
+                }
+              }}
+            >
+              Paste style
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -442,6 +537,94 @@ function AdvancedTab({ node }: { node: BlockNode }) {
         })}
       </div>
 
+      {sup.customAttributes ? (
+        <>
+          <div>
+            <SectionLabel>CSS ID</SectionLabel>
+            {renderControl("text", {
+              value: node.cssId ?? "",
+              onChange: value =>
+                dispatch({
+                  type: "SET_CSS_ID",
+                  id: node.id,
+                  cssId: typeof value === "string" ? value : "",
+                }),
+            })}
+          </div>
+          <div>
+            <SectionLabel>Attributes</SectionLabel>
+            <AttributesControl
+              value={node.attributes}
+              onChange={value =>
+                dispatch({
+                  type: "SET_ATTRIBUTES",
+                  id: node.id,
+                  attributes: (value ?? {}) as Record<string, string>,
+                })
+              }
+            />
+          </div>
+        </>
+      ) : null}
+
+      {sup.visibility ? (
+        <div>
+          <SectionLabel>Visibility</SectionLabel>
+          {VISIBILITY_BREAKPOINTS.map(bp => (
+            <label
+              key={bp.id}
+              style={{ display: "flex", gap: 6, alignItems: "center" }}
+            >
+              <input
+                type="checkbox"
+                checked={node.visibility?.[bp.id] === false}
+                onChange={e =>
+                  dispatch({
+                    type: "SET_VISIBILITY",
+                    id: node.id,
+                    breakpoint: bp.id,
+                    visible: !e.target.checked,
+                  })
+                }
+              />
+              Hide on {bp.label}
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      {sup.motion ? (
+        <div>
+          <SectionLabel>Motion</SectionLabel>
+          <MotionControl
+            value={node.motion}
+            onChange={value =>
+              dispatch({
+                type: "SET_MOTION",
+                id: node.id,
+                motion: value ?? {},
+              })
+            }
+          />
+        </div>
+      ) : null}
+
+      {sup.customCss ? (
+        <div>
+          <SectionLabel>Custom CSS</SectionLabel>
+          <CustomCssControl
+            value={node.customCss}
+            onChange={value =>
+              dispatch({
+                type: "SET_BLOCK_CSS",
+                id: node.id,
+                css: typeof value === "string" ? value : "",
+              })
+            }
+          />
+        </div>
+      ) : null}
+
       <div className="nx-pb-empty">
         Type <code>{node.type}</code>
       </div>
@@ -451,8 +634,9 @@ function AdvancedTab({ node }: { node: BlockNode }) {
         className="nx-pb-icon-btn"
         aria-label="Delete block"
         style={{
-          color: "hsl(var(--destructive))",
-          borderColor: "hsl(var(--destructive) / 0.4)",
+          color: "var(--nx-destructive)",
+          borderColor:
+            "color-mix(in srgb, var(--nx-destructive) 40%, transparent)",
         }}
         onClick={() => dispatch({ type: "REMOVE", id: node.id })}
       >

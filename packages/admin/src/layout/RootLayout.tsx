@@ -5,6 +5,7 @@ import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
@@ -58,20 +59,34 @@ function AdminAppContent() {
   // Render an empty themed container so the layout doesn't flash a mismatched
   // background during the cold-load gap.
   if (!isHydrated || !route) {
-    return <div className="min-h-screen bg-background adminapp" />;
+    return <div className="min-h-screen bg-background nextly-admin" />;
   }
 
-  const { Component, params, searchParams, routeType, requiredPermission } =
-    route;
+  const {
+    Component,
+    params,
+    searchParams,
+    routeType,
+    requiredPermission,
+    requiresBuilder,
+  } = route;
 
   // Wrap component with appropriate route guard
   const renderComponent = () => {
     // Suspense lets React handle suspended lazy chunks gracefully; fallback
     // is null because we don't render a load indicator during transitions.
-    const componentElement = (
+    const suspended = (
       <Suspense fallback={null}>
         <Component params={params} searchParams={searchParams} />
       </Suspense>
+    );
+
+    // Builder routes are unreachable where the builder is disabled, even by
+    // URL. Wraps inside the permission guard so permissions still decide first.
+    const componentElement = requiresBuilder ? (
+      <BuilderGuard>{suspended}</BuilderGuard>
+    ) : (
+      suspended
     );
 
     if (routeType === "private") {
@@ -100,7 +115,10 @@ function AdminAppContent() {
   };
 
   return (
-    <div className={cn("adminapp", isDark && "dark")} suppressHydrationWarning>
+    <div
+      className={cn("nextly-admin", isDark && "dark")}
+      suppressHydrationWarning
+    >
       <PortalProvider container={portalRoot}>
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
@@ -124,9 +142,9 @@ function AdminAppContent() {
             <Toaster richColors />
             {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
             <div
-              id="adminapp-portal-root"
+              id="nextly-admin-portal-root"
               ref={setPortalRoot}
-              className={cn("adminapp", isDark && "dark")}
+              className={cn("nextly-admin", isDark && "dark")}
             />
           </GeneralSettingsSyncProvider>
         </BrandingProvider>

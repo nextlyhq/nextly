@@ -16,14 +16,6 @@ import { FieldType } from "@admin/types/field-types";
 // Icon mapping for dynamic icon rendering
 const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
-const categoryColors: Record<string, string> = {
-  "Basic Fields": "bg-primary",
-  "Content Fields": "bg-green-500",
-  "Choice Fields": "bg-purple-500",
-  "Relational Fields": "bg-orange-500",
-  "Advanced Fields": "bg-red-500",
-};
-
 // Mapping from useFields types to FieldType enum
 const fieldTypeMapping: Record<string, FieldType> = {
   text: FieldType.TEXT,
@@ -59,7 +51,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
           </DialogTitle>
           <DialogDescription
             id="delete-dialog-description"
-            className="text-gray-800 text-md"
+            className="text-foreground text-md"
           >
             Choose the type of field you want to add to your field group
           </DialogDescription>
@@ -69,9 +61,12 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
           {fields.map((category, categoryIndex) => (
             <div key={categoryIndex}>
               <div className="text-lg font-semibold flex items-center mb-4">
-                <div
-                  className={`w-2 h-2 ${categoryColors[category.title]} rounded-none mr-3`}
-                ></div>
+                {/* A marker, not a signal. The colours here were per-category
+                    and carried no meaning, and one of them painted "Advanced
+                    Fields" in the same red the admin uses for destructive
+                    actions. A title absent from that map also rendered the
+                    word "undefined" into the class list. */}
+                <div className="w-2 h-2 shrink-0 rounded-none bg-border-strong mr-3" />
                 {category.title}
               </div>
 
@@ -81,7 +76,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
                   return (
                     <div
                       key={itemIndex}
-                      className="border border-primary/5 shadow rounded-none p-5 cursor-pointer hover:bg-zinc-100"
+                      className="border border-border shadow rounded-none p-5 cursor-pointer hover:bg-muted"
                       onClick={() => {
                         const mappedType =
                           fieldTypeMapping[item.type] || item.type;
@@ -89,13 +84,13 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
                         onClose?.();
                       }}
                     >
-                      <div className="flex items-center gap-3 text-zinc-600">
+                      <div className="flex items-center gap-3 text-muted-foreground">
                         <IconComponent className="w-5 h-5" />
-                        <span className="text-black text-sm capitalize">
+                        <span className="text-foreground text-sm capitalize">
                           {item.type}
                         </span>
                       </div>
-                      <p className="text-sm mt-3 text-zinc-700">
+                      <p className="text-sm mt-3 text-foreground">
                         {item.description}
                       </p>
                     </div>

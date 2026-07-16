@@ -23,6 +23,7 @@ import { z } from "zod";
 
 import {
   BuilderFieldList,
+  BuilderReadOnlyNotice,
   BuilderSettingsModal,
   BuilderToolbar,
   FieldEditorSheet,
@@ -480,7 +481,7 @@ export default function SingleBuilderEditPage({
   if (isLoading || !isInitialized) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <div className="p-6  border-b border-primary/5">
+        <div className="p-6  border-b border-border">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>
@@ -522,6 +523,12 @@ export default function SingleBuilderEditPage({
         onSave={() => void handleSave()}
       />
       <PageContainer className="flex-1 pb-0">
+        {isLocked && (
+          <BuilderReadOnlyNotice
+            kind="single"
+            configPath={single?.configPath}
+          />
+        )}
         <SchemaBuilderSlots
           fields={builder.fields}
           setFields={builder.setFields}
@@ -562,6 +569,7 @@ export default function SingleBuilderEditPage({
           mode="edit"
           config={SINGLE_BUILDER_CONFIG}
           initialValues={settings}
+          readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onSubmit={next => {
             setSettings(next);

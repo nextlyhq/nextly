@@ -227,6 +227,8 @@ export interface Collection {
   source?: "code" | "ui" | "built-in";
   /** Whether the collection is locked from UI edits */
   locked?: boolean;
+  /** Source file where a code-first collection is defined (read-only builder) */
+  configPath?: string | null;
   /**
    * Whether the collection has the Draft/Published status feature enabled.
    * Backed by the `dynamic_collections.status` boolean column. When true,

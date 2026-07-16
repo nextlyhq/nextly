@@ -17,28 +17,62 @@ import {
 } from "../../core/style-compiler";
 import { useEditor } from "../store/EditorProvider";
 
+// Admin design tokens mirrored into the iframe as `--nx-pb-ed-*` so the editor chrome
+// (selection ring, drop indicators, placeholders) is monochrome and follows the admin's
+// light/dark theme. The iframe is a separate document that renders the *user's* page with
+// its own tokens, so admin tokens aren't otherwise available inside it.
+export const MIRRORED_TOKENS = [
+  "--nx-primary",
+  "--nx-primary-foreground",
+  "--nx-ring",
+  "--nx-border",
+  "--nx-border-strong",
+  "--nx-muted",
+  "--nx-muted-foreground",
+  "--nx-destructive",
+];
+
+/** The admin's token prefix, dropped so `--nx-primary` mirrors as `--nx-pb-ed-primary`. */
+const ADMIN_TOKEN_PREFIX = "--nx-";
+
+/** The editor-chrome name the overlay reads for a given admin token. */
+export function mirroredName(token: string): string {
+  return `--nx-pb-ed-${token.slice(ADMIN_TOKEN_PREFIX.length)}`;
+}
+
+/** Read the current admin token values and emit an iframe `:root` mirror block. */
+function buildTokenMirrorCss(): string {
+  const src =
+    document.querySelector(".nextly-admin") ?? document.documentElement;
+  const cs = getComputedStyle(src);
+  const decls = MIRRORED_TOKENS.map(
+    t => `${mirroredName(t)}: ${cs.getPropertyValue(t).trim()};`
+  ).join("");
+  return `:root{${decls}}`;
+}
+
 const OVERLAY_CSS = [
   "body{margin:0;font-family:system-ui,-apple-system,sans-serif}",
   // Blocks are grabbable; hovering hints the boundary (Elementor-like).
   "[data-nx-id]{cursor:grab}",
   "[data-nx-id]:active{cursor:grabbing}",
-  "[data-nx-id]:hover{outline:1px dashed #a5b4fc;outline-offset:-1px}",
+  "[data-nx-id]:hover{outline:1px dashed color-mix(in srgb, var(--nx-pb-ed-ring) 50%, transparent);outline-offset:-1px}",
   // Selected block: solid ring + a small grip badge (top-left) as a grab cue.
-  ".nx-pb-selected,[data-nx-id].nx-pb-selected:hover{outline:2px solid #6366f1;outline-offset:-2px;position:relative}",
-  ".nx-pb-selected::before{content:'\\283F';position:absolute;top:-2px;left:-2px;transform:translateY(-100%);font-size:12px;line-height:1;padding:2px 5px;background:#6366f1;color:#fff;border-radius:4px 4px 0 0;pointer-events:none;z-index:2}",
+  ".nx-pb-selected,[data-nx-id].nx-pb-selected:hover{outline:2px solid var(--nx-pb-ed-ring);outline-offset:-2px;position:relative}",
+  ".nx-pb-selected::before{content:'\\283F';position:absolute;top:-2px;left:-2px;transform:translateY(-100%);font-size:12px;line-height:1;padding:2px 5px;background:var(--nx-pb-ed-primary);color:var(--nx-pb-ed-primary-foreground);border-radius:4px 4px 0 0;pointer-events:none;z-index:2}",
   ".nx-pb-dragging{opacity:.4}",
-  ".nx-pb-empty{color:#9ca3af;padding:32px;text-align:center;font-size:14px}",
-  // Between-item drop zones: collapsed at rest, a hint while dragging, a bold blue
+  ".nx-pb-empty{color:var(--nx-pb-ed-muted-foreground);padding:32px;text-align:center;font-size:14px}",
+  // Between-item drop zones: collapsed at rest, a hint while dragging, a solid
   // insertion bar when they are the active drop target.
   ".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",
-  ".nx-pb-dropzone[data-drag]{height:6px;margin:3px 0;background:rgba(99,102,241,.12)}",
-  ".nx-pb-dropzone[data-active]{height:6px;margin:4px 0;background:#4f46e5;box-shadow:0 0 0 4px rgba(79,70,229,.15)}",
+  ".nx-pb-dropzone[data-drag]{height:6px;margin:3px 0;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
+  ".nx-pb-dropzone[data-active]{height:6px;margin:4px 0;background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
   // Empty-container placeholder.
-  ".nx-pb-dropzone-empty{border:2px dashed #c7d2fe;border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:#6366f1;font-size:13px;background:#f8f9ff}",
-  ".nx-pb-dropzone-empty[data-active]{border-color:#4f46e5;background:#eef2ff;color:#4338ca}",
+  ".nx-pb-dropzone-empty{border:2px dashed var(--nx-pb-ed-border-strong);border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:var(--nx-pb-ed-muted-foreground);font-size:13px;background:var(--nx-pb-ed-muted)}",
+  ".nx-pb-dropzone-empty[data-active]{border-color:var(--nx-pb-ed-primary);background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent);color:var(--nx-pb-ed-primary)}",
   // Grid drop targets (layout-safe: inset shadow / outline, no box).
-  ".nx-pb-drop-before{box-shadow:inset 3px 0 0 #4f46e5}",
-  ".nx-pb-drop-append{outline:2px dashed #4f46e5;outline-offset:-2px}",
+  ".nx-pb-drop-before{box-shadow:inset 3px 0 0 var(--nx-pb-ed-primary)}",
+  ".nx-pb-drop-append{outline:2px dashed var(--nx-pb-ed-primary);outline-offset:-2px}",
 ].join("");
 
 export function IframeCanvas({ children }: { children: ReactNode }) {
@@ -60,6 +94,33 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
   useEffect(() => {
     attach();
   }, []);
+
+  // Mirror the admin design tokens into the iframe and keep them in sync when the admin
+  // theme flips (next-themes toggles the `.dark` class on the admin root).
+  useEffect(() => {
+    const doc = ref.current?.contentDocument;
+    if (!doc?.head) return;
+    const sync = () => {
+      let tokens = doc.getElementById(
+        "nx-pb-tokens"
+      ) as HTMLStyleElement | null;
+      if (!tokens) {
+        tokens = doc.createElement("style");
+        tokens.id = "nx-pb-tokens";
+        doc.head.insertBefore(tokens, doc.head.firstChild);
+      }
+      tokens.textContent = buildTokenMirrorCss();
+    };
+    sync();
+    const adminRoot = document.querySelector(".nextly-admin");
+    if (!adminRoot) return;
+    const observer = new MutationObserver(sync);
+    observer.observe(adminRoot, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, [body]);
 
   // Keep the compiled page CSS in sync with the document.
   useEffect(() => {
@@ -113,7 +174,7 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
         // would overflow — so a narrow pane scrolls from the left instead of clipping it.
         justifyContent: "safe center",
         height: "100%",
-        background: "hsl(var(--muted))",
+        background: "var(--nx-muted)",
         overflow: "auto",
         padding: width ? 16 : 0,
       }}
@@ -131,7 +192,7 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
           // instead, so the preview stays a faithful WYSIWYG at that width.
           maxWidth: width ? "none" : "100%",
           flexShrink: 0,
-          boxShadow: width ? "0 0 0 1px #e5e7eb" : "none",
+          boxShadow: width ? "0 0 0 1px var(--nx-border)" : "none",
           borderRadius: width ? 8 : 0,
         }}
       />

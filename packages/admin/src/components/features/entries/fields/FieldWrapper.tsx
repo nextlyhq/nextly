@@ -221,13 +221,13 @@ export function FieldWrapper({
           <Label
             htmlFor={fieldId}
             className={cn(
-              "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-slate-500",
+              "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground",
               error && "text-destructive"
             )}
           >
             {label}
             {isRequired && (
-              <span className="text-red-500 ml-1" aria-hidden="true">
+              <span className="text-destructive-500 ml-1" aria-hidden="true">
                 *
               </span>
             )}
@@ -241,7 +241,7 @@ export function FieldWrapper({
           {error && (
             <p
               id={errorId}
-              className="text-sm text-red-500! font-medium"
+              className="text-sm text-destructive-500! font-medium"
               role="alert"
             >
               {error}
@@ -275,13 +275,13 @@ export function FieldWrapper({
       <Label
         htmlFor={fieldId}
         className={cn(
-          "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-slate-500 mb-1",
+          "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground mb-1",
           error && "text-destructive"
         )}
       >
         {label}
         {isRequired && (
-          <span className="text-red-500 ml-1" aria-hidden="true">
+          <span className="text-destructive-500 ml-1" aria-hidden="true">
             *
           </span>
         )}
@@ -306,7 +306,7 @@ export function FieldWrapper({
       {error && (
         <p
           id={errorId}
-          className="text-sm text-red-500! font-medium"
+          className="text-sm text-destructive-500! font-medium"
           role="alert"
         >
           {error}

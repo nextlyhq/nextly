@@ -112,9 +112,31 @@ export const emailTemplatesSqlite = sqliteTable(
      */
     plainTextContent: text("plain_text_content"),
 
+    /**
+     * Inbox preview line shown after the subject in most clients.
+     * Supports `{{variable}}` interpolation. Null renders no preheader.
+     */
+    preheader: text("preheader"),
+
     // --------------------------------------------------------
     // Template Metadata
     // --------------------------------------------------------
+
+    /**
+     * Row kind. `layout` rows are wrappers whose `htmlContent` holds a
+     * `{{content}}` placeholder; `template` rows are message bodies;
+     * `partial` rows are reusable fragments. Nullable so it can be added
+     * to existing tables via SQLite's rebuild path; boot backfills nulls
+     * to `template` and a null kind is treated as `template` on read.
+     */
+    kind: text("kind").default("template"),
+
+    /**
+     * Layout that wraps this template at send time (`kind = 'layout'` row).
+     * Null uses the default layout. Soft reference (no DB FK) so it adds
+     * to existing tables without a rebuild; the service enforces it.
+     */
+    layoutId: text("layout_id"),
 
     /**
      * Available template variables with descriptions.
@@ -141,8 +163,19 @@ export const emailTemplatesSqlite = sqliteTable(
     /**
      * Optional provider ID to override the default email provider
      * for this specific template. When null, the system default is used.
+     * Soft reference (no DB FK); the send path falls back to the default
+     * provider when this points at a removed provider.
      */
     providerId: text("provider_id"),
+
+    /**
+     * Per-template From override (e.g. `Support <help@example.com>`).
+     * Null falls back to the provider / config From.
+     */
+    fromOverride: text("from_override"),
+
+    /** Per-template Reply-To address. Null sets no Reply-To header. */
+    replyTo: text("reply_to"),
 
     /**
      * Default attachments for this template. Merged with per-send
@@ -177,6 +210,12 @@ export const emailTemplatesSqlite = sqliteTable(
 
     /** Index for filtering templates by provider */
     index("email_templates_provider_id_idx").on(table.providerId),
+
+    /** Index for filtering by row kind (template / layout / partial) */
+    index("email_templates_kind_idx").on(table.kind),
+
+    /** Index for resolving templates that reference a layout */
+    index("email_templates_layout_id_idx").on(table.layoutId),
 
     /** Index for sorting by creation date */
     index("email_templates_created_at_idx").on(table.createdAt),

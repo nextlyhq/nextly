@@ -124,8 +124,8 @@ TabsList.displayName = List.displayName;
  * - Padding: 6px 16px (px-4 py-2)
  * - Font: text-sm (14px), font-medium (500)
  * - Transition: 150ms (design system standard)
- * - Active state: blue text with blue bottom  border border-primary/5 (2px)
- * - Hover: blue text with blue bottom  border border-primary/5
+ * - Active state: blue text with blue bottom  border border-border (2px)
+ * - Hover: blue text with blue bottom  border border-border
  * - Gmail-inspired clean underline style
  *
  * Accessibility:
@@ -140,7 +140,7 @@ const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
       ref={ref}
       data-slot="tabs-trigger"
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:!border-b-primary data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
         className
       )}
       {...props}

@@ -32,7 +32,6 @@ import type {
   FindEmailTemplatesArgs,
   FindUserFieldByIDArgs,
   FindUserFieldsArgs,
-  GetEmailLayoutArgs,
   ListResult,
   MutationResult,
   PreviewEmailTemplateArgs,
@@ -42,7 +41,6 @@ import type {
   SendTemplateEmailArgs,
   SetDefaultProviderArgs,
   TestEmailProviderArgs,
-  UpdateEmailLayoutArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
   UpdateUserFieldArgs,
@@ -219,10 +217,11 @@ export function createEmailProvidersNamespace(
 }
 
 /**
- * `nextly.emailTemplates.*` namespace — CRUD + preview + shared layout.
+ * `nextly.emailTemplates.*` namespace — CRUD + preview.
  *
- * `preview`, `getLayout`, `updateLayout` keep their bespoke shapes
- * because they're non-CRUD actions with domain-specific return types.
+ * Layouts are ordinary rows with `kind: "layout"`, edited through the
+ * same `create`/`update`/`find` calls; `preview` keeps its bespoke
+ * shape because it is a non-CRUD action with a domain-specific return.
  */
 export interface EmailTemplatesNamespace {
   find(args?: FindEmailTemplatesArgs): Promise<ListResult<EmailTemplateRecord>>;
@@ -244,10 +243,6 @@ export interface EmailTemplatesNamespace {
   preview(
     args: PreviewEmailTemplateArgs
   ): Promise<{ subject: string; html: string }>;
-  getLayout(
-    args?: GetEmailLayoutArgs
-  ): Promise<{ header: string; footer: string }>;
-  updateLayout(args: UpdateEmailLayoutArgs): Promise<void>;
 }
 
 /**
@@ -315,6 +310,12 @@ export function createEmailTemplatesNamespace(
         subject: args.data.subject,
         htmlContent: args.data.htmlContent,
         plainTextContent: args.data.textContent,
+        kind: args.data.kind,
+        preheader: args.data.preheader,
+        layoutId: args.data.layoutId,
+        fromOverride: args.data.fromOverride,
+        replyTo: args.data.replyTo,
+        useLayout: args.data.useLayout,
         variables: args.data.variables,
         attachments: args.data.attachments,
       });
@@ -361,16 +362,6 @@ export function createEmailTemplatesNamespace(
         args.id,
         args.data ?? {}
       );
-    },
-
-    async getLayout(
-      _args: GetEmailLayoutArgs = {}
-    ): Promise<{ header: string; footer: string }> {
-      return await ctx.emailTemplateService.getLayout();
-    },
-
-    async updateLayout(args: UpdateEmailLayoutArgs): Promise<void> {
-      await ctx.emailTemplateService.updateLayout(args.data);
     },
   };
 }

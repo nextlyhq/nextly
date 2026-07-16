@@ -1,23 +1,20 @@
 @import "tailwindcss";
 
+/* Playground frontend theme only. The admin (mounted at /admin) ships its
+ * own scoped design tokens via @nextlyhq/admin/style.css, so this file must
+ * NOT redefine the design-system color tokens (--primary, --card, --muted,
+ * --border, --input, ...) or emit competing color utilities — doing so with
+ * the OKLCH token set produces invalid hsl(oklch()) values and blanks out
+ * admin surfaces. Keep this to the harness's own background/foreground. */
+
 :root {
-  --background: 210 20% 98%;
-  --foreground: 222.2 47.4% 11.2%;
-  --primary: 0 0% 0%;
-  --border: 0 0% 0% / 0.05;
-  --input: 240 5% 84%; /* zinc-300, visible field border in light mode */
-  --muted: 0 0% 0% / 0.05;
-  --card: 0 0% 100%;
+  --background: #ffffff;
+  --foreground: #171717;
 }
 
 @theme inline {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-primary: hsl(var(--primary));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-muted: hsl(var(--muted));
-  --color-card: hsl(var(--card));
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
   --radius-none: 0px;
 }
 
@@ -25,8 +22,6 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
-    --input: 240 4% 26%; /* zinc-700, visible field border in dark mode */
-    --border: 240 4% 26%;
   }
 }
 

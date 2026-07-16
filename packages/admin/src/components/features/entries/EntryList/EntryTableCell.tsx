@@ -325,7 +325,7 @@ function JsonCell({ value }: { value: unknown }) {
     jsonStr.length > maxLength ? `${jsonStr.slice(0, maxLength)}...` : jsonStr;
 
   return (
-    <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
       {truncated}
     </code>
   );
@@ -441,7 +441,7 @@ export function EntryTableCell({
       return (
         <span className="flex items-center justify-center">
           {value ? (
-            <Check className="h-4 w-4 text-green-600" />
+            <Check className="h-4 w-4 text-foreground" />
           ) : (
             <X className="h-4 w-4 text-muted-foreground" />
           )}

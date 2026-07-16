@@ -25,10 +25,9 @@ export const queryLoop = defineBlock({
     columns: 1,
     gap: "16px",
   },
-  styleControls: [
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    spacing: true,
+  },
   render: ({ props, slots, className }) => (
     <div
       className={className}

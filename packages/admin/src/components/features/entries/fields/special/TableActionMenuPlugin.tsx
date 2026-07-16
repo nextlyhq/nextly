@@ -19,6 +19,7 @@ import {
   $insertTableColumnAtSelection,
   $insertTableRowAtSelection,
 } from "@lexical/table";
+import { usePortalContainer } from "@nextlyhq/ui";
 import { $getSelection, $isRangeSelection } from "lexical";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -45,8 +46,8 @@ const menuStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "2px",
   padding: "3px 4px",
-  backgroundColor: "hsl(var(--background))",
-  border: "1px solid hsl(var(--border))",
+  backgroundColor: "var(--nx-background)",
+  border: "1px solid var(--nx-border)",
   borderRadius: "6px",
   boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
   fontSize: "12px",
@@ -63,7 +64,7 @@ const actionBtnStyle: React.CSSProperties = {
   background: "transparent",
   borderRadius: "4px",
   cursor: "pointer",
-  color: "hsl(var(--muted-foreground))",
+  color: "var(--nx-muted-foreground)",
   fontSize: "11px",
   fontFamily: "inherit",
   whiteSpace: "nowrap",
@@ -77,7 +78,7 @@ const destructiveBtnStyle: React.CSSProperties = {
 const separatorStyle: React.CSSProperties = {
   width: "1px",
   height: "16px",
-  backgroundColor: "hsl(var(--border))",
+  backgroundColor: "var(--nx-border)",
   margin: "0 2px",
   flexShrink: 0,
 };
@@ -105,16 +106,19 @@ function ActionButton({
       title={title}
       onMouseEnter={e => {
         if (destructive) {
-          e.currentTarget.style.backgroundColor = "hsl(var(--destructive)/0.1)";
-          e.currentTarget.style.color = "hsl(var(--destructive))";
+          e.currentTarget.style.backgroundColor =
+            "color-mix(in srgb, var(--nx-destructive) 10%, transparent)";
+          e.currentTarget.style.color = "var(--nx-destructive)";
         } else {
-          e.currentTarget.style.backgroundColor = "hsl(var(--accent))";
-          e.currentTarget.style.color = "hsl(var(--accent-foreground))";
+          e.currentTarget.style.backgroundColor = "var(--nx-accent)";
+          e.currentTarget.style.color = "var(--nx-accent-foreground)";
         }
       }}
       onMouseLeave={e => {
         e.currentTarget.style.backgroundColor = "transparent";
-        e.currentTarget.style.color = "hsl(var(--muted-foreground))";
+        e.currentTarget.style.color = destructive
+          ? "var(--nx-destructive)"
+          : "var(--nx-muted-foreground)";
       }}
     >
       {label}
@@ -136,6 +140,9 @@ export function TableActionMenuPlugin({
   const [editor] = useLexicalComposerContext();
   const [isInTable, setIsInTable] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  // Portal into the admin's scoped root so the `.nextly-admin` CSS variables the menu
+  // styles rely on resolve; `document.body` is outside that scope.
+  const portalContainer = usePortalContainer();
 
   useEffect(() => {
     if (disabled) return;
@@ -293,6 +300,6 @@ export function TableActionMenuPlugin({
         destructive
       />
     </div>,
-    document.body
+    portalContainer ?? document.body
   );
 }

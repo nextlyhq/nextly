@@ -1,66 +1,60 @@
 "use client";
 
 import {
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 
-import { Moon, Sun, Laptop } from "@admin/components/icons";
+import { Check, Moon, Sun, Laptop } from "@admin/components/icons";
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 
+const OPTIONS = [
+  { value: "light" as const, label: "Light", icon: Sun },
+  { value: "dark" as const, label: "Dark", icon: Moon },
+  { value: "system" as const, label: "System", icon: Laptop },
+];
+
 /**
- * Theme Toggle Component
+ * Theme Toggle
  *
- * Toggles between light, dark, and system mode using next-themes.
- * Uses DropdownMenu for proper menu management.
+ * Top-bar control to switch between light, dark, and system appearance. Selecting an option
+ * applies and persists it immediately via next-themes. The trigger shows the active mode's
+ * icon and matches the sibling header icon buttons.
  */
 export function ThemeToggle(): React.ReactElement {
-  const { setTheme, resolvedTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
 
-  // Use resolvedTheme to properly detect dark mode even with "system" theme
-  const isDark = resolvedTheme === "dark";
+  // The trigger reflects the chosen mode: the device icon for "system", otherwise the
+  // resolved light/dark icon.
+  const TriggerIcon =
+    theme === "system" ? Laptop : resolvedTheme === "dark" ? Moon : Sun;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute top-[15px] right-[40px] h-9 w-9 rounded-none transition-colors hover:bg-accent"
-          aria-label="Toggle theme"
+        <button
+          type="button"
+          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+          aria-label="Choose theme"
+          title="Choose theme"
         >
-          {isDark ? (
-            <Sun className="h-[1.2rem] w-[1.2rem]" />
-          ) : (
-            <Moon className="h-[1.2rem] w-[1.2rem]" />
-          )}
-        </Button>
+          <TriggerIcon className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">
-        <DropdownMenuItem
-          onClick={() => setTheme("light")}
-          className="cursor-pointer rounded-none"
-        >
-          <Sun className="h-4 w-4" />
-          <span>Light</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => setTheme("dark")}
-          className="cursor-pointer rounded-none"
-        >
-          <Moon className="h-4 w-4" />
-          <span>Dark</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => setTheme("system")}
-          className="cursor-pointer rounded-none"
-        >
-          <Laptop className="h-4 w-4" />
-          <span>System</span>
-        </DropdownMenuItem>
+        {OPTIONS.map(({ value, label, icon: Icon }) => (
+          <DropdownMenuItem
+            key={value}
+            onClick={() => setTheme(value)}
+            className="cursor-pointer rounded-none"
+          >
+            <Icon className="h-4 w-4" />
+            <span>{label}</span>
+            {theme === value && <Check className="ml-auto h-4 w-4" />}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );

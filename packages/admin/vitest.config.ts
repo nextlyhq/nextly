@@ -9,7 +9,9 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/__tests__/setup.ts"],
-    include: ["src/**/*.test.tsx", "src/**/*.test.ts"],
+    // scripts/ too: the CSS scoper decides whether the admin's styles stay off
+    // the host page, and it shipped a broken keyframe for want of a test.
+    include: ["src/**/*.test.tsx", "src/**/*.test.ts", "scripts/**/*.test.mjs"],
     exclude: ["node_modules", "dist", ".turbo", "**/*.d.ts"],
     coverage: {
       provider: "v8",

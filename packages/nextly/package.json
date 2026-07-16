@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.33",
+  "version": "0.0.2-alpha.34",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
@@ -127,10 +127,6 @@
       "types": "./dist/api/email-templates-preview.d.ts",
       "import": "./dist/api/email-templates-preview.mjs"
     },
-    "./api/email-templates-layout": {
-      "types": "./dist/api/email-templates-layout.d.ts",
-      "import": "./dist/api/email-templates-layout.mjs"
-    },
     "./api/email-send": {
       "types": "./dist/api/email-send.d.ts",
       "import": "./dist/api/email-send.mjs"
@@ -249,14 +245,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@commander-js/extra-typings": "^14.0.0",
     "@inquirer/prompts": "^7.3.2",
-    "@lexical/code": "^0.38.2",
-    "@lexical/headless": "^0.38.2",
-    "@lexical/html": "^0.38.2",
-    "@lexical/link": "^0.38.2",
-    "@lexical/list": "^0.38.2",
-    "@lexical/rich-text": "^0.38.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "bcryptjs": "^3.0.2",
     "chokidar": "^5.0.0",
@@ -266,23 +255,18 @@
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "^0.45.2",
     "esbuild": "^0.28.1",
-    "execa": "^9.6.0",
     "file-type": "^21",
     "isomorphic-dompurify": "^2",
     "jiti": "^2.6.1",
     "jose": "^6.2.2",
-    "lexical": "^0.38.2",
     "mime-types": "^3.0.2",
-    "mysql2": "^3.0.0",
     "nodemailer": "^8.0.5",
-    "pg": "^8.0.0",
     "picocolors": "^1.1.1",
     "resend": "^6.9.2",
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",
     "server-only": "^0.0.1",
     "sharp": "^0.33.5",
-    "tree-kill": "^1.2.2",
     "ws": "^8.18.0",
     "zod": "^4.1.12"
   },

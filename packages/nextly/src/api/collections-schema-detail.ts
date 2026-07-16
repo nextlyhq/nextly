@@ -38,6 +38,7 @@ import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
+import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { respondDoc, respondMutation } from "./response-shapes";
@@ -167,6 +168,9 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("update-collection");
+
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
@@ -303,6 +307,9 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("delete-collection");
+
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 

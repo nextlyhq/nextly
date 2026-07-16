@@ -41,6 +41,13 @@ const NEXTLY_DYNAMIC_PACKAGES = [
 ];
 
 const nextConfig: NextConfig = {
+  // Two dev servers on this app cannot share a build directory, and separate
+  // ports do not help: the collision is on disk, not on the network. The
+  // browser suite runs its own server on its own port, so it points this
+  // elsewhere and a contributor's `pnpm dev:app` keeps running untouched.
+  // Unset everywhere else, which leaves Next.js's own default.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+
   // Type-checking responsibility lives in each workspace package's own
   // `pnpm check-types` (run by CI and during dev). The playground's prod
   // build should only gate on actual bundling/compilation, not re-run

@@ -357,11 +357,12 @@ export function EntryForm({
             className="mx-6 mt-3"
           />
 
-          <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
             {/* Main column */}
             <div className="flex-1 min-w-0 flex flex-col">
-              {/* Why: the parent flex's lg:-m-8 already cancels PageContainer's
-                  lg:p-8 so the form runs edge-to-edge. Wrapping the system
+              {/* Why: the parent flex's @4xl/content:-m-8 already cancels
+                  PageContainer's px-8 padding so the form runs edge-to-edge
+                  once the panel is wide enough. Wrapping the system
                   header / meta strip in another -mx-8 doubled the negative
                   margin and pushed both bands ~32px past the page edges on
                   each side — clipping the title's first character on the
@@ -408,7 +409,7 @@ export function EntryForm({
               />
 
               {mainFields.length > 0 && (
-                <div className="lg:p-8 pt-6">
+                <div className="@4xl/content:p-8 pt-6">
                   <EntryFormContent
                     fields={mainFields}
                     disabled={isSubmitting}
@@ -418,7 +419,8 @@ export function EntryForm({
               )}
             </div>
 
-            {/* Rail (collapsible). Width 320px. Hidden under 1024px until a
+            {/* Rail (collapsible). Width 320px. Hidden until the content panel
+                is wide enough (@4xl) to fit it beside the main column, until a
                 future mobile sheet ships.
 
                 Why mode === "edit" gate (Task 7 PR-4): in create mode the
@@ -428,8 +430,8 @@ export function EntryForm({
                 07-admin-bugs-feedback). Skip the whole block until the
                 entry exists. */}
             {mode === "edit" && !railCollapsed && (
-              <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
-                <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+              <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
                   <EntryFormSidebar
                     mode={mode}
                     entry={entry}

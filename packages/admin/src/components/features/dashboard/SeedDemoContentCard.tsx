@@ -58,7 +58,7 @@ export function SeedDemoContentCard() {
   return (
     <Card
       className={cn(
-        "group/card relative rounded-none border-primary/5 bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary/40",
+        "group/card relative rounded-none border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary/40",
         // Subtle hairline tint — no gradient flood. The accent bar at
         // the top carries the dominant color cue; the card body stays
         // neutral so the eye reads the content first, status second.

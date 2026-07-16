@@ -221,7 +221,7 @@ export function ShowJSONDialog({
         </DialogHeader>
 
         {/* Controls bar */}
-        <div className="flex items-center gap-4 py-2  border-b border-primary/5">
+        <div className="flex items-center gap-4 py-2  border-b border-border">
           {/* Depth selector */}
           <div className="flex items-center gap-2">
             <Label htmlFor="json-depth" className="text-sm font-medium">
@@ -267,7 +267,7 @@ export function ShowJSONDialog({
               className="gap-2"
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-500" />
+                <Check className="h-4 w-4 text-success-500" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}
@@ -277,7 +277,7 @@ export function ShowJSONDialog({
         </div>
 
         {/* JSON content area */}
-        <div className="flex-1 overflow-auto min-h-[300px] rounded-none  border border-primary/5 bg-primary/5">
+        <div className="flex-1 overflow-auto min-h-[300px] rounded-none  border border-border bg-primary/5">
           {isLoading ? (
             <div className="flex items-center justify-center h-full gap-2 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />

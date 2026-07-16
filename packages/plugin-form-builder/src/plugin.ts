@@ -8,6 +8,8 @@
  * @since 0.1.0
  */
 
+import { createRequire } from "node:module";
+
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
@@ -25,6 +27,12 @@ import type {
 } from "./types";
 
 export type NextlyPlugin = PluginDefinition;
+
+// Read the version from package.json so it can never drift from the published
+// package. Node/config-side only (this module is not part of the admin bundle).
+const { version: PLUGIN_VERSION } = createRequire(import.meta.url)(
+  "../package.json"
+) as { version: string };
 
 /** The runtime instance passed to plugin hooks (type extracted from `init`'s parameter). */
 type NextlyInstance = Parameters<NonNullable<NextlyPlugin["init"]>>[0];
@@ -168,8 +176,7 @@ export function formBuilder(
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
-    // Keep in sync with package.json `version` (guarded by package-metadata.test).
-    version: "0.0.2-alpha.24",
+    version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
 
     // Declarative schema: the merged pipeline folds these into the
@@ -184,7 +191,15 @@ export function formBuilder(
           resource: "submissions",
           label: "Export Submissions",
           description: "Export form submissions as CSV/JSON",
-          group: "Form Builder",
+          // No `group`: the admin already files this under the plugin that
+          // declared it, so naming the plugin again would nest it inside
+          // itself. `group` is for a plugin with enough permissions to sort
+          // its own into headings, which one is not.
+          //
+          // `danger` because the point of the permission is to take
+          // submissions — names, emails, whatever a form asked for — out of
+          // the site in a file.
+          danger: true,
         },
       ],
       // HTTP route — exported at

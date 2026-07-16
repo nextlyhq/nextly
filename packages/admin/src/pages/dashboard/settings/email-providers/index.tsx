@@ -1,6 +1,5 @@
 "use client";
 
-import type { Column } from "@nextlyhq/ui";
 import {
   Alert,
   AlertDescription,
@@ -16,33 +15,30 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
-  ResponsiveTable,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-  TableSkeleton,
+  Skeleton,
 } from "@nextlyhq/ui";
 import React, { useState, useCallback, useMemo } from "react";
 
 import { SettingsTableToolbar } from "@admin/components/features/settings";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
+  AlertTriangle,
   Columns,
+  Edit,
   Loader2,
   Plus,
+  Send,
   Star,
   Trash2,
-  Edit,
-  MoreHorizontal,
-  Send,
-  AlertTriangle,
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -51,6 +47,11 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailProviders,
@@ -63,7 +64,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
 
 // ============================================================
-// Provider Type Badge Map
+// Provider type badge map
 // ============================================================
 
 const PROVIDER_TYPE_CONFIG: Record<
@@ -74,10 +75,6 @@ const PROVIDER_TYPE_CONFIG: Record<
   resend: { label: "Resend", variant: "primary" },
   sendlayer: { label: "SendLayer", variant: "success" },
 };
-
-// ============================================================
-// Helper: Mask Configuration
-// ============================================================
 
 function maskConfiguration(
   type: EmailProviderRecord["type"],
@@ -102,24 +99,16 @@ function maskConfiguration(
   }
 }
 
-// ============================================================
-// Helper: Format Date
-// ============================================================
-
 function formatDate(dateValue?: string): string {
   return formatDateWithAdminTimezone(
     dateValue,
-    {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    },
+    { year: "numeric", month: "short", day: "numeric" },
     "N/A"
   );
 }
 
 // ============================================================
-// Delete Dialog Component
+// Delete Dialog
 // ============================================================
 
 function ProviderDeleteDialog({
@@ -180,7 +169,7 @@ function ProviderDeleteDialog({
 }
 
 // ============================================================
-// Send-Test Dialog Component
+// Send-Test Dialog
 // ============================================================
 
 function ProviderTestDialog({
@@ -198,7 +187,6 @@ function ProviderTestDialog({
 }) {
   const [email, setEmail] = useState("");
 
-  // Reset the field whenever the dialog opens
   React.useEffect(() => {
     if (open) setEmail("");
   }, [open]);
@@ -273,43 +261,33 @@ function ProviderTestDialog({
 }
 
 // ============================================================
-// Provider Table Component
+// Provider Table (unified DataTableView)
 // ============================================================
 
+const ALWAYS_VISIBLE = new Set(["name"]);
+
 function EmailProviderTable() {
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state
   const [search, setSearch] = useState("");
-
-  // Filter state
   const [type, setType] = useState<string>("all");
-
-  // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  const toggleColumn = (key: string) => {
+  const toggleColumn = useCallback((key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
-  };
+  }, []);
 
-  // Delete dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<{
     id: string;
     name: string;
   } | null>(null);
 
-  // Test dialog state
   const [testDialogOpen, setTestDialogOpen] = useState(false);
   const [providerToTest, setProviderToTest] = useState<{
     id: string;
@@ -317,7 +295,6 @@ function EmailProviderTable() {
     fromEmail: string;
   } | null>(null);
 
-  // Fetch providers
   const { data, isLoading, isError, error } = useEmailProviders({
     page,
     pageSize,
@@ -325,16 +302,10 @@ function EmailProviderTable() {
     type,
   });
 
-  // Delete mutation
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();
-
-  // Set default mutation
   const { mutate: doSetDefault } = useSetDefaultProvider();
-
-  // Test mutation
   const { mutate: doTest, isPending: isTesting } = useTestProvider();
 
-  // Action handlers
   const handleEdit = useCallback((provider: EmailProviderRecord) => {
     navigateTo(
       buildRoute(ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT, { id: provider.id })
@@ -357,18 +328,12 @@ function EmailProviderTable() {
         setProviderToDelete(null);
       },
       onError: (err: Error) => {
-        // Close dialog even on error as provider might already be deleted
         setDeleteDialogOpen(false);
         setProviderToDelete(null);
-
-        // Only show error if it's not a "not found" error (already deleted)
         const errorMessage = err.message || "Unknown error";
         if (!errorMessage.toLowerCase().includes("not found")) {
-          toast.error("Delete failed", {
-            description: errorMessage,
-          });
+          toast.error("Delete failed", { description: errorMessage });
         } else {
-          // Provider was already deleted, show success instead
           toast.success("Provider deleted", {
             description: `${providerToDelete.name} has been deleted.`,
           });
@@ -394,7 +359,6 @@ function EmailProviderTable() {
     [doSetDefault]
   );
 
-  // Open the test dialog — actual send happens in handleConfirmTest
   const handleTest = useCallback((provider: EmailProviderRecord) => {
     setProviderToTest({
       id: provider.id,
@@ -434,7 +398,6 @@ function EmailProviderTable() {
     [providerToTest, doTest]
   );
 
-  // Page size change handler
   const handlePageSizeChange = useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
@@ -445,31 +408,15 @@ function EmailProviderTable() {
     setPage(0);
   }, []);
 
-  // Table columns
-  const ALWAYS_VISIBLE = new Set(["id"]);
-
-  const columnDefs = useMemo<Column<EmailProviderRecord>[]>(
+  const allColumns = useMemo<NextlyColumn<EmailProviderRecord>[]>(
     () => [
       {
-        key: "name",
-        label: "Name",
-        render: (_value, provider) => (
+        name: "name",
+        header: "Name",
+        cell: ({ row }) => (
           <div className="flex items-center gap-2">
-            <span
-              className="font-medium cursor-pointer hover-unified"
-              onClick={() => handleEdit(provider)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleEdit(provider);
-                }
-              }}
-            >
-              {provider.name}
-            </span>
-            {!provider.isActive && (
+            <span className="font-medium">{row.name}</span>
+            {!row.isActive && (
               <Badge variant="warning" className="text-xs">
                 Inactive
               </Badge>
@@ -478,44 +425,42 @@ function EmailProviderTable() {
         ),
       },
       {
-        key: "type",
-        label: "Type",
-        render: (_value, provider) => {
-          const config = PROVIDER_TYPE_CONFIG[provider.type];
+        name: "type",
+        header: "Type",
+        cell: ({ row }) => {
+          const config = PROVIDER_TYPE_CONFIG[row.type];
           return <Badge variant={config.variant}>{config.label}</Badge>;
         },
       },
       {
-        key: "fromEmail",
-        label: "From",
-        render: (_value, provider) => (
+        name: "fromEmail",
+        header: "From",
+        cell: ({ row }) => (
           <div>
-            {provider.fromName && (
-              <div className="text-sm font-medium">{provider.fromName}</div>
+            {row.fromName && (
+              <div className="text-sm font-medium">{row.fromName}</div>
             )}
-            <div className="text-sm text-muted-foreground">
-              {provider.fromEmail}
-            </div>
+            <div className="text-sm text-muted-foreground">{row.fromEmail}</div>
           </div>
         ),
       },
       {
-        key: "configuration",
-        label: "Configuration",
+        name: "configuration",
+        header: "Configuration",
         hideOnMobile: true,
-        render: (_value, provider) => (
-          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
-            {maskConfiguration(provider.type, provider.configuration)}
+        cell: ({ row }) => (
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+            {maskConfiguration(row.type, row.configuration)}
           </code>
         ),
       },
       {
-        key: "isDefault",
-        label: "Default",
-        render: (_value, provider) =>
-          provider.isDefault ? (
+        name: "isDefault",
+        header: "Default",
+        cell: ({ row }) =>
+          row.isDefault ? (
             <div className="flex items-center gap-1.5">
-              <Star className="h-4 w-4 text-amber-500 fill-amber-500 shrink-0" />
+              <Star className="h-4 w-4 fill-current text-foreground shrink-0" />
               <Badge variant="success">Default</Badge>
             </div>
           ) : (
@@ -523,93 +468,75 @@ function EmailProviderTable() {
           ),
       },
       {
-        key: "createdAt",
-        label: "Created",
+        name: "createdAt",
+        header: "Created",
         hideOnMobile: true,
-        render: createdAt => (
-          <span className="text-sm">{formatDate(createdAt as string)}</span>
-        ),
-      },
-      {
-        key: "id",
-        label: "Actions",
-        render: (_value, provider) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-8 w-8 p-0  border border-primary/5"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => handleEdit(provider)}
-              >
-                <Edit className="h-4 w-4" />
-                Edit
-              </DropdownMenuItem>
-              {!provider.isDefault && (
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => handleSetDefault(provider)}
-                >
-                  <Star className="h-4 w-4" />
-                  Set Default
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => handleTest(provider)}
-                disabled={isTesting}
-              >
-                <Send className="h-4 w-4" />
-                Send Test
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => handleDelete(provider)}
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        cell: ({ row }) => (
+          <span className="text-sm">{formatDate(row.createdAt)}</span>
         ),
       },
     ],
-    [handleEdit, handleSetDefault, handleTest, handleDelete, isTesting]
+    []
   );
 
   const columns = useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
   );
 
-  // Error state
+  const rowActions = useCallback(
+    (provider: EmailProviderRecord): RowAction<EmailProviderRecord>[] => {
+      const actions: RowAction<EmailProviderRecord>[] = [
+        {
+          id: "edit",
+          label: "Edit",
+          icon: <Edit className="h-4 w-4" />,
+          onSelect: () => handleEdit(provider),
+        },
+      ];
+      if (!provider.isDefault) {
+        actions.push({
+          id: "set-default",
+          label: "Set Default",
+          icon: <Star className="h-4 w-4" />,
+          onSelect: () => handleSetDefault(provider),
+        });
+      }
+      actions.push({
+        id: "test",
+        label: "Send Test",
+        icon: <Send className="h-4 w-4" />,
+        isDisabled: () => isTesting,
+        onSelect: () => handleTest(provider),
+      });
+      actions.push({
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onSelect: () => handleDelete(provider),
+      });
+      return actions;
+    },
+    [handleEdit, handleSetDefault, handleTest, handleDelete, isTesting]
+  );
+
   if (isError) {
     return (
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search providers by name..."
-              isLoading={false}
-              className="w-full bg-background text-foreground border-input"
-            />
-          </div>
-        </div>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search providers by name..."
+          isLoading={false}
+          className="w-full max-w-md bg-background text-foreground border-input"
+        />
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -619,26 +546,6 @@ function EmailProviderTable() {
               : "Failed to load email providers. Please try again."}
           </AlertDescription>
         </Alert>
-      </div>
-    );
-  }
-
-  // Loading state (initial load only)
-  if (isLoading && !data) {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search providers by name..."
-              isLoading={true}
-              className="w-full bg-background text-foreground border-input"
-            />
-          </div>
-        </div>
-        <TableSkeleton columns={7} />
       </div>
     );
   }
@@ -659,7 +566,7 @@ function EmailProviderTable() {
         }
         filters={
           <Select value={type} onValueChange={handleTypeChange}>
-            <SelectTrigger className="w-[130px] bg-background text-foreground border-primary/5 hover:bg-accent/10">
+            <SelectTrigger className="w-[130px] bg-background text-foreground border-border hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
@@ -683,11 +590,11 @@ function EmailProviderTable() {
               <DropdownMenuSeparator />
               {toggleableColumns.map(col => (
                 <DropdownMenuCheckboxItem
-                  key={String(col.key)}
-                  checked={!hiddenColumns.has(String(col.key))}
-                  onCheckedChange={() => toggleColumn(String(col.key))}
+                  key={col.name}
+                  checked={!hiddenColumns.has(col.name)}
+                  onCheckedChange={() => toggleColumn(col.name)}
                 >
-                  {typeof col.label === "string" ? col.label : String(col.key)}
+                  {typeof col.header === "string" ? col.header : col.name}
                 </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
@@ -695,30 +602,39 @@ function EmailProviderTable() {
         }
       />
 
-      {/* Table */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
-        <ResponsiveTable
-          data={data?.data || []}
-          columns={columns}
-          emptyMessage="No email providers configured. Add a provider to start sending emails."
-          ariaLabel="Email providers table"
-          tableWrapperClassName="border-0 rounded-none shadow-none"
-        />
-        {data && data.meta.totalPages > 0 && (
-          <Pagination
-            currentPage={page}
-            totalPages={data.meta.totalPages}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            isLoading={isLoading}
-            totalItems={totalItems}
+      {isLoading && !data ? (
+        <div className="rounded-none border border-border bg-card p-4">
+          <Skeleton className="h-50 w-full rounded-none" />
+        </div>
+      ) : (
+        <>
+          <DataTableView<EmailProviderRecord>
+            columns={columns}
+            rows={data?.data ?? []}
+            loading={isLoading}
+            onRowClick={provider => handleEdit(provider)}
+            primaryColumn="name"
+            rowActions={rowActions}
+            registryKey="email-providers"
+            ariaLabel="Email providers table"
+            emptyMessage="No email providers configured. Add a provider to start sending emails."
           />
-        )}
-      </div>
 
-      {/* Delete confirmation dialog */}
+          {data && data.meta.totalPages > 0 && (
+            <Pagination
+              currentPage={page}
+              totalPages={data.meta.totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              isLoading={isLoading}
+              totalItems={totalItems}
+            />
+          )}
+        </>
+      )}
+
       <ProviderDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -727,7 +643,6 @@ function EmailProviderTable() {
         isLoading={isDeleting}
       />
 
-      {/* Send test email dialog */}
       <ProviderTestDialog
         open={testDialogOpen}
         onOpenChange={setTestDialogOpen}
@@ -740,7 +655,7 @@ function EmailProviderTable() {
 }
 
 // ============================================================
-// Page Component
+// Page
 // ============================================================
 
 const EmailProvidersPage: React.FC = () => {
@@ -749,17 +664,14 @@ const EmailProvidersPage: React.FC = () => {
       <PageContainer>
         <SettingsLayout
           actions={
-            <div className="flex items-center gap-3">
-              <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
-                <Button size="md" className="flex items-center gap-1">
-                  <Plus className="h-4 w-4" />
-                  <span>Add Provider</span>
-                </Button>
-              </Link>
-            </div>
+            <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
+              <Button size="md" className="flex items-center gap-1">
+                <Plus className="h-4 w-4" />
+                <span>Add Provider</span>
+              </Button>
+            </Link>
           }
         >
-          {/* Email provider table */}
           <EmailProviderTable />
         </SettingsLayout>
       </PageContainer>

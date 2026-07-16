@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -26,14 +26,14 @@ jobs:
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -49,18 +49,55 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      # Enforce the design-token theming contract in the admin + plugin packages
+      # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
+      # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.
+      - name: Design tokens lint
+        run: pnpm lint:design
+
       - name: Build
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # `./e2e` is named explicitly: it is a workspace member but sits under
+      # neither glob, being neither something we publish nor something we run.
       - name: Lint
-        run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*'
+        run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
         env:
           TURBO_CACHE_DIR: .turbo
 
       - name: Typecheck
         run: pnpm turbo check-types --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Unit tests. Named packages rather than all of them: `nextly` and
+      # `@nextlyhq/admin` carry a large pre-existing failing baseline (stale
+      # test scaffolding, not product bugs) and are being repaired in a
+      # follow-up that adds them here once green. Everything gated below passes
+      # today, so a new failure in any of these packages is a real regression
+      # and blocks the merge — which is the whole point, and the reason the job
+      # was named "Test" long before it ran any.
+      #
+      # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
+      # they gate automatically the moment they gain one.
+      - name: Test
+        run: >-
+          pnpm turbo test
+          --filter=@nextlyhq/plugin-page-builder
+          --filter=@nextlyhq/plugin-form-builder
+          --filter=@nextlyhq/plugin-sdk
+          --filter=@nextlyhq/ui
+          --filter=@nextlyhq/adapter-drizzle
+          --filter=@nextlyhq/adapter-postgres
+          --filter=@nextlyhq/adapter-mysql
+          --filter=@nextlyhq/adapter-sqlite
+          --filter=@nextlyhq/storage-s3
+          --filter=@nextlyhq/storage-uploadthing
+          --filter=@nextlyhq/storage-vercel-blob
+          --filter=@nextlyhq/telemetry
+          --filter=create-nextly-app
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -95,6 +132,80 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+  # The admin, in a real browser, against a real server and a real database.
+  # Covers the class of failure the unit and integration suites structurally
+  # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
+  # control outline that fails contrast measures the same whether the bug is
+  # there or not. Runs after `ci` so a broken tree does not spend browser
+  # minutes.
+  #
+  # The suite brings up its own playground on its own port, against its own
+  # throwaway sqlite file. Nothing here touches a database anyone wanted.
+  e2e:
+    name: Browser tests
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # This job never pushes. Left on, the default keeps GITHUB_TOKEN in
+          # the git config for everything that follows, which here is a pnpm
+          # install and a browser download.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Cache Turbo
+        uses: actions/cache@v6
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Keyed on the lockfile: the browser build only has to change when the
+      # Playwright version does, and a download is most of this job's runtime.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
+
+      # The playground loads the admin and the plugins from their built output,
+      # not their source, so a stale dist is a stale test.
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Run browser tests
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/.playwright/report
+          retention-days: 7
+
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh
   # installs. Runs after the main `ci` job to avoid wasting minutes when
@@ -111,13 +222,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm

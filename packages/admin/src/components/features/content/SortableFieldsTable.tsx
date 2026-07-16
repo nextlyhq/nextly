@@ -65,7 +65,7 @@ function SortableFieldRow({
             width="16"
             height="16"
             fill="currentColor"
-            className="mr-2 text-gray-400"
+            className="mr-2 text-muted-foreground"
             viewBox="0 0 20 20"
           >
             <circle cx="5" cy="6" r="1.5" />

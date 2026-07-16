@@ -115,7 +115,7 @@ import type { PaginationProps } from "./types";
  * />
  * ```
  */
-export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
+export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
   (
     {
       currentPage,
@@ -128,10 +128,69 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
       onPageSizeChange,
       isLoading = false,
       totalItems,
+      itemLabel = "items",
+      ariaLabel = "Pagination",
       className,
     },
     ref
   ) => {
+    const canGoPrevious = currentPage > 0;
+    const canGoNext = currentPage < totalPages - 1;
+
+    /** Arrow/Home/End move between pages while the control has focus. */
+    const handleKeyDown = React.useCallback(
+      (e: React.KeyboardEvent) => {
+        if (isLoading) return;
+
+        // These keys already mean something inside a form control — a select
+        // jumps between its options with them — and keydown reaches this nav
+        // by bubbling from its own children. Taking the key there would both
+        // block the control and move the page out from under whoever is using
+        // it.
+        if (
+          (e.target as HTMLElement | null)?.closest(
+            "select, input, textarea, [contenteditable='true']"
+          )
+        ) {
+          return;
+        }
+
+        switch (e.key) {
+          case "ArrowLeft":
+            if (canGoPrevious) {
+              e.preventDefault();
+              onPageChange(currentPage - 1);
+            }
+            break;
+          case "ArrowRight":
+            if (canGoNext) {
+              e.preventDefault();
+              onPageChange(currentPage + 1);
+            }
+            break;
+          case "Home":
+            if (canGoPrevious) {
+              e.preventDefault();
+              onPageChange(0);
+            }
+            break;
+          case "End":
+            if (canGoNext) {
+              e.preventDefault();
+              onPageChange(totalPages - 1);
+            }
+            break;
+        }
+      },
+      [
+        isLoading,
+        canGoPrevious,
+        canGoNext,
+        currentPage,
+        totalPages,
+        onPageChange,
+      ]
+    );
     // Render smart page numbers with ellipsis
     const renderPageNumbers = () => {
       // Common button class
@@ -139,15 +198,15 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
         cn(
           "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
           isActive
-            ? "!bg-primary text-primary-foreground !border-primary z-20"
-            : "bg-background  border border-primary/5 hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
+            ? "bg-primary! text-primary-foreground border-primary! z-20"
+            : "bg-background  border border-border-strong hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
         );
 
       // Helper for ellipsis
       const renderEllipsis = (key: string) => (
         <span
           key={key}
-          className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background text-muted-foreground text-xs -ml-px"
+          className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
           ...
@@ -239,20 +298,22 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
     };
 
     return (
-      <div
+      <nav
         ref={ref}
+        aria-label={ariaLabel}
+        onKeyDown={handleKeyDown}
         className={cn(
-          "flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-primary/5 bg-[hsl(var(--table-header-bg))]",
+          "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
           className
         )}
       >
         {/* Left: Info */}
-        <div className="whitespace-nowrap order-2 sm:order-1">
+        <div className="whitespace-nowrap order-2 @2xl/content:order-1">
           {totalItems !== undefined ? (
             <>
               Showing {currentPage * pageSize + 1}-
               {Math.min((currentPage + 1) * pageSize, totalItems)} of{" "}
-              {totalItems} entries
+              {totalItems} {itemLabel}
             </>
           ) : (
             <>
@@ -263,11 +324,11 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
         </div>
 
         {/* Right: Controls */}
-        <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 lg:gap-8 order-1 sm:order-2">
+        <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
             <div className="flex items-center space-x-2">
-              <span className="whitespace-nowrap hidden sm:inline-block">
+              <span className="whitespace-nowrap hidden @md/content:inline-block">
                 Rows per page
               </span>
               <div className="relative">
@@ -279,7 +340,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
                     onPageSizeChange(newPageSize);
                   }}
                   disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-none  border border-primary/5 bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+                  className="h-9 w-[70px] appearance-none rounded-none  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
                 >
                   {pageSizeOptions.map(size => (
                     <option key={size} value={size}>
@@ -312,7 +373,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(0)}
               disabled={currentPage === 0 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to first page"
             >
               <ChevronsLeft className="h-4 w-4" />
@@ -322,7 +383,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 0 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 focus:outline-none focus:border-primary z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to previous page"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -335,7 +396,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to next page"
             >
               <ChevronRight className="h-4 w-4" />
@@ -345,7 +406,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(totalPages - 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to last page"
             >
               <ChevronsRight className="h-4 w-4" />
@@ -353,11 +414,11 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
           </div>
 
           {/* Page Count (Far Right) */}
-          <div className="whitespace-nowrap hidden sm:block">
+          <div className="whitespace-nowrap hidden @md/content:block">
             Page {currentPage + 1} of {totalPages}
           </div>
         </div>
-      </div>
+      </nav>
     );
   }
 );

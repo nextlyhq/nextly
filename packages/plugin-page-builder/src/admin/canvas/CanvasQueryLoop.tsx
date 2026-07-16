@@ -83,8 +83,8 @@ const labelStyle = {
   fontWeight: 600,
   letterSpacing: "0.04em",
   textTransform: "uppercase" as const,
-  color: "#94a3b8",
+  color: "var(--nx-pb-ed-muted-foreground)",
   margin: "10px 0 6px",
-  borderTop: "1px dashed #cbd5e1",
+  borderTop: "1px dashed var(--nx-pb-ed-border-strong)",
   paddingTop: 8,
 };

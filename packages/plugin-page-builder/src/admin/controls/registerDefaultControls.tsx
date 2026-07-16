@@ -11,6 +11,15 @@ import { createElement, type ReactNode } from "react";
 import { defaultControlRegistry } from "../../core/registry";
 
 import { ColorControl } from "./ColorControl";
+import { BackgroundControl } from "./composite/BackgroundControl";
+import { BorderControl } from "./composite/BorderControl";
+import { BoxShadowControl } from "./composite/BoxShadowControl";
+import { GradientControl } from "./composite/GradientControl";
+import { IconPickerControl } from "./composite/IconPickerControl";
+import { PositionControl } from "./composite/PositionControl";
+import { RepeaterControl } from "./composite/RepeaterControl";
+import { SliderControl } from "./composite/SliderControl";
+import { UnitControl } from "./composite/UnitControl";
 import { MediaControl } from "./MediaControl";
 import {
   AlignControl,
@@ -37,6 +46,15 @@ const CONTROLS: Record<string, ControlComponent> = {
   spacing: SpacingControl,
   color: ColorControl,
   media: MediaControl,
+  unit: UnitControl,
+  border: BorderControl,
+  background: BackgroundControl,
+  position: PositionControl,
+  slider: SliderControl,
+  boxShadow: BoxShadowControl,
+  icon: IconPickerControl,
+  repeater: RepeaterControl,
+  gradient: GradientControl,
 };
 
 let registered = false;

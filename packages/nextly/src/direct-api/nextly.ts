@@ -180,8 +180,6 @@ import type {
   ListFoldersArgs,
   BulkDeleteMediaArgs,
   PreviewEmailTemplateArgs,
-  GetEmailLayoutArgs,
-  UpdateEmailLayoutArgs,
   ReorderUserFieldsArgs,
   RevokeApiKeyArgs,
   SendEmailArgs,
@@ -823,10 +821,6 @@ export const nextly = {
       getNextly().emailTemplates.delete(args),
     preview: (args: PreviewEmailTemplateArgs) =>
       getNextly().emailTemplates.preview(args),
-    getLayout: (args?: GetEmailLayoutArgs) =>
-      getNextly().emailTemplates.getLayout(args),
-    updateLayout: (args: UpdateEmailLayoutArgs) =>
-      getNextly().emailTemplates.updateLayout(args),
   },
 
   userFields: {

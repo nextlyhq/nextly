@@ -139,7 +139,7 @@ async function ensureServicesInitialized(): Promise<void> {
     // Seed system + collection + single permissions (idempotent).
     // This mirrors init.ts runPostInitTasks() so external apps using
     // createDynamicHandlers() get permissions auto-seeded on first request.
-    // Without this, permissions like "manage-api-keys" won't exist and
+    // Without this, permissions like "update-api-keys" won't exist and
     // the admin UI will block access to protected settings tabs.
     try {
       const permissionSeedService = getService("permissionSeedService");

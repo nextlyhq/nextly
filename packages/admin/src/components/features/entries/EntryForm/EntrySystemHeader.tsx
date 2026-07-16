@@ -22,7 +22,6 @@ import {
   PanelRight,
   PanelRightClose,
   RotateCcw,
-  Save,
   Trash2,
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -218,7 +217,7 @@ export function EntrySystemHeader({
       : ((entry?.slug as string | undefined) ?? null);
 
   return (
-    <div className="px-6 py-3 border-b border-primary/5 flex items-center gap-3 sticky top-0 z-30 bg-white dark:bg-slate-950">
+    <div className="px-6 py-3 border-b border-border flex items-center gap-3 sticky top-0 z-30 bg-background">
       {/* Title input — borderless, 19px, autofocus on create */}
       <div className="flex-1 min-w-0">
         <input
@@ -261,11 +260,7 @@ export function EntrySystemHeader({
               onClick={onSaveChanges}
               data-status="save-changes"
             >
-              {isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save changes
             </Button>
             <Button
@@ -289,11 +284,7 @@ export function EntrySystemHeader({
               onClick={onSaveDraft}
               data-status="draft"
             >
-              {isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save Draft
             </Button>
             <Button
@@ -323,11 +314,10 @@ export function EntrySystemHeader({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Saving…
               </>
+            ) : mode === "create" ? (
+              "Create"
             ) : (
-              <>
-                <Save className="h-3.5 w-3.5" />
-                {mode === "create" ? "Create" : "Save"}
-              </>
+              "Save"
             )}
           </Button>
         )}
@@ -414,7 +404,7 @@ export function EntrySystemHeader({
         {/* Rail toggle — far right, separated by a thin divider */}
         {onToggleRail && (
           <>
-            <span className="w-px h-5 bg-black/10 mx-1" />
+            <span className="w-px h-5 bg-border mx-1" />
             <Button
               type="button"
               variant="outline"

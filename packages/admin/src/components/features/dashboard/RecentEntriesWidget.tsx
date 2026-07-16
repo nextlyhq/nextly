@@ -25,7 +25,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="warning"
-        className="bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] uppercase tracking-wider font-bold"
+        className="bg-warning-500/10 text-warning-500 border-warning-500/20 text-[10px] uppercase tracking-wider font-bold"
       >
         Draft
       </Badge>
@@ -35,7 +35,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="success"
-        className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[10px] uppercase tracking-wider font-bold"
+        className="bg-success-500/10 text-success-500 border-success-500/20 text-[10px] uppercase tracking-wider font-bold"
       >
         Published
       </Badge>
@@ -54,11 +54,11 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
 
   return (
     <Link href={editHref} className="block group">
-      <div className="flex items-center gap-5 px-4 py-4.5 rounded-none] transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
+      <div className="flex items-center gap-5 px-4 py-4.5 rounded-none transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
         {/* Hover Highlight Overlay */}
         <div className="absolute inset-0 bg-gradient-to-r from-primary/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
-        <div className="h-12 w-12 shrink-0 rounded-none bg-primary/5 flex items-center justify-center  border border-primary/5 group-hover:border-primary/5 group-hover-unified group-hover:rotate-3 transition-all duration-500 relative z-10">
+        <div className="h-12 w-12 shrink-0 rounded-none bg-primary/5 flex items-center justify-center  border border-border group-hover:border-border group-hover-unified group-hover:rotate-3 transition-all duration-500 relative z-10">
           <span className="text-sm font-black text-muted-foreground/60 group-hover-unified transition-colors">
             {firstLetter}
           </span>
@@ -83,7 +83,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
           {getStatusBadge(entry.status)}
         </div>
 
-        <div className="p-2 rounded-none  border border-primary/5 border-transparent group-hover:border-primary/5 group-hover:bg-white group-hover:shadow-sm transition-all duration-500 relative z-10">
+        <div className="p-2 rounded-none  border border-border border-transparent group-hover:border-border group-hover:bg-card group-hover:shadow-sm transition-all duration-500 relative z-10">
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover-unified group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>
@@ -116,10 +116,10 @@ export const RecentEntriesWidget: React.FC = () => {
   const { data, isLoading, error } = useRecentEntries(7);
 
   return (
-    <Card className="border-primary/5 bg-card/60 backdrop-blur-md overflow-hidden rounded-none] transition-all duration-500 hover:border-primary/5">
+    <Card className="border-border bg-card/60 backdrop-blur-md overflow-hidden rounded-none transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
-        className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-primary/5"
+        className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border"
       >
         <div className="space-y-1">
           <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
@@ -146,7 +146,7 @@ export const RecentEntriesWidget: React.FC = () => {
           </div>
         ) : !data?.entries.length ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-none] bg-primary/5  border border-primary/5">
+            <div className="p-6 rounded-none bg-primary/5  border border-border">
               <FileText className="h-10 w-10 text-muted-foreground/20" />
             </div>
             <div className="space-y-1">

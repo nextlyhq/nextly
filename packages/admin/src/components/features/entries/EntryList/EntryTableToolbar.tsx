@@ -1,7 +1,7 @@
 /**
  * Entry Table Toolbar Component
  *
- * Provides search, query presets, export, and column visibility controls for the entry table.
+ * Provides search, filters, and column visibility controls for the entry table.
  *
  * @module components/entries/EntryList/EntryTableToolbar
  * @since 1.0.0
@@ -16,11 +16,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import type { Table } from "@tanstack/react-table";
 import type React from "react";
 
 import { Columns, RotateCcw, Filter } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
+import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 
 import type { CollectionForColumns } from "./EntryTableColumns";
 
@@ -32,10 +32,14 @@ import type { CollectionForColumns } from "./EntryTableColumns";
  * Props for the EntryTableToolbar component.
  */
 export interface EntryTableToolbarProps {
-  /** TanStack Table instance */
-  table: Table<Record<string, unknown>>;
   /** Collection configuration */
   collection: CollectionForColumns;
+  /** The table's columns (used to populate the visibility toggle). */
+  columns: NextlyColumn<Record<string, unknown>>[];
+  /** Whether a column is currently visible. */
+  isColumnVisible: (name: string) => boolean;
+  /** Toggle a column's visibility. */
+  onToggleColumn: (name: string) => void;
   /** Current global filter value */
   globalFilter: string;
   /** Callback when global filter changes */
@@ -49,102 +53,43 @@ export interface EntryTableToolbarProps {
 }
 
 // ============================================================================
-// Constants
-// ============================================================================
-
-/**
- * Column IDs that should not appear in the column visibility dropdown.
- * These are structural columns (selection, actions) that should always be visible.
- * Additionally, core fields like title, slug, and id are excluded from toggling
- * so they remain fixed in the table.
- */
-const HIDDEN_FROM_COLUMN_TOGGLE = new Set(["select", "actions"]);
-
-/**
- * Friendly display names for built-in columns.
- */
-const COLUMN_DISPLAY_NAMES: Record<string, string> = {
-  id: "ID",
-  createdAt: "Created At",
-  updatedAt: "Updated At",
-};
-
-// ============================================================================
 // Component
 // ============================================================================
 
 /**
  * Toolbar for entry table with search and column visibility controls.
- *
- * Features:
- * - Global search input with clear button
- * - Query presets for saving/loading view states
- * - Column visibility toggle dropdown
- *
- * @param props - Toolbar props
- * @returns Toolbar component
- *
- * @example
- * ```tsx
- * <EntryTableToolbar
- *   table={table}
- *   collection={collection}
- *   globalFilter={globalFilter}
- *   onGlobalFilterChange={handleGlobalFilterChange}
- * />
- * ```
  */
 export function EntryTableToolbar({
-  table,
   collection,
+  columns,
+  isColumnVisible,
+  onToggleColumn,
   globalFilter,
   onGlobalFilterChange,
   onResetColumnVisibility,
   filters,
   hasActiveFilters,
 }: EntryTableToolbarProps) {
-  // Get columns that can be toggled (exclude select and actions)
-  const toggleableColumns = table
-    .getAllColumns()
-    .filter(
-      column => column.getCanHide() && !HIDDEN_FROM_COLUMN_TOGGLE.has(column.id)
-    );
-
-  // Get display name for a column
-  const getColumnDisplayName = (columnId: string): string => {
-    // Check built-in names first
-    if (COLUMN_DISPLAY_NAMES[columnId]) {
-      return COLUMN_DISPLAY_NAMES[columnId];
-    }
-
-    // Try to get label from collection fields
-    const field = collection.fields.find(
-      f => "name" in f && f.name === columnId
-    );
-    if (field && "label" in field && field.label) {
-      return field.label;
-    }
-
-    // Capitalize the column ID as fallback
-    return columnId.charAt(0).toUpperCase() + columnId.slice(1);
-  };
+  const getColumnDisplayName = (
+    column: NextlyColumn<Record<string, unknown>>
+  ) => (typeof column.header === "string" ? column.header : column.name);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col justify-between gap-4 @lg/content:flex-row @lg/content:items-center">
         {/* Search Input */}
-        <div className="relative w-full sm:max-w-xs md:max-w-sm">
+        <div className="relative w-full @lg/content:max-w-xs @2xl/content:max-w-sm">
           <SearchBar
             value={globalFilter}
             onChange={onGlobalFilterChange}
             placeholder={`Search ${collection.label}...`}
-            className="w-full bg-background text-foreground border-primary/5"
+            className="w-full border-border bg-background text-foreground"
             data-entry-search-input
           />
         </div>
 
         {/* Toolbar Controls */}
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <div className="flex flex-wrap items-center gap-2 @lg/content:justify-end">
           {/* Custom Filters (e.g. Status) */}
           {filters && (
             <DropdownMenu>
@@ -152,12 +97,12 @@ export function EntryTableToolbar({
                 <Button
                   variant="outline"
                   size="md"
-                  className="relative flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                  className="relative flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 @lg/content:flex-none"
                 >
                   <Filter className="h-4 w-4" />
                   Filter
                   {hasActiveFilters && (
-                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
+                    <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-none bg-primary" />
                   )}
                 </Button>
               </DropdownMenuTrigger>
@@ -173,7 +118,7 @@ export function EntryTableToolbar({
               <Button
                 variant="outline"
                 size="md"
-                className="flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                className="flex-1 border-border bg-background text-foreground hover-unified hover:bg-accent/10 @lg/content:flex-none"
               >
                 <Columns className="h-4 w-4" />
                 Columns
@@ -182,22 +127,22 @@ export function EntryTableToolbar({
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {toggleableColumns.length === 0 ? (
+              {columns.length === 0 ? (
                 <p className="px-2 py-1.5 text-sm text-muted-foreground">
                   No columns to toggle
                 </p>
               ) : (
-                toggleableColumns.map(column => (
+                columns.map(column => (
                   <DropdownMenuCheckboxItem
-                    key={column.id}
-                    checked={column.getIsVisible()}
-                    onCheckedChange={value => column.toggleVisibility(!!value)}
+                    key={column.name}
+                    checked={isColumnVisible(column.name)}
+                    onCheckedChange={() => onToggleColumn(column.name)}
                   >
-                    {getColumnDisplayName(column.id)}
+                    {getColumnDisplayName(column)}
                   </DropdownMenuCheckboxItem>
                 ))
               )}
-              {onResetColumnVisibility && toggleableColumns.length > 0 && (
+              {onResetColumnVisibility && columns.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
                   <Button

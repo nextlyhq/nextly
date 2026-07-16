@@ -10,7 +10,7 @@
  * @since 1.0.0
  */
 
-import { $createCodeNode, $isCodeNode } from "@lexical/code";
+import { $createCodeNode, $isCodeNode } from "@lexical/code-core";
 import { $isLinkNode } from "@lexical/link";
 import {
   INSERT_CHECK_LIST_COMMAND,

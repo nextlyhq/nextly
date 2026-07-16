@@ -24,7 +24,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
 
   return (
     <div>
-      <div className="bg-card  border-t border-primary/5 px-4 py-6 animate-in fade-in-0 slide-in-from-bottom-2">
+      <div className="bg-card  border-t border-border px-4 py-6 animate-in fade-in-0 slide-in-from-bottom-2">
         <div className="flex flex-col items-center mb-3">
           <Avatar size="xl" className="bg-primary/5 mb-3 text-primary">
             <AvatarFallback>
@@ -74,12 +74,14 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             onClick={() => {
               void logout();
             }}
-            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 mt-2 cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-destructive-400 hover:bg-destructive-500/10 hover:text-destructive-300 mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">
               <span>Log out</span>
-              <span className="text-xs text-red-400/80">End your session</span>
+              <span className="text-xs text-destructive-400/80">
+                End your session
+              </span>
             </div>
           </button>
         </div>

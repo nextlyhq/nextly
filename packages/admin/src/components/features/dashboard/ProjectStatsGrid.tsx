@@ -112,7 +112,7 @@ export const ProjectStatsGrid: React.FC = () => {
     }, [data, localeCount]);
 
   return (
-    <Card className="border-primary/5 bg-card/80 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/5">
+    <Card className="border-border bg-card/80 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -134,7 +134,7 @@ export const ProjectStatsGrid: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none]">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none">
             <AlertCircle className="h-4 w-4" />
             <span>Resource index synchronization failed</span>
           </div>
@@ -148,7 +148,7 @@ export const ProjectStatsGrid: React.FC = () => {
                 value={stat.value}
                 icon={stat.icon}
                 href={stat.href}
-                className="rounded-none bg-primary/5 border-primary/5"
+                className="rounded-none bg-primary/5 border-border"
               />
             ))}
           </div>

@@ -24,6 +24,7 @@
 
 export type {
   EmailTemplateVariable,
+  EmailTemplateKind,
   EmailTemplateInsert,
   EmailTemplateRecord,
 } from "./types";

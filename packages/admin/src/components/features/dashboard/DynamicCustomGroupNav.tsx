@@ -197,8 +197,7 @@ export function DynamicCustomGroupNav({
                     <TooltipContent
                       side="right"
                       hidden={!isCollapsed}
-                      className="bg-black text-white"
-                      style={{ backgroundColor: "black", color: "white" }}
+                      className="bg-primary text-primary-foreground"
                     >
                       {item.label}
                     </TooltipContent>

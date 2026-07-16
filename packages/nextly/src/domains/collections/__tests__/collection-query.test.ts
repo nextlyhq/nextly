@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { CollectionQueryService } from "../services/collection-query-service";
 
 import {
   createMockSchema,
@@ -412,6 +413,51 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    // ── Count/row agreement ─────────────────────────────────────────────
+
+    // The total is produced by a second query, and both queries resolve the
+    // Draft/Published filter from `status` and `overrideAccess`. If the count
+    // is not given the pair the rows were fetched under, it falls back to the
+    // public default and counts published-only: a trusted reader gets its
+    // drafts listed but not counted, and totalPages then hides the tail of
+    // the very result set it is describing.
+    // Spied on the prototype rather than the service: the count is an
+    // internal call the query service makes on itself, so it never passes
+    // through the facade the tests hold.
+    it("should count under the same trust level the rows were listed under", async () => {
+      selectData.rows = [];
+      const countSpy = vi.spyOn(
+        CollectionQueryService.prototype,
+        "countEntries"
+      );
+
+      await service.listEntries({
+        collectionName: "posts",
+        overrideAccess: true,
+      });
+
+      expect(countSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ overrideAccess: true })
+      );
+    });
+
+    it("should count under the same explicit status the rows were listed under", async () => {
+      selectData.rows = [];
+      const countSpy = vi.spyOn(
+        CollectionQueryService.prototype,
+        "countEntries"
+      );
+
+      await service.listEntries({
+        collectionName: "posts",
+        status: "draft",
+      });
+
+      expect(countSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "draft" })
+      );
     });
 
     // ── Depth / Relationship expansion ──────────────────────────────────

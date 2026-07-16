@@ -173,7 +173,7 @@ export function RepeaterFieldEditor({
       </div>
 
       {/* Collapsed row title */}
-      <div className="space-y-2 pt-2 border-t border-primary/5">
+      <div className="space-y-2 pt-2 border-t border-border">
         <div className="space-y-1">
           <Label className="text-xs font-medium">Collapsed row title</Label>
           <p className="text-xs text-muted-foreground leading-relaxed">
@@ -247,7 +247,7 @@ export function RepeaterFieldEditor({
       </div>
 
       {/* Admin Options Section */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>

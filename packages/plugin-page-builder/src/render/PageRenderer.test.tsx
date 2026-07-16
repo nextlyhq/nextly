@@ -78,6 +78,37 @@ describe("PageRenderer", () => {
     expect(html).toContain(`<section class="${nodeClass(root.id)}"`);
   });
 
+  it("injects sanitized per-block custom CSS into the page style", () => {
+    const inner = makeNode("core/heading", { text: "Hi" });
+    inner.customCss = "selector { color: tomato; }";
+    const root = makeNode("core/container", {}, undefined, {
+      default: [inner],
+    });
+    const html = renderToStaticMarkup(
+      <PageRenderer document={{ version: 1, root }} registry={registry()} />
+    );
+    // Assert the scoped selector and declaration together, so an unscoped
+    // `selector{color:tomato}` leak would fail this test (selector isolation).
+    expect(html).toMatch(
+      new RegExp(`\\.${nodeClass(inner.id)}[^{]*\\{[^}]*color:tomato`)
+    );
+  });
+
+  it("applies css id + safe custom attributes to the block root, dropping unsafe ones", () => {
+    const inner = makeNode("core/heading", { text: "Hi" });
+    inner.cssId = "hero";
+    inner.attributes = { "data-track": "1", onclick: "alert(1)" };
+    const root = makeNode("core/container", {}, undefined, {
+      default: [inner],
+    });
+    const html = renderToStaticMarkup(
+      <PageRenderer document={{ version: 1, root }} registry={registry()} />
+    );
+    expect(html).toContain('id="hero"');
+    expect(html).toContain('data-track="1"');
+    expect(html).not.toContain("onclick");
+  });
+
   it("renders a safe fallback for unknown block types and keeps rendering the page", () => {
     const unknown = { id: "u1", type: "acme/mystery", props: {} };
     const root = makeNode("core/container", {}, undefined, {

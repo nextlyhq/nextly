@@ -21,7 +21,7 @@ import type {
  * Built on Radix UI primitives with WAI-ARIA compliance.
  *
  * Design Specs:
- * - AccordionItem border: 1px bottom  border border-primary/5 (border-b)
+ * - AccordionItem border: 1px bottom  border border-border (border-b)
  * - AccordionTrigger padding: 16px vertical (py-4)
  * - AccordionTrigger font: font-medium (500 weight)
  * - AccordionContent padding: 16px bottom, 0 top (pb-4 pt-0)
@@ -113,7 +113,7 @@ const Accordion = AccordionPrimitive.Root;
  * AccordionItem - Container for trigger and content
  *
  * Design Specs:
- * - Border: 1px bottom  border border-primary/5 (border-b) for visual separation
+ * - Border: 1px bottom  border border-border (border-b) for visual separation
  * - Each item represents a collapsible section
  *
  * Accessibility:
@@ -168,7 +168,7 @@ const AccordionTrigger = forwardRef<AccordionTriggerRef, AccordionTriggerProps>(
         {...props}
       >
         {children}
-        <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-150" />
+        <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-150 will-change-transform" />
       </AccordionPrimitive.Trigger>
     </AccordionPrimitive.Header>
   )
@@ -200,7 +200,7 @@ const AccordionContent = forwardRef<AccordionContentRef, AccordionContentProps>(
     <AccordionPrimitive.Content
       ref={ref}
       data-slot="accordion-content"
-      className="overflow-hidden text-sm transition-all data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down"
+      className="overflow-hidden text-sm transition-all will-change-[height] transform-[translateZ(0)] data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down"
       {...props}
     >
       <div className={cn("pb-4 pt-0", className)}>{children}</div>

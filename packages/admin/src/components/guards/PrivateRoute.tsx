@@ -64,8 +64,8 @@ export function PrivateRoute({ children }: PrivateRouteProps) {
 
   if (!data.isSetup) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-primary/5 dark:bg-gray-900">
-        <p className="text-gray-600 dark:text-gray-400">
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <p className="text-muted-foreground dark:text-muted-foreground">
           Redirecting to setup...
         </p>
       </div>
@@ -74,8 +74,8 @@ export function PrivateRoute({ children }: PrivateRouteProps) {
 
   if (!data.isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-primary/5 dark:bg-gray-900">
-        <p className="text-gray-600 dark:text-gray-400">
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <p className="text-muted-foreground dark:text-muted-foreground">
           Redirecting to login...
         </p>
       </div>

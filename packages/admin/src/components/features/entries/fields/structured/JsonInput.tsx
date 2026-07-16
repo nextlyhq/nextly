@@ -316,7 +316,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         {/* Success indicator when valid */}
         {!parseError && isValidJson && !justFormatted && (
           <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Check className="h-4 w-4 text-green-500" />
+            <Check className="h-4 w-4 text-success-500" />
             <span>Valid JSON</span>
           </div>
         )}
@@ -324,7 +324,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         {/* Just formatted indicator */}
         {justFormatted && (
           <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Check className="h-4 w-4 text-green-500" />
+            <Check className="h-4 w-4 text-success-500" />
             <span>Formatted</span>
           </div>
         )}

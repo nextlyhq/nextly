@@ -11,7 +11,7 @@
  */
 
 import type { VisibilityState } from "@tanstack/react-table";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 // ============================================================================
 // Constants
@@ -293,12 +293,32 @@ export function useColumnVisibility({
   // Persistence
   // ---------------------------------------------------------------------------
 
-  // Save to localStorage when visibility changes
+  /**
+   * Only a user action may write to storage. `availableColumns`/`defaultVisible`
+   * are derived from the collection query, so the first render sees just the
+   * built-in columns and the data-driven ones arrive later. Persisting on every
+   * state change would save that placeholder set over the user's stored choice
+   * before the collection ever resolves.
+   */
+  const userChanged = useRef(false);
+  /** The collection `userChanged` refers to; intent does not carry across slugs. */
+  const intentSlug = useRef(collectionSlug);
+
   useEffect(() => {
+    // The list re-renders under a new slug rather than remounting, so a ref set
+    // on the previous collection is still armed here. Writing now would save
+    // that collection's choice — or this one's not-yet-loaded placeholder —
+    // under the new slug, which is the same clobber this ref exists to stop.
+    if (intentSlug.current !== collectionSlug) {
+      intentSlug.current = collectionSlug;
+      userChanged.current = false;
+      return;
+    }
+    if (!userChanged.current) return;
     saveToStorage(collectionSlug, visibleColumns, defaultColumns);
   }, [collectionSlug, visibleColumns, defaultColumns]);
 
-  // Reset state when collection changes
+  // Re-read the stored choice when the collection (and so its columns) changes.
   useEffect(() => {
     const stored = loadFromStorage(
       collectionSlug,
@@ -322,6 +342,7 @@ export function useColumnVisibility({
         | VisibilityState
         | ((prev: VisibilityState) => VisibilityState)
     ) => {
+      userChanged.current = true;
       setVisibleColumns(prev => {
         const currentState = toVisibilityState(prev, availableColumns);
         const newState =
@@ -338,6 +359,7 @@ export function useColumnVisibility({
    * Toggle a specific column's visibility.
    */
   const toggleColumn = useCallback((columnId: string) => {
+    userChanged.current = true;
     setVisibleColumns(prev =>
       prev.includes(columnId)
         ? prev.filter(id => id !== columnId)
@@ -349,6 +371,7 @@ export function useColumnVisibility({
    * Show a specific column.
    */
   const showColumn = useCallback((columnId: string) => {
+    userChanged.current = true;
     setVisibleColumns(prev =>
       prev.includes(columnId) ? prev : [...prev, columnId]
     );
@@ -358,6 +381,7 @@ export function useColumnVisibility({
    * Hide a specific column.
    */
   const hideColumn = useCallback((columnId: string) => {
+    userChanged.current = true;
     setVisibleColumns(prev => prev.filter(id => id !== columnId));
   }, []);
 
@@ -370,6 +394,7 @@ export function useColumnVisibility({
       const validColumns = columnIds.filter(col =>
         availableColumns.includes(col)
       );
+      userChanged.current = true;
       setVisibleColumns(
         validColumns.length > 0 ? validColumns : defaultColumns
       );
@@ -382,6 +407,7 @@ export function useColumnVisibility({
    * Uses collection's defaultColumns if defined, otherwise shows all columns.
    */
   const resetToDefault = useCallback(() => {
+    userChanged.current = true;
     setVisibleColumns(defaultColumns);
   }, [defaultColumns]);
 

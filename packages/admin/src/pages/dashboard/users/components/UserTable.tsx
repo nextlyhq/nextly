@@ -1,6 +1,6 @@
 "use client";
 
-import type { Column, TableParams } from "@nextlyhq/ui";
+import type { TableParams } from "@nextlyhq/ui";
 import {
   Alert,
   Avatar,
@@ -14,21 +14,23 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
   Skeleton,
-  TableSkeleton,
 } from "@nextlyhq/ui";
-import { Columns } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { Columns, Edit, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import {
@@ -44,22 +46,18 @@ import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
 import type { UserApiResponse } from "@admin/types/user";
 
 // ============================================================================
-// Custom Field Cell Renderer
+// Custom field cell renderer
 // ============================================================================
 
 /**
- * Renders a custom field value with type-appropriate formatting.
- * - text/email/textarea → plain text (truncated)
- * - number → formatted number
- * - checkbox → Yes/No badge
- * - select/radio → badge with option label
- * - date → formatted date
+ * Renders a user custom-field value with type-appropriate formatting:
+ * checkbox -> Yes/No badge, select/radio -> option-label badge, number ->
+ * formatted number, date -> formatted date, everything else -> truncated text.
  */
 function renderCustomFieldCell(
   value: unknown,
   fieldDef: UserFieldDefinitionRecord
 ): React.ReactNode {
-  // Null/undefined → dash
   if (value === null || value === undefined || value === "") {
     return <span className="text-sm text-muted-foreground">—</span>;
   }
@@ -77,7 +75,6 @@ function renderCustomFieldCell(
 
     case "select":
     case "radio": {
-      // Try to find the matching option label
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const strValue = String(value);
       const option = fieldDef.options?.find(o => o.value === strValue);
@@ -99,17 +96,10 @@ function renderCustomFieldCell(
       const dateStr = String(value);
       const formatted = formatDateWithAdminTimezone(
         dateStr,
-        {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        },
+        { year: "numeric", month: "short", day: "numeric" },
         ""
       );
-      if (!formatted) {
-        return <span className="text-sm">{dateStr}</span>;
-      }
-      return <span className="text-sm">{formatted}</span>;
+      return <span className="text-sm">{formatted || dateStr}</span>;
     }
 
     case "text":
@@ -124,64 +114,33 @@ function renderCustomFieldCell(
   }
 }
 
-/**
- * UserTable Component
- *
- * Displays a responsive table/card view of users with search, pagination, sorting, CRUD actions,
- * and bulk operations (assign role, delete, enable/disable, export).
- * Uses TanStack Query for data fetching and ResponsiveTable for mobile responsiveness.
- *
- * ## Features
- * - Mobile responsive: Card view (< 768px), table view (≥ 768px)
- * - Search users by name or email (debounced 300ms)
- * - Server-side pagination (10/25/50 rows per page)
- * - Sorting by name or created date
- * - CRUD actions: View, Edit, Delete
- * - **Bulk operations**: Select multiple users, assign role, delete, enable/disable, export CSV
- * - Loading states: Skeleton on initial load, spinner during search
- * - Error states: Alert component for API failures
- * - Empty states: "No users found" message
- *
- * ## TanStack Query Integration
- * - useUsers: Fetches paginated user list with auto-caching
- * - useDeleteUser: Deletes user with automatic cache invalidation
- * - No manual state management for data (TanStack Query handles it)
- *
- * ## Bulk Operations
- * - BulkSelectCheckbox: Checkbox in first column for row selection
- * - BulkSelectCheckbox: Checkbox in first column for row selection
- * - BulkActionBar: Top bulk action bar with selection count, delete, and clear
- * - useRowSelection: Custom hook for selection state management
- *
- * @example
- * ```tsx
- * <UserTable />
- * ```
- */
-const ALWAYS_VISIBLE = new Set(["email", "actions", "name", "id"]);
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["name"]);
 
+/**
+ * UserTable
+ *
+ * Lists users with search, server-side pagination, dynamic custom-field columns,
+ * column visibility, whole-row navigation to the edit page, per-row actions, and
+ * bulk delete. Data + mutations run through TanStack Query so the list stays in
+ * sync after edits and deletes; rendering is delegated to the unified
+ * DataTableView.
+ */
 export default function UserTable() {
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state
   const [search, setSearch] = useState("");
+  const [roleFilter] = useState<string>("all");
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Filter state
-  const [roleFilter, setRoleFilter] = useState<string>("all");
-
-  // Delete dialog state (single user)
+  // Single + bulk delete dialog state.
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<{
     id: string;
     name: string;
   } | null>(null);
-
-  // Bulk delete dialog state
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
-  // Bulk selection state (NEW)
   const {
     selectedIds,
     selectedCount,
@@ -189,46 +148,45 @@ export default function UserTable() {
     selectAllOnPage,
     deselectAllOnPage,
     clearSelection,
-    isSelected,
-    getSelectedCountOnPage,
   } = useRowSelection();
 
-  // TanStack Query: Fetch user field definitions (for dynamic columns)
   const { data: fieldsData } = useUserFields();
-
-  // Debounced search term to prevent rapid API calls
   const debouncedSearch = useDebouncedValue(search, 500);
 
-  // TanStack Query: Fetch users
+  // Reset to the first page when the search term changes so a later page does not
+  // request out-of-range results and show a false empty state.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  // Selection is page-scoped: clear it whenever the page or search changes so a
+  // bulk action never targets rows that are no longer shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, clearSelection]);
+
   const params: TableParams = {
     pagination: { page, pageSize },
-    sorting: [], // Sorting can be added later if needed
+    sorting: [],
     filters: { search: debouncedSearch },
   };
 
   const { data, isLoading, isError, error, isFetching } = useUsers(params);
 
-  // Filter data client-side (until API supports these filters)
+  // Client-side role filter until the API supports it.
   const filteredData = useMemo(() => {
     if (!data?.items) return [];
-
     return data.items.filter(user => {
-      // Filter by role
       if (roleFilter !== "all") {
-        const hasRole = user.roles.some(role => role.id === roleFilter);
-        if (!hasRole) return false;
+        return user.roles.some(role => role.id === roleFilter);
       }
       return true;
     });
   }, [data?.items, roleFilter]);
 
-  // TanStack Query: Delete user mutation
   const { mutate: deleteUser, isPending: isDeleting } = useDeleteUser();
-
-  // TanStack Query: Bulk mutations
   const { mutate: bulkDeleteUsers } = useBulkDeleteUsers();
 
-  // Action handlers
   const handleEdit = useCallback((user: UserApiResponse) => {
     navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
   }, []);
@@ -240,7 +198,6 @@ export default function UserTable() {
 
   const handleConfirmDelete = () => {
     if (!userToDelete) return;
-
     deleteUser(userToDelete.id, {
       onSuccess: () => {
         toast.success("User deleted", {
@@ -258,7 +215,6 @@ export default function UserTable() {
     });
   };
 
-  // Format date helper
   const formatDate = useCallback((dateValue?: string) => {
     return formatDateWithAdminTimezone(
       dateValue,
@@ -274,46 +230,10 @@ export default function UserTable() {
     );
   }, []);
 
-  // Bulk operation handlers (NEW)
-  const usersOnPage = filteredData || [];
-  const pageUserIds = usersOnPage.map(u => u.id);
-  const selectedOnPage = getSelectedCountOnPage(pageUserIds);
-  const _totalUsers = data?.meta.total || 0;
+  const handleBulkDelete = () => setBulkDeleteDialogOpen(true);
 
-  // Determine "select all on page" checkbox state
-  const selectAllCheckboxState: boolean | "indeterminate" =
-    selectedOnPage === 0
-      ? false
-      : selectedOnPage === pageUserIds.length
-        ? true
-        : "indeterminate";
-
-  // Debounced search term to prevent rapid API calls
-
-  // Column visibility state
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-
-  // Handler: Toggle "select all on page"
-  const handleToggleSelectAllOnPage = useCallback(() => {
-    if (selectedOnPage === pageUserIds.length) {
-      // All selected → Deselect all on page
-      deselectAllOnPage(pageUserIds);
-    } else {
-      // Some or none selected → Select all on page
-      selectAllOnPage(pageUserIds);
-    }
-  }, [selectedOnPage, pageUserIds, deselectAllOnPage, selectAllOnPage]);
-
-  // Handler: Bulk delete users (shows confirmation dialog)
-  const handleBulkDelete = () => {
-    setBulkDeleteDialogOpen(true);
-  };
-
-  // Handler: Confirm bulk delete (after dialog confirmation)
   const handleConfirmBulkDelete = () => {
-    const selectedUserIds = Array.from(selectedIds);
-
-    void bulkDeleteUsers(selectedUserIds, undefined, {
+    void bulkDeleteUsers(selectedIds, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Users deleted", {
@@ -323,7 +243,6 @@ export default function UserTable() {
           toast.warning("Partially completed", {
             description: `${result.succeeded} users deleted, ${result.failed} failed. Check console for details.`,
           });
-          // Log failed IDs for debugging
           console.error("Failed to delete users:", result.failedIds);
         }
         setBulkDeleteDialogOpen(false);
@@ -336,154 +255,93 @@ export default function UserTable() {
               ? "Failed to delete 1 user."
               : `Failed to delete ${result.failed} users. Check console for details.`,
         });
-        // Log failed IDs for debugging
         console.error("Failed to delete users:", result.failedIds);
       },
     });
   };
 
-  // Build custom field columns from listFields config
-  const customColumns = useMemo((): Column<UserApiResponse>[] => {
-    if (!fieldsData?.fields || !fieldsData.adminConfig?.listFields) {
-      return [];
-    }
-
-    const { listFields: configListFields } = fieldsData.adminConfig;
+  // Dynamic custom-field columns from the admin list config.
+  const customColumns = useMemo((): NextlyColumn<UserApiResponse>[] => {
+    if (!fieldsData?.fields || !fieldsData.adminConfig?.listFields) return [];
     const activeFieldMap = new Map<string, UserFieldDefinitionRecord>(
       fieldsData.fields.filter(f => f.isActive).map(f => [f.name, f])
     );
-
-    const cols: Column<UserApiResponse>[] = [];
-    for (const fieldName of configListFields) {
+    const cols: NextlyColumn<UserApiResponse>[] = [];
+    for (const fieldName of fieldsData.adminConfig.listFields) {
       const fieldDef = activeFieldMap.get(fieldName);
       if (!fieldDef) continue;
-
       cols.push({
-        key: fieldName,
-        label: fieldDef.label,
+        name: fieldName,
+        header: fieldDef.label,
         hideOnMobile: true,
-        render: (_value: unknown, user: UserApiResponse) =>
-          renderCustomFieldCell(user[fieldName], fieldDef),
+        cell: ({ row }) => renderCustomFieldCell(row[fieldName], fieldDef),
       });
     }
     return cols;
   }, [fieldsData]);
 
-  // ResponsiveTable columns — custom columns inserted between Role and Created
-  const columns: Column<UserApiResponse>[] = useMemo(
-    () => [
-      // Checkbox column for bulk selection
+  const allColumns = useMemo((): NextlyColumn<UserApiResponse>[] => {
+    return [
       {
-        key: "email",
-        label: (
-          <BulkSelectCheckbox
-            checked={selectAllCheckboxState}
-            onCheckedChange={handleToggleSelectAllOnPage}
-            rowId="select-all"
-            rowLabel="Select all users on page"
-          />
-        ),
-        render: (_value, user) => (
-          <BulkSelectCheckbox
-            checked={isSelected(user.id)}
-            onCheckedChange={() => toggleSelection(user.id)}
-            rowId={user.id}
-            rowLabel={user.name}
-          />
-        ),
-      },
-      {
-        key: "name",
-        label: "NAME",
-        render: (value, user) => {
-          const firstName = user.name.split(" ")[0];
-          const initial = firstName.charAt(0).toUpperCase();
+        name: "name",
+        header: "NAME",
+        cell: ({ row }) => {
+          const initial = row.name.split(" ")[0].charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
               <Avatar className="w-9 rounded-none">
-                <AvatarImage src={user.image} alt={user.name} />
-                <AvatarFallback className="rounded-none bg-primary/5 text-primary">
+                <AvatarImage src={row.image} alt={row.name} />
+                <AvatarFallback className="rounded-none bg-muted text-foreground">
                   {initial}
                 </AvatarFallback>
               </Avatar>
-              <div className="min-w-0 flex-1 flex flex-col">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      handleEdit(user);
-                    }}
-                    className="font-medium text-sm text-foreground truncate text-left cursor-pointer"
-                  >
-                    {user.name}
-                  </button>
-                </div>
-                <div className="text-xs text-muted-foreground truncate">
-                  {user.email}
-                </div>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm font-medium text-foreground">
+                  {row.name}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {row.email}
+                </span>
               </div>
             </div>
           );
         },
       },
       {
-        key: "id",
-        label: "ID",
-        render: id => (
-          <span
-            className="font-mono text-xs text-muted-foreground"
-            title={id as string}
-          >
-            {(id as string).length > 8
-              ? `${(id as string).slice(0, 8)}...`
-              : (id as string)}
-          </span>
-        ),
+        name: "id",
+        header: "ID",
+        hideOnMobile: true,
+        cell: ({ value }) => {
+          const id = typeof value === "string" ? value : "";
+          return (
+            <span
+              className="font-mono text-xs text-muted-foreground"
+              title={id}
+            >
+              {id.length > 8 ? `${id.slice(0, 8)}...` : id}
+            </span>
+          );
+        },
       },
       {
-        key: "roles",
-        label: "ROLE",
-        render: roles => (
-          <div className="flex gap-2 flex-wrap text-left">
-            {Array.isArray(roles) && roles.length > 0 ? (
-              roles.map(role => {
-                const lowerName = role.name.toLowerCase();
-                let badgeVariant:
-                  | "default"
-                  | "destructive"
-                  | "warning"
-                  | "primary"
-                  | "success"
-                  | "outline" = "default";
-
-                if (lowerName.includes("admin")) {
-                  badgeVariant = "destructive";
-                } else if (lowerName.includes("manager")) {
-                  badgeVariant = "warning";
-                } else if (lowerName.includes("editor")) {
-                  badgeVariant = "primary";
-                } else if (
-                  lowerName.includes("user") ||
-                  lowerName.includes("viewer")
-                ) {
-                  badgeVariant = "success";
-                }
-
-                return (
-                  <Badge
-                    key={role.id}
-                    variant={badgeVariant}
-                    className="capitalize shadow-none"
-                  >
-                    {role.name}
-                  </Badge>
-                );
-              })
+        name: "roles",
+        header: "ROLE",
+        cell: ({ row }) => (
+          <div className="flex flex-wrap gap-2 text-left">
+            {row.roles.length > 0 ? (
+              row.roles.map(role => (
+                <Badge
+                  key={role.id}
+                  variant="default"
+                  className="capitalize shadow-none"
+                >
+                  {role.name}
+                </Badge>
+              ))
             ) : (
               <Badge
                 variant="default"
-                className="text-muted-foreground font-normal"
+                className="font-normal text-muted-foreground"
               >
                 No role
               </Badge>
@@ -491,97 +349,82 @@ export default function UserTable() {
           </div>
         ),
       },
-      // Dynamic custom field columns (inserted between Role and Created)
       ...customColumns,
       {
-        key: "createdAt",
-        label: "CREATED",
-        hideOnMobile: true, // Hide on mobile to save space
-        render: createdAt => (
+        name: "createdAt",
+        header: "CREATED",
+        hideOnMobile: true,
+        cell: ({ value }) => (
           <span className="text-sm">
-            {formatDate(createdAt as string | undefined)}
+            {formatDate(value as string | undefined)}
           </span>
         ),
       },
-      {
-        key: "actions" as keyof UserApiResponse,
-        label: "ACTIONS",
-        render: (_, user) => (
-          <div className="flex justify-center">
-            <ActionColumn
-              item={user}
-              callbacks={{
-                onEdit: handleEdit,
-                onDelete: handleDelete,
-              }}
-            />
-          </div>
-        ),
-      },
-    ],
-    [
-      selectAllCheckboxState,
-      handleToggleSelectAllOnPage,
-      isSelected,
-      toggleSelection,
-      customColumns,
-      formatDate,
-      handleEdit,
-      handleDelete,
-    ]
-  );
+    ];
+  }, [customColumns, formatDate]);
 
-  // Combine columns and handle visibility
-  const allColumns = useMemo(
-    () => [
-      ...columns.slice(0, 4), // email/select, name, id, roles
-      ...customColumns,
-      ...columns.slice(columns.length - 2), // createdAt, actions
-    ],
-    [columns, customColumns]
-  );
-
-  const visibleColumns = useMemo(
-    () => allColumns.filter(col => !hiddenColumns.has(String(col.key))),
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
     [allColumns, hiddenColumns]
   );
 
   const toggleableColumns = useMemo(
-    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(String(col.key))),
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
   );
 
   const toggleColumn = useCallback((columnKey: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(columnKey)) {
-        next.delete(columnKey);
-      } else {
-        next.add(columnKey);
-      }
+      if (next.has(columnKey)) next.delete(columnKey);
+      else next.add(columnKey);
       return next;
     });
   }, []);
 
-  // Handle filter changes (reset to first page)
-  const _handleRoleFilterChange = (value: string) => {
-    setRoleFilter(value);
-    setPage(0);
-  };
-
-  // Handle page size change (reset to first page)
   const handlePageSizeChange = (newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
   };
 
-  // Handlers for error and loading states within the unified layout
+  // Controlled selection wired to the page-level selection hook.
+  const selection = useMemo<DataTableSelection<UserApiResponse>>(
+    () => ({
+      selectedIds,
+      onToggle: user => toggleSelection(user.id),
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(r => r.id);
+        if (allSelected) deselectAllOnPage(ids);
+        else selectAllOnPage(ids);
+      },
+    }),
+    [selectedIds, toggleSelection, deselectAllOnPage, selectAllOnPage]
+  );
+
+  const rowActions = useCallback(
+    (user: UserApiResponse): RowAction<UserApiResponse>[] => [
+      {
+        id: "edit",
+        label: "Edit",
+        icon: <Edit className="h-4 w-4" />,
+        onSelect: () => handleEdit(user),
+      },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onSelect: () => handleDelete(user),
+      },
+    ],
+    [handleEdit, handleDelete]
+  );
+
   const showLoadingSkeleton = isLoading || (isFetching && !data);
 
-  // Render table with data
   return (
     <div className="space-y-4">
-      {/* Bulk action bar */}
       {selectedCount > 0 && (
         <BulkActionBar
           selectedCount={selectedCount}
@@ -592,33 +435,26 @@ export default function UserTable() {
         />
       )}
 
-      {/* Search and filters */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search users by name or email"
-            isLoading={isFetching}
-            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
-          />
-        </div>
+      {/* Search + column visibility */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search users by name or email"
+          isLoading={isFetching}
+          className="max-w-sm flex-1 border-border bg-background text-foreground"
+        />
 
-        {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
           {showLoadingSkeleton ? (
-            <>
-              <Skeleton className="w-[80px]" />
-              <Skeleton className="w-[100px]" />
-            </>
+            <Skeleton className="h-9 w-25" />
           ) : (
-            /* Columns Dropdown */
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
                   size="md"
-                  className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                  className="border-border bg-background text-foreground hover:bg-accent/10"
                 >
                   <Columns className="h-4 w-4" />
                   Columns
@@ -629,13 +465,11 @@ export default function UserTable() {
                 <DropdownMenuSeparator />
                 {toggleableColumns.map(col => (
                   <DropdownMenuCheckboxItem
-                    key={String(col.key)}
-                    checked={!hiddenColumns.has(String(col.key))}
-                    onCheckedChange={() => toggleColumn(String(col.key))}
+                    key={col.name}
+                    checked={!hiddenColumns.has(col.name)}
+                    onCheckedChange={() => toggleColumn(col.name)}
                   >
-                    {typeof col.label === "string"
-                      ? col.label
-                      : String(col.key)}
+                    {typeof col.header === "string" ? col.header : col.name}
                   </DropdownMenuCheckboxItem>
                 ))}
               </DropdownMenuContent>
@@ -644,48 +478,44 @@ export default function UserTable() {
         </div>
       </div>
 
-      {/* Responsive table and Pagination Card */}
-      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
-        {isError ? (
-          <div className="p-8">
-            <Alert variant="destructive">
-              {error instanceof Error
-                ? error.message
-                : "Failed to load users. Please try again."}
-            </Alert>
-          </div>
-        ) : showLoadingSkeleton ? (
-          <TableSkeleton columns={6} rowCount={pageSize} />
-        ) : (
-          <ResponsiveTable
-            data={filteredData}
-            columns={visibleColumns}
-            emptyMessage={
-              search || roleFilter !== "all"
-                ? "No users found. Try adjusting your search or filters."
-                : "No users available."
-            }
-            ariaLabel="Users table"
-            tableWrapperClassName="border-0 rounded-none shadow-none"
-          />
-        )}
+      {isError ? (
+        <Alert variant="destructive">
+          {error instanceof Error
+            ? error.message
+            : "Failed to load users. Please try again."}
+        </Alert>
+      ) : (
+        <DataTableView<UserApiResponse>
+          columns={columns}
+          rows={filteredData}
+          loading={showLoadingSkeleton}
+          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+          primaryColumn="name"
+          selection={selection}
+          rowActions={rowActions}
+          registryKey="users"
+          ariaLabel="Users table"
+          emptyMessage={
+            search || roleFilter !== "all"
+              ? "No users found. Try adjusting your search or filters."
+              : "No users available."
+          }
+        />
+      )}
 
-        {/* Pagination */}
-        {data && data.meta.totalPages > 0 && (
-          <Pagination
-            currentPage={page}
-            totalPages={data.meta.totalPages}
-            totalItems={data.meta.total}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            isLoading={isLoading}
-          />
-        )}
-      </div>
+      {data && data.meta.totalPages > 0 && (
+        <Pagination
+          currentPage={page}
+          totalPages={data.meta.totalPages}
+          totalItems={data.meta.total}
+          pageSize={pageSize}
+          pageSizeOptions={[10, 25, 50]}
+          onPageChange={setPage}
+          onPageSizeChange={handlePageSizeChange}
+          isLoading={isLoading}
+        />
+      )}
 
-      {/* Delete confirmation dialog */}
       <UserDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -694,19 +524,12 @@ export default function UserTable() {
         isLoading={isDeleting}
       />
 
-      {/* Bulk delete confirmation dialog */}
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
-        users={
-          filteredData
-            .filter(user => selectedIds.includes(user.id))
-            .map(user => ({
-              id: user.id,
-              name: user.name,
-              email: user.email,
-            })) || []
-        }
+        users={filteredData
+          .filter(user => selectedIds.includes(user.id))
+          .map(user => ({ id: user.id, name: user.name, email: user.email }))}
         onConfirm={handleConfirmBulkDelete}
       />
     </div>

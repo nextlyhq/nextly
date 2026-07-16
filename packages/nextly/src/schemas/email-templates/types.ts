@@ -47,6 +47,20 @@ export interface EmailTemplateVariable {
 }
 
 // ============================================================
+// Email Template Kind
+// ============================================================
+
+/**
+ * Row kind discriminator for the unified `email_templates` table.
+ *
+ * - `template` — a message body sent to recipients (the default).
+ * - `layout` — a wrapper whose `htmlContent` holds a `{{content}}`
+ *   placeholder where a template body is injected at send time.
+ * - `partial` — a reusable fragment (reserved for future use).
+ */
+export type EmailTemplateKind = "template" | "layout" | "partial";
+
+// ============================================================
 // Email Template Insert Type
 // ============================================================
 
@@ -99,6 +113,33 @@ export interface EmailTemplateInsert {
    * When null, a plain text version may be auto-generated from `htmlContent`.
    */
   plainTextContent?: string | null;
+
+  /**
+   * Inbox preview line shown after the subject. Supports `{{variable}}`
+   * interpolation. When null/omitted, no preheader is rendered.
+   */
+  preheader?: string | null;
+
+  /**
+   * Row kind. Omit for a normal message body (`template`).
+   * @default 'template'
+   */
+  kind?: EmailTemplateKind;
+
+  /**
+   * Layout row (`kind = 'layout'`) that wraps this template at send time.
+   * When null/omitted, the default layout is used.
+   */
+  layoutId?: string | null;
+
+  /**
+   * Per-template From override (e.g. `Support <help@example.com>`).
+   * When null/omitted, the provider / config From is used.
+   */
+  fromOverride?: string | null;
+
+  /** Per-template Reply-To address. When null/omitted, no Reply-To is set. */
+  replyTo?: string | null;
 
   /**
    * Available template variables with descriptions.
@@ -171,6 +212,21 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
 
   /** Plain text fallback content (required on record, nullable). */
   plainTextContent: string | null;
+
+  /** Inbox preview line (required on record, nullable). */
+  preheader: string | null;
+
+  /** Row kind (required on record). */
+  kind: EmailTemplateKind;
+
+  /** Wrapping layout id (required on record, nullable). */
+  layoutId: string | null;
+
+  /** Per-template From override (required on record, nullable). */
+  fromOverride: string | null;
+
+  /** Per-template Reply-To (required on record, nullable). */
+  replyTo: string | null;
 
   /** Available template variables (required on record, nullable). */
   variables: EmailTemplateVariable[] | null;
