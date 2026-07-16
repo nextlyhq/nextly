@@ -26,6 +26,8 @@ export interface FieldTypePickerProps<T extends CatalogFieldType> {
   disabled?: boolean;
   /** Grid columns; surfaces with wider layouts pass more. */
   columns?: 2 | 3 | 4;
+  /** Accessible name for the radio group. */
+  ariaLabel?: string;
 }
 
 /**
@@ -40,6 +42,7 @@ export function FieldTypePicker<T extends CatalogFieldType>({
   onChange,
   disabled,
   columns = 2,
+  ariaLabel = "Field type",
 }: FieldTypePickerProps<T>) {
   const entries = useMemo(() => narrowFieldTypeCatalog(types), [types]);
 
@@ -49,8 +52,34 @@ export function FieldTypePicker<T extends CatalogFieldType>({
     4: "grid-cols-2 md:grid-cols-4",
   }[columns];
 
+  // Standard radio-group keyboard model: the group is one tab stop (the
+  // selected card), and arrow keys move + select within it.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled || entries.length === 0) return;
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    const backward = event.key === "ArrowLeft" || event.key === "ArrowUp";
+    if (!forward && !backward) return;
+    event.preventDefault();
+    const currentIndex = Math.max(
+      0,
+      entries.findIndex(entry => entry.type === value)
+    );
+    const nextIndex =
+      (currentIndex + (forward ? 1 : -1) + entries.length) % entries.length;
+    const nextType = entries[nextIndex].type;
+    onChange(nextType);
+    event.currentTarget
+      .querySelector<HTMLButtonElement>(`[data-type="${nextType}"]`)
+      ?.focus();
+  };
+
   return (
-    <div role="radiogroup" className={cn("grid gap-3", gridColumns)}>
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cn("grid gap-3", gridColumns)}
+      onKeyDown={handleKeyDown}
+    >
       {entries.map(entry => {
         const Icon =
           (Icons as Record<string, React.ElementType>)[entry.icon] ?? Type;
@@ -60,7 +89,9 @@ export function FieldTypePicker<T extends CatalogFieldType>({
             key={entry.type}
             type="button"
             role="radio"
+            data-type={entry.type}
             aria-checked={isSelected}
+            tabIndex={isSelected ? 0 : -1}
             disabled={disabled}
             onClick={() => onChange(entry.type)}
             className={cn(

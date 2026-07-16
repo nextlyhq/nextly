@@ -8,12 +8,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { useMemo } from "react";
 
 /**
  * Radix Select rejects an empty-string item value, so "no default" is a
- * sentinel translated back to "" at the onChange boundary.
+ * sentinel translated back to "" at the onChange boundary. The base spelling
+ * is extended until it collides with no real option value, so an option
+ * literally valued "__none__" still selects itself instead of clearing the
+ * default.
  */
-const NO_DEFAULT = "__none__";
+const NO_DEFAULT_BASE = "__none__";
+
+function uncollidedSentinel(values: ReadonlySet<string>): string {
+  let sentinel = NO_DEFAULT_BASE;
+  while (values.has(sentinel)) sentinel += "_";
+  return sentinel;
+}
 
 export interface FieldDefaultOption {
   label: string;
@@ -52,18 +62,30 @@ export function FieldDefaultValueInput({
   disabled,
   ariaLabel = "Default value",
 }: FieldDefaultValueInputProps) {
+  const validOptions = useMemo(
+    () => options.filter(option => option.value.trim()),
+    [options]
+  );
+  const noDefault = useMemo(
+    () =>
+      uncollidedSentinel(
+        new Set(["true", "false", ...validOptions.map(option => option.value)])
+      ),
+    [validOptions]
+  );
+
   if (fieldType === "checkbox") {
     return (
       <Select
-        value={value || NO_DEFAULT}
-        onValueChange={val => onChange(val === NO_DEFAULT ? "" : val)}
+        value={value || noDefault}
+        onValueChange={val => onChange(val === noDefault ? "" : val)}
         disabled={disabled}
       >
         <SelectTrigger aria-label={ariaLabel}>
           <SelectValue placeholder="No default" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={NO_DEFAULT}>No default</SelectItem>
+          <SelectItem value={noDefault}>No default</SelectItem>
           <SelectItem value="true">Checked (true)</SelectItem>
           <SelectItem value="false">Unchecked (false)</SelectItem>
         </SelectContent>
@@ -71,22 +93,21 @@ export function FieldDefaultValueInput({
     );
   }
 
-  const validOptions = options.filter(option => option.value.trim());
   if (
     (fieldType === "select" || fieldType === "radio") &&
     validOptions.length > 0
   ) {
     return (
       <Select
-        value={value || NO_DEFAULT}
-        onValueChange={val => onChange(val === NO_DEFAULT ? "" : val)}
+        value={value || noDefault}
+        onValueChange={val => onChange(val === noDefault ? "" : val)}
         disabled={disabled}
       >
         <SelectTrigger aria-label={ariaLabel}>
           <SelectValue placeholder="No default" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={NO_DEFAULT}>No default</SelectItem>
+          <SelectItem value={noDefault}>No default</SelectItem>
           {validOptions.map(option => (
             <SelectItem key={option.value} value={option.value}>
               {option.label || option.value}

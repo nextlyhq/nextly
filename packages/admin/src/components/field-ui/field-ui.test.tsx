@@ -30,6 +30,26 @@ describe("FieldTypePicker", () => {
     expect(onChange).toHaveBeenCalledWith("number");
   });
 
+  it("names the group and moves selection with arrow keys (roving tabindex)", () => {
+    const onChange = vi.fn();
+    render(<FieldTypePicker types={types} value="text" onChange={onChange} />);
+    const group = screen.getByRole("radiogroup", { name: "Field type" });
+    // One tab stop: the selected card; the rest are removed from tab order.
+    expect(screen.getByRole("radio", { name: /Text/ })).toHaveAttribute(
+      "tabindex",
+      "0"
+    );
+    expect(screen.getByRole("radio", { name: /Number/ })).toHaveAttribute(
+      "tabindex",
+      "-1"
+    );
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    expect(onChange).toHaveBeenCalledWith("number");
+    // Backward from the first entry wraps to the last.
+    fireEvent.keyDown(group, { key: "ArrowUp" });
+    expect(onChange).toHaveBeenCalledWith("date");
+  });
+
   it("disables every card when disabled", () => {
     const onChange = vi.fn();
     render(
@@ -90,6 +110,23 @@ describe("FieldDefaultValueInput", () => {
     const input = screen.getByRole("spinbutton", { name: "Default value" });
     fireEvent.change(input, { target: { value: "7" } });
     expect(onChange).toHaveBeenCalledWith("7");
+  });
+
+  it("keeps an option literally valued __none__ selectable instead of clearing", () => {
+    render(
+      <FieldDefaultValueInput
+        fieldType="select"
+        options={[
+          { label: "None marker", value: "__none__" },
+          { label: "Red", value: "red" },
+        ]}
+        value="__none__"
+        onChange={() => {}}
+      />
+    );
+    // The sentinel extends past the collision, so the trigger shows the real
+    // option rather than the "No default" placeholder.
+    expect(screen.getByRole("combobox")).toHaveTextContent("None marker");
   });
 
   it("renders a select with no options as a text input rather than an empty menu", () => {
