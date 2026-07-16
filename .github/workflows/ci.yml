@@ -55,6 +55,14 @@ jobs:
       - name: Design tokens lint
         run: pnpm lint:design
 
+      # Workspace manifest consistency across all 19 packages (sherif):
+      # unordered keys, unsynced sibling versions, malformed manifests.
+      # The multiple-dependency-versions rule is ignored until the existing
+      # cross-package version drift is aligned dependency-by-dependency;
+      # everything else gates. Runs in milliseconds, fails fast.
+      - name: Workspace consistency
+        run: pnpm lint:workspace
+
       - name: Build
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
         env:
