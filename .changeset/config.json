@@ -16,7 +16,12 @@
       "@nextlyhq/storage-uploadthing",
       "@nextlyhq/storage-vercel-blob",
       "@nextlyhq/plugin-form-builder",
-      "@nextlyhq/plugin-sdk"
+      "@nextlyhq/plugin-page-builder",
+      "@nextlyhq/plugin-sdk",
+      "@nextlyhq/eslint-config",
+      "@nextlyhq/prettier-config",
+      "@nextlyhq/telemetry",
+      "@nextlyhq/tsconfig"
     ]
   ],
   "linked": [],
