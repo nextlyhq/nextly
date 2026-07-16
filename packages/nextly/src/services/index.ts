@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { getDialectTables } from "../database/index";
+import { getDialectTables, getStaticRelations } from "../database/index";
+import type { SchemaRegistry } from "../database/schema-registry";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
 import { AuthService } from "../domains/auth/services/auth-service";
@@ -94,7 +95,10 @@ export {
   DynamicCollectionRegistryService,
 } from "../domains/dynamic-collections";
 
-export { RoleQueryService, RoleMutationService } from "../domains/auth/services/role/index";
+export {
+  RoleQueryService,
+  RoleMutationService,
+} from "../domains/auth/services/role/index";
 
 export { RoleService } from "../domains/auth/services/role-service";
 export { PermissionService } from "../domains/auth/services/permission-service";
@@ -163,14 +167,20 @@ export class ServiceContainer {
   private readonly db: any;
 
   constructor(private readonly adapter: DrizzleAdapter) {
-    this.tables = getDialectTables(adapter.getCapabilities().dialect);
-    this.db = adapter.getDrizzle(this.tables as Record<string, unknown>);
+    const dialect = adapter.getCapabilities().dialect;
+    this.tables = getDialectTables(dialect);
+    // v1: db.query is powered by the relations config (defineRelations).
+    // Prefer the schema registry's assembly (static + dynamic-entity
+    // edges); fall back to the static bundle relations during early boot
+    // before the registry singleton is registered.
+    const relations = container.has("schemaRegistry")
+      ? container.get<SchemaRegistry>("schemaRegistry").getRelations()
+      : getStaticRelations(dialect);
+    this.db = adapter.getDrizzle(relations);
   }
 
   private getLogger(): Logger {
-    return container.has("logger")
-      ? container.get<Logger>("logger")
-      : console;
+    return container.has("logger") ? container.get<Logger>("logger") : console;
   }
 
   /**
@@ -239,7 +249,9 @@ export class ServiceContainer {
       // First, try to get from DI container (ensures dynamic schemas are shared)
       try {
         if (container.has("collectionsHandler")) {
-          const handler = container.get<CollectionsHandler | undefined>("collectionsHandler");
+          const handler = container.get<CollectionsHandler | undefined>(
+            "collectionsHandler"
+          );
           if (handler) {
             this._collections = handler;
             return this._collections;

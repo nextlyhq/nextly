@@ -5,8 +5,8 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` (activityLogRelations) lives in
- * `./mysql-relations.ts` and is re-exported at the bottom of this file. See
+ * Drizzle v2 relations for this feature live centrally in
+ * `../_dialect-bundles/mysql.relations.ts` (defineRelations).
  * `./postgres.ts` for the rationale.
  *
  * @module schemas/audit/mysql

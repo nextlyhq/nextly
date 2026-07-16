@@ -1,8 +1,14 @@
 import Database from "better-sqlite3";
+import { defineRelations } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import * as schema from "./sqlite-schema";
+
+// v1 relations config over the fixture tables. Edge-less for now — RQB
+// tests that traverse `with:` add their edges here as they convert.
+export const testRelations = defineRelations(schema);
+export type TestDrizzleDb = BetterSQLite3Database<typeof testRelations>;
 
 /**
  * Create database tables using raw SQL.
@@ -238,7 +244,7 @@ function createTables(sqlite: Database.Database) {
  * @returns Test database instance with utilities
  */
 export async function createTestDb(): Promise<{
-  db: BetterSQLite3Database<typeof schema>;
+  db: TestDrizzleDb;
   sqlite: Database.Database;
   schema: typeof schema;
   reset: () => Promise<void>;
@@ -250,8 +256,10 @@ export async function createTestDb(): Promise<{
   // Enable foreign keys for referential integrity
   sqlite.pragma("foreign_keys = ON");
 
-  // Create Drizzle instance with schema
-  const db = drizzle(sqlite, { schema });
+  // Create Drizzle instance. v1: the object form is required (positional
+  // silently opens a NEW :memory: db), and db.query is driven by the
+  // relations config, not a schema map.
+  const db = drizzle({ client: sqlite, relations: testRelations });
 
   // Create tables
   createTables(sqlite);

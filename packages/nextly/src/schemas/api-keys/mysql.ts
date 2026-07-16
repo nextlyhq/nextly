@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` (apiKeysRelations) lives in `./mysql-relations.ts`
+ * Cross-table `relations()` (apiKeysRelations) lives in `../_dialect-bundles/mysql.relations.ts`
  * and is re-exported at the bottom of this file. See `./postgres.ts` for the
  * rationale.
  *

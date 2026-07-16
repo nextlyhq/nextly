@@ -6,7 +6,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks live in `./mysql-relations.ts` and are
+ * Cross-table `relations()` blocks live in `../_dialect-bundles/mysql.relations.ts` and are
  * re-exported at the bottom of this file. See `./postgres.ts` for the
  * rationale.
  *

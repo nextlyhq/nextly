@@ -62,6 +62,7 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
+import type { AnyRelations } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -647,15 +648,18 @@ export class SqliteAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the better-sqlite3 connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = BetterSQLite3Database<any>>(
-    schema?: Record<string, unknown>
+  getDrizzle<T = BetterSQLite3Database<AnyRelations>>(
+    relations?: AnyRelations
   ): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const db = this.ensureDb();
-    return (schema ? drizzle(db, { schema }) : drizzle(db)) as T;
+    // drizzle v1 removed the positional (client, config) form — positional
+    // calls silently open a NEW :memory: database. Object form only.
+    return (
+      relations ? drizzle({ client: db, relations }) : drizzle({ client: db })
+    ) as T;
   }
 
   /**

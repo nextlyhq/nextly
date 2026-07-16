@@ -157,15 +157,18 @@ interface SqliteKitClient {
 }
 
 // Derives the v1 `{ query }` client from a drizzle-orm/mysql2 instance.
-// mysql2/promise pool.query resolves to [rows, fields].
+// The adapter hands drizzle the CALLBACK pool (v1 rejects the promise
+// wrapper), so `$client` is callback-style — promote it via `.promise()`
+// when available; a promise client passes through. `.query` resolves to
+// [rows, fields].
 function mysqlKitClient(drizzleInstance: unknown): MySqlKitClient {
-  const pool = (
-    drizzleInstance as {
-      $client: {
-        query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]>;
-      };
-    }
-  ).$client;
+  const raw = (drizzleInstance as { $client: unknown }).$client as {
+    promise?: () => unknown;
+    query: unknown;
+  };
+  const pool = (typeof raw.promise === "function" ? raw.promise() : raw) as {
+    query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]>;
+  };
   return {
     query: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
       const [rows] = await pool.query(sql, params);

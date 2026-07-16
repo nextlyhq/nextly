@@ -11,18 +11,12 @@
  */
 
 export { users, accounts, sessions } from "../users/mysql";
-export {
-  usersRelations,
-  accountsRelations,
-  sessionsRelations,
-} from "../users/mysql-relations";
 
 export {
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
 } from "../auth-tokens/mysql";
-export { refreshTokensRelations } from "../auth-tokens/mysql-relations";
 
 export {
   roles,
@@ -32,30 +26,16 @@ export {
   roleInherits,
   userPermissionCache,
 } from "../rbac/mysql";
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "../rbac/mysql-relations";
 
 export { apiKeys } from "../api-keys/mysql";
-export { apiKeysRelations } from "../api-keys/mysql-relations";
 
 export { auditLog, activityLog } from "../audit/mysql";
-export { activityLogRelations } from "../audit/mysql-relations";
 
 export { media, mediaFolders, imageSizes } from "../media/mysql";
-export {
-  mediaRelations,
-  mediaFoldersRelations,
-} from "../media/mysql-relations";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
 
 export { dynamicCollectionsMysql as dynamicCollections } from "../dynamic-collections/mysql";
-export { dynamicCollectionsRelations } from "../dynamic-collections/mysql-relations";
 export { dynamicSinglesMysql as dynamicSingles } from "../dynamic-singles/mysql";
 export { dynamicComponentsMysql as dynamicComponents } from "../dynamic-components/mysql";
 

@@ -11,7 +11,8 @@
  * @packageDocumentation
  */
 
-import { asc, desc, getTableColumns } from "drizzle-orm";
+import { asc, desc, getColumns } from "drizzle-orm";
+import type { AnyRelations } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
 import type {
@@ -183,11 +184,11 @@ export abstract class DrizzleAdapter {
    * @example
    * ```typescript
    * // For legacy code that needs direct Drizzle access
-   * const db = adapter.getDrizzle(mySchemas);
+   * const db = adapter.getDrizzle(myRelations); // defineRelations output
    * const result = await db.insert(users).values({ ... }).returning();
    * ```
    */
-  abstract getDrizzle<T = unknown>(schema?: Record<string, unknown>): T;
+  abstract getDrizzle<T = unknown>(relations?: AnyRelations): T;
 
   // ============================================================
   // Drizzle Query API Support
@@ -486,7 +487,7 @@ export abstract class DrizzleAdapter {
         }
 
         if (options?.orderBy?.length) {
-          const columns = getTableColumns(tableObj as never);
+          const columns = getColumns(tableObj as never);
           const orderClauses = options.orderBy
             .map((o: OrderBySpec) => {
               const col = columns[o.column];
@@ -833,7 +834,7 @@ export abstract class DrizzleAdapter {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
-        const columns = getTableColumns(tableObj as never);
+        const columns = getColumns(tableObj as never);
 
         // Build conflict target columns
         const conflictTarget = options.conflictColumns

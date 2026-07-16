@@ -1,7 +1,12 @@
+import type { AnyRelations } from "drizzle-orm";
+
 import { env } from "../lib/env";
 import * as schemasMy from "../schemas/_dialect-bundles/mysql";
+import { relations as relationsMy } from "../schemas/_dialect-bundles/mysql.relations";
 import * as schemasPg from "../schemas/_dialect-bundles/postgres";
+import { relations as relationsPg } from "../schemas/_dialect-bundles/postgres.relations";
 import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
+import { relations as relationsSl } from "../schemas/_dialect-bundles/sqlite.relations";
 
 /**
  * Backwards-compatible `schema.postgres` / `schema.mysql` / `schema.sqlite`
@@ -49,6 +54,21 @@ export { withDbErrors } from "./with-db-errors";
  * @param dialect - Optional dialect override. If not provided, uses env.DB_DIALECT
  * @returns Schema object for the configured dialect (postgres, mysql, or sqlite)
  */
+/**
+ * The prebuilt static drizzle v2 relations for a dialect (no dynamic
+ * edges). Runtime code should prefer SchemaRegistry.getRelations(),
+ * which layers dynamic-entity edges on top; this helper serves early
+ * boot paths that run before the registry singleton exists.
+ */
+export function getStaticRelations(dialect?: string): AnyRelations {
+  const d = dialect ?? env.DB_DIALECT ?? "sqlite";
+  if (d === "postgresql" || d === "postgres") {
+    return relationsPg;
+  }
+  if (d === "mysql") return relationsMy;
+  return relationsSl;
+}
+
 export function getDialectTables(dialect?: string) {
   const dbDialect = dialect || env.DB_DIALECT;
   if (dbDialect === "postgresql") return schema.postgres;

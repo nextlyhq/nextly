@@ -91,6 +91,7 @@ import {
   isDatabaseError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
@@ -750,13 +751,21 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the pg pool connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = NodePgDatabase<any>>(schema?: Record<string, unknown>): T {
+  getDrizzle<T = NodePgDatabase<AnyRelations>>(relations?: AnyRelations): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    return (schema ? drizzle(pool, { schema }) : drizzle(pool)) as T;
+    // drizzle v1 removed the positional (client, config) form — the object
+    // form is REQUIRED (positional silently treats the client as config).
+    // `relations` (defineRelations output, assembled by Nextly's schema
+    // registry) is what powers db.query in v1; a bare instance serves the
+    // select-builder CRUD paths.
+    return (
+      relations
+        ? drizzle({ client: pool, relations })
+        : drizzle({ client: pool })
+    ) as T;
   }
 
   /**

@@ -6,9 +6,8 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks (rolesRelations, permissionsRelations,
- * rolePermissionsRelations, userRolesRelations, roleInheritsRelations) live
- * in `./postgres-relations.ts` to keep this file free of cross-feature
+ * Drizzle v2 relations for this feature live centrally in
+ * `../_dialect-bundles/postgres.relations.ts` (defineRelations).
  * imports (`users`, `apiKeys`). Re-exported at the bottom so namespace
  * consumers see them.
  *

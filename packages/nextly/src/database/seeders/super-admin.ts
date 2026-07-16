@@ -9,7 +9,7 @@ import type { SeederResult } from "./permissions";
  * Type for adapters that support getDrizzle() method
  */
 type AdapterWithDrizzle = {
-  getDrizzle(schema?: Record<string, unknown>): unknown;
+  getDrizzle(relations?: unknown): unknown;
   dialect: string;
 };
 

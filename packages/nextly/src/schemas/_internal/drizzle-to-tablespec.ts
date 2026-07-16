@@ -17,7 +17,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import { getTableColumns, getTableName, type Table } from "drizzle-orm";
+import { getColumns, getTableName, type Table } from "drizzle-orm";
 
 import type {
   ColumnSpec,
@@ -33,7 +33,7 @@ import type {
  */
 export function drizzleTableToTableSpec(table: Table): TableSpec {
   const name = getTableName(table);
-  const drizzleColumns = getTableColumns(table);
+  const drizzleColumns = getColumns(table);
 
   const columns: ColumnSpec[] = Object.values(drizzleColumns).map(col => ({
     name: col.name,

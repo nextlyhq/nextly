@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table relations live in `./sqlite-relations.ts` and are re-exported
+ * Cross-table relations live in `../_dialect-bundles/sqlite.relations.ts` and are re-exported
  * at the bottom of this file. See `./postgres.ts` for the rationale.
  *
  * @module schemas/users/sqlite
