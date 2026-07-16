@@ -72,6 +72,35 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # Unit tests. Named packages rather than all of them: `nextly` and
+      # `@nextlyhq/admin` carry a large pre-existing failing baseline (stale
+      # test scaffolding, not product bugs) and are being repaired in a
+      # follow-up that adds them here once green. Everything gated below passes
+      # today, so a new failure in any of these packages is a real regression
+      # and blocks the merge — which is the whole point, and the reason the job
+      # was named "Test" long before it ran any.
+      #
+      # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
+      # they gate automatically the moment they gain one.
+      - name: Test
+        run: >-
+          pnpm turbo test
+          --filter=@nextlyhq/plugin-page-builder
+          --filter=@nextlyhq/plugin-form-builder
+          --filter=@nextlyhq/plugin-sdk
+          --filter=@nextlyhq/ui
+          --filter=@nextlyhq/adapter-drizzle
+          --filter=@nextlyhq/adapter-postgres
+          --filter=@nextlyhq/adapter-mysql
+          --filter=@nextlyhq/adapter-sqlite
+          --filter=@nextlyhq/storage-s3
+          --filter=@nextlyhq/storage-uploadthing
+          --filter=@nextlyhq/storage-vercel-blob
+          --filter=@nextlyhq/telemetry
+          --filter=create-nextly-app
+        env:
+          TURBO_CACHE_DIR: .turbo
+
       # Strict: package.json shape / publish-readiness across all 13 publishable
       # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.
