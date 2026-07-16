@@ -79,6 +79,24 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
     expect(types[date + 1]).toBe("time");
   });
 
+  it("keeps categories in display order (Basic before Advanced before Media)", () => {
+    const order = ["Basic", "Advanced", "Media", "Relational", "Structured"];
+    const indices = FORM_FIELD_TYPE_CATALOG.map(entry =>
+      order.indexOf(entry.category)
+    );
+    for (let i = 1; i < indices.length; i++) {
+      expect(indices[i]).toBeGreaterThanOrEqual(indices[i - 1]);
+    }
+  });
+
+  it("gives every form-surface type an icon distinct from canonical entries", () => {
+    const canonicalIcons = new Set(FIELD_TYPE_CATALOG.map(e => e.icon));
+    for (const surfaceOnly of ["url", "phone", "time", "file", "hidden"]) {
+      const entry = FORM_FIELD_TYPE_CATALOG.find(e => e.type === surfaceOnly);
+      expect(entry && canonicalIcons.has(entry.icon)).toBe(false);
+    }
+  });
+
   it("keeps the surface-only types out of the canonical catalog", () => {
     for (const surfaceOnly of ["time", "file", "hidden"]) {
       expect(

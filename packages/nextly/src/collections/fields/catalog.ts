@@ -200,7 +200,7 @@ const URL_SURFACE_ENTRY = {
   label: "URL",
   category: "Basic",
   hint: "Validated web address",
-  icon: "Link2",
+  icon: "Globe",
 } as const satisfies FieldTypeCatalogEntry<"url">;
 
 const PHONE_SURFACE_ENTRY = {
@@ -214,7 +214,7 @@ const PHONE_SURFACE_ENTRY = {
 const TIME_SURFACE_ENTRY = {
   type: "time",
   label: "Time",
-  category: "Basic",
+  category: "Advanced",
   hint: "Time of day",
   icon: "Clock",
 } as const satisfies FieldTypeCatalogEntry<"time">;
@@ -224,7 +224,7 @@ const FILE_SURFACE_ENTRY = {
   label: "File upload",
   category: "Media",
   hint: "File attached by the visitor",
-  icon: "Upload",
+  icon: "Paperclip",
 } as const satisfies FieldTypeCatalogEntry<"file">;
 
 const HIDDEN_SURFACE_ENTRY = {
@@ -320,7 +320,7 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
         combined.push(TIME_SURFACE_ENTRY);
       }
     }
-    combined.push(FILE_SURFACE_ENTRY, HIDDEN_SURFACE_ENTRY);
+    combined.push(HIDDEN_SURFACE_ENTRY, FILE_SURFACE_ENTRY);
     return combined;
   })();
 
