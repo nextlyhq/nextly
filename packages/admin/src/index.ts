@@ -150,6 +150,23 @@ export type {
   BulkAction,
 } from "./components/ui/table/data-table";
 
+// Field-UI kit — controlled, form-library-agnostic field-building components
+// (type picker, options editor, default-value input) rendered from the shared
+// `nextly/field-catalog`. Author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`, same as the DataTable above.
+export {
+  FieldTypePicker,
+  FieldDefaultValueInput,
+  FieldOptionsEditor,
+} from "./components/field-ui";
+export type {
+  FieldTypePickerProps,
+  FieldDefaultValueInputProps,
+  FieldDefaultOption,
+  FieldOption,
+  FieldOptionsEditorProps,
+} from "./components/field-ui";
+
 // Error Fallback Components
 export {
   PageErrorFallback,
