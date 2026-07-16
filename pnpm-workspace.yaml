@@ -1,3 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
+  # Browser tests for the composed product, rather than for any one package.
+  # Not under packages/ (which is what ships) or apps/ (which is what runs).
+  - "e2e"
