@@ -1,0 +1,67 @@
+name: Preview release
+
+# Publishes every PR's packages to pkg.pr.new (StackBlitz's continuous-release
+# CDN) and comments install URLs on the PR. A consumer app can then install a
+# PR's exact build — `npm i https://pkg.pr.new/nextlyhq/nextly/nextly@<sha>` —
+# and verify it against real projects before the PR merges. Nothing is
+# published to the npm registry and the URLs expire on their own, so there is
+# no version pollution and nothing to clean up.
+#
+# Requires the pkg.pr.new GitHub App (github.com/apps/pkg-pr-new) to be
+# installed on this repository; publishing authenticates through the app, not
+# through repo secrets.
+
+on:
+  pull_request:
+    branches: [main]
+
+# The GITHUB_TOKEN is unused: the pkg.pr.new app authenticates the publish
+# and writes the PR comment itself.
+permissions: {}
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Publish preview packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Cache Turbo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # `--pnpm` makes pkg-pr-new pack with pnpm so workspace:* protocol
+      # ranges in package.json resolve to real versions in the tarballs,
+      # exactly as `changeset publish` does for npm releases.
+      - name: Publish to pkg.pr.new
+        run: pnpm dlx pkg-pr-new publish --pnpm './packages/*'
