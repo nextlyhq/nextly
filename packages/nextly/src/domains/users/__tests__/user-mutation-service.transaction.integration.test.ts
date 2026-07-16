@@ -61,11 +61,11 @@ const TEST_DB_URL = `file:${TEST_DB_PATH}`;
 process.env.DB_DIALECT = "sqlite";
 process.env.DATABASE_URL = TEST_DB_URL;
 
-// Minimal DDL matching the Drizzle sqliteTable definitions in
-// packages/nextly/src/database/schema/sqlite.ts. Only the tables that
+// Minimal DDL matching the Drizzle sqliteTable definition in
+// packages/nextly/src/schemas/users/sqlite.ts. Only the tables that
 // createLocalUser actually touches are created here — keeping the DDL
 // explicit makes the test fast and keeps the failure mode obvious if the
-// schema drifts. If you add a column to `users` in sqlite.ts and this test
+// schema drifts. If you add a column to `users` in that file and this test
 // starts failing, update the CREATE TABLE here to match.
 const CREATE_USERS_TABLE = `
   CREATE TABLE IF NOT EXISTS users (
@@ -77,6 +77,8 @@ const CREATE_USERS_TABLE = `
     image                TEXT,
     password_hash        TEXT,
     is_active            INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until         INTEGER,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
   )

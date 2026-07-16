@@ -17,10 +17,11 @@ import { createAdapter } from "../../database/factory";
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
 import type { Logger } from "../../services/shared";
 
+// No dev-default fallback on purpose: this suite creates and drops a real
+// table, so probing a hardcoded localhost DB would mutate whatever database
+// happens to be listening there. It skips unless a test URL is explicit.
 const PG_URL =
-  process.env.TEST_POSTGRES_URL ??
-  process.env.TEST_DATABASE_URL ??
-  "postgres://postgres:postgres@localhost:5433/nextly_test";
+  process.env.TEST_POSTGRES_URL ?? process.env.TEST_DATABASE_URL ?? "";
 
 const silentLogger: Logger = {
   debug() {},
@@ -35,6 +36,7 @@ const TABLE = "dc_pg_builder_extend";
 async function connectIfAvailable(): Promise<Awaited<
   ReturnType<typeof createAdapter>
 > | null> {
+  if (!PG_URL) return null;
   process.env.DB_DIALECT = "postgresql";
   try {
     const adapter = await createAdapter({
