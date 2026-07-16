@@ -35,6 +35,10 @@
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.mjs"
     },
+    "./field-catalog": {
+      "types": "./dist/field-catalog.d.ts",
+      "import": "./dist/collections/fields/catalog.mjs"
+    },
     "./observability": {
       "types": "./dist/observability/index.d.ts",
       "import": "./dist/observability/index.mjs"
