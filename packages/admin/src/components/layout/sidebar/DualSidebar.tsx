@@ -34,7 +34,7 @@ interface DualSidebarProps {
 
 export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const { pathname, route, isHydrated } = useRouter();
-  const { folderViewMode } = useMediaContext();
+  const { isFolderTreeVisible } = useMediaContext();
   const {
     capabilities,
     permissions,
@@ -395,9 +395,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterCollectionItems(visible, capabilities);
   }, [collectionsData, capabilities]);
 
-  // Determine if we should show the second sidebar
+  // Determine if we should show the second sidebar. For media the sub-sidebar
+  // holds the folder tree, so it follows the tree's visibility toggle.
   const hasSubSidebar =
-    ([
+    [
       "collections",
       "singles",
       "plugins",
@@ -405,9 +406,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       "settings",
       ...(showBuilder ? ["builders" as const] : []),
     ].includes(selectedMain) ||
-      selectedMain.startsWith("standalone-") ||
-      (selectedMain === "media" && folderViewMode === "sidebar")) &&
-    !(selectedMain === "media" && folderViewMode === "grid");
+    selectedMain.startsWith("standalone-") ||
+    (selectedMain === "media" && isFolderTreeVisible);
 
   const CATEGORIES_WITH_SUB_SIDEBAR = [
     "collections",
