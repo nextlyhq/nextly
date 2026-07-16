@@ -208,9 +208,24 @@ importers:
 
   e2e:
     devDependencies:
+      '@nextlyhq/adapter-drizzle':
+        specifier: workspace:*
+        version: link:../packages/adapter-drizzle
+      '@nextlyhq/adapter-sqlite':
+        specifier: workspace:*
+        version: link:../packages/adapter-sqlite
+      '@nextlyhq/admin':
+        specifier: workspace:*
+        version: link:../packages/admin
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../packages/eslint-config
+      '@nextlyhq/plugin-form-builder':
+        specifier: workspace:*
+        version: link:../packages/plugin-form-builder
+      '@nextlyhq/plugin-page-builder':
+        specifier: workspace:*
+        version: link:../packages/plugin-page-builder
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../packages/tsconfig
@@ -223,6 +238,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
+      nextly:
+        specifier: workspace:*
+        version: link:../packages/nextly
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

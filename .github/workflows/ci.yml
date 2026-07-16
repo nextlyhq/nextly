@@ -121,6 +121,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # This job never pushes. Left on, the default keeps GITHUB_TOKEN in
+          # the git config for everything that follows, which here is a pnpm
+          # install and a browser download.
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6

@@ -149,18 +149,37 @@ export function fieldToFormValues(
 // Zod Schema
 // ============================================================
 
+/**
+ * What this form generates for a new field: lowercase and underscores.
+ *
+ * Narrower than what a name may be. The server also accepts camelCase, which is
+ * what a `defineConfig()` field usually looks like. A house style for names the
+ * form invents, not a rule about names that already exist.
+ */
+const GENERATED_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+
 export function buildUserFieldSchema(mode: "create" | "edit") {
+  // Checked only while the form is inventing the name. In edit mode the input
+  // is disabled, the stored value is submitted back untouched, and the server
+  // refuses to change it regardless, so holding it to this form's house style
+  // rejects nothing anyone could fix. It only makes a field the server
+  // accepted, such as `phoneNumber`, impossible to relabel here.
+  const nameSchema =
+    mode === "create"
+      ? z
+          .string()
+          .min(1, "Field name is required")
+          .max(64)
+          .regex(
+            GENERATED_NAME_PATTERN,
+            "Must start with a letter and contain only lowercase letters, numbers, and underscores"
+          )
+      : z.string();
+
   return z
     .object({
       label: z.string().min(1, "Label is required").max(255),
-      name: z
-        .string()
-        .min(1, "Field name is required")
-        .max(64)
-        .regex(
-          /^[a-z][a-z0-9_]*$/,
-          "Must start with a letter and contain only lowercase letters, numbers, and underscores"
-        ),
+      name: nameSchema,
       type: z.enum([
         "text",
         "textarea",

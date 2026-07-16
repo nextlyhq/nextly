@@ -99,6 +99,37 @@ test("the server refuses a name that would displace a built-in", async ({
   }
 });
 
+test("a field the server accepts can be edited in the form", async ({
+  page,
+  request,
+}) => {
+  // camelCase is valid to the server (`/^[a-zA-Z][a-zA-Z0-9_]*$/`) and is what
+  // `defineConfig()` fields normally look like. The form's own rule is
+  // lowercase-only, and it validates the name even in edit mode — where the
+  // input is disabled and the stored value is submitted back untouched. So a
+  // field the server made is one the form refuses to save.
+  const created = await request.post("/admin/api/user-fields", {
+    data: {
+      name: "phoneNumber",
+      label: "Phone Number",
+      type: "text",
+      required: false,
+      isActive: true,
+    },
+  });
+  expect(created.status(), "the server accepts camelCase").toBe(201);
+
+  await gotoAdmin(page, "/users/fields");
+  await page.getByRole("button", { name: "phoneNumber" }).click();
+  await expect(page).toHaveURL(/\/admin\/users\/fields\/edit\//);
+
+  await page.getByRole("textbox", { name: "Label" }).fill("Mobile Number");
+  await page.getByRole("button", { name: /Update Field/i }).click();
+
+  // Saved, rather than blocked by a complaint about a name nobody can change.
+  await expect(page).toHaveURL(/\/admin\/users\/fields$/, { timeout: 10_000 });
+});
+
 test("the server refuses a rename, and says why", async ({ page, request }) => {
   await gotoAdmin(page, "/users/fields");
 
@@ -118,6 +149,13 @@ test("the server refuses a rename, and says why", async ({ page, request }) => {
     data: { name: "email" },
   });
   expect(renamed.status()).toBe(400);
+
+  // The refusal alone is not the claim — "says why" is. Assert the reason
+  // reaches the caller as a field error, the same shape a create rejection has.
+  const renamedBody = (await renamed.json()) as ApiError;
+  const renamedError = renamedBody.error?.data?.errors?.[0];
+  expect(renamedError?.path).toBe("name");
+  expect(renamedError?.code).toBe("USER_FIELD_NAME_IMMUTABLE");
 
   // A label-only edit must still go through: the guard rejects a change to the
   // field's identity, not every write.

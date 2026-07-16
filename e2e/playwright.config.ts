@@ -40,7 +40,13 @@ export default defineConfig({
   // suite is not retried into passing locally. CI retries once, for the
   // genuinely slow-machine flakes, and records a trace when it does.
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // One worker, everywhere. `fullyParallel: false` only serialises tests
+  // *within* a file; different spec files still get their own worker, and the
+  // default is more than one on most machines. Every worker here would share
+  // the same database and the same signed-in session, so a field one file
+  // creates is visible to another mid-assertion. The suite runs in ~20s: there
+  // is nothing to win by racing it against itself.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   fullyParallel: false,
 

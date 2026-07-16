@@ -14,11 +14,17 @@
     "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
+    "@nextlyhq/adapter-drizzle": "workspace:*",
+    "@nextlyhq/adapter-sqlite": "workspace:*",
+    "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/plugin-form-builder": "workspace:*",
+    "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@playwright/test": "^1.58.2",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.1",
+    "nextly": "workspace:*",
     "typescript": "^5.9.3"
   }
 }

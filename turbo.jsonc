@@ -301,7 +301,10 @@
     // turbo can fingerprint.
     //
     // dependsOn ^build because the playground loads the admin and the plugins
-    // from their built output — a stale dist is a stale test.
+    // from their built output — a stale dist is a stale test. This only reaches
+    // them because the e2e package declares them as devDependencies; without
+    // that, ^build would build only e2e's own config deps and the suite would
+    // run against whatever dist happened to be lying around.
     "test:e2e": {
       "dependsOn": ["^build"],
       "outputs": [],

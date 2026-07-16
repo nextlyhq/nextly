@@ -4,7 +4,11 @@
     "noEmit": true,
     "types": ["node"],
     "module": "ESNext",
-    "moduleResolution": "Bundler"
+    "moduleResolution": "Bundler",
+    // The base config leaves this off, and without it the `.mjs` below is
+    // included and then skipped — which is the same silent gap the comment
+    // under `include` exists to avoid.
+    "allowJs": true
   },
   // Everything, deliberately. The two page-builder specs that rotted did so
   // because their package's tsconfig only included `src/**/*`, so an import of
