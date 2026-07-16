@@ -6,25 +6,27 @@
  *
  * ## API Integration
  *
- * This client makes HTTP requests to `/api/media` endpoints which are implemented
- * in the consumer's Next.js application by re-exporting handlers from `nextly/api/media`.
+ * This client talks to the **gated** `/admin/api/media` endpoints, which the
+ * admin's `Path=/admin` session cookie can reach. Every write is checked
+ * against a media permission and attributed to the signed-in user server-side,
+ * so the client never sends an `uploadedBy`/`createdBy` identity. Public,
+ * anonymous reads live separately at `/api/media` (used when serving files);
+ * the admin uses the gated surface for everything.
  *
  * ## Architecture
  *
  * ```
  * Frontend (mediaApi.ts)
  *   ↓ HTTP fetch/XMLHttpRequest
- * API Routes (/api/media)
+ * API Routes (/admin/api/media)
  *   ↓ Function calls
  * MediaService (nextly)
  *   ↓ Database queries
  * PostgreSQL/MySQL/SQLite
  * ```
  *
- * @see nextly/api/media - Backend API handlers
+ * @see nextly/api/media-handlers - Backend API handlers
  */
-
-import { getCurrentUserId } from "@admin/lib/auth/session";
 
 import { parseApiError } from "../lib/api/parseApiError";
 import {
@@ -45,6 +47,11 @@ import type {
   FolderResponse,
   FolderContentsResponse,
 } from "../types/media";
+
+// The gated admin media surface. The session cookie is scoped to `/admin`, so
+// this is the path it authenticates against; the server derives identity and
+// enforces media permissions here.
+const MEDIA_BASE = "/admin/api/media";
 
 // ============================================================
 // Internal fetch helper
@@ -131,7 +138,9 @@ function uploadMediaOnce(
       reject(new Error("Upload cancelled"));
     });
 
-    xhr.open("POST", "/api/media");
+    xhr.open("POST", MEDIA_BASE);
+    // Send session cookies so the gated endpoint can authenticate the upload.
+    xhr.withCredentials = true;
     xhr.send(formData);
   });
 }
@@ -141,11 +150,10 @@ export async function uploadMedia(
   onProgress?: (progress: number) => void,
   folderId?: string | null
 ): Promise<Media> {
-  const userId = await getCurrentUserId();
-
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("uploadedBy", userId);
+  // No `uploadedBy`: the server attributes the upload to the authenticated
+  // caller from the session, never a client-supplied identity.
   if (folderId) {
     formData.append("folderId", folderId);
   }
@@ -229,7 +237,7 @@ export async function fetchMedia(
       hasNext: boolean;
       hasPrev: boolean;
     };
-  }>(`/api/media?${queryParams.toString()}`);
+  }>(`${MEDIA_BASE}?${queryParams.toString()}`);
 
   return {
     data: result.items || [],
@@ -250,7 +258,7 @@ export async function fetchMedia(
  */
 export async function getMediaById(mediaId: string): Promise<Media> {
   // respondDoc returns the bare row.
-  return mediaFetchJson<Media>(`/api/media/${mediaId}`);
+  return mediaFetchJson<Media>(`${MEDIA_BASE}/${mediaId}`);
 }
 
 /**
@@ -261,7 +269,7 @@ export async function updateMedia(
   updates: MediaUpdateInput
 ): Promise<void> {
   // respondMutation { message, item }; caller does not need the item back.
-  await mediaFetchVoid(`/api/media/${mediaId}`, {
+  await mediaFetchVoid(`${MEDIA_BASE}/${mediaId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
@@ -273,13 +281,13 @@ export async function updateMedia(
  */
 export async function deleteMedia(mediaId: string): Promise<void> {
   // respondAction { message, id }; caller does not need the id back.
-  await mediaFetchVoid(`/api/media/${mediaId}`, { method: "DELETE" });
+  await mediaFetchVoid(`${MEDIA_BASE}/${mediaId}`, { method: "DELETE" });
 }
 
 /**
  * Bulk delete multiple media files.
  *
- * Hits `DELETE /api/media/bulk` (server `media-bulk.ts` DELETE handler).
+ * Hits `DELETE /admin/api/media/bulk` (server `media-bulk.ts` DELETE handler).
  * Single round-trip; server runs per-id deletes concurrently with full
  * access-control + storage-cleanup pipeline; partial failures returned
  * in `errors[]` with structured `{ id, code, message }`.
@@ -299,7 +307,7 @@ export async function deleteMedia(mediaId: string): Promise<void> {
 export async function bulkDeleteMedia(
   mediaIds: string[]
 ): Promise<BulkResponse<{ id: string }>> {
-  const response = await authFetch("/api/media/bulk", {
+  const response = await authFetch(`${MEDIA_BASE}/bulk`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mediaIds }),
@@ -323,15 +331,14 @@ export async function bulkDeleteMedia(
 export async function createFolder(
   input: CreateFolderInput
 ): Promise<MediaFolder> {
-  const userId = await getCurrentUserId();
-
-  // respondMutation: { message, item: Folder }.
+  // respondMutation: { message, item: Folder }. The server sets `createdBy`
+  // from the authenticated caller, so the client does not send it.
   const result = await mediaFetchJson<{ item?: MediaFolder }>(
-    "/api/media/folders",
+    `${MEDIA_BASE}/folders`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, createdBy: userId }),
+      body: JSON.stringify(input),
     }
   );
   if (!result.item) {
@@ -348,7 +355,7 @@ export async function getFolderById(
 ): Promise<FolderResponse["data"]> {
   // respondDoc returns the bare folder row (with breadcrumbs).
   return mediaFetchJson<FolderResponse["data"]>(
-    `/api/media/folders/${folderId}`
+    `${MEDIA_BASE}/folders/${folderId}`
   );
 }
 
@@ -358,7 +365,7 @@ export async function getFolderById(
 export async function listRootFolders(): Promise<MediaFolder[]> {
   // respondData { folders: MediaFolder[] } (non-paginated list, named field).
   const result = await mediaFetchJson<{ folders?: MediaFolder[] }>(
-    "/api/media/folders?root=true"
+    `${MEDIA_BASE}/folders?root=true`
   );
   return result.folders || [];
 }
@@ -368,7 +375,7 @@ export async function listRootFolders(): Promise<MediaFolder[]> {
  */
 export async function listSubfolders(parentId: string): Promise<MediaFolder[]> {
   const result = await mediaFetchJson<{ folders?: MediaFolder[] }>(
-    `/api/media/folders?parentId=${parentId}`
+    `${MEDIA_BASE}/folders?parentId=${parentId}`
   );
   return result.folders || [];
 }
@@ -380,8 +387,8 @@ export async function getFolderContents(
   folderId: string | null
 ): Promise<FolderContentsResponse["data"]> {
   const url = folderId
-    ? `/api/media/folders/${folderId}/contents`
-    : "/api/media/folders/root/contents";
+    ? `${MEDIA_BASE}/folders/${folderId}/contents`
+    : `${MEDIA_BASE}/folders/root/contents`;
 
   // respondData ships the structured contents object bare.
   return mediaFetchJson<FolderContentsResponse["data"]>(url);
@@ -395,7 +402,7 @@ export async function updateFolder(
   updates: UpdateFolderInput
 ): Promise<MediaFolder> {
   const result = await mediaFetchJson<{ item?: MediaFolder }>(
-    `/api/media/folders/${folderId}`,
+    `${MEDIA_BASE}/folders/${folderId}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -416,7 +423,7 @@ export async function deleteFolder(
   deleteContents: boolean = false
 ): Promise<void> {
   await mediaFetchVoid(
-    `/api/media/folders/${folderId}?deleteContents=${deleteContents}`,
+    `${MEDIA_BASE}/folders/${folderId}?deleteContents=${deleteContents}`,
     { method: "DELETE" }
   );
 }
@@ -432,7 +439,7 @@ export async function moveMediaToFolder(
   // signature returned the moved record; the new endpoint omits it because
   // the admin already has the row in cache. Keep the public signature for
   // backwards compatibility with callers but always resolve to null.
-  await mediaFetchVoid(`/api/media/${mediaId}/move`, {
+  await mediaFetchVoid(`${MEDIA_BASE}/${mediaId}/move`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ folderId }),
