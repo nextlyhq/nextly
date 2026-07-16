@@ -155,10 +155,11 @@ jobs:
             gh issue comment "$existing" --repo "${{ github.repository }}" \
               --body "Nightly package smoke failed again: $RUN_URL"
           else
+            # printf keeps the multi-line body inside this YAML block scalar;
+            # a raw multi-line string here would dedent and break the file.
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nEither the packed tarballs no longer install/import in a clean project, or `create-nextly-app` no longer scaffolds an app that builds. See the run logs for the failing job.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Nightly package smoke is failing" \
               --label ci-nightly-failure \
-              --body "The nightly package-smoke workflow failed. Run: $RUN_URL
-
-Either the packed tarballs no longer install/import in a clean project, or \`create-nextly-app\` no longer scaffolds an app that builds. See the run logs for the failing job."
+              --body "$body"
           fi
