@@ -22,14 +22,11 @@ import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
 
-import { Authors } from "./src/collections/authors";
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
-import { Seo } from "./src/components/seo";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
-import { SiteSettings } from "./src/singles/site-settings";
 
 export default defineConfig({
   admin: {
@@ -43,10 +40,6 @@ export default defineConfig({
       password: "DevPassword123!",
     },
   },
-  // Multilingual content. Defines the languages the admin can switch between —
-  // required for the entry-editor language switcher, per-language pills, and the
-  // "Copy from" / "Publish all languages" actions to appear. A collection also
-  // needs its own Internationalization toggle on (or `localized: true` in code).
   localization: {
     locales: [
       { code: "en", label: "English" },
@@ -58,10 +51,8 @@ export default defineConfig({
     // Untranslated fields fall back to another locale's value on read (default true).
     fallback: true,
   },
-  collections: [Posts, Categories, Tags, Authors],
-  singles: [Homepage, LandingPage, SiteSettings],
-  // Code-first components (reusable field groups → comp_<slug> tables).
-  components: [Seo],
+  collections: [Posts, Categories, Tags],
+  singles: [Homepage, LandingPage],
   // Dev-harness plugins: page builder and form builder.
   plugins: [pageBuilder(), formBuilderPlugin],
   typescript: {
