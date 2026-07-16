@@ -28,7 +28,7 @@
     "lint:design": "node scripts/lint-design.mjs",
     "lint:fix": "turbo run lint -- --fix",
     "lint:report": "node scripts/lint-report.mjs",
-    "lint:workspace": "sherif --ignore-rule multiple-dependency-versions",
+    "lint:workspace": "sherif",
     "_comment_testing": "=== Testing ===",
     "test": "turbo run test",
     "test:watch": "turbo run test:watch",
@@ -89,7 +89,7 @@
     "sherif": "1.13.0",
     "tsx": "^4.20.5",
     "turbo": "^2.9.7",
-    "typescript": "5.9.3",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   },
   "prettier": "@nextlyhq/prettier-config",
