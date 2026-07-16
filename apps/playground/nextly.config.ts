@@ -40,6 +40,17 @@ export default defineConfig({
       password: "DevPassword123!",
     },
   },
+  localization: {
+    locales: [
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish", fallbackLocale: "en" },
+      // `rtl: true` renders this language's translatable fields right-to-left.
+      { code: "ar", label: "Arabic", rtl: true, fallbackLocale: "en" },
+    ],
+    defaultLocale: "en",
+    // Untranslated fields fall back to another locale's value on read (default true).
+    fallback: true,
+  },
   collections: [Posts, Categories, Tags],
   singles: [Homepage, LandingPage],
   // Dev-harness plugins: page builder and form builder.
