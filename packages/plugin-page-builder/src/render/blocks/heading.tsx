@@ -2,6 +2,9 @@ import { createElement } from "react";
 
 import { defineBlock } from "../../core/registry";
 
+import { renderInline } from "./markdown";
+import { safeUrl, str } from "./util";
+
 const LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 export const heading = defineBlock({
@@ -10,7 +13,7 @@ export const heading = defineBlock({
   label: "Heading",
   icon: "Heading",
   category: "basic",
-  defaultProps: { text: "New heading", level: "h2" },
+  defaultProps: { text: "New heading", level: "h2", link: { href: "" } },
   contentFields: [
     { name: "text", type: "text", label: "Text", bindable: true },
     {
@@ -19,18 +22,25 @@ export const heading = defineBlock({
       label: "Level",
       options: LEVELS.map(l => ({ value: l, label: l.toUpperCase() })),
     },
+    { name: "link", type: "link", label: "Link (optional)" },
   ],
-  styleControls: [
-    { control: "color", styleKey: "color", label: "Text color" },
-    { control: "dimension", styleKey: "fontSize", label: "Font size" },
-    { control: "align", styleKey: "textAlign", label: "Align" },
-    { control: "spacing", styleKey: "padding", label: "Padding" },
-    { control: "spacing", styleKey: "margin", label: "Margin" },
-  ],
+  supports: {
+    typography: true,
+    color: { text: true },
+    spacing: true,
+    border: true,
+    shadow: true,
+    dimensions: { width: true, maxWidth: true },
+    position: true,
+    opacity: true,
+    interactions: { hover: true },
+  },
   render: ({ props, className }) => {
-    const level = LEVELS.includes(String(props.level))
-      ? String(props.level)
-      : "h2";
-    return createElement(level, { className }, String(props.text ?? ""));
+    const level = LEVELS.includes(str(props.level)) ? str(props.level) : "h2";
+    const parts = renderInline(str(props.text));
+    const link = props.link as { href?: string } | undefined;
+    const href = safeUrl(link?.href);
+    const inner = href ? createElement("a", { href }, parts) : parts;
+    return createElement(level, { className }, inner);
   },
 });

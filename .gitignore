@@ -66,6 +66,9 @@ docker/postgres/data/
 # SQLite database files
 apps/playground/data/
 
+# Nextly runtime artifacts (migration logs, journal) written next to any app/package
+.nextly/
+
 # Bundled templates copied into create-nextly-app during build (build artifact)
 packages/create-nextly-app/templates/
 

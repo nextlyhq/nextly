@@ -201,7 +201,7 @@ export function ConditionalLogicEditor({
                 updateLogic({ action: value as "show" | "hide" })
               }
             >
-              <SelectTrigger className="w-[100px] h-9 bg-transparent border-input dark:bg-slate-900/50">
+              <SelectTrigger className="w-[100px] h-9 bg-transparent border-input dark:bg-muted/50">
                 <SelectValue placeholder="Show/Hide" />
               </SelectTrigger>
               <SelectContent>
@@ -216,7 +216,7 @@ export function ConditionalLogicEditor({
                 updateLogic({ operator: value as "AND" | "OR" })
               }
             >
-              <SelectTrigger className="w-[80px] h-9 bg-transparent border-input dark:bg-slate-900/50">
+              <SelectTrigger className="w-[80px] h-9 bg-transparent border-input dark:bg-muted/50">
                 <SelectValue placeholder="All/Any" />
               </SelectTrigger>
               <SelectContent>
@@ -230,14 +230,14 @@ export function ConditionalLogicEditor({
           {/* Conditions list */}
           <div className="space-y-3 pt-4">
             {logic.conditions.length === 0 ? (
-              <div className="p-4 bg-primary/5/30 rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
+              <div className="p-4 bg-muted rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
                 No conditions defined. Add a condition to get started.
               </div>
             ) : (
               logic.conditions.map((condition, index) => (
                 <div
                   key={index}
-                  className="flex flex-col gap-2 p-3 rounded-none bg-primary/5/20 border border-primary/5 relative group"
+                  className="flex flex-col gap-2 p-3 rounded-none bg-muted border border-primary/5 relative group"
                 >
                   <div className="grid grid-cols-1 gap-2">
                     {/* Field selector */}
@@ -247,7 +247,7 @@ export function ConditionalLogicEditor({
                         handleUpdateCondition(index, { field: value })
                       }
                     >
-                      <SelectTrigger className="w-full bg-transparent border-input dark:bg-slate-900/50">
+                      <SelectTrigger className="w-full bg-transparent border-input dark:bg-muted/50">
                         <SelectValue placeholder="Select field" />
                       </SelectTrigger>
                       <SelectContent>
@@ -270,7 +270,7 @@ export function ConditionalLogicEditor({
                           })
                         }
                       >
-                        <SelectTrigger className="flex-1 h-9 bg-transparent border-input dark:bg-slate-900/50">
+                        <SelectTrigger className="flex-1 h-9 bg-transparent border-input dark:bg-muted/50">
                           <SelectValue placeholder="Compare operator" />
                         </SelectTrigger>
                         <SelectContent>
@@ -327,7 +327,7 @@ export function ConditionalLogicEditor({
               + Add Condition
             </Button>
           ) : (
-            <p className="mt-4 text-center text-xs text-amber-500 font-medium bg-amber-500/10 p-2 rounded-none border border-amber-500/20">
+            <p className="mt-4 text-center text-xs text-warning font-medium bg-warning/10 p-2 rounded-none border border-warning/20">
               Add more fields to the form to create conditions.
             </p>
           )}

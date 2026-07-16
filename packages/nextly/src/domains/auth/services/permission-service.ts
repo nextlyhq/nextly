@@ -22,17 +22,30 @@ import type { Logger } from "../../../services/shared";
 interface PermissionsTableLike {
   resource: unknown;
   action: unknown;
+  orphanedAt: unknown;
 }
 
 function buildHiddenPermissionConditions(
-  permissionsTable: PermissionsTableLike
+  permissionsTable: PermissionsTableLike,
+  options?: { includeOrphaned?: boolean }
 ) {
-  return [
+  const conditions = [
     // Hide the legacy `permissions` resource from assignable/admin permission lists.
     sql`${permissionsTable.resource} <> 'permissions'`,
     // Hide create/delete actions for `settings` resource.
     sql`NOT (${permissionsTable.resource} = 'settings' AND ${permissionsTable.action} IN ('create', 'delete'))`,
   ];
+
+  if (!options?.includeOrphaned) {
+    // A permission nothing declares any more should not be offered as a choice
+    // — it enforces nothing, so granting it does nothing. It stays in the table
+    // and keeps its grants; this only takes it off the menu. Retiring it is a
+    // separate, deliberate act, and the cleanup that does the retiring asks for
+    // orphans explicitly.
+    conditions.push(sql`${permissionsTable.orphanedAt} IS NULL`);
+  }
+
+  return conditions;
 }
 
 /**
@@ -116,6 +129,12 @@ export class PermissionService extends BaseService {
     // Sorting
     sortBy?: "action" | "resource" | "name";
     sortOrder?: "asc" | "desc";
+    /**
+     * Include permissions nothing declares any more. Off by default: they are
+     * not a choice anyone should be offered. The cleanup that retires them
+     * needs to see them, and asks.
+     */
+    includeOrphaned?: boolean;
   }): Promise<{
     data: Array<{
       id: string;
@@ -125,6 +144,14 @@ export class PermissionService extends BaseService {
       resource: string;
       description: string | null;
       category?: string;
+      /** Package that declared this permission; null for the built-in seeds. */
+      owner: string | null;
+      /** True once the declaring package stopped declaring it. */
+      orphaned: boolean;
+      /** Heading within the owner's section; null when the owner set none. */
+      group: string | null;
+      /** True for a permission the admin should warn before granting. */
+      danger: boolean;
     }>;
     meta: {
       total: number;
@@ -142,11 +169,14 @@ export class PermissionService extends BaseService {
         resource,
         sortBy = "resource",
         sortOrder = "asc",
+        includeOrphaned = false,
       } = options || {};
 
       const { permissions } = this.tables;
 
-      const conditions = [...buildHiddenPermissionConditions(permissions)];
+      const conditions = [
+        ...buildHiddenPermissionConditions(permissions, { includeOrphaned }),
+      ];
 
       if (search) {
         const searchPattern = `%${search}%`;
@@ -213,6 +243,10 @@ export class PermissionService extends BaseService {
           action: permissions.action,
           resource: permissions.resource,
           description: permissions.description,
+          owner: permissions.owner,
+          orphanedAt: permissions.orphanedAt,
+          permissionGroup: permissions.permissionGroup,
+          danger: permissions.danger,
         })
         .from(permissions)
         .where(whereClause)
@@ -281,6 +315,10 @@ export class PermissionService extends BaseService {
             resource: String(row.resource),
             description: row.description ? String(row.description) : null,
             category,
+            owner: row.owner ? String(row.owner) : null,
+            orphaned: row.orphanedAt !== null && row.orphanedAt !== undefined,
+            group: row.permissionGroup ? String(row.permissionGroup) : null,
+            danger: Boolean(row.danger),
           };
         }),
         meta: {
@@ -405,7 +443,27 @@ export class PermissionService extends BaseService {
     resource: string,
     name: string,
     slug: string,
-    description?: string
+    description?: string,
+    /**
+     * What the declaration says about the permission beyond its identity.
+     *
+     * An object rather than three more positional arguments: the signature was
+     * already six deep, and `(…, undefined, undefined, true)` is not something
+     * anyone should have to read.
+     */
+    meta?: {
+      /**
+       * Who declared it — a plugin name, or omitted for the framework's own
+       * per-collection seeds. Recorded so the admin can tell a plugin's custom
+       * permission from a content type's, rather than inferring one from the
+       * slug and inventing a collection that does not exist.
+       */
+      owner?: string;
+      /** Heading within the owner's section of the matrix. */
+      group?: string;
+      /** True for a permission the admin should warn before granting. */
+      danger?: boolean;
+    }
   ): Promise<{
     /** ID of the existing or newly created permission row. */
     id: string;
@@ -418,7 +476,13 @@ export class PermissionService extends BaseService {
     // Case-insensitive matching to align with listPermissions behavior
 
     const existing = await this.db
-      .select({ id: permissions.id })
+      .select({
+        id: permissions.id,
+        owner: permissions.owner,
+        slug: permissions.slug,
+        permissionGroup: permissions.permissionGroup,
+        danger: permissions.danger,
+      })
       .from(permissions)
       .where(
         and(
@@ -429,6 +493,65 @@ export class PermissionService extends BaseService {
       .limit(1)
       .then((rows: unknown[]) => rows[0] || null);
     if (existing) {
+      // Adopt the row's provenance and slug if either is out of step with the
+      // declaration. Create-if-missing alone would leave every permission
+      // seeded before provenance existed permanently unattributed, which is
+      // most of them on any database that has already run — and the
+      // declaration is the truth about a permission, not whatever was true
+      // when it was first written.
+      //
+      // The slug is a label, not a key: identity is (action, resource) and
+      // grants reference the row by id, so bringing a stale slug into line
+      // renames without revoking. Without this, a corrected slug would reach
+      // new installs only, and existing databases would keep answering to a
+      // name no caller asks for.
+      const patch: {
+        owner?: string | null;
+        slug?: string;
+        permissionGroup?: string | null;
+        danger?: boolean;
+      } = {};
+
+      const currentOwner =
+        (existing as { owner?: string | null }).owner ?? null;
+      const declaredOwner = meta?.owner ?? null;
+      if (currentOwner !== declaredOwner) {
+        patch.owner = declaredOwner;
+      }
+
+      const currentGroup =
+        (existing as { permissionGroup?: string | null }).permissionGroup ??
+        null;
+      const declaredGroup = meta?.group ?? null;
+      if (currentGroup !== declaredGroup) {
+        patch.permissionGroup = declaredGroup;
+      }
+
+      const currentDanger = Boolean((existing as { danger?: unknown }).danger);
+      const declaredDanger = meta?.danger === true;
+      if (currentDanger !== declaredDanger) {
+        patch.danger = declaredDanger;
+      }
+
+      const currentSlug = (existing as { slug?: string | null }).slug ?? null;
+      if (currentSlug !== slug) {
+        patch.slug = slug;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        try {
+          await this.db
+            .update(permissions)
+            .set(patch)
+            .where(eq(permissions.id, String(existing.id)));
+        } catch (err) {
+          // Same contract as the insert below: a raw driver error never leaves
+          // this service. The reachable case is the slug — it carries a unique
+          // index, so adopting a declared slug already taken by another row
+          // fails here rather than at insert.
+          throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+        }
+      }
       return { id: String(existing.id), created: false };
     }
     const id = randomUUID();
@@ -439,6 +562,9 @@ export class PermissionService extends BaseService {
       action,
       resource,
       description: description ?? null,
+      owner: meta?.owner ?? null,
+      permissionGroup: meta?.group ?? null,
+      danger: meta?.danger === true,
     };
     try {
       const insertPerm = (this.db as RBACDatabaseInstance)

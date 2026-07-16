@@ -18,6 +18,7 @@
  * runtime ignores this field. See packages/nextly/src/auth/handlers/session.ts.
  */
 
+import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
 
@@ -41,9 +42,8 @@ export default defineConfig({
   },
   collections: [Posts, Categories, Tags],
   singles: [Homepage, LandingPage],
-  // First plugin registered in the Playground (consciously relaxing the
-  // "playground stays plugin-free" note) — the page-builder dev harness.
-  plugins: [pageBuilder()],
+  // Dev-harness plugins: page builder and form builder.
+  plugins: [pageBuilder(), formBuilderPlugin],
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },

@@ -63,8 +63,6 @@ export interface RoleApiDetailsResponse {
     description: string;
     type: "System" | "Custom";
     permissions: string[];
-    status: string;
-    created: string;
     name: string;
   };
   childRoleIds: string[];

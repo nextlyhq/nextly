@@ -21,9 +21,11 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     contributes: {
       collections: [pagesCollection()],
       fieldTypes: [PAGE_BUILDER_FIELD_TYPE],
-      permissions: [
-        { action: "publish", resource: "pages", label: "Publish Pages" },
-      ],
+      // No `publish` permission. One was declared here and nothing ever read
+      // it: publishing a page is a status change on the entry, which
+      // `update-pages` already covers, and no code path asked whether the user
+      // could publish. Granting it did nothing and withholding it prevented
+      // nothing. Declare it again alongside the check that reads it.
       admin: {
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },

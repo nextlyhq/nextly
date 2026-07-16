@@ -25,7 +25,7 @@ function StatusItem({
   color: string;
 }) {
   return (
-    <div className="flex items-center justify-between p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-primary/5 border-transparent hover:border-primary/5">
+    <div className="flex items-center justify-between p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-border border-transparent hover:border-border">
       <div className="flex items-center gap-3.5">
         <div
           className="h-2 w-2 rounded-none ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
@@ -44,7 +44,7 @@ function StatusItem({
         <span className="text-[13px] font-black tabular-nums text-foreground/80">
           {count}
         </span>
-        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none  border border-primary/5 min-w-[36px] text-center">
+        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none  border border-border min-w-[36px] text-center">
           {percentage}%
         </span>
       </div>
@@ -75,12 +75,12 @@ export const ContentStatusWidget: React.FC = () => {
   const draftPct = total > 0 ? Math.round((draft / total) * 100) : 0;
 
   const segments = [
-    { label: "Published", value: published, color: "var(--primary)" },
+    { label: "Published", value: published, color: "var(--nx-primary)" },
     { label: "Draft", value: draft, color: "#f59e0b" }, // Amber
   ];
 
   return (
-    <Card className="border-primary/5 bg-card/60 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/5">
+    <Card className="border-border bg-card/60 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -96,13 +96,13 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none]">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>
         ) : total === 0 ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-none] bg-primary/5  border border-primary/5">
+            <div className="p-6 rounded-none bg-primary/5  border border-border">
               <FileText className="h-10 w-10 text-muted-foreground/10" />
             </div>
             <div className="space-y-2">
@@ -137,12 +137,12 @@ export const ContentStatusWidget: React.FC = () => {
               </div>
             </div>
 
-            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none]  border border-primary/5">
+            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none  border border-border">
               <StatusItem
                 label="Published"
                 count={published}
                 percentage={publishedPct}
-                color="var(--primary)"
+                color="var(--nx-primary)"
               />
               <StatusItem
                 label="Draft"

@@ -7,8 +7,6 @@ import { getAuthLogger } from "../../../lib/logger";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
-import { PermissionCheckerService } from "./permission-checker-service";
-
 // Rate-limited error logging to prevent log flooding on repeated cache write failures
 const errorLogRateLimiter = new Map<string, number>();
 const ERROR_LOG_INTERVAL_MS = 60_000;
@@ -41,17 +39,17 @@ function shouldLogError(errorKey: string): boolean {
  * - Overall: 60%+ query reduction, 90%+ cache hit rate
  *
  * Responsibilities:
- * - Warm cache for users (pre-compute all permissions)
  * - Store/retrieve cached permission results
  * - Invalidate cache on user/role changes
  * - Cleanup expired cache entries
  *
+ * Entries are written on demand: a permission check that misses resolves the
+ * answer and stores it, so the cache fills itself from real traffic and only
+ * for the checks that are actually made.
+ *
  * @example
  * ```typescript
  * const cacheService = new PermissionCacheService(adapter, logger);
- *
- * // Pre-compute all permissions for a user
- * await cacheService.warmCacheForUser(userId);
  *
  * // Check cached permission
  * const cached = await cacheService.getCachedPermission(userId, 'read', 'users');
@@ -64,7 +62,6 @@ function shouldLogError(errorKey: string): boolean {
  * ```
  */
 export class PermissionCacheService extends BaseService {
-  private permissionChecker: PermissionCheckerService;
   private cacheTtlMs: number;
 
   constructor(
@@ -73,8 +70,6 @@ export class PermissionCacheService extends BaseService {
     options?: { cacheTtlSeconds?: number }
   ) {
     super(adapter, logger);
-
-    this.permissionChecker = new PermissionCheckerService(adapter, logger);
 
     const ttlSeconds = options?.cacheTtlSeconds ?? 86400;
     this.cacheTtlMs = ttlSeconds * 1000;
@@ -97,105 +92,6 @@ export class PermissionCacheService extends BaseService {
    */
   private serializeRoleIdsForDb(roleIds: string[]): string | string[] {
     return this.dialect === "sqlite" ? JSON.stringify(roleIds) : roleIds;
-  }
-
-  /**
-   * Pre-compute and store all permissions for a user (cache warming).
-   *
-   * This method is called on:
-   * - User login
-   * - Role assignment changes
-   * - Permission changes affecting user's roles
-   *
-   * Performance: O(n) where n = number of possible permission checks (~20-50 typically)
-   *
-   * @param userId - User ID to warm cache for
-   * @returns Promise that resolves when cache is warmed
-   */
-  async warmCacheForUser(userId: string): Promise<void> {
-    if (!userId) {
-      getAuthLogger()?.log?.("warn", {
-        category: "auth",
-        op: "cache",
-        message: "warmCacheForUser called with empty userId",
-      });
-      return;
-    }
-
-    try {
-      const { permissions, userPermissionCache } = this.tables;
-
-      const allPermissions = (await this.db
-        .select({
-          id: permissions.id,
-          action: permissions.action,
-          resource: permissions.resource,
-        })
-        .from(permissions)) as Array<{
-        id: string;
-        action: string;
-        resource: string;
-      }>;
-
-      if (allPermissions.length === 0) {
-        return;
-      }
-
-      const roleIds =
-        await this.permissionChecker.getAllPermissionsForRole(userId);
-
-      const expiresAt = new Date(Date.now() + this.cacheTtlMs);
-      const entries = [];
-      const serializedRoleIds = this.serializeRoleIdsForDb(Array.from(roleIds));
-
-      for (const perm of allPermissions) {
-        const hasPermission = roleIds.includes(perm.id);
-        const cacheKey = `${userId}|${perm.action}|${perm.resource}`;
-
-        entries.push({
-          id: cacheKey,
-          userId,
-          action: perm.action,
-          resource: perm.resource,
-          hasPermission,
-          roleIds: serializedRoleIds,
-          expiresAt,
-          createdAt: new Date(),
-        });
-      }
-
-      if (entries.length > 0) {
-        await this.db
-          .insert(userPermissionCache)
-          .values(entries)
-          .onConflictDoUpdate({
-            target: userPermissionCache.id,
-            set: {
-              hasPermission: sql`EXCLUDED.has_permission`,
-              roleIds: sql`EXCLUDED.role_ids`,
-              expiresAt: sql`EXCLUDED.expires_at`,
-              createdAt: sql`EXCLUDED.created_at`,
-            },
-          });
-      }
-
-      if (process.env.DEBUG_CACHE === "1") {
-        console.log("[cache][dbg] warmCacheForUser", {
-          userId,
-          entriesCount: entries.length,
-          ttlMs: this.cacheTtlMs,
-        });
-      }
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "warmCacheForUser failed",
-        userId,
-        error: String(error),
-      });
-      throw error;
-    }
   }
 
   /**

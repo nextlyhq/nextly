@@ -42,7 +42,7 @@ export function EntryMetaStrip({
   if (!showStatusPill && !showSlug) return null;
 
   return (
-    <div className="px-6 py-2 border-b border-primary/5 flex items-center gap-3 text-xs text-muted-foreground">
+    <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
       {showStatusPill && <StatusPill status={status} />}
       {showSlug && (
         <SlugInlineEditor slugField={slugField} readOnly={lockSlug} />
@@ -161,7 +161,10 @@ function SlugInlineEditor({
         </button>
       </div>
       {errorMsg && (
-        <span className="text-[10px] text-red-600 shrink-0" role="alert">
+        <span
+          className="text-[10px] text-destructive-600 shrink-0"
+          role="alert"
+        >
           {errorMsg}
         </span>
       )}

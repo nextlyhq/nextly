@@ -35,13 +35,21 @@ export interface EmailTemplateAttachment {
   filename?: string;
 }
 
+/** Row kind discriminator. Layouts wrap templates at their {{content}}. */
+export type EmailTemplateKind = "template" | "layout" | "partial";
+
 export interface EmailTemplateRecord {
   id: string;
   name: string;
   slug: string;
+  kind: EmailTemplateKind;
   subject: string;
   htmlContent: string;
   plainTextContent: string | null;
+  preheader: string | null;
+  layoutId: string | null;
+  fromOverride: string | null;
+  replyTo: string | null;
   variables: EmailTemplateVariable[] | null;
   useLayout: boolean;
   isActive: boolean;
@@ -51,12 +59,29 @@ export interface EmailTemplateRecord {
   updatedAt: string;
 }
 
+/** Wire shape before normalization: legacy rows may carry a null `kind`. */
+type RawEmailTemplateRecord = Omit<EmailTemplateRecord, "kind"> & {
+  kind: EmailTemplateKind | null;
+};
+
+/** Coerce a null `kind` (legacy rows) to "template" at the API boundary. */
+function normalizeTemplate(
+  record: RawEmailTemplateRecord
+): EmailTemplateRecord {
+  return { ...record, kind: record.kind ?? "template" };
+}
+
 export interface CreateEmailTemplatePayload {
   name: string;
   slug: string;
+  kind?: EmailTemplateKind;
   subject: string;
   htmlContent: string;
   plainTextContent?: string | null;
+  preheader?: string | null;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
   variables?: EmailTemplateVariable[] | null;
   useLayout?: boolean;
   isActive?: boolean;
@@ -69,16 +94,15 @@ export interface UpdateEmailTemplatePayload {
   subject?: string;
   htmlContent?: string;
   plainTextContent?: string | null;
+  preheader?: string | null;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
   variables?: EmailTemplateVariable[] | null;
   useLayout?: boolean;
   isActive?: boolean;
   providerId?: string | null;
   attachments?: EmailTemplateAttachment[] | null;
-}
-
-export interface EmailLayout {
-  header: string;
-  footer: string;
 }
 
 export interface EmailTemplatePreviewResult {
@@ -98,19 +122,24 @@ export interface EmailTemplatePreviewResult {
  * `templates` to keep the bare-array public signature callers expect.
  */
 export async function listTemplates(): Promise<EmailTemplateRecord[]> {
-  const result = await fetcher<{ templates: EmailTemplateRecord[] }>(
+  const result = await fetcher<{ templates: RawEmailTemplateRecord[] }>(
     "/email-templates",
     {},
     true
   );
-  return result.templates ?? [];
+  return (result.templates ?? []).map(normalizeTemplate);
 }
 
 /**
  * Get a single email template by ID.
  */
 export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
-  return fetcher<EmailTemplateRecord>(`/email-templates/${id}`, {}, true);
+  const record = await fetcher<RawEmailTemplateRecord>(
+    `/email-templates/${id}`,
+    {},
+    true
+  );
+  return normalizeTemplate(record);
 }
 
 /**
@@ -119,12 +148,12 @@ export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
 export async function createTemplate(
   data: CreateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
     "/email-templates",
     { method: "POST", body: JSON.stringify(data) },
     true
   );
-  return result.item;
+  return normalizeTemplate(result.item);
 }
 
 /**
@@ -134,12 +163,12 @@ export async function updateTemplate(
   id: string,
   data: UpdateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
     `/email-templates/${id}`,
     { method: "PATCH", body: JSON.stringify(data) },
     true
   );
-  return result.item;
+  return normalizeTemplate(result.item);
 }
 
 /**
@@ -150,27 +179,6 @@ export async function deleteTemplate(id: string): Promise<void> {
   await fetcher<ActionResponse>(
     `/email-templates/${id}`,
     { method: "DELETE" },
-    true
-  );
-}
-
-/**
- * Get the shared email layout (header and footer HTML). The dispatcher
- * emits the bare `{ header, footer }` shape, so we type the fetcher
- * generic with EmailLayout directly.
- */
-export async function getLayout(): Promise<EmailLayout> {
-  return fetcher<EmailLayout>("/email-templates/layout", {}, true);
-}
-
-/**
- * Update the shared email layout. Server returns ActionResponse;
- * we discard.
- */
-export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
-  await fetcher<ActionResponse>(
-    "/email-templates/layout",
-    { method: "PATCH", body: JSON.stringify(data) },
     true
   );
 }
@@ -193,13 +201,36 @@ export async function previewTemplate(
   );
 }
 
+export interface SendTestEmailResult {
+  success: boolean;
+  messageId?: string;
+}
+
+/**
+ * Send a real test email from a saved template via the shared
+ * send-with-template endpoint. Tests the SAVED template (not unsaved edits).
+ */
+export async function sendTestEmail(
+  slug: string,
+  to: string,
+  variables: Record<string, unknown>
+): Promise<SendTestEmailResult> {
+  return fetcher<SendTestEmailResult>(
+    "/email/send-with-template",
+    {
+      method: "POST",
+      body: JSON.stringify({ to, template: slug, variables }),
+    },
+    true
+  );
+}
+
 export const emailTemplateApi = {
   listTemplates,
   getTemplate,
   createTemplate,
   updateTemplate,
   deleteTemplate,
-  getLayout,
-  updateLayout,
   previewTemplate,
+  sendTestEmail,
 } as const;

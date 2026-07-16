@@ -56,10 +56,29 @@ export function sanitizeCustomCss(css: string, scopeClass: string): string {
     visit: "Selector",
     enter(node: CssNode) {
       const sel = node as csstree.Selector;
+      const first = sel.children.first;
+      const alreadyScoped =
+        first != null &&
+        first.type === "ClassSelector" &&
+        first.name === scopeClass;
+      if (alreadyScoped) return;
       sel.children.prependData({ type: "Combinator", name: " " });
       sel.children.prependData({ type: "ClassSelector", name: scopeClass });
     },
   });
 
   return csstree.generate(ast);
+}
+
+/**
+ * Per-block custom CSS (spec §4.4). Authors write CSS using the Elementor-style
+ * `selector` keyword to mean "this block's root". We replace `selector` with the
+ * block's scope class, then run every other selector through the same scoping +
+ * declaration sanitize as page CSS so nothing can escape the block.
+ */
+export function sanitizeBlockCss(css: string, scopeClass: string): string {
+  if (!css) return "";
+  // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
+  const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
+  return sanitizeCustomCss(withScope, scopeClass);
 }

@@ -12,7 +12,7 @@
  * - **Animation**: Width transition (300ms linear) for smooth progress updates
  * - **Variants**:
  *   - `default`: Primary blue (bg-primary-500)
- *   - `success`: Green (bg-green-500)
+ *   - `success`: Green (bg-success-500)
  *   - `error`: Red (bg-destructive)
  *
  * ## Accessibility
@@ -63,7 +63,7 @@ export const progressVariants = cva("h-full rounded-none transition-all", {
   variants: {
     variant: {
       default: "bg-primary-500",
-      success: "bg-green-500",
+      success: "bg-success-500",
       error: "bg-destructive",
     },
   },
@@ -100,7 +100,7 @@ export type ProgressProps = {
    * Visual variant for different states
    *
    * - `default`: Primary blue (bg-primary-500)
-   * - `success`: Green (bg-green-500)
+   * - `success`: Green (bg-success-500)
    * - `error`: Red (bg-destructive)
    *
    * @default "default"

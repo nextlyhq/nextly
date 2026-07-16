@@ -21,6 +21,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ServiceContainer } from "../../services";
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
@@ -166,9 +167,7 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
   },
   getRoleByName: {
     execute: async (c, p) => {
-      const role = await c.roles.getRoleByName(
-        requireParam(p, "name", "Name")
-      );
+      const role = await c.roles.getRoleByName(requireParam(p, "name", "Name"));
       return respondDoc(role);
     },
   },
@@ -177,11 +176,36 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       const b = body as
         | { name?: string; slug?: string; permissionIds?: string[] }
         | undefined;
-      if (!b?.name || !b?.slug)
-        throw new Error("Role data with name and slug is required");
-      if (!b.permissionIds?.length) {
-        throw new Error("At least one permission is required to create a role");
+
+      // A NextlyError, not a bare Error: a bare one fails NextlyError.is() at
+      // the boundary and collapses to INTERNAL_ERROR, so "name is required"
+      // reaches the caller as a 500 saying "An unexpected error occurred."
+      const missing: Array<{ path: string; code: string; message: string }> =
+        [];
+      if (!b?.name) {
+        missing.push({
+          path: "name",
+          code: "REQUIRED",
+          message: "A role needs a name.",
+        });
       }
+      if (!b?.slug) {
+        missing.push({
+          path: "slug",
+          code: "REQUIRED",
+          message: "A role needs a slug.",
+        });
+      }
+      if (missing.length > 0) {
+        throw NextlyError.validation({ errors: missing });
+      }
+
+      // No permission check here. There was one, demanding at least one
+      // permission always, which contradicted the service: a role built on a
+      // base role needs none of its own, and the service says so. Two copies
+      // of a rule, one of them wrong, and the wrong one ran first — so a role
+      // that only takes its permissions from its base could not be created at
+      // all. The rule lives with the service that owns it.
       const role = await c.roles.createRole(
         b as Parameters<typeof c.roles.createRole>[0]
       );

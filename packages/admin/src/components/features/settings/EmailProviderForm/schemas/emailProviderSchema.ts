@@ -15,6 +15,7 @@ export interface ProviderFormValues {
   fromEmail: string;
   fromName: string;
   isDefault: boolean;
+  isActive: boolean;
   // SMTP fields
   smtpHost: string;
   smtpPort: number;
@@ -40,6 +41,7 @@ export function buildProviderSchema(
       fromEmail: z.string().email("Please enter a valid email address"),
       fromName: z.string().max(255).optional().or(z.literal("")),
       isDefault: z.boolean(),
+      isActive: z.boolean(),
       smtpHost: z.string().optional().or(z.literal("")),
       smtpPort: z.number().int().min(1).max(65535).optional(),
       smtpSecure: z.boolean().optional(),
@@ -106,6 +108,7 @@ export const DEFAULT_VALUES: ProviderFormValues = {
   fromEmail: "",
   fromName: "",
   isDefault: false,
+  isActive: true,
   smtpHost: "",
   smtpPort: 587,
   smtpSecure: false,
@@ -129,6 +132,7 @@ export function formValuesToPayload(values: ProviderFormValues) {
     fromEmail: values.fromEmail,
     fromName: values.fromName || null,
     isDefault: values.isDefault,
+    isActive: values.isActive,
   };
 
   switch (values.type) {
@@ -169,6 +173,7 @@ export function providerToFormValues(
     fromEmail: provider.fromEmail,
     fromName: provider.fromName ?? "",
     isDefault: provider.isDefault,
+    isActive: provider.isActive,
     // Initialize all fields with defaults — only the relevant ones get overridden
     smtpHost: "",
     smtpPort: 587,
@@ -202,7 +207,7 @@ export function providerToFormValues(
         type: "resend",
         apiKey:
           typeof config.apiKey === "string" && config.apiKey.length > 0
-            ? (config.apiKey)
+            ? config.apiKey
             : "",
       };
     case "sendlayer":
@@ -211,7 +216,7 @@ export function providerToFormValues(
         type: "sendlayer",
         apiKey:
           typeof config.apiKey === "string" && config.apiKey.length > 0
-            ? (config.apiKey)
+            ? config.apiKey
             : "",
       };
     default:

@@ -120,7 +120,7 @@ describe("BuilderToolbar", () => {
     expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
-  it("disables Save and Settings when locked", () => {
+  it("shows a read-only badge, disables Save, but keeps Settings viewable when locked", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
@@ -131,8 +131,12 @@ describe("BuilderToolbar", () => {
         onSave={vi.fn()}
       />
     );
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /settings/i })).toBeDisabled();
+    // Settings stays enabled so code-first config can be inspected read-only.
+    expect(
+      screen.getByRole("button", { name: /view settings/i })
+    ).toBeEnabled();
   });
 
   it("invokes onSave when Save is clicked (and dirty)", async () => {

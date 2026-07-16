@@ -764,19 +764,48 @@ describe("SqliteAdapter", () => {
       expect(mockStatement.all).toHaveBeenCalledWith("1", 0);
     });
 
-    it("tx.insert converts Date to ISO string before binding", async () => {
+    // Seconds, because that is what the column reads. Every SQLite column that
+    // takes a Date is `integer({ mode: "timestamp" })`, whose decoder does
+    // `value * 1000` — an ISO string there is NaN, and the row comes back with
+    // an Invalid Date that surfaces as null. This assertion used to require the
+    // string, which is how the encoding stayed wrong while under test.
+    it("tx.insert binds a Date as unix seconds", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
       const date = new Date("2026-05-05T06:00:00.000Z");
       mockStatement.all.mockReturnValue([
-        { id: "1", created_at: date.toISOString() },
+        { id: "1", created_at: date.getTime() / 1000 },
       ]);
 
       await adapter.transaction(async tx => {
         await tx.insert("entries", { id: "1", created_at: date });
       });
 
-      expect(mockStatement.all).toHaveBeenCalledWith("1", date.toISOString());
+      expect(mockStatement.all).toHaveBeenCalledWith(
+        "1",
+        Math.floor(date.getTime() / 1000)
+      );
+    });
+
+    // The non-transactional insert goes through Drizzle's typed encoder and
+    // has always written seconds. The two paths write to the same columns, so
+    // they have to agree; they did not, and only the rows written inside a
+    // transaction were unreadable.
+    it("tx.insert binds a Date the same way the typed path does", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const date = new Date("2026-05-05T06:00:00.000Z");
+      mockStatement.all.mockReturnValue([{ id: "1" }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", created_at: date });
+      });
+
+      const bound = mockStatement.all.mock.calls[0][1];
+      expect(typeof bound).toBe("number");
+      expect(new Date((bound as number) * 1000).toISOString()).toBe(
+        date.toISOString()
+      );
     });
 
     it("tx.insert converts undefined to null before binding", async () => {
@@ -830,7 +859,7 @@ describe("SqliteAdapter", () => {
       expect(mockStatement.run).toHaveBeenCalledWith(1, "abc");
     });
 
-    it("tx.execute converts Date params to ISO strings before binding", async () => {
+    it("tx.execute binds Date params as unix seconds", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
       const date = new Date("2026-05-05T06:00:00.000Z");
@@ -843,7 +872,10 @@ describe("SqliteAdapter", () => {
         ]);
       });
 
-      expect(mockStatement.run).toHaveBeenCalledWith(date.toISOString(), "abc");
+      expect(mockStatement.run).toHaveBeenCalledWith(
+        Math.floor(date.getTime() / 1000),
+        "abc"
+      );
     });
 
     it("executeQuery converts boolean params to 0/1 before binding", async () => {
@@ -859,7 +891,7 @@ describe("SqliteAdapter", () => {
       expect(mockStatement.run).toHaveBeenCalledWith(1, "abc");
     });
 
-    it("executeQuery converts Date params to ISO strings before binding", async () => {
+    it("executeQuery binds Date params as unix seconds", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
       const date = new Date("2026-05-05T06:00:00.000Z");
@@ -870,7 +902,10 @@ describe("SqliteAdapter", () => {
         [date, "abc"]
       );
 
-      expect(mockStatement.run).toHaveBeenCalledWith(date.toISOString(), "abc");
+      expect(mockStatement.run).toHaveBeenCalledWith(
+        Math.floor(date.getTime() / 1000),
+        "abc"
+      );
     });
 
     it("insertMany converts boolean values to 0/1 before binding", async () => {

@@ -114,7 +114,7 @@ function ButtonGroupComponent({
         {buttons.map((button, index) => {
           const variantClass =
             button.variant === "outline"
-              ? "border border-primary/5 bg-background hover:bg-accent hover:text-accent-foreground"
+              ? "border border-border bg-background hover:bg-accent hover:text-accent-foreground"
               : "";
 
           return (
@@ -127,8 +127,8 @@ function ButtonGroupComponent({
               )}
               style={{
                 ...(button.variant === "filled" && {
-                  backgroundColor: button.bgColor || "hsl(var(--primary))",
-                  color: button.textColor || "hsl(var(--primary-foreground))",
+                  backgroundColor: button.bgColor || "var(--nx-primary)",
+                  color: button.textColor || "var(--nx-primary-foreground)",
                 }),
                 ...(button.variant === "outline" &&
                   button.textColor && {

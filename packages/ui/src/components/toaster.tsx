@@ -77,9 +77,9 @@ export { toast };
  *
  * Customization:
  * All styling uses CSS variables from the design system:
- * - --normal-bg: Background color (uses --popover with fallback)
- * - --normal-text: Text color (uses --popover-foreground with fallback)
- * - --normal-border: Border color (uses --border with fallback)
+ * - --normal-bg: Background color (uses --nx-popover with fallback)
+ * - --normal-text: Text color (uses --nx-popover-foreground with fallback)
+ * - --normal-border: Border color (uses --nx-border with fallback)
  * - --border-radius: Border radius (uses --radius with fallback)
  *
  * Security:
@@ -106,7 +106,7 @@ export function Toaster({ theme = "system", ...props }: ToasterProps) {
   return (
     <Sonner
       theme={theme}
-      className="toaster group !bg-transparent !overflow-visible !z-[9999]"
+      className="toaster group bg-transparent! overflow-visible! z-[9999]!"
       data-slot="toaster"
       toastOptions={{
         classNames: {
@@ -122,9 +122,9 @@ export function Toaster({ theme = "system", ...props }: ToasterProps) {
       }}
       style={
         {
-          "--normal-bg": "hsl(var(--popover, 0 0% 100%))",
-          "--normal-text": "hsl(var(--popover-foreground, 222.2 84% 4.9%))",
-          "--normal-border": "hsl(var(--border, 214.3 31.8% 91.4%))",
+          "--normal-bg": "var(--nx-popover)",
+          "--normal-text": "var(--nx-popover-foreground)",
+          "--normal-border": "var(--nx-border)",
           "--border-radius": "0px",
         } as React.CSSProperties
       }

@@ -162,6 +162,95 @@ export function interpolateTemplate(
 }
 
 // ============================================================
+// HTML → Plain Text
+// ============================================================
+
+/** Common named entities decoded when converting HTML to plain text. */
+const ENTITY_DECODE_MAP: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&nbsp;": " ",
+  "&copy;": "©",
+  "&reg;": "®",
+  "&mdash;": "—",
+  "&ndash;": "–",
+  "&hellip;": "…",
+};
+
+const ENTITY_DECODE_RE =
+  /&(?:amp|lt|gt|quot|#39|nbsp|copy|reg|mdash|ndash|hellip);/g;
+
+function decodeEntities(input: string): string {
+  return input.replace(
+    ENTITY_DECODE_RE,
+    match => ENTITY_DECODE_MAP[match] ?? match
+  );
+}
+
+/**
+ * Produce a readable plain-text approximation of an HTML email body.
+ *
+ * Used as the multipart `text/plain` alternative when a template does not
+ * supply its own plain-text content. It strips markup, keeps link targets
+ * (`label (https://…)`), turns block elements into line breaks, and decodes
+ * common entities. It is intentionally lightweight, not a full HTML parser.
+ *
+ * @param html - HTML email body
+ * @returns Plain-text alternative
+ *
+ * @example
+ * ```typescript
+ * htmlToText('<h1>Hi</h1><p>Visit <a href="https://x.io">us</a></p>');
+ * // 'Hi\n\nVisit us (https://x.io)'
+ * ```
+ */
+export function htmlToText(html: string): string {
+  if (!html) return "";
+
+  let text = html;
+
+  // Drop non-content blocks entirely (styles, scripts, head, MSO comments).
+  text = text.replace(/<(style|script|head)\b[\s\S]*?<\/\1>/gi, "");
+  text = text.replace(/<!--[\s\S]*?-->/g, "");
+
+  // Preserve link targets: "<a href="X">label</a>" → "label (X)".
+  text = text.replace(
+    /<a\b[^>]*?href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_match, href: string, label: string) => {
+      const cleanLabel = label.replace(/<[^>]+>/g, "").trim();
+      const cleanHref = href.trim();
+      if (!cleanHref || cleanHref === cleanLabel) return cleanLabel;
+      return cleanLabel ? `${cleanLabel} (${cleanHref})` : cleanHref;
+    }
+  );
+
+  // Block-level boundaries become line breaks.
+  text = text.replace(/<li\b[^>]*>/gi, "- ");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(
+    /<\/(p|div|tr|h[1-6]|li|table|blockquote|section|header|footer)>/gi,
+    "\n"
+  );
+
+  // Strip every remaining tag, then decode entities.
+  text = text.replace(/<[^>]+>/g, "");
+  text = decodeEntities(text);
+
+  // Normalise whitespace: collapse runs of spaces, trim each line, and
+  // cap consecutive blank lines at one.
+  text = text
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return text;
+}
+
+// ============================================================
 // Variable Validation
 // ============================================================
 

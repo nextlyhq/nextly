@@ -44,8 +44,16 @@ async function build(reason) {
   }
   isBuilding = true;
   try {
-    const { ms, sizeKB } = await buildCssFast();
+    const { ms, sizeKB, unscoped } = await buildCssFast();
     console.log(`[admin:css] ${reason} → ${sizeKB} KB in ${ms}ms`);
+    if (unscoped?.length) {
+      // The production build refuses to ship these; say so now, while the
+      // change that caused it is still on screen.
+      console.warn(
+        `[admin:css] ⚠ ${unscoped.length} rule(s) escaped .nextly-admin and will fail the release build:`
+      );
+      for (const sel of unscoped.slice(0, 10)) console.warn(`  ${sel}`);
+    }
   } catch (err) {
     console.error(`[admin:css] build failed (${reason}):`, err);
   } finally {

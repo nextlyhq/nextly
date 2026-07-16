@@ -96,7 +96,7 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
         <div className="space-y-2">
           <p className="text-sm font-medium">Your API key</p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-none  border border-primary/5 bg-primary/5 px-3 py-2 font-mono text-sm break-all">
+            <code className="flex-1 overflow-x-auto rounded-none  border border-border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
               {rawKey ?? ""}
             </code>
             <Button
@@ -108,7 +108,7 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
               className="shrink-0"
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-600" />
+                <Check className="h-4 w-4 text-success-600" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

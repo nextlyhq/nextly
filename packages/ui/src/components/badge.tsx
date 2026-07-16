@@ -29,25 +29,25 @@ import { cn } from "../lib/utils";
  * - success: Light green background
  * - warning: Light amber background
  * - destructive: Light red background
- * - outline: Transparent background with  border border-primary/5
+ * - outline: Transparent background with  border border-border
  */
 const badgeVariants = cva(
   "inline-flex items-center rounded-none px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
   {
     variants: {
       variant: {
-        default:
-          "bg-primary/5 text-slate-900 dark:bg-slate-800 dark:text-slate-100",
-        primary:
-          "bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/90",
+        // Clear, legible chip in both modes (was bg-primary/5 at ~5% opacity,
+        // which was nearly invisible on dark backgrounds).
+        default: "bg-muted text-foreground",
+        primary: "bg-primary/10 text-primary dark:bg-primary/20",
         success:
-          "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-100",
+          "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
         warning:
-          "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-100",
+          "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
         destructive:
-          "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-100",
+          "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
         outline:
-          "border !border-primary/5 bg-transparent text-slate-700 dark:text-slate-300 dark:!border-primary/5",
+          "border border-border! bg-transparent text-foreground dark:text-muted-foreground dark:border-border!",
       },
     },
     defaultVariants: {

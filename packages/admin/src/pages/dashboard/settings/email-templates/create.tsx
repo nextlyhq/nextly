@@ -1,22 +1,16 @@
 "use client";
 
-import { Button } from "@nextlyhq/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  EMAIL_TEMPLATE_FORM_ID,
   EmailTemplateForm,
   formValuesToCreatePayload,
   templateToFormValues,
   type TemplateFormValues,
 } from "@admin/components/features/settings/EmailTemplateForm";
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
-import { Loader2 } from "@admin/components/icons";
-import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
-import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
@@ -29,51 +23,44 @@ export default function CreateEmailTemplatePage() {
   const [duplicateTemplate, setDuplicateTemplate] =
     useState<EmailTemplateRecord | null>(null);
   const [isLoadingDuplicate, setIsLoadingDuplicate] = useState(false);
+  // Which `?duplicate=<id>` we've already attempted. Guards against retrying a
+  // failed load forever: without it, `finally` clears the loading flag and the
+  // effect's condition is satisfied again, re-requesting on every render.
+  const attemptedDuplicateId = useRef<string | null>(null);
 
-  // Check if we're duplicating a template from query parameters
+  // Support duplicating an existing template via ?duplicate=<id>. One-shot: the
+  // URL param doesn't change while this page is mounted.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const duplicateId = params.get("duplicate");
-
-    if (duplicateId && !duplicateTemplate && !isLoadingDuplicate) {
-      setIsLoadingDuplicate(true);
-      getTemplate(duplicateId)
-        .then(template => {
-          setDuplicateTemplate(template);
-        })
-        .catch(error => {
-          console.error("Failed to load template for duplication:", error);
-          toast.error("Failed to load template", {
-            description: "Could not load the template to duplicate.",
-          });
-        })
-        .finally(() => {
-          setIsLoadingDuplicate(false);
+    if (!duplicateId || attemptedDuplicateId.current === duplicateId) return;
+    attemptedDuplicateId.current = duplicateId;
+    setIsLoadingDuplicate(true);
+    getTemplate(duplicateId)
+      .then(setDuplicateTemplate)
+      .catch(() => {
+        toast.error("Failed to load template", {
+          description: "Could not load the template to duplicate.",
         });
-    }
-  }, [duplicateTemplate, isLoadingDuplicate]);
+      })
+      .finally(() => setIsLoadingDuplicate(false));
+  }, []);
 
-  // If duplicating, pre-fill the form with the template data
   const initialValues = useMemo(() => {
     if (!duplicateTemplate) return undefined;
-
     const values = templateToFormValues(duplicateTemplate);
-    // Modify name and slug for the duplicate
     values.name = `${values.name} (Copy)`;
     values.slug = `${values.slug}-copy`;
-    values.isActive = false; // Set to inactive by default
-
+    values.isActive = false;
     return values;
   }, [duplicateTemplate]);
 
   const handleSubmit = useCallback(
     (values: TemplateFormValues) => {
-      const payload = formValuesToCreatePayload(values);
-
-      createTemplate(payload, {
+      createTemplate(formValuesToCreatePayload(values), {
         onSuccess: () => {
           toast.success("Template created", {
-            description: `${values.name} has been created successfully.`,
+            description: `${values.name} has been created.`,
           });
           navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES);
         },
@@ -90,44 +77,16 @@ export default function CreateEmailTemplatePage() {
     [createTemplate]
   );
 
-  const submitting = isPending || isLoadingDuplicate;
-
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <SettingsLayout
-          actions={
-            <>
-              <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
-                <Button type="button" variant="outline" disabled={submitting}>
-                  Cancel
-                </Button>
-              </Link>
-              <Button
-                type="submit"
-                form={EMAIL_TEMPLATE_FORM_ID}
-                disabled={submitting}
-              >
-                {isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Template"
-                )}
-              </Button>
-            </>
-          }
-        >
-          <EmailTemplateForm
-            mode="create"
-            initialValues={initialValues}
-            isPending={submitting}
-            onSubmit={handleSubmit}
-          />
-        </SettingsLayout>
-      </PageContainer>
+      <div className="h-full min-h-0">
+        <EmailTemplateForm
+          mode="create"
+          initialValues={initialValues}
+          isPending={isPending || isLoadingDuplicate}
+          onSubmit={handleSubmit}
+        />
+      </div>
     </QueryErrorBoundary>
   );
 }

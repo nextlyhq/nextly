@@ -39,13 +39,13 @@ import { cn } from "../lib/utils";
  * - search: Search input with clear button
  */
 const inputVariants = cva(
-  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-none border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:!border-primary focus-visible:!border-primary aria-invalid:border-destructive aria-invalid:focus:!border-destructive data-[invalid=true]:border-destructive data-[invalid=true]:focus:!border-destructive",
+  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-none border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
   {
     variants: {
       size: {
-        sm: "h-8 px-2.5 py-2 text-sm",
-        default: "h-10 px-3 py-2.5 text-sm",
-        lg: "h-11 px-4 py-3 text-base",
+        sm: "h-[var(--nx-control-height-sm)] px-2.5 py-2 text-sm",
+        default: "h-[var(--nx-control-height)] px-3 py-2.5 text-sm",
+        lg: "h-[var(--nx-control-height-lg)] px-4 py-3 text-base",
       },
     },
     defaultVariants: {

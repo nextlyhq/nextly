@@ -11,7 +11,7 @@
  * @since 1.2.0
  */
 
-import { $createCodeNode } from "@lexical/code";
+import { $createCodeNode } from "@lexical/code-core";
 import {
   INSERT_CHECK_LIST_COMMAND,
   INSERT_ORDERED_LIST_COMMAND,
@@ -258,8 +258,9 @@ const menuContainerStyle: React.CSSProperties = {
   overflowY: "auto",
   overflowX: "hidden",
   borderRadius: "8px",
-  border: "1px solid #e2e8f0",
-  backgroundColor: "#ffffff",
+  // Use theme tokens so the slash menu adapts to light/dark instead of a hardcoded white panel
+  border: "1px solid var(--nx-border)",
+  backgroundColor: "var(--nx-popover)",
   padding: "4px",
   boxShadow:
     "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
@@ -281,8 +282,8 @@ const getMenuItemStyle = (isSelected: boolean): React.CSSProperties => ({
   borderRadius: "6px",
   cursor: "pointer",
   fontSize: "14px",
-  color: "#1e293b",
-  backgroundColor: isSelected ? "#f1f5f9" : "transparent",
+  color: "var(--nx-popover-foreground)",
+  backgroundColor: isSelected ? "var(--nx-muted)" : "transparent",
   transition: "background-color 0.15s ease",
   whiteSpace: "nowrap",
 });
@@ -291,7 +292,7 @@ const iconStyle: React.CSSProperties = {
   width: "16px",
   height: "16px",
   flexShrink: 0,
-  color: "#64748b",
+  color: "var(--nx-muted-foreground)",
 };
 
 const textStyle: React.CSSProperties = {

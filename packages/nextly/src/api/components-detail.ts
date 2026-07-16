@@ -24,6 +24,7 @@ import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { requireAuthHeader } from "./auth-header-only";
 import { respondDoc, respondMutation } from "./response-shapes";
@@ -68,6 +69,9 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("update-component");
+
     requireAuthHeader(request);
 
     const { slug } = await context.params;
@@ -130,6 +134,9 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
+    // Schema DDL: refuse when the builder is disabled for this environment.
+    requireBuilderEnabled("delete-component");
+
     requireAuthHeader(request);
 
     const { slug } = await context.params;

@@ -153,10 +153,10 @@ function SortableFieldItem({
 
       {/* Field type icon box — blue, matches FieldPalette */}
       <div
-        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-white mr-1"
+        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-foreground mr-1"
         style={{
-          borderRadius: "6px",
-          border: "1px solid hsl(var(--primary) / 0.25)",
+          border:
+            "1px solid color-mix(in srgb, var(--nx-primary) 25%, transparent)",
         }}
       >
         <svg
@@ -182,7 +182,7 @@ function SortableFieldItem({
           {typeLabel}
         </span>
         {field.required && (
-          <span className="text-[10px] px-2 py-0 leading-5 bg-red-50 text-red-600 dark:bg-red-500/20 dark:text-red-400 font-normal rounded-full border border-red-200 dark:border-red-500/30 shrink-0">
+          <span className="text-[10px] px-2 py-0 leading-5 bg-muted text-muted-foreground font-normal rounded-full border border-border shrink-0">
             Required
           </span>
         )}
@@ -235,7 +235,7 @@ export function FormCanvas({
         ref={setNodeRef}
         id="canvas-drop-zone"
         className={`min-h-[320px] flex flex-col items-center justify-center border-2 border-dashed rounded-none transition-all duration-200 ${
-          isOver ? "border-primary bg-primary/5" : "border-primary/5 bg-primary/5/20"
+          isOver ? "border-primary bg-primary/5" : "border-primary/5 bg-muted"
         }`}
       >
         <div className="text-center px-6 py-12">

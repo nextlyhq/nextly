@@ -5,7 +5,6 @@ import type React from "react";
 import { useCallback, useState } from "react";
 
 import { ApiKeyTable } from "@admin/components/features/api-keys/ApiKeyTable";
-import { EditApiKeyDialog } from "@admin/components/features/api-keys/EditApiKeyDialog";
 import { RevokeApiKeyDialog } from "@admin/components/features/api-keys/RevokeApiKeyDialog";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Plus } from "@admin/components/icons";
@@ -13,7 +12,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
-import { ROUTES } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useApiKeys } from "@admin/hooks/queries/useApiKeys";
 import { navigateTo } from "@admin/lib/navigation";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
@@ -26,27 +25,17 @@ const ApiKeysContent: React.FC = () => {
   // Fetch keys
   const { data, isLoading, isError, error } = useApiKeys();
 
-  // Edit dialog state
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [keyToEdit, setKeyToEdit] = useState<ApiKeyMeta | null>(null);
-
   // Revoke dialog state
   const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
   const [keyToRevoke, setKeyToRevoke] = useState<ApiKeyMeta | null>(null);
 
   const handleEdit = useCallback((key: ApiKeyMeta) => {
-    setKeyToEdit(key);
-    setEditDialogOpen(true);
+    navigateTo(buildRoute(ROUTES.SETTINGS_API_KEYS_EDIT, { id: key.id }));
   }, []);
 
   const handleRevoke = useCallback((key: ApiKeyMeta) => {
     setKeyToRevoke(key);
     setRevokeDialogOpen(true);
-  }, []);
-
-  const handleEditDialogChange = useCallback((open: boolean) => {
-    setEditDialogOpen(open);
-    if (!open) setKeyToEdit(null);
   }, []);
 
   const handleRevokeDialogChange = useCallback((open: boolean) => {
@@ -91,13 +80,6 @@ const ApiKeysContent: React.FC = () => {
         isLoading={isLoading}
         onEdit={handleEdit}
         onRevoke={handleRevoke}
-      />
-
-      {/* Edit dialog */}
-      <EditApiKeyDialog
-        open={editDialogOpen}
-        onOpenChange={handleEditDialogChange}
-        apiKey={keyToEdit}
       />
 
       {/* Revoke dialog */}

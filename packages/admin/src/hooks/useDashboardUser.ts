@@ -1,13 +1,23 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import type { User } from "../types/user";
 
 import { useApi } from "./useApi";
 
 /**
- * Custom hook to fetch and manage dashboard user information
+ * Query key for the signed-in user. Anything that changes your own profile
+ * (name, avatar) should invalidate this so the chrome reflects it immediately.
+ */
+export const currentUserKey = ["auth", "me"] as const;
+
+/**
+ * The signed-in user, for the dashboard chrome (avatar, name, email).
+ *
+ * Reads through the query cache rather than fetching into local state, so an
+ * edit elsewhere can invalidate `currentUserKey` and have the header update
+ * without a reload.
  *
  * @returns User data, loading state, and error state
  *
@@ -21,50 +31,25 @@ import { useApi } from "./useApi";
  * ```
  */
 export function useDashboardUser() {
-  const [user, setUser] = useState<{
-    id: string;
-    name: string;
-    email: string;
-    avatar?: string;
-  } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
   const { api } = useApi();
 
-  useEffect(() => {
-    async function fetchUser() {
-      try {
-        setIsLoading(true);
-        setError(null);
-
-        const userData = await api.protected.get<User>("/me");
-
-        setUser({
-          id: userData.id,
-          name: userData.name,
-          email: userData.email,
-          // API uses `image` for avatar URL in the admin types
-          avatar: userData.image ?? undefined,
-        });
-      } catch (err) {
-        console.error("User data fetch failed:", err);
-        setError(
-          err instanceof Error ? err : new Error("Failed to fetch user data")
-        );
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    void fetchUser();
-    // Reason: api is stable from useApi() — including it would cause unnecessary
-    // re-fetches. This effect should only run once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { data, isLoading, error } = useQuery({
+    queryKey: currentUserKey,
+    queryFn: async () => {
+      const userData = await api.protected.get<User>("/me");
+      return {
+        id: userData.id,
+        name: userData.name,
+        email: userData.email,
+        // API uses `image` for avatar URL in the admin types
+        avatar: userData.image ?? undefined,
+      };
+    },
+  });
 
   return {
-    user,
+    user: data ?? null,
     isLoading,
-    error,
+    error: error ?? null,
   };
 }
