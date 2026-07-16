@@ -121,6 +121,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to view media files",
   },
   {
+    name: "Update Media",
+    slug: "update-media",
+    action: "update",
+    resource: "media",
+    description: "Permission to edit media metadata and move files",
+  },
+  {
     name: "Delete Media",
     slug: "delete-media",
     action: "delete",
