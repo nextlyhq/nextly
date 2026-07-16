@@ -98,7 +98,8 @@ export const ROUTES = {
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
-  PLUGIN_SETTINGS: "/admin/plugins/[slug]",
+  PLUGIN_DETAIL: "/admin/plugins/[slug]",
+  PLUGIN_SETTINGS: "/admin/plugins/[slug]/settings",
 } as const;
 
 /**

@@ -212,7 +212,7 @@ export function DynamicPluginNav({
   }
 
   const getPluginUrl = (slug: string) =>
-    buildRoute(ROUTES.PLUGIN_SETTINGS, { slug });
+    buildRoute(ROUTES.PLUGIN_DETAIL, { slug });
 
   const getCollectionUrl = (collection: ApiCollection) =>
     buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name });
@@ -237,13 +237,10 @@ export function DynamicPluginNav({
     );
   }
 
-  // Expanded mode — use plugin metadata slug for the overview link
-  const firstMetaSlug =
-    pluginMetadata?.[0]?.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") ?? plugins[0].slug;
-  const overviewHref = getPluginUrl(firstMetaSlug);
+  // Expanded mode — the overview link goes to the plugins list; each plugin
+  // has its own detail page now, so linking a plugin's slug here would land
+  // on one plugin instead of the overview.
+  const overviewHref = ROUTES.PLUGINS;
   const isOverviewActive = isActive("/admin/plugins");
 
   // Plugins with unplaced collections (shown as expandable with collection sub-items)
