@@ -306,7 +306,7 @@ export function UploadPreview({
           className={cn(
             "absolute top-2 right-2 h-6 w-6",
             "opacity-0 group-hover:opacity-100 transition-opacity",
-            "shadow-lg z-10"
+            "z-10"
           )}
           onClick={e => {
             e.stopPropagation();
@@ -327,7 +327,7 @@ export function UploadPreview({
           className={cn(
             "absolute top-2 right-10 h-6 w-6",
             "opacity-0 group-hover:opacity-100 transition-opacity",
-            "shadow-lg z-10"
+            "z-10"
           )}
           onClick={e => {
             e.stopPropagation();

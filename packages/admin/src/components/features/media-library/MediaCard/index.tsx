@@ -19,12 +19,12 @@
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
  * - **Border**: Default  `border border-border`, Selected  `border border-border border-primary`
- * - **Border Radius**: 8px (`rounded-none`)
- * - **Hover State**: `border-primary-300 scale-105 shadow-md` (NOT when selected)
- * - **Selected State**: `border-2 border-primary-500 ring-2 ring-primary-500`, no scale
- * - **Focus State**: `ring-2 ring-primary-500 ring-offset-2` (keyboard navigation)
+ * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
+ * - **Hover State**: token-based border/background emphasis (NOT when selected)
+ * - **Selected State**: primary border + ring, no scale
+ * - **Focus State**: primary ring (keyboard navigation)
  * - **Transition**: `transition-all duration-150` (design system standard)
- * - **Bottom Overlay**: `bg-gradient-to-t from-black/60 to-transparent`, white text
+ * - **Bottom Bar**: token surface (`bg-primary/5`, `border-t border-border`)
  * - **Filename**: `text-sm font-medium truncate`
  * - **Badge**: Type-based (image=success, video=primary, document=default, audio=warning)
  *
@@ -186,7 +186,7 @@ export function MediaCard({
               setImageLoading(false);
             }}
             className={cn(
-              "max-w-full max-h-full object-contain drop-shadow-sm",
+              "max-w-full max-h-full object-contain",
               imageLoading ? "opacity-0" : "opacity-100",
               "transition-all duration-500 group-hover:scale-105"
             )}
