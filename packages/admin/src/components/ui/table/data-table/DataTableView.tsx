@@ -2,9 +2,8 @@
  * DataTableView — presentational core of the unified table.
  *
  * Controlled and fetch-free: the parent owns data, pagination, search, and (via
- * the `selection` prop) row selection. This is a drop-in replacement for the
- * legacy `ResponsiveTable` on pages that already manage their own state with
- * TanStack Query, so migrating a page never disturbs its data layer or its
+ * the `selection` prop) row selection. Pages that already manage their own state
+ * with TanStack Query can adopt it without disturbing their data layer or their
  * mutation cache-invalidation.
  *
  * Renders both a desktop table and a responsive card view, switching on the

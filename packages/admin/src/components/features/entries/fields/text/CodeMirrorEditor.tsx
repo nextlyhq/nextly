@@ -51,6 +51,12 @@ export interface CodeMirrorEditorProps {
     tabSize?: number;
   };
   placeholder?: string;
+  /**
+   * Receives the editor view once mounted, for callers that must act on the
+   * document directly — inserting at the caret, for one, which has no
+   * equivalent in the value/onChange pair.
+   */
+  onCreateEditor?: (view: EditorView) => void;
 }
 
 // ============================================================
@@ -274,6 +280,7 @@ export function CodeMirrorEditor({
   maxHeight,
   editorOptions,
   placeholder,
+  onCreateEditor,
 }: CodeMirrorEditorProps) {
   // Get language extensions with linters
   const extensions = useMemo(() => getLanguageExtensions(language), [language]);
@@ -293,23 +300,27 @@ export function CodeMirrorEditor({
           "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
       },
       ".cm-gutters": {
-        borderRight: "1px solid var(--border)",
-        backgroundColor: "var(--muted)",
+        borderRight: "1px solid var(--nx-border)",
+        backgroundColor: "var(--nx-muted)",
       },
       ".cm-activeLineGutter": {
-        backgroundColor: "var(--accent)",
+        backgroundColor: "var(--nx-accent)",
       },
       ".cm-activeLine": {
-        backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-accent) 10%, transparent)",
       },
       ".cm-selectionMatch": {
-        backgroundColor: "color-mix(in srgb, var(--primary) 20%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 20%, transparent)",
       },
       ".cm-searchMatch": {
-        backgroundColor: "color-mix(in srgb, var(--warning) 30%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-warning) 30%, transparent)",
       },
       ".cm-searchMatch.cm-searchMatch-selected": {
-        backgroundColor: "color-mix(in srgb, var(--warning) 50%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-warning) 50%, transparent)",
       },
     });
   }, [editorOptions.fontSize, editorOptions.fontFamily]);
@@ -346,6 +357,7 @@ export function CodeMirrorEditor({
         drawSelection: true,
       }}
       placeholder={placeholder}
+      onCreateEditor={onCreateEditor}
       className="overflow-hidden rounded-none"
     />
   );

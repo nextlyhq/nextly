@@ -18,6 +18,14 @@
  *   3. No stray `!important` in plugin packages. The admin keeps a small reviewed baseline
  *      (each one documented in place); the guard fails only if that count grows.
  *
+ *   4. No Tailwind palette utilities — `text-green-600`, `bg-amber-50/30`, `dark:border-rose-200`.
+ *      A hue is not a meaning: two of them stood in for "success" and two for "destructive",
+ *      which is how they drift apart. Use the semantic scales instead — `success-*`,
+ *      `warning-*`, `destructive-*`, `primary-*` — each derived from one token, so a
+ *      retheme moves the whole scale. Neutrals come from `foreground` / `muted-foreground`
+ *      / `border` / `border-strong`. Rules 1 and 2 cannot see these: a utility class is not
+ *      a color literal, and it lives in `.tsx`, which rule 2 only reads inside plugins.
+ *
  * A genuine exception gets an inline `design-lint-ok: <reason>` comment rather than
  * silencing the whole check. Run with `pnpm lint:design`.
  */
@@ -44,6 +52,46 @@ const ADMIN_IMPORTANT_BASELINE = 35;
 
 const TOKEN_WRAP_RE = /\b(?:hsl|hsla|rgb|rgba)\(\s*var\(/;
 const COLOR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(\s*[0-9.]/;
+
+// Tailwind's built-in palette, which ships with the framework whether or not
+// theme.css redefines a given hue — so `bg-emerald-50` compiles even though no
+// `--color-emerald-*` is declared anywhere here. That is exactly why this needs
+// its own rule.
+const PALETTE_HUES =
+  "slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
+const COLOR_UTILS =
+  "text|bg|border|ring|ring-offset|from|via|to|fill|stroke|shadow|outline|decoration|accent|caret|divide|placeholder";
+// Longest shade first: `50|\d{3}` would match `500` as `50` and let it through.
+const PALETTE_SHADES = "950|900|800|700|600|500|400|300|200|100|50";
+// Anchored on a class-list boundary so `translate-x-1/2` (which contains
+// "slate-x") and a prose mention of a colour are not read as utilities.
+const PALETTE_CLASS_RE = new RegExp(
+  `(?:^|[\\s"'\`{])((?:[a-z-]+:)*!?(?:${COLOR_UTILS})-(?:${PALETTE_HUES})-(?:${PALETTE_SHADES})(?:\\/\\d{1,3})?)(?![\\w-])`
+);
+
+/** The token scale that replaced each hue, so the error says what to do next. */
+const HUE_REPLACEMENT = {
+  green: "success-*",
+  emerald: "success-*",
+  red: "destructive-*",
+  rose: "destructive-*",
+  amber: "warning-*",
+  yellow: "warning-*",
+  orange: "warning-*",
+};
+
+/** True for a line that is nothing but a comment — `//`, `/* … *​/`, or a JSDoc `*`. */
+function isCommentLine(line) {
+  const t = line.trim();
+  return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*");
+}
+
+function paletteAdvice(match) {
+  const hue = new RegExp(`(${PALETTE_HUES})`).exec(match)?.[1];
+  const replacement = hue && HUE_REPLACEMENT[hue];
+  if (replacement) return `use ${replacement}`;
+  return "use a semantic scale (success-*/warning-*/destructive-*/primary-*) or a neutral token";
+}
 
 const listFiles = () =>
   execSync(
@@ -81,6 +129,9 @@ let adminImportant = 0;
 for (const file of listFiles()) {
   const isCss = file.endsWith(".css");
   const isPlugin = file.includes(PLUGIN_MARKER);
+  // The theme declares the palette scales themselves; it is the one place the
+  // hue names are the subject rather than a shortcut past the tokens.
+  const isThemeSource = file.endsWith("ui/src/styles/theme.css");
   const lines = readFileSync(file, "utf8").split("\n");
 
   lines.forEach((line, i) => {
@@ -102,6 +153,19 @@ for (const file of listFiles()) {
         violations.push(`${at}  !important not allowed in plugins: ${line.trim()}`);
       } else {
         adminImportant += 1;
+      }
+    }
+
+    // 4. Tailwind palette utility — every package, every file type. The theme
+    //    defines its own `--color-{hue}-*` scales, so skip the file that owns them.
+    //    A comment naming a hue is prose (a JSDoc example, a note about what a
+    //    line used to be) and styles nothing, so whole-comment lines are skipped.
+    if (!isThemeSource && !isCommentLine(line)) {
+      const paletteMatch = PALETTE_CLASS_RE.exec(line);
+      if (paletteMatch && !line.includes("design-lint-ok")) {
+        violations.push(
+          `${at}  palette class \`${paletteMatch[1]}\` — ${paletteAdvice(paletteMatch[1])}: ${line.trim()}`
+        );
       }
     }
   });

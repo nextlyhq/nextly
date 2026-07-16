@@ -22,7 +22,7 @@ describe("StatsCard", () => {
     expect(screen.getByText("+12.5%")).toBeInTheDocument();
     // Check for emerald color classes for Antigravity aesthetic
     const trendElement = screen.getByText("+12.5%");
-    expect(trendElement).toHaveClass("text-emerald-500");
+    expect(trendElement).toHaveClass("text-success-500");
   });
 
   it("renders with negative trend indicator", () => {
@@ -33,7 +33,7 @@ describe("StatsCard", () => {
     expect(screen.getByText("-5.2%")).toBeInTheDocument();
     // Check for rose/red color classes for Antigravity aesthetic
     const trendElement = screen.getByText("-5.2%");
-    expect(trendElement).toHaveClass("text-rose-500");
+    expect(trendElement).toHaveClass("text-destructive-500");
   });
 
   it("does not render trend when change is undefined", () => {

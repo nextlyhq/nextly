@@ -76,7 +76,6 @@ export interface ComponentSelectorProps {
 
 interface ComponentCategory {
   name: string;
-  color: string;
   components: ComponentInfo[];
 }
 
@@ -97,41 +96,12 @@ interface ComponentInfo {
  */
 const DEFAULT_CATEGORY = "General";
 
-/**
- * Category color palette for visual distinction.
- * Colors cycle through this palette based on category name hash.
- */
-const CATEGORY_COLORS = [
-  "bg-primary",
-  "bg-green-500",
-  "bg-purple-500",
-  "bg-orange-500",
-  "bg-pink-500",
-  "bg-cyan-500",
-  "bg-amber-500",
-  "bg-indigo-500",
-  "bg-rose-500",
-  "bg-teal-500",
-];
-
 // Icon map for dynamic icon rendering
 const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
 // ============================================================
 // Helpers
 // ============================================================
-
-/**
- * Generates a consistent color index based on category name.
- */
-function getCategoryColorIndex(categoryName: string): number {
-  let hash = 0;
-  for (let i = 0; i < categoryName.length; i++) {
-    hash = (hash << 5) - hash + categoryName.charCodeAt(i);
-    hash = hash & hash;
-  }
-  return Math.abs(hash) % CATEGORY_COLORS.length;
-}
 
 /**
  * Extracts component info from schemas and groups by category.
@@ -162,7 +132,7 @@ function groupComponentsByCategory(
     categoryMap.set(category, existing);
   }
 
-  // Convert to array with colors
+  // Convert to array
   const categories: ComponentCategory[] = [];
 
   // Sort categories alphabetically, but put "General" last
@@ -174,10 +144,8 @@ function groupComponentsByCategory(
 
   for (const categoryName of sortedCategoryNames) {
     const components = categoryMap.get(categoryName) || [];
-    const colorIndex = getCategoryColorIndex(categoryName);
     categories.push({
       name: categoryName,
-      color: CATEGORY_COLORS[colorIndex],
       components: components.sort((a, b) => a.label.localeCompare(b.label)),
     });
   }
@@ -261,7 +229,7 @@ function ComponentCard({ component, onSelect }: ComponentCardProps) {
  *
  * Features:
  * - Search functionality across label, slug, and description
- * - Category grouping with colored indicators
+ * - Category grouping
  * - 2-column grid layout for components
  * - Icon, label, and description display
  * - Keyboard accessible
@@ -384,7 +352,7 @@ export function ComponentSelector({
                   {/* Category Header */}
                   <div className="flex items-center gap-2 mb-3">
                     <div
-                      className={cn("w-2 h-2 rounded-none", category.color)}
+                      className="w-2 h-2 shrink-0 rounded-none bg-border-strong"
                       aria-hidden="true"
                     />
                     <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">

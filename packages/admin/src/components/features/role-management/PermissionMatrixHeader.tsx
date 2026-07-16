@@ -1,131 +1,92 @@
 import { Checkbox } from "@nextlyhq/ui";
 
+import { actionLabel } from "@admin/constants/permissions";
+import {
+  isEveryPermissionLocked,
+  permissionIdsForAction,
+} from "@admin/lib/permissions/calculations";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
 
 export interface PermissionMatrixHeaderProps {
   contentTypes: ContentTypePermissions[];
+  /** The tab's columns, resolved once by the table so rows line up with them. */
+  actions: string[];
   disabled: boolean;
   lockedIds: string[];
   onToggleAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"],
+    action: string,
     checked: boolean
   ) => void;
   isAllSelectedForAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"]
+    action: string
   ) => boolean;
   isPartiallySelectedForAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"]
+    action: string
   ) => boolean;
 }
 
 export function PermissionMatrixHeader({
   contentTypes,
+  actions,
   disabled,
   lockedIds,
   onToggleAction,
   isAllSelectedForAction,
   isPartiallySelectedForAction,
 }: PermissionMatrixHeaderProps) {
-  const hasLockedCreate = contentTypes.some(
-    ct => ct.permissions.create && lockedIds.includes(ct.permissions.create.id)
-  );
-
-  const hasLockedView = contentTypes.some(
-    ct => ct.permissions.view && lockedIds.includes(ct.permissions.view.id)
-  );
-
-  const hasLockedEdit = contentTypes.some(
-    ct => ct.permissions.edit && lockedIds.includes(ct.permissions.edit.id)
-  );
-
-  const hasLockedDelete = contentTypes.some(
-    ct => ct.permissions.delete && lockedIds.includes(ct.permissions.delete.id)
-  );
-
+  // Widths come from the table's colgroup, not from here, so the header and
+  // body cannot disagree about them.
   const headerClass =
     "p-4 align-middle text-sm font-medium text-foreground  border-b border-border bg-primary/5 backdrop-blur-sm sticky top-0 z-10";
-  const actionClass =
-    "p-4 align-middle text-sm font-medium text-foreground  border-b border-border bg-primary/5 backdrop-blur-sm w-[120px] sticky top-0 z-10";
+  const actionClass = `${headerClass} px-2`;
 
   return (
     <thead>
       <tr>
-        <th className={`text-left ${headerClass} min-w-[200px]`}>
+        <th id="permission-matrix-name" className={`text-left ${headerClass}`}>
           <div className="flex items-center h-full">Name</div>
         </th>
 
-        <th className={actionClass}>
-          <div className="flex flex-row items-center justify-center gap-2 h-full">
-            <Checkbox
-              checked={isAllSelectedForAction(contentTypes, "create")}
-              indeterminate={isPartiallySelectedForAction(
-                contentTypes,
-                "create"
-              )}
-              onCheckedChange={checked =>
-                onToggleAction(contentTypes, "create", !!checked)
-              }
-              disabled={disabled || hasLockedCreate}
-              aria-label="Toggle all create permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-            />
-            <span>Create</span>
-          </div>
-        </th>
+        {actions.map(action => {
+          const allLocked = isEveryPermissionLocked(
+            permissionIdsForAction(contentTypes, action),
+            lockedIds
+          );
 
-        <th className={actionClass}>
-          <div className="flex flex-row items-center justify-center gap-2 h-full">
-            <Checkbox
-              checked={isAllSelectedForAction(contentTypes, "view")}
-              indeterminate={isPartiallySelectedForAction(contentTypes, "view")}
-              onCheckedChange={checked =>
-                onToggleAction(contentTypes, "view", !!checked)
-              }
-              disabled={disabled || hasLockedView}
-              aria-label="Toggle all view permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-            />
-            <span>Read</span>
-          </div>
-        </th>
+          return (
+            <th
+              key={action}
+              // Referenced by every checkbox in this column so a screen reader
+              // announces the action alongside the row's name, rather than
+              // "checkbox, not checked" thirty times over.
+              id={`permission-column-${action}`}
+              className={actionClass}
+            >
+              <div className="flex flex-row items-center justify-center gap-2 h-full">
+                <Checkbox
+                  checked={isAllSelectedForAction(contentTypes, action)}
+                  indeterminate={isPartiallySelectedForAction(
+                    contentTypes,
+                    action
+                  )}
+                  onCheckedChange={checked =>
+                    onToggleAction(contentTypes, action, !!checked)
+                  }
+                  disabled={disabled || allLocked}
+                  aria-label={`Toggle all ${action} permissions`}
+                />
+                <span>{actionLabel(action)}</span>
+              </div>
+            </th>
+          );
+        })}
 
-        <th className={actionClass}>
-          <div className="flex flex-row items-center justify-center gap-2 h-full">
-            <Checkbox
-              checked={isAllSelectedForAction(contentTypes, "edit")}
-              indeterminate={isPartiallySelectedForAction(contentTypes, "edit")}
-              onCheckedChange={checked =>
-                onToggleAction(contentTypes, "edit", !!checked)
-              }
-              disabled={disabled || hasLockedEdit}
-              aria-label="Toggle all edit permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-            />
-            <span>Update</span>
-          </div>
-        </th>
-
-        <th className={actionClass}>
-          <div className="flex flex-row items-center justify-center gap-2 h-full">
-            <Checkbox
-              checked={isAllSelectedForAction(contentTypes, "delete")}
-              indeterminate={isPartiallySelectedForAction(
-                contentTypes,
-                "delete"
-              )}
-              onCheckedChange={checked =>
-                onToggleAction(contentTypes, "delete", !!checked)
-              }
-              disabled={disabled || hasLockedDelete}
-              aria-label="Toggle all delete permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-            />
-            <span>Delete</span>
-          </div>
-        </th>
+        {/* Absorbs the width the action columns don't need, so it lands here
+            rather than inside Name. */}
+        <th aria-hidden="true" className={headerClass} />
       </tr>
     </thead>
   );

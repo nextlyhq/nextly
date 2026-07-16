@@ -15,12 +15,12 @@ function StepRow({ step }: { step: OnboardingStep }) {
           className={cn(
             "h-6 w-6 rounded-none flex items-center justify-center transition-all duration-500",
             step.isComplete
-              ? "bg-emerald-500/10  border border-border border-emerald-500/30 scale-110 shadow-glow-success"
+              ? "bg-success-500/10  border border-border border-success-500/30 scale-110 shadow-glow-success"
               : "bg-primary/5  border border-border group-hover:border-primary/30 group-hover:scale-105"
           )}
         >
           {step.isComplete ? (
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-success-500 shrink-0" />
           ) : (
             <div className="h-1.5 w-1.5 rounded-none bg-primary/20 group-hover:bg-primary/60 transition-colors" />
           )}

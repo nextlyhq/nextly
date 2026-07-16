@@ -1,5 +1,6 @@
 "use client";
 
+import type { EditorView } from "@codemirror/view";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Badge,
@@ -19,17 +20,22 @@ import {
   Switch,
   Textarea,
 } from "@nextlyhq/ui";
-import Prism from "prismjs";
-import "prismjs/components/prism-markup";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useFieldArray,
   useForm,
   type Resolver,
   type SubmitHandler,
 } from "react-hook-form";
-import Editor from "react-simple-code-editor";
 import { z } from "zod";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
@@ -61,6 +67,7 @@ import {
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import {
   useEmailTemplates,
@@ -74,6 +81,14 @@ import type {
   UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
 import type { Media } from "@admin/types/media";
+
+// CodeMirror reaches for browser globals on import, so it loads on demand
+// rather than during SSR.
+const CodeMirrorEditor = lazy(() =>
+  import(
+    "@admin/components/features/entries/fields/text/CodeMirrorEditor"
+  ).then(m => ({ default: m.CodeMirrorEditor }))
+);
 
 // ============================================================
 // Form id (external submit hooks may still reference it).
@@ -367,34 +382,6 @@ export function templateToFormValues(
     })),
   };
 }
-
-// ============================================================
-// HTML syntax highlighter (Prism)
-// ============================================================
-
-function highlightHtml(code: string): string {
-  try {
-    if (Prism?.languages?.markup) {
-      return Prism.highlight(code, Prism.languages.markup, "markup");
-    }
-    return escapeHtmlValue(code);
-  } catch {
-    return escapeHtmlValue(code);
-  }
-}
-
-const PRISM_THEME_CSS = `
-.adminapp .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(220 38 38); }
-.adminapp .html-code-editor .token.attr-name { color: rgb(124 58 237); }
-.adminapp .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(22 101 52); }
-.adminapp .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(107 114 128); font-style: italic; }
-.adminapp .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(75 85 99); }
-.adminapp .dark .html-code-editor :is(.token.tag, .token.keyword) { color: rgb(252 165 165); }
-.adminapp .dark .html-code-editor .token.attr-name { color: rgb(196 181 253); }
-.adminapp .dark .html-code-editor :is(.token.attr-value, .token.string) { color: rgb(134 239 172); }
-.adminapp .dark .html-code-editor :is(.token.comment, .token.prolog, .token.doctype, .token.cdata) { color: rgb(156 163 175); font-style: italic; }
-.adminapp .dark .html-code-editor :is(.token.punctuation, .token.operator) { color: rgb(209 213 219); }
-`;
 
 // ============================================================
 // Small UI: segmented control
@@ -1316,6 +1303,8 @@ export function EmailTemplateForm({
   const isEdit = mode === "edit";
   const slugTouchedRef = useRef(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);
+  const htmlEditorViewRef = useRef<EditorView | null>(null);
+  const { resolvedTheme } = useTheme();
 
   const [railTab, setRailTab] = useState<RailTab>("variables");
   const [railOpen, setRailOpen] = useState(true);
@@ -1395,6 +1384,22 @@ export function EmailTemplateForm({
       const fieldName =
         editorTab === "html" ? "htmlContent" : "plainTextContent";
       const current = form.getValues(fieldName) ?? "";
+
+      // The HTML tab is CodeMirror, which owns its document and has no
+      // textarea to read a caret from. Dispatching the insert lets it update
+      // the document and the cursor together; onChange then carries the new
+      // value back to the form.
+      const view = htmlEditorViewRef.current;
+      if (editorTab === "html" && view) {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: token },
+          selection: { anchor: from + token.length },
+        });
+        view.focus();
+        return;
+      }
+
       const ta = editorWrapRef.current?.querySelector("textarea");
       if (!ta) {
         form.setValue(fieldName, current + token, {
@@ -1520,7 +1525,6 @@ export function EmailTemplateForm({
 
   return (
     <Form {...form}>
-      <style>{PRISM_THEME_CSS}</style>
       <form
         id={EMAIL_TEMPLATE_FORM_ID}
         onSubmit={e => {
@@ -1754,21 +1758,30 @@ export function EmailTemplateForm({
                   control={form.control}
                   name="htmlContent"
                   render={({ field }) => (
-                    <Editor
-                      value={field.value ?? ""}
-                      onValueChange={val => {
-                        if (!isPending) field.onChange(val);
-                      }}
-                      highlight={highlightHtml}
-                      padding={14}
-                      tabSize={2}
-                      insertSpaces
-                      textareaClassName="outline-none"
-                      placeholder={
-                        "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
+                    <Suspense
+                      fallback={
+                        <div className="min-h-[380px] w-full animate-pulse bg-muted/30" />
                       }
-                      className="min-h-full font-mono text-sm leading-relaxed text-foreground caret-foreground [&_textarea]:outline-none! [&_textarea]:ring-0! [&_textarea]:placeholder:text-muted-foreground [&_textarea]:placeholder:opacity-50"
-                    />
+                    >
+                      <CodeMirrorEditor
+                        value={field.value ?? ""}
+                        onChange={val => {
+                          if (!isPending) field.onChange(val);
+                        }}
+                        onCreateEditor={view => {
+                          htmlEditorViewRef.current = view;
+                        }}
+                        language="html"
+                        theme={resolvedTheme === "dark" ? "dark" : "light"}
+                        disabled={isPending}
+                        readOnly={false}
+                        minHeight={380}
+                        editorOptions={{ tabSize: 2 }}
+                        placeholder={
+                          "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
+                        }
+                      />
+                    </Suspense>
                   )}
                 />
               ) : (

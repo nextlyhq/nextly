@@ -25,7 +25,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="warning"
-        className="bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] uppercase tracking-wider font-bold"
+        className="bg-warning-500/10 text-warning-500 border-warning-500/20 text-[10px] uppercase tracking-wider font-bold"
       >
         Draft
       </Badge>
@@ -35,7 +35,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="success"
-        className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[10px] uppercase tracking-wider font-bold"
+        className="bg-success-500/10 text-success-500 border-success-500/20 text-[10px] uppercase tracking-wider font-bold"
       >
         Published
       </Badge>

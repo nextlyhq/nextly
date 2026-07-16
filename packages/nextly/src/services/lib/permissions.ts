@@ -41,9 +41,7 @@ function getAdapter(): DrizzleAdapter {
 }
 
 function getLogger(): Logger {
-  return container.has("logger")
-    ? container.get<Logger>("logger")
-    : console;
+  return container.has("logger") ? container.get<Logger>("logger") : console;
 }
 
 export type PermissionCheck = { action: string; resource: string };
@@ -249,27 +247,17 @@ class PermissionChecker {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roleInherits } = this.t as any;
 
-    // Traverse both ancestors (parents) and descendants (children)
+    // Descendants only. A role holds the permissions of the roles it inherits
+    // from, and those are recorded as its children: creating a role with base
+    // role B writes `role_inherits(parentRoleId = theNewRole, childRoleId =
+    // B)`. So the edge is directed, and following it upwards as well makes it
+    // symmetric — every role reachable from the user's own would count, and a
+    // base role would collect everything the roles built on top of it hold.
+    // Matches RoleInheritanceService.listDescendantRoles, which the rest of
+    // the RBAC services resolve through.
     while (queue.length > 0) {
       const batch = queue.splice(0, 50);
 
-      // Fetch parent roles (ancestors)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const parentRows = await (getDb() as any)
-        .select({ parentRoleId: roleInherits.parentRoleId })
-        .from(roleInherits)
-        .where(inArray(roleInherits.childRoleId, batch));
-
-      for (const r of parentRows as Array<{ parentRoleId: string }>) {
-        const parentRoleId = String(r.parentRoleId);
-        if (!visited.has(parentRoleId)) {
-          visited.add(parentRoleId);
-          all.add(parentRoleId);
-          queue.push(parentRoleId);
-        }
-      }
-
-      // Fetch child roles (descendants)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const childRows = await (getDb() as any)
         .select({ childRoleId: roleInherits.childRoleId })

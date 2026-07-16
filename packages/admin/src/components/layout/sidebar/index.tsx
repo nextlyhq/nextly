@@ -490,7 +490,7 @@ const sidebarMenuButtonVariants = cva(
       variant: {
         default: "hover-unified",
         outline:
-          "bg-background shadow-[0_0_0_1px_var(--sidebar-border)] hover-unified hover:shadow-[0_0_0_1px_var(--sidebar-accent)]",
+          "bg-background shadow-[0_0_0_1px_var(--nx-sidebar-border)] hover-unified hover:shadow-[0_0_0_1px_var(--nx-sidebar-accent)]",
       },
       size: {
         default: "h-8 text-sm",

@@ -322,7 +322,7 @@ export function UserFormFields({
                     </p>
                     {showVerificationGateNote && (
                       <p
-                        className="text-xs text-amber-700 dark:text-amber-400 mt-2"
+                        className="text-xs text-warning-700 dark:text-warning-400 mt-2"
                         role="note"
                       >
                         Note: the account is active, but the user will need to

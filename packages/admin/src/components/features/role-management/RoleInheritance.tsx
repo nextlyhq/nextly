@@ -5,12 +5,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import type { UseFormReturn } from "react-hook-form";
+import { useRef } from "react";
+import { useWatch, type UseFormReturn } from "react-hook-form";
 
-import { Check as CheckIcon } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import {
-  FormDescription,
+  FormControl,
   FormField,
   FormItem,
   FormLabel,
@@ -25,253 +25,177 @@ import { roleApi } from "@admin/services/roleApi";
  */
 const NONE_VALUE = "__none__" as const;
 
-/**
- * Clear all base roles and reset permissions to user-selected only
- */
-function clearAllBaseRoles(
-  form: UseFormReturn<RoleFormValuesType>,
-  currentPermissions: string[],
-  lockedPermissionIds: string[],
-  setLockedPermissionIds: (ids: string[]) => void,
-  setSelectedBaseRoleIds: (ids: string[]) => void,
-  setRolePermissionsMap: (map: Record<string, string[]>) => void
-) {
-  const userExtras = currentPermissions.filter(
-    id => !lockedPermissionIds.includes(id)
-  );
-  setLockedPermissionIds([]);
-  setSelectedBaseRoleIds([]);
-  setRolePermissionsMap({});
-  form.setValue("permissions", userExtras, { shouldDirty: true });
-}
-
-/**
- * Deselect a base role and recompute locked permissions
- *
- * When a base role is deselected, we need to:
- * 1. Remove it from the selected base roles list
- * 2. Recompute locked permissions from remaining base roles
- * 3. Update form permissions to keep user-added + newly locked permissions
- */
-function deselectBaseRole(
-  roleId: string,
-  form: UseFormReturn<RoleFormValuesType>,
-  selectedBaseRoleIds: string[],
-  rolePermissionsMap: Record<string, string[]>,
-  lockedPermissionIds: string[],
-  setSelectedBaseRoleIds: (ids: string[]) => void,
-  setLockedPermissionIds: (ids: string[]) => void
-) {
-  const nextIds = selectedBaseRoleIds.filter(id => id !== roleId);
-
-  // Recompute locked permissions as the union of remaining base roles
-  const union = new Set<string>();
-  nextIds.forEach(id => {
-    const perms = rolePermissionsMap[id] || [];
-    perms.forEach(p => union.add(p));
-  });
-  const newLocked = Array.from(union);
-
-  setSelectedBaseRoleIds(nextIds);
-  setLockedPermissionIds(newLocked);
-
-  const current = form.getValues("permissions") || [];
-  // Get permissions the user manually added (not inherited from any base role)
-  // We use the OLD lockedPermissionIds to identify what was inherited before deselection
-  const userExtras = current.filter(id => !lockedPermissionIds.includes(id));
-  // Combine user-added permissions with the new locked set (from remaining base roles)
-  const nextPermissions = Array.from(new Set([...userExtras, ...newLocked]));
-
-  form.setValue("permissions", nextPermissions, { shouldDirty: true });
-}
-
-/**
- * Select a new base role and add its permissions to locked set
- */
-async function selectBaseRole(
-  roleId: string,
-  form: UseFormReturn<RoleFormValuesType>,
-  selectedBaseRoleIds: string[],
-  rolePermissionsMap: Record<string, string[]>,
-  lockedPermissionIds: string[],
-  setSelectedBaseRoleIds: (ids: string[]) => void,
-  setRolePermissionsMap: (map: Record<string, string[]>) => void,
-  setLockedPermissionIds: (ids: string[]) => void,
-  allRoles: Array<{ id: string; name: string; permissions: string[] }>
-): Promise<void> {
-  const selected = allRoles.find(r => r.id === roleId);
-
-  try {
-    // Fetch fresh permissions for the selected role to ensure we have the latest data
-    const r = await roleApi.getRoleById(roleId);
-    const permissions = normalizePermissions(r.permissions);
-
-    setRolePermissionsMap({
-      ...rolePermissionsMap,
-      [roleId]: permissions,
-    });
-
-    // Update locked permissions to include newly inherited ones
-    const newLocked = Array.from(
-      new Set([...lockedPermissionIds, ...permissions])
-    );
-    setLockedPermissionIds(newLocked);
-
-    // Keep user-added permissions and add new inherited ones
-    const current = form.getValues("permissions") || [];
-    const userExtras = current.filter(id => !lockedPermissionIds.includes(id));
-    const merged = Array.from(new Set([...userExtras, ...newLocked]));
-
-    form.setValue("permissions", merged, { shouldDirty: true });
-    setSelectedBaseRoleIds([...selectedBaseRoleIds, roleId]);
-  } catch {
-    toast.error(
-      `Failed to load permissions for role ${selected?.name || roleId}`
-    );
-  }
-}
-
 interface RoleInheritanceProps {
   form: UseFormReturn<RoleFormValuesType>;
   allRoles: Array<{ id: string; name: string; permissions: string[] }>;
   selectedBaseRoleIds: string[];
   setSelectedBaseRoleIds: (ids: string[]) => void;
-  rolePermissionsMap: Record<string, string[]>;
   setRolePermissionsMap: (map: Record<string, string[]>) => void;
   lockedPermissionIds: string[];
   setLockedPermissionIds: (ids: string[]) => void;
 }
 
 /**
- * RoleInheritance Component
+ * Where a role starts: an existing role it takes its permissions from, plus
+ * whatever is ticked on top.
  *
- * Handles base role selection and inherited permissions management.
- * When a role is selected as a base role, its permissions are automatically
- * added to the current role and locked (cannot be removed).
+ * One base, not several. A role built on one other role can be read in a
+ * sentence, which is the only reason inheritance is safe to have here at all —
+ * resolving it is otherwise invisible, and invisible resolution is why the
+ * comparable systems avoid inheritance entirely and compose visible bundles
+ * instead. Several bases, each contributing some unnameable part of the
+ * result, is the thing they are avoiding.
  *
- * Features:
- * - Multi-select base roles
- * - Automatic permission inheritance
- * - Permission locking for inherited permissions
- * - Visual indication of selected roles with checkmarks
+ * Inherited permissions are locked: they come from the base, so the way to
+ * remove one is to change the base rather than to untick it here and produce a
+ * role whose name no longer describes it.
  */
 export function RoleInheritance({
   form,
   allRoles,
   selectedBaseRoleIds,
   setSelectedBaseRoleIds,
-  rolePermissionsMap,
   setRolePermissionsMap,
   lockedPermissionIds,
   setLockedPermissionIds,
 }: RoleInheritanceProps) {
-  // Only show if there are other roles available
+  // Subscribed, not sampled. `getValues` reads once per render and nothing
+  // above this component renders on a permission change — the permission
+  // matrix is its own controller, and the only form state anyone here
+  // subscribes to is `isDirty`, which flips once and never again. So a sampled
+  // read went stale after the first tick: the summary below kept reporting the
+  // count from that first render, and changing the base afterwards dropped
+  // every permission ticked since.
+  const watchedPermissions = useWatch({
+    control: form.control,
+    name: "permissions",
+  });
+
+  // Only rendered when a base can be chosen — but after the hooks above, which
+  // must run on every render.
+  const selectedIds = watchedPermissions ?? [];
+
+  const baseRoleId = selectedBaseRoleIds[0];
+  const baseRole = allRoles.find(r => r.id === baseRoleId);
+
+  /** Permissions ticked on top of whatever the base already grants. */
+  const extras = selectedIds.filter(id => !lockedPermissionIds.includes(id));
+
+  // Only the newest selection may commit. Two selections in quick succession
+  // race, and the loser landing last would restore the base the user just
+  // moved away from — along with its locks and permissions.
+  const selectionRef = useRef(0);
+
+  const clearBase = () => {
+    selectionRef.current += 1;
+    setLockedPermissionIds([]);
+    setSelectedBaseRoleIds([]);
+    setRolePermissionsMap({});
+    form.setValue("permissions", extras, { shouldDirty: true });
+  };
+
+  const chooseBase = async (roleId: string) => {
+    const selection = ++selectionRef.current;
+
+    try {
+      // Read the base's permissions now rather than trusting the list, which
+      // was loaded when the page was.
+      const fresh = await roleApi.getRoleById(roleId);
+      if (selection !== selectionRef.current) return;
+
+      const inherited = normalizePermissions(fresh.permissions);
+
+      setRolePermissionsMap({ [roleId]: inherited });
+      setLockedPermissionIds(inherited);
+      setSelectedBaseRoleIds([roleId]);
+
+      // Replaces, not merges: one base means the previous base's permissions
+      // leave with it, while anything ticked by hand stays ticked.
+      form.setValue(
+        "permissions",
+        Array.from(new Set([...extras, ...inherited])),
+        {
+          shouldDirty: true,
+        }
+      );
+    } catch {
+      if (selection !== selectionRef.current) return;
+      const name = allRoles.find(r => r.id === roleId)?.name ?? roleId;
+      toast.error(`Failed to load permissions for role ${name}`);
+    }
+  };
+
+  const handleSelection = async (value: string) => {
+    if (!value || value === NONE_VALUE) {
+      clearBase();
+      return;
+    }
+    if (value === baseRoleId) return;
+    await chooseBase(value);
+  };
+
   if (allRoles.length === 0) {
     return null;
   }
-
-  const handleRoleSelection = async (val: string) => {
-    const value = val === NONE_VALUE || !val ? undefined : val;
-
-    // Handle deselection (None selected)
-    if (!value) {
-      const current = form.getValues("permissions") || [];
-      clearAllBaseRoles(
-        form,
-        current,
-        lockedPermissionIds,
-        setLockedPermissionIds,
-        setSelectedBaseRoleIds,
-        setRolePermissionsMap
-      );
-      return;
-    }
-
-    // Check if role is already selected (toggle off)
-    const alreadySelected = selectedBaseRoleIds.includes(value);
-
-    if (alreadySelected) {
-      deselectBaseRole(
-        value,
-        form,
-        selectedBaseRoleIds,
-        rolePermissionsMap,
-        lockedPermissionIds,
-        setSelectedBaseRoleIds,
-        setLockedPermissionIds
-      );
-      return;
-    }
-
-    // Add new role to selection
-    await selectBaseRole(
-      value,
-      form,
-      selectedBaseRoleIds,
-      rolePermissionsMap,
-      lockedPermissionIds,
-      setSelectedBaseRoleIds,
-      setRolePermissionsMap,
-      setLockedPermissionIds,
-      allRoles
-    );
-  };
 
   return (
     <FormField
       control={form.control}
       name="baseRoleId"
       render={() => (
-        <FormItem className={allRoles.length === 0 ? "hidden" : ""}>
-          <FormLabel>Base Role</FormLabel>
+        <FormItem>
+          <FormLabel>Start from</FormLabel>
+          {/*
+            Undefined rather than the sentinel when there is no base: the
+            trigger only renders an item's text for a value whose item is
+            mounted, and items are not mounted while the list is closed. Left
+            as the sentinel, the closed trigger reads as blank.
+          */}
           <Select
-            value=""
-            disabled={allRoles.length === 0}
+            value={baseRoleId}
             onValueChange={value => {
-              void handleRoleSelection(value);
+              void handleSelection(value);
             }}
           >
-            <SelectTrigger>
-              {selectedBaseRoleIds.length > 0 ? (
-                <span>
-                  {selectedBaseRoleIds
-                    .map(id => allRoles.find(r => r.id === id)?.name)
-                    .filter(Boolean)
-                    .join(", ")}
-                </span>
-              ) : (
-                <SelectValue placeholder="Select base role (optional)" />
-              )}
-              {selectedBaseRoleIds.length > 0 && (
-                <span className="ml-1 text-sm text-muted-foreground">
-                  ({selectedBaseRoleIds.length}{" "}
-                  {selectedBaseRoleIds.length === 1 ? "role" : "roles"})
-                </span>
-              )}
-            </SelectTrigger>
+            {/*
+              Wrapped so the trigger takes the form item's id: the label points
+              at that id, and without it the combobox announces with no name.
+            */}
+            <FormControl>
+              <SelectTrigger>
+                <SelectValue placeholder="Nothing — choose every permission by hand" />
+              </SelectTrigger>
+            </FormControl>
             <SelectContent>
-              <SelectItem value={NONE_VALUE}>None</SelectItem>
+              <SelectItem value={NONE_VALUE}>
+                Nothing — choose every permission by hand
+              </SelectItem>
               {allRoles.map(roleOpt => (
-                <SelectItem
-                  key={roleOpt.id}
-                  value={roleOpt.id}
-                  className="relative pr-2"
-                >
-                  {selectedBaseRoleIds.includes(roleOpt.id) && (
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2">
-                      <CheckIcon className="h-4 w-4" />
-                    </span>
-                  )}
-                  <span>{roleOpt.name}</span>
+                <SelectItem key={roleOpt.id} value={roleOpt.id}>
+                  {roleOpt.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <FormDescription>
-            {allRoles.length === 0
-              ? "No other roles available to inherit from yet. Create this role first."
-              : "Inherit permissions from existing role(s). Inherited permissions are locked."}
-          </FormDescription>
+          {/*
+            The resolved effect, in a sentence, and visible rather than behind
+            a hover. Inheritance resolves where nobody can see it, so saying
+            the outcome plainly is the thing that makes it safe to have here at
+            all — a summary you have to discover is not one anybody reads.
+            FormDescription would put this in a tooltip, which is why it is
+            not used.
+          */}
+          <p className="text-sm text-muted-foreground">
+            {baseRole
+              ? `This role can do everything ${baseRole.name} can${
+                  extras.length > 0
+                    ? `, plus ${extras.length} permission${
+                        extras.length === 1 ? "" : "s"
+                      } ticked below`
+                    : ""
+                }. Inherited permissions are locked; change the base to remove them.`
+              : "Pick a role to build on, or leave this alone and choose every permission yourself."}
+          </p>
           <FormMessage />
         </FormItem>
       )}

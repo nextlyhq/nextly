@@ -475,7 +475,8 @@ export function MediaUploadDropzone({
     reject: "border-2 border-dashed border-destructive",
     uploading: "border-2 border-dashed border-primary/80",
     error: "border-2 border-dashed border-destructive",
-    success: "border-2 border-dashed border-green-500 dark:border-green-400",
+    success:
+      "border-2 border-dashed border-success-500 dark:border-success-400",
   };
 
   // Background styles — use CSS variables (bg-card) so both light and dark modes resolve correctly.
@@ -486,7 +487,7 @@ export function MediaUploadDropzone({
     reject: "bg-destructive/5 dark:bg-destructive/10",
     uploading: "bg-card",
     error: "bg-destructive/5 dark:bg-destructive/10",
-    success: "bg-green-500/5 dark:bg-green-500/10",
+    success: "bg-success-500/5 dark:bg-success-500/10",
   };
 
   // Icon component based on state
@@ -506,7 +507,7 @@ export function MediaUploadDropzone({
     reject: "text-destructive",
     uploading: "text-primary",
     error: "text-destructive",
-    success: "text-green-500 dark:text-green-400",
+    success: "text-success-500 dark:text-success-400",
   };
 
   if (isCollapsed) return null;
@@ -567,7 +568,8 @@ export function MediaUploadDropzone({
             visualState === "uploading" && "bg-primary/15 dark:bg-primary/20",
             (visualState === "reject" || visualState === "error") &&
               "bg-destructive/15 dark:bg-destructive/20",
-            visualState === "success" && "bg-green-500/15 dark:bg-green-500/20"
+            visualState === "success" &&
+              "bg-success-500/15 dark:bg-success-500/20"
           )}
         >
           <IconComponent
@@ -657,7 +659,7 @@ export function MediaUploadDropzone({
                   <Loader2 className="h-4 w-4 animate-spin text-primary-500" />
                 )}
                 {item.status === "success" && (
-                  <Check className="h-4 w-4 text-green-500" />
+                  <Check className="h-4 w-4 text-success-500" />
                 )}
                 {item.status === "error" && (
                   <X className="h-4 w-4 text-destructive" />

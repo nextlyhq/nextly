@@ -34,11 +34,11 @@ export function PasswordStrengthIndicator({
         className={cn(
           "p-3 rounded-none  border border-border transition-colors duration-100",
           {
-            "bg-red-500/5 border-red-500/20 text-red-900 dark:text-red-200":
+            "bg-destructive-500/5 border-destructive-500/20 text-destructive-900 dark:text-destructive-200":
               strength.score <= 2,
-            "bg-amber-500/5 border-amber-500/20 text-amber-900 dark:text-amber-200":
+            "bg-warning-500/5 border-warning-500/20 text-warning-900 dark:text-warning-200":
               strength.score > 2 && strength.score <= 4,
-            "bg-green-500/5 border-green-500/20 text-green-900 dark:text-green-200":
+            "bg-success-500/5 border-success-500/20 text-success-900 dark:text-success-200":
               strength.score > 4,
           }
         )}
@@ -58,12 +58,13 @@ export function PasswordStrengthIndicator({
                 <div
                   key={i}
                   className={cn("flex-1", {
-                    "bg-red-500": strength.score <= 2 && i <= strength.score,
-                    "bg-amber-500":
+                    "bg-destructive-500":
+                      strength.score <= 2 && i <= strength.score,
+                    "bg-warning-500":
                       strength.score > 2 &&
                       strength.score <= 4 &&
                       i <= strength.score,
-                    "bg-green-500": strength.score > 4 && i <= strength.score,
+                    "bg-success-500": strength.score > 4 && i <= strength.score,
                     "bg-muted": i > strength.score,
                   })}
                 />

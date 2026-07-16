@@ -40,7 +40,7 @@ import { EntryEmptyState } from "./EntryEmptyState";
 import { buildEntryWhereFilter } from "./entryFilters";
 import {
   EntryTable,
-  type EntryTablePagination,
+  type TablePaginationState,
   type EntryTableRef,
 } from "./EntryTable";
 import {
@@ -72,10 +72,10 @@ export interface EntryListProps {
  * (canonical wire is 1-based per spec §5.1; the table component
  * uses a 0-based React index internally).
  */
-function toTablePagination(
+function toTablePaginationState(
   response: ListResponse<Entry> | undefined,
   limit: number
-): EntryTablePagination {
+): TablePaginationState {
   if (!response) {
     return {
       page: 0,
@@ -351,7 +351,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   );
 
   const entries = entriesResponse?.items ?? [];
-  const pagination = toTablePagination(entriesResponse, limit);
+  const pagination = toTablePaginationState(entriesResponse, limit);
 
   // ---------------------------------------------------------------------------
   // Handlers

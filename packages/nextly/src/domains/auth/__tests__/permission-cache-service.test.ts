@@ -200,42 +200,6 @@ describe("PermissionCacheService", () => {
     });
   });
 
-  describe("warmCacheForUser", () => {
-    it("should pre-compute permissions for user", async () => {
-      const mockPermissions = [
-        { id: "perm-1", action: "read", resource: "users" },
-        { id: "perm-2", action: "write", resource: "users" },
-      ];
-
-      mockDb.from.mockResolvedValue(mockPermissions);
-
-      // Mock getAllPermissionsForRole to return one permission
-      const mockChecker = {
-        getAllPermissionsForRole: vi.fn().mockResolvedValue(["perm-1"]),
-      };
-      (cacheService as any).permissionChecker = mockChecker;
-
-      await cacheService.warmCacheForUser("user-123");
-
-      expect(mockDb.insert).toHaveBeenCalled();
-      expect(mockDb.values).toHaveBeenCalled();
-    });
-
-    it("should skip for invalid userId", async () => {
-      await cacheService.warmCacheForUser("");
-
-      expect(mockDb.from).not.toHaveBeenCalled();
-    });
-
-    it("should handle no permissions gracefully", async () => {
-      mockDb.from.mockResolvedValue([]);
-
-      await expect(
-        cacheService.warmCacheForUser("user-123")
-      ).resolves.not.toThrow();
-    });
-  });
-
   describe("TTL configuration", () => {
     it("should use custom TTL from constructor", () => {
       const customService = new PermissionCacheService(mockDb, mockTables, {

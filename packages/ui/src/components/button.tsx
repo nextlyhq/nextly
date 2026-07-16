@@ -41,15 +41,15 @@ const buttonVariants = cva(
         link: "text-primary border border-transparent underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-[var(--control-height)] px-6 py-2",
-        sm: "h-[var(--control-height-md)] px-4 text-[13px]",
-        md: "h-[var(--control-height)] px-6 text-sm",
-        lg: "h-[var(--control-height-lg)] px-8 text-base",
-        icon: "h-[var(--control-height)] w-[var(--control-height)] p-0",
+        default: "h-[var(--nx-control-height)] px-6 py-2",
+        sm: "h-[var(--nx-control-height-md)] px-4 text-[13px]",
+        md: "h-[var(--nx-control-height)] px-6 text-sm",
+        lg: "h-[var(--nx-control-height-lg)] px-8 text-base",
+        icon: "h-[var(--nx-control-height)] w-[var(--nx-control-height)] p-0",
         "icon-sm":
-          "h-[var(--control-height-md)] w-[var(--control-height-md)] p-0",
+          "h-[var(--nx-control-height-md)] w-[var(--nx-control-height-md)] p-0",
         "icon-lg":
-          "h-[var(--control-height-lg)] w-[var(--control-height-lg)] p-0",
+          "h-[var(--nx-control-height-lg)] w-[var(--nx-control-height-lg)] p-0",
       },
     },
     defaultVariants: {

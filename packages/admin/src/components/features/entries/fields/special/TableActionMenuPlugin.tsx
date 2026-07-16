@@ -46,8 +46,8 @@ const menuStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "2px",
   padding: "3px 4px",
-  backgroundColor: "var(--background)",
-  border: "1px solid var(--border)",
+  backgroundColor: "var(--nx-background)",
+  border: "1px solid var(--nx-border)",
   borderRadius: "6px",
   boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
   fontSize: "12px",
@@ -64,7 +64,7 @@ const actionBtnStyle: React.CSSProperties = {
   background: "transparent",
   borderRadius: "4px",
   cursor: "pointer",
-  color: "var(--muted-foreground)",
+  color: "var(--nx-muted-foreground)",
   fontSize: "11px",
   fontFamily: "inherit",
   whiteSpace: "nowrap",
@@ -78,7 +78,7 @@ const destructiveBtnStyle: React.CSSProperties = {
 const separatorStyle: React.CSSProperties = {
   width: "1px",
   height: "16px",
-  backgroundColor: "var(--border)",
+  backgroundColor: "var(--nx-border)",
   margin: "0 2px",
   flexShrink: 0,
 };
@@ -107,18 +107,18 @@ function ActionButton({
       onMouseEnter={e => {
         if (destructive) {
           e.currentTarget.style.backgroundColor =
-            "color-mix(in srgb, var(--destructive) 10%, transparent)";
-          e.currentTarget.style.color = "var(--destructive)";
+            "color-mix(in srgb, var(--nx-destructive) 10%, transparent)";
+          e.currentTarget.style.color = "var(--nx-destructive)";
         } else {
-          e.currentTarget.style.backgroundColor = "var(--accent)";
-          e.currentTarget.style.color = "var(--accent-foreground)";
+          e.currentTarget.style.backgroundColor = "var(--nx-accent)";
+          e.currentTarget.style.color = "var(--nx-accent-foreground)";
         }
       }}
       onMouseLeave={e => {
         e.currentTarget.style.backgroundColor = "transparent";
         e.currentTarget.style.color = destructive
-          ? "var(--destructive)"
-          : "var(--muted-foreground)";
+          ? "var(--nx-destructive)"
+          : "var(--nx-muted-foreground)";
       }}
     >
       {label}
@@ -140,7 +140,7 @@ export function TableActionMenuPlugin({
   const [editor] = useLexicalComposerContext();
   const [isInTable, setIsInTable] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
-  // Portal into the admin's scoped root so the `.adminapp` CSS variables the menu
+  // Portal into the admin's scoped root so the `.nextly-admin` CSS variables the menu
   // styles rely on resolve; `document.body` is outside that scope.
   const portalContainer = usePortalContainer();
 

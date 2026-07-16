@@ -634,9 +634,9 @@ function AdvancedTab({ node }: { node: BlockNode }) {
         className="nx-pb-icon-btn"
         aria-label="Delete block"
         style={{
-          color: "var(--destructive)",
+          color: "var(--nx-destructive)",
           borderColor:
-            "color-mix(in srgb, var(--destructive) 40%, transparent)",
+            "color-mix(in srgb, var(--nx-destructive) 40%, transparent)",
         }}
         onClick={() => dispatch({ type: "REMOVE", id: node.id })}
       >

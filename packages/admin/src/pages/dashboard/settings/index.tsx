@@ -9,7 +9,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { Save } from "lucide-react";
 import type React from "react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
@@ -224,12 +223,7 @@ const SettingsGeneralPage: React.FC = () => {
         >
           <SettingsLayout
             actions={
-              <Button
-                type="submit"
-                disabled={isPending || isLoading}
-                className="flex items-center gap-2"
-              >
-                <Save className="h-4 w-4" />
+              <Button type="submit" disabled={isPending || isLoading}>
                 {isPending ? "Saving…" : "Save Changes"}
               </Button>
             }

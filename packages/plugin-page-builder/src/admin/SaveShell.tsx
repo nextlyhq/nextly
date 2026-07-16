@@ -103,7 +103,7 @@ export function SaveShell({ props }: { props: CustomEditViewProps }) {
         </Button>
       </div>
       {error ? (
-        <p style={{ color: "var(--destructive)", width: "100%", margin: 0 }}>
+        <p style={{ color: "var(--nx-destructive)", width: "100%", margin: 0 }}>
           {error}
         </p>
       ) : null}

@@ -6,18 +6,6 @@
  */
 
 /**
- * BulkSelectCheckbox Component Props
- */
-export type BulkSelectCheckboxProps = {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  rowId: string;
-  rowLabel: string;
-  disabled?: boolean;
-  className?: string;
-};
-
-/**
  * BulkActionBar Component Props
  */
 export type BulkActionBarProps = {
@@ -32,28 +20,6 @@ export type BulkActionBarProps = {
   isTogglingStatus?: boolean;
   canDelete?: boolean;
   deleteDisabledReason?: string;
-  className?: string;
-};
-
-/**
- * RoleAssignDialog Component Props
- */
-export type RoleAssignDialogProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  users: Array<{
-    id: string;
-    name: string;
-    currentRole?: string;
-  }>;
-  role: {
-    id: string;
-    name: string;
-    icon?: string;
-  };
-  onConfirm: () => void;
-  isLoading?: boolean;
-  error?: string;
   className?: string;
 };
 

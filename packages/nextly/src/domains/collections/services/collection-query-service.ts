@@ -546,6 +546,13 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             search: params.search,
             where: cleanedWhere, // Use cleaned where (without geo operators)
+            // The count has to answer the same question as the rows beside it.
+            // Both resolve the Draft/Published filter from these two, so
+            // leaving them out counts published-only for every caller: a
+            // trusted reader gets its drafts listed but not counted, and
+            // totalPages then hides the tail of its own result set.
+            status: params.status,
+            overrideAccess: params.overrideAccess,
           }),
         ]);
 

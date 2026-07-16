@@ -12,11 +12,12 @@
  * @module components/ui/table/data-table/DataTable
  */
 
-import { TablePagination, TableSearch, Button } from "@nextlyhq/ui";
+import { TableSearch, Button } from "@nextlyhq/ui";
 import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { Pagination } from "@admin/components/shared/pagination";
 import { useServerTable } from "@admin/hooks/useServerTable";
 
 import { DataTableView } from "./DataTableView";
@@ -259,27 +260,38 @@ export function DataTable<Row extends object>({
         </div>
       )}
 
-      <DataTableView<Row>
-        columns={columns}
-        rows={rows}
-        getRowId={getRowId}
-        rowHref={rowHref}
-        onRowClick={onRowClick}
-        primaryColumn={primaryColumn}
-        selection={selection}
-        rowActions={rowActions}
-        registryKey={registryKey}
-        loading={loading}
-        error={error}
-        emptyMessage={emptyMessage}
-      />
+      {/* One bordered surface holds the table and its pagination; the
+          pagination supplies its own top border as the divider. Bordering them
+          separately would double the outline and open a gap between them. */}
+      <div className="rounded-none border border-border bg-card text-card-foreground">
+        <DataTableView<Row>
+          columns={columns}
+          rows={rows}
+          getRowId={getRowId}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          primaryColumn={primaryColumn}
+          selection={selection}
+          rowActions={rowActions}
+          registryKey={registryKey}
+          loading={loading}
+          error={error}
+          emptyMessage={emptyMessage}
+          bordered={false}
+        />
 
-      <div className="rounded-none border border-border bg-card p-4">
-        <TablePagination
-          meta={paginationMeta}
+        {/* paginationMeta.page is the 1-indexed wire value; the controls and
+            handlePageChange both work in 0-indexed page numbers. */}
+        <Pagination
+          currentPage={paginationMeta.page - 1}
+          totalPages={paginationMeta.totalPages}
+          totalItems={paginationMeta.total}
+          pageSize={paginationMeta.limit}
+          pageSizeOptions={paginationConfig.pageSizeOptions}
+          showPageSizeSelector={paginationConfig.showPageSizeSelector}
+          maxVisiblePages={paginationConfig.maxVisiblePages}
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
-          config={paginationConfig}
           isLoading={loading}
         />
       </div>

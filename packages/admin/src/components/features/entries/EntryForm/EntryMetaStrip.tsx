@@ -161,7 +161,10 @@ function SlugInlineEditor({
         </button>
       </div>
       {errorMsg && (
-        <span className="text-[10px] text-red-600 shrink-0" role="alert">
+        <span
+          className="text-[10px] text-destructive-600 shrink-0"
+          role="alert"
+        >
           {errorMsg}
         </span>
       )}

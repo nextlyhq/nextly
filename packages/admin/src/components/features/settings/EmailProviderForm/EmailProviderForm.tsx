@@ -250,7 +250,7 @@ export function EmailProviderForm({
                   description={
                     selectedType === "resend" ? (
                       <span className="flex items-start gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
                           Must be an email from a{" "}
                           <strong>verified domain</strong> in your Resend
@@ -263,7 +263,7 @@ export function EmailProviderForm({
                       </span>
                     ) : selectedType === "sendlayer" ? (
                       <span className="flex items-start gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
                           Must be an email from a{" "}
                           <strong>verified domain</strong> in your SendLayer

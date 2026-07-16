@@ -19,7 +19,7 @@ import RoleTable from "./roles/components/RoleTable";
  *
  * ## Features
  * - Page header with title, description, "Add Role" button
- * - RoleTable component with ResponsiveTable (mobile card view, desktop table view)
+ * - RoleTable component with DataTableView (mobile card view, desktop table view)
  * - Consistent spacing via PageContainer
  * - Mobile responsive layout
  *
@@ -27,7 +27,7 @@ import RoleTable from "./roles/components/RoleTable";
  * - PageContainer wrapper for consistent spacing (16px → 24px → 32px)
  * - Badge variants for role type and status
  * - TanStack Query integration (automatic caching, loading/error states)
- * - ResponsiveTable for mobile optimization
+ * - DataTableView container queries for mobile optimization
  *
  * @example
  * ```tsx

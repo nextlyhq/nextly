@@ -758,7 +758,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
       {field.minRows !== undefined &&
         items.length < field.minRows &&
         items.length > 0 && (
-          <p className="text-sm text-amber-600 dark:text-amber-500">
+          <p className="text-sm text-warning-600 dark:text-warning-500">
             Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
             Currently have {items.length}.
           </p>
@@ -916,14 +916,14 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-none  border border-border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 p-4",
+        "rounded-none  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
         className
       )}
     >
-      <p className="text-sm text-amber-700 dark:text-amber-300">
+      <p className="text-sm text-warning-700 dark:text-warning-300">
         <strong>Component field:</strong> {field.name}
       </p>
-      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+      <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
         Schema data not available. Ensure the collection schema API returns
         enriched component fields.
       </p>

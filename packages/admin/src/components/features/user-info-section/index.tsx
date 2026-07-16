@@ -74,12 +74,14 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             onClick={() => {
               void logout();
             }}
-            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 mt-2 cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-destructive-400 hover:bg-destructive-500/10 hover:text-destructive-300 mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">
               <span>Log out</span>
-              <span className="text-xs text-red-400/80">End your session</span>
+              <span className="text-xs text-destructive-400/80">
+                End your session
+              </span>
             </div>
           </button>
         </div>
