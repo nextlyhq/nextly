@@ -126,8 +126,18 @@ test("a field the server accepts can be edited in the form", async ({
   await page.getByRole("textbox", { name: "Label" }).fill("Mobile Number");
   await page.getByRole("button", { name: /Update Field/i }).click();
 
-  // Saved, rather than blocked by a complaint about a name nobody can change.
+  // The redirect proves the submit was not blocked, which is what the original
+  // bug did — it never left the edit page. Reading the field back proves the
+  // stronger thing the redirect only implies: that the PATCH saved the label,
+  // rather than redirecting on a write that changed nothing.
   await expect(page).toHaveURL(/\/admin\/users\/fields$/, { timeout: 10_000 });
+
+  const list = await request.get("/admin/api/user-fields");
+  const payload = (await list.json()) as {
+    fields?: Array<{ name: string; label: string }>;
+  };
+  const saved = payload.fields?.find(f => f.name === "phoneNumber");
+  expect(saved?.label).toBe("Mobile Number");
 });
 
 test("the server refuses a rename, and says why", async ({ page, request }) => {
