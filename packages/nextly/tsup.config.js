@@ -55,6 +55,9 @@ const serverEntries = [
   "src/storage/index.ts",
   // Unified error system entry points
   "src/errors/index.ts",
+  // Field-type catalog subpath: pure serializable data, browser-safe —
+  // consumed by the admin's field pickers and by plugins.
+  "src/collections/fields/catalog.ts",
   "src/observability/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23
