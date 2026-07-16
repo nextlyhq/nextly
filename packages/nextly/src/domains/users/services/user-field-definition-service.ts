@@ -31,6 +31,10 @@ import type {
 } from "../../../schemas/user-field-definitions/types";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import {
+  checkUserFieldName,
+  checkUserFieldType,
+} from "../../../users/config/validate-user-config";
 
 // ============================================================
 // Drizzle Transaction Type
@@ -117,16 +121,97 @@ export class UserFieldDefinitionService extends BaseService {
   // ============================================================
 
   /**
+   * Reject a name that cannot back a `user_ext` column.
+   *
+   * A custom field's name becomes both a column identifier and a key on the
+   * user object, where it is assigned over the built-ins — so a field named
+   * `email` or `id` displaces the real one rather than sitting beside it.
+   * `defineConfig()` applies the same check to code-defined fields.
+   */
+  private assertUsableName(name: unknown): void {
+    const rejection = checkUserFieldName(name);
+    if (!rejection) return;
+
+    throw NextlyError.validation({
+      errors: [
+        { path: "name", code: rejection.code, message: rejection.message },
+      ],
+      logContext: { name },
+    });
+  }
+
+  /**
+   * Reject a type that has no `user_ext` column representation.
+   */
+  private assertUsableType(type: unknown): void {
+    const rejection = checkUserFieldType(type);
+    if (!rejection) return;
+
+    throw NextlyError.validation({
+      errors: [
+        { path: "type", code: rejection.code, message: rejection.message },
+      ],
+      logContext: { type },
+    });
+  }
+
+  /**
+   * Reject a change to an existing field's name or type.
+   *
+   * Both identify the backing `user_ext` column, and the schema reconciler
+   * only ever adds columns: a rename leaves the old column and its data
+   * stranded under the old name, and a type change leaves the column at its
+   * original type. Values echoed back unchanged are accepted so that clients
+   * can send a whole field back without special-casing these two keys.
+   */
+  private assertIdentityUnchanged(
+    existing: UserFieldDefinitionRecord,
+    data: UpdateUserFieldDefinitionInput
+  ): void {
+    if (data.name !== undefined && data.name !== existing.name) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "name",
+            code: "USER_FIELD_NAME_IMMUTABLE",
+            message:
+              "A field's name cannot be changed after it is created. Create a new field instead.",
+          },
+        ],
+        logContext: { id: existing.id, from: existing.name, to: data.name },
+      });
+    }
+
+    if (data.type !== undefined && data.type !== existing.type) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "type",
+            code: "USER_FIELD_TYPE_IMMUTABLE",
+            message:
+              "A field's type cannot be changed after it is created. Create a new field instead.",
+          },
+        ],
+        logContext: { id: existing.id, from: existing.type, to: data.type },
+      });
+    }
+  }
+
+  /**
    * Create a new user field definition.
    *
    * If `sortOrder` is not provided, it defaults to one higher than
    * the current maximum sort order (appending to the end).
    *
+   * @throws NextlyError(VALIDATION) when the name or type cannot back a column
    * @throws NextlyError(DUPLICATE) on unique constraint violation (duplicate name)
    */
   async createField(
     data: CreateUserFieldDefinitionInput
   ): Promise<UserFieldDefinitionRecord> {
+    this.assertUsableName(data.name);
+    this.assertUsableType(data.type);
+
     const id = randomUUID();
     const now = new Date();
 
@@ -231,6 +316,8 @@ export class UserFieldDefinitionService extends BaseService {
         logContext: { id, name: existing.name },
       });
     }
+
+    this.assertIdentityUnchanged(existing, data);
 
     const updateData: Record<string, unknown> = {
       updatedAt: new Date(),

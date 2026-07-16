@@ -28,8 +28,13 @@ export interface UserFieldFormValues {
 // ============================================================
 
 /**
- * Reserved user field names matching the backend RESERVED_USER_FIELD_NAMES.
+ * Reserved user field names mirroring the backend's RESERVED_USER_FIELD_NAMES.
  * Compared case-insensitively.
+ *
+ * Duplicated rather than imported: the canonical list lives in `nextly`, whose
+ * root entry point is server-only, and this schema runs in the browser. The
+ * copy exists to answer before a round trip — the server rejects a reserved
+ * name regardless, so the two drifting costs a worse message, not a hole.
  */
 const RESERVED_FIELD_NAMES = new Set([
   "id",
@@ -144,18 +149,37 @@ export function fieldToFormValues(
 // Zod Schema
 // ============================================================
 
+/**
+ * What this form generates for a new field: lowercase and underscores.
+ *
+ * Narrower than what a name may be. The server also accepts camelCase, which is
+ * what a `defineConfig()` field usually looks like. A house style for names the
+ * form invents, not a rule about names that already exist.
+ */
+const GENERATED_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+
 export function buildUserFieldSchema(mode: "create" | "edit") {
+  // Checked only while the form is inventing the name. In edit mode the input
+  // is disabled, the stored value is submitted back untouched, and the server
+  // refuses to change it regardless, so holding it to this form's house style
+  // rejects nothing anyone could fix. It only makes a field the server
+  // accepted, such as `phoneNumber`, impossible to relabel here.
+  const nameSchema =
+    mode === "create"
+      ? z
+          .string()
+          .min(1, "Field name is required")
+          .max(64)
+          .regex(
+            GENERATED_NAME_PATTERN,
+            "Must start with a letter and contain only lowercase letters, numbers, and underscores"
+          )
+      : z.string();
+
   return z
     .object({
       label: z.string().min(1, "Label is required").max(255),
-      name: z
-        .string()
-        .min(1, "Field name is required")
-        .max(64)
-        .regex(
-          /^[a-z][a-z0-9_]*$/,
-          "Must start with a letter and contain only lowercase letters, numbers, and underscores"
-        ),
+      name: nameSchema,
       type: z.enum([
         "text",
         "textarea",
@@ -179,7 +203,10 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
       isActive: z.boolean(),
     })
     .superRefine((data, ctx) => {
-      // Reserved name check (only in create mode since name is immutable in edit)
+      // Answers before a round trip; the server decides. Edit mode is exempt
+      // because the name is fixed once the field exists and is submitted back
+      // unchanged — a stored name that predates the server guard would
+      // otherwise fail here with no way to correct it from this form.
       if (
         mode === "create" &&
         RESERVED_FIELD_NAMES.has(data.name.toLowerCase())

@@ -43,7 +43,7 @@ export function registerUserServices(ctx: RegistrationContext): void {
             "userFieldDefinitionService"
           )
         : undefined;
-      return new UserExtSchemaService(dialect, fieldDefService);
+      return new UserExtSchemaService(dialect, fieldDefService, logger);
     }
   );
 
