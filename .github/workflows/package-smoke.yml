@@ -1,0 +1,165 @@
+name: Package smoke
+
+# Nightly proof that the published artifacts actually work: the tarballs
+# install into a clean project and import, and the scaffolder produces an app
+# that really installs and builds. publint and attw validate manifests and
+# types statically on every PR; this covers the runtime layer they cannot —
+# missing `files` entries, broken bins, template dependency drift, and
+# native-module (better-sqlite3) prebuilds across current Node LTS lines.
+#
+# Scheduled instead of per-PR: full installs take minutes, and this class of
+# drift moves slowly. A red night shows up as an issue, not a slower PR.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The failure reporter files an issue via `gh`.
+  issues: write
+
+jobs:
+  pack-and-consume:
+    name: Install packed tarballs in a clean project
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      # `pnpm pack` (not npm pack) so workspace:* ranges resolve to concrete
+      # versions in each tarball, exactly as `changeset publish` packs them.
+      # Private workspaces (e2e, shared configs, telemetry) are skipped by
+      # reading each manifest's `private` flag, so the set packed here always
+      # matches the set `changeset publish` would release.
+      - name: Pack all publishable packages
+        run: |
+          mkdir -p /tmp/tarballs
+          for dir in packages/*/; do
+            if node -e "process.exit(require('./${dir}package.json').private ? 0 : 1)"; then
+              continue
+            fi
+            (cd "$dir" && pnpm pack --pack-destination /tmp/tarballs)
+          done
+          ls -l /tmp/tarballs
+
+      # Install every tarball together in an empty project. Direct tarball
+      # specs win for the packages themselves; their pinned inter-deps
+      # resolve from the registry at the same lockstep version. This proves
+      # the packed artifacts are complete (files/exports/bins) and
+      # installable — the layer a monorepo install can never exercise.
+      - name: Install tarballs in a clean project
+        run: |
+          mkdir -p /tmp/consumer
+          cd /tmp/consumer
+          npm init -y > /dev/null
+          npm install /tmp/tarballs/*.tgz
+          npm ls --depth=0
+
+      - name: Import smoke
+        run: |
+          cd /tmp/consumer
+          node --input-type=module -e "
+            const nextly = await import('nextly');
+            if (!nextly || typeof nextly !== 'object') throw new Error('nextly import produced no module');
+            const sdk = await import('@nextlyhq/plugin-sdk');
+            if (!sdk || typeof sdk !== 'object') throw new Error('plugin-sdk import produced no module');
+            console.log('imports resolved:', Object.keys(nextly).length, 'nextly exports,', Object.keys(sdk).length, 'plugin-sdk exports');
+          "
+
+  scaffold-and-build:
+    name: Scaffold and build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Current LTS lines only; the interesting failure here is a
+      # better-sqlite3 prebuild/ABI gap on a Node line we claim to support.
+      matrix:
+        node: [22, 24]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI + core
+        run: pnpm turbo build --filter=create-nextly-app --filter=nextly
+
+      - name: Pack create-nextly-app
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      # Unlike the per-PR scaffold smoke (which passes --skip-install to stay
+      # fast), this runs the real install and a real production build of the
+      # generated app — the full end-to-end contract of the scaffolder.
+      - name: Scaffold with real install, then build
+        run: |
+          mkdir -p /tmp/scaffold-full
+          cd /tmp/scaffold-full
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --yes
+          cd smoke-app
+          npm run build
+
+  # A red nightly must surface without anyone watching the Actions tab.
+  report-failure:
+    name: File an issue on failure
+    needs: [pack-and-consume, scaffold-and-build]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-nightly-failure --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "Nightly package smoke failed again: $RUN_URL"
+          else
+            # printf keeps the multi-line body inside this YAML block scalar;
+            # a raw multi-line string here would dedent and break the file.
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nEither the packed tarballs no longer install/import in a clean project, or `create-nextly-app` no longer scaffolds an app that builds. See the run logs for the failing job.' "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Nightly package smoke is failing" \
+              --label ci-nightly-failure \
+              --body "$body"
+          fi
