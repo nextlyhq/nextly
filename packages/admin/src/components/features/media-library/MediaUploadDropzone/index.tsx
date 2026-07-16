@@ -590,8 +590,13 @@ export function MediaUploadDropzone({
   ]
     .filter(Boolean)
     .join(", ");
+  // The live denominator counts only rows that will actually upload;
+  // pre-rejected rows sit in the same queue but were never attempted.
+  const uploadableCount = uploadQueue.filter(
+    item => item.status !== "rejected"
+  ).length;
   const queueSummary = isUploading
-    ? `Uploading ${inProgressCount} of ${uploadQueue.length} files...`
+    ? `Uploading ${inProgressCount} of ${uploadableCount} files...`
     : settledSummary;
 
   return (
