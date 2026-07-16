@@ -462,10 +462,7 @@ export class CollectionMutationService extends BaseService {
       // Extract component field data for separate storage in comp_{slug} tables
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (
-          isComponentField(field as unknown as FieldConfig) &&
-          finalData[field.name] !== undefined
-        ) {
+        if (isComponentField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main insert
         }
@@ -963,10 +960,7 @@ export class CollectionMutationService extends BaseService {
       // Component fields should not be stored in the collection table
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (
-          isComponentField(field as unknown as FieldConfig) &&
-          finalData[field.name] !== undefined
-        ) {
+        if (isComponentField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main update
         }
