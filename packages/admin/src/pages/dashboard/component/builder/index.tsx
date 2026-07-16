@@ -52,6 +52,10 @@ export default function ComponentBuilderPage(): React.ReactElement | null {
           category: values.category?.trim() || undefined,
           icon: values.icon,
         },
+        // i18n: persist the Internationalization flag at create. Fields are empty here, so the
+        // companion has no columns yet — it is provisioned when the first translatable field is
+        // added on the builder page.
+        ...(values.i18n === true ? { localized: true } : {}),
         // Empty user-fields list — server auto-injects system columns.
         fields: [],
       },
@@ -65,7 +69,11 @@ export default function ComponentBuilderPage(): React.ReactElement | null {
               await schemaFileApi.writeComponent(
                 componentToManifestEntity({
                   slug,
-                  settings: { singularName: singular },
+                  settings: {
+                    singularName: singular,
+                    // i18n: mirror the Internationalization flag into ui-schema.json.
+                    localized: values.i18n === true,
+                  },
                   fields: [],
                 })
               );

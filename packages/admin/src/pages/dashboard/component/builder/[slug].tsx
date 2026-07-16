@@ -106,6 +106,10 @@ export default function ComponentBuilderEditPage({
   });
 
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
+  // i18n: pinned load-time settings snapshot so a settings-only change (e.g. toggling
+  // Internationalization) enables Save even when no field changed.
+  const [originalSettings, setOriginalSettings] =
+    useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
   const [originalFields, setOriginalFields] = useState<
@@ -144,26 +148,45 @@ export default function ComponentBuilderEditPage({
     setOriginalFields(allFields.filter(f => !f.isSystem));
 
     const adminBlock = (component.admin ?? {}) as Record<string, unknown>;
-    setSettings({
+    const loadedSettings: BuilderSettingsValues = {
       singularName: component.label || component.slug || "",
       slug: component.slug,
       description: component.description || "",
       icon: (adminBlock.icon as string | undefined) || "Puzzle",
       category: (adminBlock.category as string | undefined) || "",
-    });
+      // i18n: reflect the saved localization flag so the Internationalization toggle shows real
+      // state (mirrors the collection/single builder).
+      i18n: (component as { localized?: boolean }).localized === true,
+    };
+    setSettings(loadedSettings);
+    setOriginalSettings(loadedSettings);
 
     setIsInitialized(true);
   }, [component, builder, isInitialized]);
 
   const isLocked = component?.locked === true;
 
-  const unsavedCount = useMemo(() => {
-    if (!originalFields) return 0;
-    return countDirtyFields(
-      originalFields,
-      builder.fields.filter(f => !f.isSystem)
+  const settingsDirty = useMemo(() => {
+    if (!originalSettings || !settings) return false;
+    return (
+      originalSettings.singularName !== settings.singularName ||
+      originalSettings.description !== settings.description ||
+      originalSettings.icon !== settings.icon ||
+      originalSettings.category !== settings.category ||
+      // i18n: toggling Internationalization on its own must enable Save.
+      originalSettings.i18n !== settings.i18n
     );
-  }, [builder.fields, originalFields]);
+  }, [originalSettings, settings]);
+
+  const unsavedCount = useMemo(() => {
+    if (!originalFields) return settingsDirty ? 1 : 0;
+    return (
+      countDirtyFields(
+        originalFields,
+        builder.fields.filter(f => !f.isSystem)
+      ) + (settingsDirty ? 1 : 0)
+    );
+  }, [builder.fields, originalFields, settingsDirty]);
 
   const getValidatedFields = useCallback((): FieldDefinition[] | null => {
     const userFields = builder.fields.filter(
@@ -194,7 +217,10 @@ export default function ComponentBuilderEditPage({
           fieldDefinitions,
           schemaVersion,
           resolutions,
-          renameResolutions
+          renameResolutions,
+          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
+          // the companion in the same apply.
+          settings?.i18n === true
         );
         if (result.success) {
           const componentLabel = settings?.singularName?.trim() || slug;
@@ -207,13 +233,18 @@ export default function ComponentBuilderEditPage({
           setShowSafeDialog(false);
           setPreviewData(null);
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
+          if (settings) setOriginalSettings(settings);
 
           // D-series: database mode also writes the committable ui-schema.json
           // so the component has a migration record. Non-fatal if it fails.
           try {
             const entity = componentToManifestEntity({
               slug,
-              settings: { singularName: settings?.singularName },
+              settings: {
+                singularName: settings?.singularName,
+                // i18n: mirror the Internationalization flag into ui-schema.json.
+                localized: settings?.i18n === true,
+              },
               fields: fieldDefinitions,
             });
             await schemaFileApi.writeComponent(entity);
@@ -241,7 +272,7 @@ export default function ComponentBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, settings?.singularName, builder.fields]
+    [slug, startRestart, stopRestart, settings, builder.fields]
   );
 
   const saveSettingsOnly = useCallback(
@@ -258,12 +289,18 @@ export default function ComponentBuilderEditPage({
               category: settings.category,
               icon: settings.icon,
             },
+            // i18n: the component-level Internationalization toggle. Toggling on provisions the
+            // companion comp_<slug>_locales table; always send the boolean so OFF also reaches the
+            // server. Mirrors the collection/single builder.
+            localized: settings.i18n === true,
           },
         },
         {
           onSuccess: () => {
             toast.success("Component updated");
             setOriginalFields(builder.fields.filter(f => !f.isSystem));
+            // Re-pin settings baseline so the Save button disables again.
+            setOriginalSettings(settings);
           },
           onError: err => {
             const errorObj = err as { message?: string };

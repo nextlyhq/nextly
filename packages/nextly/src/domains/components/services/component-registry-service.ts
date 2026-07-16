@@ -324,6 +324,13 @@ export class ComponentRegistryService extends BaseRegistryService<
       updateData.locked = data.locked ? 1 : 0;
     }
 
+    // i18n: persist the Internationalization flag on update. Previously omitted, so a component
+    // toggled localized in the UI (or a code-first sync flag flip) could never update the column
+    // — only registerComponent (create) ever wrote it. Mirrors the collection/single registries.
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
+
     if (data.configPath !== undefined) {
       updateData.config_path = data.configPath;
     }

@@ -91,6 +91,8 @@ export interface UpdateCollectionInput {
   sidebarGroup?: string;
   /** Toggle Draft/Published. Honoured when defined; undefined leaves it unchanged. */
   status?: boolean;
+  /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
+  localized?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -337,6 +339,11 @@ export class DynamicCollectionService extends BaseService {
     // Status toggle: only persist when the caller explicitly sent it,
     // so admin updates that don't touch the flag don't reset it.
     if (updates.status !== undefined) metadataUpdates.status = updates.status;
+    // i18n: persist the Internationalization toggle. Previously omitted here, so toggling i18n on
+    // an EXISTING collection was sent by the UI but never saved (only the create path persisted
+    // it). Mirrors `status` — only written when the caller explicitly sent it.
+    if (updates.localized !== undefined)
+      metadataUpdates.localized = updates.localized;
 
     let migrationSQL: string | null = null;
     let migrationFileName: string | null = null;
@@ -386,8 +393,13 @@ export class DynamicCollectionService extends BaseService {
       const hasStatus =
         updates.status !== undefined ? updates.status === true : wasStatus;
 
+      // i18n: prefer the update's localized flag over the persisted one, so toggling i18n ON an
+      // existing collection immediately routes translatable fields to the companion in the same
+      // save (the flag is persisted above). Falls back to the stored value when not sent.
       const isLocalized =
-        (collection as { localized?: boolean }).localized === true;
+        updates.localized !== undefined
+          ? updates.localized === true
+          : (collection as { localized?: boolean }).localized === true;
       if (isLocalized) {
         // i18n: a localized collection stores translatable fields in the companion
         // `_locales` table. The main ALTER must only see SHARED fields; the

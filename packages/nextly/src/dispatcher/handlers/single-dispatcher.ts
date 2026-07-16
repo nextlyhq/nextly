@@ -183,6 +183,75 @@ interface SinglesServices {
 }
 
 // ============================================================
+// i18n helpers
+// ============================================================
+
+/**
+ * Provision (create / ADD-DROP columns / drop) the single's companion `single_<slug>_locales`
+ * table out-of-band after a schema apply, then register its runtime table so per-language
+ * reads/writes resolve without a restart. The push pipeline excludes companion tables, so every
+ * single write/create/apply path that changes the localized field set goes through here.
+ *
+ * Shared by createSingle, updateSingleSchema and applySingleSchemaChanges so the three stay in
+ * lockstep. No-op when the single isn't localized (a non-localized single has no companion).
+ * The DDL reconcile throws on failure (data-integrity critical); the runtime registration is
+ * best-effort (recovered on next restart).
+ */
+async function reconcileSingleCompanion(args: {
+  slug: string;
+  tableName: string;
+  oldFields: FieldDefinition[];
+  newFields: FieldDefinition[];
+  localized: boolean;
+  status: boolean;
+  adapter: DrizzleAdapter;
+}): Promise<void> {
+  const { slug, tableName, oldFields, newFields, localized, status, adapter } =
+    args;
+  if (!localized) return;
+  const dialect = adapter.dialect;
+
+  const oldLocalizedNames = new Set(resolveLocalizedFieldNames(oldFields, true));
+  const newLocalizedNames = new Set(resolveLocalizedFieldNames(newFields, true));
+  const companionSQL = buildCompanionReconcileSql({
+    slug,
+    tableName,
+    oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
+    newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
+    dialect,
+    status,
+    companionExists: await adapter.tableExists(`${tableName}_locales`),
+  });
+  for (const stmt of companionSQL.split(";")) {
+    const s = stmt.trim();
+    if (s) await adapter.executeQuery(s);
+  }
+
+  // Register the companion runtime table (best-effort — next boot re-registers it).
+  try {
+    const companion = buildCompanionRuntimeTable({
+      slug,
+      tableName,
+      fields: newFields,
+      dialect,
+      localized: true,
+      status,
+    });
+    if (companion) {
+      getSchemaRegistryFromDI()?.registerDynamicSchema(
+        companion.companionTableName,
+        companion.table
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
+    );
+  }
+}
+
+// ============================================================
 // Method definitions
 // ============================================================
 
@@ -264,6 +333,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             admin?: Record<string, unknown>;
             // Draft/Published opt-in; persists to dynamic_singles.status.
             status?: boolean;
+            // i18n: Internationalization opt-in; persists to dynamic_singles.localized and
+            // provisions the companion single_<slug>_locales table.
+            localized?: boolean;
           }
         | undefined;
 
@@ -283,10 +355,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // when the user opted into Draft/Published — without it the
       // runtime schema would expect a column the DDL never created.
       const schemaService = new DynamicCollectionSchemaService();
+      const isLocalized = b.localized === true;
       const migrationSQL = schemaService.generateMigrationSQL(
         tableName,
         b.fields as unknown as FieldDefinition[],
-        { isSingle: true, hasStatus: b.status === true }
+        // i18n: omit translatable columns from the main table when localized — they live in the
+        // companion single_<slug>_locales table (provisioned below), mirroring collections.
+        { isSingle: true, hasStatus: b.status === true, localized: isLocalized }
       );
 
       // Run migration immediately (same semantics as Collections).
@@ -313,7 +388,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 tableName,
                 b.fields as unknown as FieldDefinition[],
                 dialect,
-                { status: b.status === true }
+                // i18n: main runtime table omits translatable columns for a localized single.
+                { status: b.status === true, localized: isLocalized }
               );
               const resolver = (
                 adapter as unknown as {
@@ -333,6 +409,30 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               }
             } catch {
               // Non-fatal: schema will be registered on next server restart.
+            }
+
+            // i18n: provision the companion single_<slug>_locales table for a localized single
+            // (create-only — the single is brand new) and register its runtime table. The push
+            // pipeline excludes companions, so this is the only place it gets created on create.
+            try {
+              await reconcileSingleCompanion({
+                slug: b.slug,
+                tableName,
+                oldFields: [],
+                newFields: b.fields as unknown as FieldDefinition[],
+                localized: isLocalized,
+                status: b.status === true,
+                adapter,
+              });
+            } catch (companionErr) {
+              migrationStatus = "failed";
+              const m =
+                companionErr instanceof Error
+                  ? companionErr.message
+                  : String(companionErr);
+              console.error(
+                `[Singles] Companion provisioning failed for "${tableName}": ${m}`
+              );
             }
           } else {
             migrationStatus = "failed";
@@ -367,6 +467,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Forward the Draft/Published flag so admin-created Singles that
         // opt in light up the Save Draft / Publish split.
         status: b.status === true,
+        // i18n: persist the Internationalization flag so the single reads/writes per language.
+        localized: isLocalized,
         schemaHash,
         migrationStatus,
       });
@@ -617,6 +719,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Draft/Published toggle; honoured when defined, undefined leaves
             // the existing value untouched.
             status?: boolean;
+            // i18n: Internationalization toggle; honoured when defined, undefined leaves the
+            // existing value untouched. Persists to dynamic_singles.localized.
+            localized?: boolean;
           }
         | undefined;
 
@@ -637,6 +742,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (b.description !== undefined) updateData.description = b.description;
       if (b.admin !== undefined) updateData.admin = b.admin;
       if (b.status !== undefined) updateData.status = b.status;
+      // i18n: persist the Internationalization toggle. `wasLocalized`/`isLocalized` drive the
+      // companion provisioning below. `alterOmitLocalized` keeps translatable columns out of the
+      // main-table ALTER whenever the single is localized in either state, so they are only ever
+      // managed on the companion (moving existing rows between the two is the `nextly migrate`
+      // path — the dev toggle provisions the companion without touching main-table data).
+      if (b.localized !== undefined) updateData.localized = b.localized;
+      const wasLocalized = existing.localized === true;
+      const isLocalized = b.localized !== undefined ? b.localized === true : wasLocalized;
+      const alterOmitLocalized = isLocalized || wasLocalized;
 
       let migrationStatus = existing.migrationStatus;
 
@@ -661,10 +775,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
         const existingFields = (existing.fields ??
           []) as unknown as FieldDefinition[];
-        const existingFieldNames = new Set(existingFields.map(f => f.name));
+        // i18n: when the single is localized (in either state), translatable columns live on the
+        // companion, never the main table — drop them from the ALTER input so the main-table diff
+        // never tries to ADD/DROP them. `reconcileSingleCompanion` owns the companion side.
+        const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
+          if (!alterOmitLocalized) return fields;
+          const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
+          return fields.filter(f => !localizedNames.has(f.name));
+        };
+        const existingFieldsForAlter = omitLocalized(existingFields);
+        const existingFieldNames = new Set(
+          existingFieldsForAlter.map(f => f.name)
+        );
         const normalizedOldFields: FieldDefinition[] = [
           ...systemFields.filter(sf => !existingFieldNames.has(sf.name)),
-          ...existingFields,
+          ...existingFieldsForAlter,
           {
             name: "updatedAt",
             type: "date",
@@ -673,10 +798,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         ];
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
-        const newFieldNames = new Set(newFieldsRaw.map(f => f.name));
+        const newFieldsForAlter = omitLocalized(newFieldsRaw);
+        const newFieldNames = new Set(newFieldsForAlter.map(f => f.name));
         const normalizedNewFields: FieldDefinition[] = [
           ...systemFields.filter(sf => !newFieldNames.has(sf.name)),
-          ...newFieldsRaw,
+          ...newFieldsForAlter,
           {
             name: "updatedAt",
             type: "date",
@@ -712,7 +838,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               const createSQL = schemaService.generateMigrationSQL(
                 tableName,
                 normalizedNewFields,
-                { isSingle: true, hasStatus }
+                // i18n: fresh (re)create omits translatable columns when localized.
+                { isSingle: true, hasStatus, localized: isLocalized }
               );
               await executeMigrationStatements(adapter, createSQL);
             } else {
@@ -733,7 +860,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   tableName,
                   (b.fields ?? existing.fields) as FieldDefinition[],
                   dialect,
-                  { status: hasStatus }
+                  // i18n: main runtime table omits translatable columns when localized.
+                  { status: hasStatus, localized: isLocalized }
                 );
                 const resolver = (
                   adapter as unknown as {
@@ -753,6 +881,33 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 }
               } catch {
                 // Non-fatal.
+              }
+
+              // i18n: provision/alter the companion single_<slug>_locales table for the new
+              // localized field set (create when the single is newly localized, ADD/DROP columns
+              // as translatable fields change). No-op when not localized. See the note above:
+              // this does not move existing main-table rows into the companion — that is the
+              // `nextly migrate` enable/disable path.
+              try {
+                await reconcileSingleCompanion({
+                  slug,
+                  tableName,
+                  oldFields: existing.fields as unknown as FieldDefinition[],
+                  newFields: (b.fields ??
+                    existing.fields) as unknown as FieldDefinition[],
+                  localized: isLocalized,
+                  status: hasStatus,
+                  adapter,
+                });
+              } catch (companionErr) {
+                migrationStatus = "failed";
+                const m =
+                  companionErr instanceof Error
+                    ? companionErr.message
+                    : String(companionErr);
+                console.error(
+                  `[Singles] Companion reconcile failed for "${tableName}": ${m}`
+                );
               }
             } else {
               migrationStatus = "failed";
@@ -882,6 +1037,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
+        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -889,10 +1045,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions?: Record<string, FieldResolution>;
         renameResolutions?: BrowserRenameResolution[];
         eventResolutions?: Resolution[];
+        // i18n: the builder sends the current Internationalization toggle so a save that flips
+        // i18n AND changes fields in one shot provisions the companion in the same apply, rather
+        // than reading a stale registry flag. Undefined = leave the persisted value untouched.
+        localized?: boolean;
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
+
+      // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
+      // simultaneous toggle+field-change save); fall back to the registry value.
+      const isLocalized =
+        requestLocalized !== undefined
+          ? requestLocalized === true
+          : (single as { localized?: boolean }).localized === true;
 
       const currentVersion = single.schemaVersion ?? 1;
       const tableName = single.tableName;
@@ -921,7 +1088,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the single's main table (they live in single_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection apply path.
-        localized: (single as { localized?: boolean }).localized === true,
+        localized: isLocalized,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -959,43 +1126,28 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      // i18n: the push pipeline excludes companion tables, so reconcile the single's
-      // companion out-of-band — create single_<slug>_locales on the first translatable
-      // field, then ADD/DROP columns as the field set changes (mirrors collections).
-      const isLocalized = (single as { localized?: boolean }).localized === true;
-      if (isLocalized) {
-        try {
-          const oldFields = (single.fields ??
-            []) as unknown as FieldDefinition[];
-          const newFields = fields as unknown as FieldDefinition[];
-          const oldLocalizedNames = new Set(
-            resolveLocalizedFieldNames(oldFields, true)
-          );
-          const newLocalizedNames = new Set(
-            resolveLocalizedFieldNames(newFields, true)
-          );
-          const companionSQL = buildCompanionReconcileSql({
-            slug,
-            tableName,
-            oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
-            newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
-            dialect,
-            status: single.status === true,
-            companionExists: await adapter.tableExists(`${tableName}_locales`),
-          });
-          for (const stmt of companionSQL.split(";")) {
-            const s = stmt.trim();
-            if (s) await adapter.executeQuery(s);
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          throw new Error(
-            `[applySingleSchemaChanges] Companion reconcile failed for '${slug}': ${msg}.`
-          );
-        }
+      // i18n: the push pipeline excludes companion tables, so reconcile the single's companion
+      // out-of-band — create single_<slug>_locales on the first translatable field, then ADD/DROP
+      // columns as the field set changes (mirrors collections). Uses the request's `isLocalized`.
+      try {
+        await reconcileSingleCompanion({
+          slug,
+          tableName,
+          oldFields: single.fields as unknown as FieldDefinition[],
+          newFields: fields as unknown as FieldDefinition[],
+          localized: isLocalized,
+          status: single.status === true,
+          adapter,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `[applySingleSchemaChanges] Companion reconcile failed for '${slug}': ${msg}.`
+        );
       }
 
-      // Post-apply: update dynamic_singles fields JSON + schema_hash.
+      // Post-apply: update dynamic_singles fields JSON + schema_hash (+ localized, so a
+      // simultaneous toggle+field-change save persists the flag alongside the field set).
       try {
         await adapter.update(
           "dynamic_singles",
@@ -1003,6 +1155,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            localized: isLocalized,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
