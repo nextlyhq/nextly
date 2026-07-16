@@ -286,8 +286,7 @@ export function MediaLibrary({
 
   // Handlers: Upload
   const handleUploadComplete = React.useCallback(
-    (media: Media[]) => {
-      console.log("[MediaLibrary] Upload complete:", media.length, "files");
+    (_media: Media[]) => {
       // Refetch to show new uploads
       void refetch();
       // Clear selection
@@ -295,6 +294,12 @@ export function MediaLibrary({
     },
     [refetch]
   );
+
+  // Collapse the drop target as soon as files start uploading; the dropzone's
+  // queue keeps rendering while collapsed, so progress stays visible.
+  const handleUploadStart = React.useCallback(() => {
+    setIsUploadCollapsed(true);
+  }, []);
 
   // Handlers: Delete
   const handleDeleteItem = React.useCallback((media: Media) => {
@@ -541,7 +546,7 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-none shadow-sm",
+                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-none",
                 !isUploadCollapsed ? "opacity-90" : ""
               )}
             >
@@ -557,6 +562,7 @@ export function MediaLibrary({
           isCollapsed={isUploadCollapsed}
           onToggleCollapse={() => setIsUploadCollapsed(!isUploadCollapsed)}
           onUploadComplete={handleUploadComplete}
+          onUploadStart={handleUploadStart}
           activeFolderId={activeFolderId}
           activeFolderName={activeFolderName}
           className={cn(!isUploadCollapsed && "mb-8")}
