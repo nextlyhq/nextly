@@ -14,6 +14,7 @@ import { createHash } from "crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { ServiceContainer } from "../../../services/index";
 import { userInviteTokens } from "../../../schemas/auth-tokens/sqlite";
 import { users } from "../../../schemas/users/sqlite";
@@ -70,7 +71,18 @@ describe("createLocalUser — invite mode", () => {
     // The link is the artifact the admin gets back.
     expect(created.invite).toBeDefined();
     expect(created.invite!.link).toContain("/admin/accept-invite?token=");
-    expect(created.invite!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+    // The link lasts seven days — assert the actual TTL, not just "in future",
+    // so a wrong expiry window is caught. Wide tolerance absorbs CI slowness.
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const TOLERANCE_MS = 5 * 60 * 1000;
+    const expectedExpiry = Date.now() + SEVEN_DAYS_MS;
+    expect(created.invite!.expiresAt.getTime()).toBeGreaterThan(
+      expectedExpiry - TOLERANCE_MS
+    );
+    expect(created.invite!.expiresAt.getTime()).toBeLessThanOrEqual(
+      expectedExpiry + TOLERANCE_MS
+    );
 
     // The account has no credential and an unproven address until acceptance.
     const userRows = await db
@@ -88,6 +100,14 @@ describe("createLocalUser — invite mode", () => {
     const tokenRows = await db.select().from(userInviteTokens);
     expect(tokenRows).toHaveLength(1);
     expect(tokenRows[0].tokenHash).toBe(expectedHash);
+    // The persisted expiry is the same seven-day instant handed to the admin,
+    // within the database's second-level timestamp precision.
+    const persistedExpiry = new Date(
+      tokenRows[0].expires as string | number
+    ).getTime();
+    expect(
+      Math.abs(persistedExpiry - created.invite!.expiresAt.getTime())
+    ).toBeLessThan(1000);
   });
 
   it("sets the password directly and mints no invite when a password is given", async () => {
@@ -133,10 +153,29 @@ describe("createLocalUser — invite mode", () => {
     expect(userRows[0].passwordHash).not.toBeNull();
     expect(userRows[0].emailVerified).not.toBeNull();
     expect(userRows[0].isActive).toBeTruthy();
+    const passwordHashAfterFirstUse = userRows[0].passwordHash;
 
-    // The link is single-use: reusing it now fails.
+    // The link is single-use: reusing it fails with the generic INVALID_INVITE
+    // error (the same one an unknown or expired token returns, so a guessed
+    // token learns nothing).
     await expect(
       auth.acceptInvite(token, "An0ther!Passw0rd")
-    ).rejects.toBeTruthy();
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        NextlyError.is(err) &&
+        err.code === "VALIDATION_ERROR" &&
+        Array.isArray(err.publicData?.errors) &&
+        err.publicData.errors.some(
+          (e: { code?: string }) => e.code === "INVALID_INVITE"
+        )
+    );
+
+    // The rejected reuse changed nothing: the password is still the one set on
+    // the first, successful acceptance — not the second attempt's.
+    const afterReuse = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, "handoff@example.com"));
+    expect(afterReuse[0].passwordHash).toBe(passwordHashAfterFirstUse);
   });
 });

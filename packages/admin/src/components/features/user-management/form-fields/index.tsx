@@ -129,7 +129,8 @@ export function UserFormFields({
   // Create mode only: the sign-in method decides whether the password fields
   // are shown at all. Edit mode always shows an (optional) password field.
   const signInMethod = useWatch({ control, name: "signInMethod" });
-  const showPasswordField = !isCreateMode || signInMethod === "password";
+  const isInviteMode = isCreateMode && signInMethod === "invite";
+  const showPasswordField = !isInviteMode;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-y-12 md:gap-x-[10rem] w-full">
@@ -261,7 +262,6 @@ export function UserFormFields({
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                tabIndex={-1}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
@@ -310,8 +310,10 @@ export function UserFormFields({
           )}
         />
 
-        {/* Account Settings */}
-        {showActiveAccount && (
+        {/* Account Settings. Hidden in invite mode: accepting the invite
+            activates the account, so an "inactive" choice here would not hold —
+            we do not offer a control the redemption step silently overrides. */}
+        {showActiveAccount && !isInviteMode && (
           <div className="space-y-3">
             {/* Active Account Checkbox */}
             <div className="rounded-none  border border-border dark:border-primary/30 bg-primary/5 p-3 shadow-none">

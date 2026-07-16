@@ -87,9 +87,20 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
       const err = error as Record<string, unknown> | undefined;
       const response = err?.response as Record<string, unknown> | undefined;
       const data = response?.data as Record<string, unknown> | undefined;
+      // `data.error` may be a string or an object (e.g. CSRF failures return
+      // `{ code, message }`); pull the message so the toast never renders
+      // "[object Object]".
+      const apiError = data?.error;
+      const apiErrorMessage =
+        typeof apiError === "string"
+          ? apiError
+          : typeof (apiError as { message?: unknown } | undefined)?.message ===
+              "string"
+            ? (apiError as { message: string }).message
+            : undefined;
       const errorMessage =
-        (data?.error as string) ||
-        (err?.message as string) ||
+        apiErrorMessage ||
+        (typeof err?.message === "string" ? err.message : undefined) ||
         "Something went wrong. Please try again.";
 
       toast.error("Could not set your password", {
@@ -220,7 +231,9 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        tabIndex={-1}
+                        aria-label={
+                          showPassword ? "Hide password" : "Show password"
+                        }
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showPassword ? (
@@ -259,7 +272,11 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
                         onClick={() =>
                           setShowConfirmPassword(!showConfirmPassword)
                         }
-                        tabIndex={-1}
+                        aria-label={
+                          showConfirmPassword
+                            ? "Hide password"
+                            : "Show password"
+                        }
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showConfirmPassword ? (

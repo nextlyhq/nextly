@@ -4,6 +4,7 @@ import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useCallback, useState } from "react";
 
 import { Check, Copy, Info } from "@admin/components/icons";
+import { toast } from "@admin/components/ui";
 import { UI } from "@admin/constants/ui";
 
 export interface InviteLinkPanelProps {
@@ -35,10 +36,23 @@ export function InviteLinkPanel({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(link).then(() => {
+    // Clipboard access can be unavailable (insecure context) or rejected
+    // (permission). The link stays visible in the field either way, so on
+    // failure we just point the admin at it rather than silently doing nothing.
+    const notifyManualCopy = () =>
+      toast.error("Couldn't copy automatically", {
+        description: "Select and copy the link from the field above.",
+      });
+
+    if (!navigator.clipboard?.writeText) {
+      notifyManualCopy();
+      return;
+    }
+
+    navigator.clipboard.writeText(link).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
-    });
+    }, notifyManualCopy);
   }, [link]);
 
   // Format the expiry as a plain date; fall back to the raw value if the
