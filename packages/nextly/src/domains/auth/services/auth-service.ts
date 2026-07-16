@@ -327,6 +327,9 @@ export class AuthService extends BaseService {
         .set({
           passwordHash: newPasswordHash,
           passwordUpdatedAt: new Date(),
+          // The user chose this password themselves, so any admin-set
+          // must-change requirement is satisfied.
+          mustChangePassword: false,
         })
         .where(eq(this.tables.users.id, userId));
     } catch (error) {
@@ -543,6 +546,9 @@ export class AuthService extends BaseService {
         .set({
           passwordHash,
           passwordUpdatedAt: new Date(),
+          // Resetting via an emailed link means the user set this password
+          // themselves — clear any admin-set must-change requirement.
+          mustChangePassword: false,
         })
         .where(eq(this.tables.users.id, targetUser.id));
 
@@ -909,6 +915,70 @@ export class AuthService extends BaseService {
     // (e.g. a security-notification email) would be wrong for a first set.
 
     return { userId: invite.userId };
+  }
+
+  /**
+   * Replace an admin-set password on forced first sign-in and clear the
+   * must-change flag (ASVS 6.4.1). The update is conditional on the flag still
+   * being set, so a replayed or concurrent call cannot re-set the password
+   * after it has already been changed — exactly one call flips the flag, and
+   * only that one writes the new password.
+   *
+   * @throws NextlyError(VALIDATION_ERROR) on a weak password.
+   * @throws NextlyError(INVALID_INPUT) when the account is not (or is no longer)
+   *   in the must-change state.
+   */
+  async setInitialPassword(
+    userId: string,
+    newPassword: string
+  ): Promise<{ userId: string }> {
+    const passwordStrength = validatePasswordStrength(newPassword);
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
+      });
+    }
+
+    const passwordHash = await hashPasswordBcrypt(newPassword);
+
+    let changed = false;
+    try {
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+        const claim = await tx
+          .update(this.tables.users)
+          .set({
+            passwordHash,
+            mustChangePassword: false,
+            passwordUpdatedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(this.tables.users.id, userId),
+              eq(this.tables.users.mustChangePassword, true)
+            )
+          );
+        if (affectedRowCount(claim, this.dialect) !== 1) return;
+        changed = true;
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+
+    if (!changed) {
+      throw new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage: "This request is no longer valid. Please sign in again.",
+        logContext: { userId, reason: "not-in-must-change-state" },
+      });
+    }
+
+    return { userId };
   }
 
   /**

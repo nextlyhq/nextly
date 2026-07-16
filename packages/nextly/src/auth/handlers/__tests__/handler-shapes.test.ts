@@ -74,6 +74,7 @@ function loginPipelineDeps(lockoutDeps: {
         email: u.email,
         name: u.name,
         image: u.image,
+        mustChangePassword: u.mustChangePassword,
       };
     },
   });
@@ -190,6 +191,77 @@ describe("login handler: respondAction shape", () => {
     expect(typeof body.expiresAt).toBe("string");
     // expiresAt is ISO-8601, future-dated
     expect(Number.isFinite(Date.parse(body.expiresAt as string))).toBe(true);
+  });
+
+  it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
+    const passwordHash = await hashPassword("Pass1234!");
+    const fakeUser = {
+      id: "u1",
+      email: "a@example.com",
+      name: "A",
+      image: null,
+      passwordHash,
+      emailVerified: new Date(),
+      isActive: true,
+      // The account still holds an admin-set password.
+      mustChangePassword: true,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    };
+
+    const findUserByEmail = vi.fn().mockResolvedValue(fakeUser);
+    const incrementFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const lockAccount = vi.fn().mockResolvedValue(undefined);
+    const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const storeRefreshToken = vi.fn().mockResolvedValue(undefined);
+
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      maxLoginAttempts: 5,
+      lockoutDurationSeconds: 900,
+      loginStallTimeMs: 0,
+      requireEmailVerification: true,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
+      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+      storeRefreshToken,
+      ...loginPipelineDeps({
+        findUserByEmail,
+        incrementFailedAttempts,
+        lockAccount,
+        resetFailedAttempts,
+        maxLoginAttempts: 5,
+        lockoutDurationSeconds: 900,
+        requireEmailVerification: true,
+      }),
+    };
+
+    const req = makeRequest("POST", {
+      email: "a@example.com",
+      password: "Pass1234!",
+    });
+    const res = await handleLogin(req, deps);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+
+    // No session was issued: the response is the change-password step, not a login.
+    expect(body.status).toBe("password_change_required");
+    expect(typeof body.pendingToken).toBe("string");
+    expect(body).not.toHaveProperty("accessToken");
+    expect(body).not.toHaveProperty("user");
+    // And no refresh token was persisted — the account has no session yet.
+    expect(storeRefreshToken).not.toHaveBeenCalled();
+    // No Set-Cookie for the access-token session.
+    expect(res.headers.get("set-cookie") ?? "").not.toContain("nextly_session");
   });
 });
 

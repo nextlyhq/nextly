@@ -112,6 +112,13 @@ export interface CreateLocalUserData {
   password?: string | null;
   roles?: string[];
   isActive?: boolean;
+  /**
+   * Force the user to replace this password on first sign-in (ASVS 6.4.1).
+   * Set by the admin create path when an admin types a password for someone
+   * else; NOT derived from password presence, so self-registration and the
+   * setup flow (where the person chooses their own password) never trip it.
+   */
+  mustChangePassword?: boolean;
   /** Custom field values from user_ext */
   [key: string]: unknown;
 }
@@ -461,6 +468,9 @@ export class UserMutationService extends BaseService {
         emailVerified: isInvite ? null : now,
         image: userData.image ?? null,
         isActive: userData.isActive ?? false,
+        // Only true when an admin typed the password for someone else; the
+        // caller decides, so self-registration/setup never force a change.
+        mustChangePassword: userData.mustChangePassword === true,
         createdAt: now,
         updatedAt: now,
       };

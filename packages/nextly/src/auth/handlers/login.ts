@@ -4,7 +4,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
-import { mintPendingToken } from "../pipeline/pending-token";
+import {
+  mintPendingToken,
+  MUST_CHANGE_PASSWORD_CHALLENGE,
+} from "../pipeline/pending-token";
 import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
 
@@ -152,6 +155,29 @@ export async function handleLogin(
       );
       await stallResponse(startTime, deps.loginStallTimeMs);
       return challengeResponse(ch, pendingToken, requestId);
+    }
+
+    // Forced first-sign-in password change (ASVS 6.4.1). The account still
+    // holds a password an admin chose for it, so no session is issued: the
+    // client gets a short-lived, single-purpose pending token (which the access
+    // guard refuses for any normal request) and must set a new password via
+    // handleSetInitialPassword before a real session exists.
+    if (afterAuth.mustChangePassword) {
+      const pendingToken = await mintPendingToken(
+        {
+          userId: afterAuth.id,
+          challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
+          attempts: 0,
+        },
+        deps.secret,
+        deps.challengeTokenTTL
+      );
+      await stallResponse(startTime, deps.loginStallTimeMs);
+      return jsonResponse(
+        200,
+        { status: "password_change_required", pendingToken },
+        { "x-request-id": requestId }
+      );
     }
 
     const response = await issueSession(afterAuth, deps, request, requestId);

@@ -43,6 +43,11 @@ export const users = pgTable(
     // applies it cleanly.
     passwordHash: text("password_hash"),
     isActive: boolean("is_active").notNull().default(false),
+    // Set when an admin creates the account with a password they chose: the
+    // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
+    // column can be added to an existing table without a data-losing default;
+    // null and false both mean "no forced change".
+    mustChangePassword: boolean("must_change_password"),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: false }),

@@ -9,6 +9,12 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   image?: string | null;
+  /**
+   * True when the account holds an admin-set password the user must replace
+   * before a session is issued. Carried from the credential check to the login
+   * handler; not persisted in the JWT.
+   */
+  mustChangePassword?: boolean;
 }
 
 export interface JwtPayload {
