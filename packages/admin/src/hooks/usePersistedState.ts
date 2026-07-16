@@ -62,6 +62,15 @@ export function usePersistedStringSet(
 ): [Set<string>, (update: (prev: Set<string>) => Set<string>) => void] {
   const [value, setValueState] = useState<Set<string>>(() => new Set());
 
+  // Mirror of the latest committed-or-pending value. Every change flows
+  // through the hydration effect or setValue below, so the ref never needs a
+  // render-phase assignment. It exists so consecutive setValue calls in the
+  // same frame each build on the previous one instead of a stale render
+  // value - and so the state updater itself stays a pure plain-value set
+  // (React may replay or abandon updaters; side effects inside one can
+  // persist a value that never commits).
+  const valueRef = useRef(value);
+
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(key);
@@ -72,7 +81,9 @@ export function usePersistedStringSet(
         const strings = parsed.filter(
           (item): item is string => typeof item === "string"
         );
-        setValueState(new Set(strings));
+        const hydrated = new Set(strings);
+        valueRef.current = hydrated;
+        setValueState(hydrated);
       }
     } catch {
       // localStorage/JSON can throw under privacy modes or corruption; keep
@@ -82,15 +93,16 @@ export function usePersistedStringSet(
 
   const setValue = useCallback(
     (update: (prev: Set<string>) => Set<string>) => {
-      setValueState(prev => {
-        const next = update(prev);
-        try {
-          window.localStorage.setItem(key, JSON.stringify([...next]));
-        } catch {
-          // ignore - the UI still updates in memory.
-        }
-        return next;
-      });
+      const next = update(valueRef.current);
+      valueRef.current = next;
+      setValueState(next);
+      // Persisting here (the event handler) keeps the write out of React's
+      // render phase entirely.
+      try {
+        window.localStorage.setItem(key, JSON.stringify([...next]));
+      } catch {
+        // ignore - the UI still updates in memory.
+      }
     },
     [key]
   );
