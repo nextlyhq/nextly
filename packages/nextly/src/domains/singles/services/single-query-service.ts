@@ -396,6 +396,10 @@ export class SingleQueryService extends BaseService {
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
+    // Gate on THIS single's flag: a non-localized single has no companion table, and
+    // buildCompanionSchema would otherwise classify its text fields as translatable and query a
+    // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
+    if (singleMeta.localized !== true) return;
     const companion = buildCompanionSchema({
       slug,
       tableName: singleMeta.tableName,
@@ -430,7 +434,9 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     doc: Record<string, unknown>
   ): Promise<void> {
-    if (!this.localization) return;
+    // Gate on THIS single's flag, not just app-level localization — a non-localized single has
+    // no companion, so there is no per-locale translation status to attach.
+    if (!this.localization || singleMeta.localized !== true) return;
     const companion = buildCompanionSchema({
       slug,
       tableName: singleMeta.tableName,

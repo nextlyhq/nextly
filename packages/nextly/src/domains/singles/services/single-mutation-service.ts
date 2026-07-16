@@ -248,8 +248,13 @@ export class SingleMutationService extends BaseService {
       // 8.5. i18n: for a localized single, split translatable columns out of the main
       // update — they live on the companion `single_<slug>_locales` row, not the main
       // table. `companion` is null when the single isn't localized (unchanged path).
-      const companion = this.localization
-        ? buildCompanionSchema({
+      // Gate on THIS single's `localized` flag, not just the app-level localization config:
+      // a non-localized single in a localized app has no companion table, and
+      // buildCompanionSchema would otherwise still classify its text fields as translatable
+      // and route the write to a `single_<slug>_locales` table that was never created.
+      const companion =
+        this.localization && singleMeta.localized === true
+          ? buildCompanionSchema({
             slug,
             tableName: singleMeta.tableName,
             fields: singleMeta.fields as { name: string; type: string }[],
