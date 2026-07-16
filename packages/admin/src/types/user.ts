@@ -35,13 +35,13 @@ export interface UserApiResponse {
  * roles as objects with id property, while User stores them as string[]
  */
 /**
- * Payload for creating a user via API
+ * Payload for creating a user via API.
  *
- * Extends Partial<User> with create-specific fields like sendWelcomeEmail
- * and an index signature for custom user fields.
+ * Extends Partial<User> with an index signature for custom user fields.
+ * Omitting `password` creates the account in invite mode (a set-password link
+ * is returned); providing one sets the credential directly.
  */
 export interface CreateUserPayload extends Partial<User> {
-  sendWelcomeEmail?: boolean;
   [key: string]: unknown;
 }
 
