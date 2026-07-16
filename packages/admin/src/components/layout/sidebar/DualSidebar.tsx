@@ -419,8 +419,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     "builders",
   ];
 
+  // Media only has a sub-sidebar while the folder tree is visible; treating
+  // it as a sub-sidebar category with the tree hidden would turn the mobile
+  // Media icon into a button that opens nothing instead of a link.
   const hasSubSidebarCategory = (id: string) =>
-    CATEGORIES_WITH_SUB_SIDEBAR.includes(id) || id.startsWith("standalone-");
+    (CATEGORIES_WITH_SUB_SIDEBAR.includes(id) &&
+      (id !== "media" || isFolderTreeVisible)) ||
+    id.startsWith("standalone-");
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(item, visibleStandalonePlugins);

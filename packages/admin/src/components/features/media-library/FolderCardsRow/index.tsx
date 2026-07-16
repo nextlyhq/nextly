@@ -104,6 +104,7 @@ export function FolderCardsRow({
               )}
             >
               <DropdownMenu
+                open={openMenuId === folder.id}
                 onOpenChange={open => onOpenMenuChange(open ? folder.id : null)}
               >
                 <DropdownMenuTrigger asChild>

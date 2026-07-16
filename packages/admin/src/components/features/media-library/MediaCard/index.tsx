@@ -12,18 +12,17 @@
  * - **Checkbox Selection**: Top-left overlay for bulk operations (44×44px mobile, 20×20px desktop)
  * - **Actions Menu**: Top-right dropdown with Edit/Delete/Copy URL/Download (44×44px mobile, 32×32px desktop)
  * - **Bottom Overlay**: Gradient background with filename and file type badge
- * - **Visual States**: Default, hover (scale + shadow), selected  (border border-border + ring), focus (keyboard ring)
+ * - **Visual States**: Default, hover (border emphasis + image scale), selected (primary border)
  * - **Responsive**: Touch-friendly on mobile (44×44px touch targets), compact on desktop
  *
  * ## Design Specifications
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
- * - **Border**: Default  `border border-border`, Selected  `border border-border border-primary`
+ * - **Border**: Default `border border-border`, Selected `border-primary/30`
  * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
- * - **Hover State**: token-based border/background emphasis (NOT when selected)
- * - **Selected State**: primary border + ring, no scale
- * - **Focus State**: primary ring (keyboard navigation)
- * - **Transition**: `transition-all duration-150` (design system standard)
+ * - **Hover State**: `hover:border-primary/30` on the card, image scales (`group-hover:scale-105`); no shadow
+ * - **Selected State**: `border-primary/30`, no ring, no scale
+ * - **Transition**: `transition-all duration-300`
  * - **Bottom Bar**: token surface (`bg-primary/5`, `border-t border-border`)
  * - **Filename**: `text-sm font-medium truncate`
  * - **Badge**: Type-based (image=success, video=primary, document=default, audio=warning)

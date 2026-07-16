@@ -53,7 +53,10 @@ import {
   useSubfolders,
   useRootFolders,
 } from "@admin/hooks/queries/useMedia";
-import { usePersistedState } from "@admin/hooks/usePersistedState";
+import {
+  usePersistedState,
+  usePersistedStringSet,
+} from "@admin/hooks/usePersistedState";
 import { cn } from "@admin/lib/utils";
 import type {
   Media,
@@ -112,17 +115,6 @@ export interface MediaLibraryProps {
 const isViewMode = (value: string): value is "grid" | "list" =>
   value === "grid" || value === "list";
 
-const isJsonStringArray = (value: string): value is string => {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return (
-      Array.isArray(parsed) && parsed.every(item => typeof item === "string")
-    );
-  } catch {
-    return false;
-  }
-};
-
 /**
  * MediaLibrary component
  *
@@ -138,25 +130,22 @@ export function MediaLibrary({
   // State: Pagination
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(defaultPageSize);
-  // Hidden list-view columns persist across visits as a JSON array of keys.
-  const [hiddenColumnsJson, setHiddenColumnsJson] = usePersistedState(
-    "nextly:admin:media:hidden-columns",
-    "[]",
-    isJsonStringArray
-  );
-  const hiddenColumns = React.useMemo(
-    () => new Set(JSON.parse(hiddenColumnsJson) as string[]),
-    [hiddenColumnsJson]
+  // Hidden list-view columns persist across visits. Functional updates so
+  // two quick toggles both land instead of the second reading stale state.
+  const [hiddenColumns, updateHiddenColumns] = usePersistedStringSet(
+    "nextly:admin:media:hidden-columns"
   );
 
   const toggleColumn = (key: string) => {
-    const next = new Set(hiddenColumns);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setHiddenColumnsJson(JSON.stringify([...next]));
+    updateHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   };
 
   // State: Filters
