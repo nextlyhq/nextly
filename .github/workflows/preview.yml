@@ -63,5 +63,9 @@ jobs:
       # `--pnpm` makes pkg-pr-new pack with pnpm so workspace:* protocol
       # ranges in package.json resolve to real versions in the tarballs,
       # exactly as `changeset publish` does for npm releases.
+      # `--commentWithSha` puts the commit sha in the comment's install
+      # links instead of the PR number: a sha URL is immutable, so a
+      # consumer app testing a preview cannot silently drift onto a newer
+      # push to the same PR.
       - name: Publish to pkg.pr.new
-        run: pnpm dlx pkg-pr-new publish --pnpm './packages/*'
+        run: pnpm dlx pkg-pr-new publish --pnpm --commentWithSha './packages/*'
