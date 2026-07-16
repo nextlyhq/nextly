@@ -1,7 +1,7 @@
 export {
+  defaultLayoutTemplate,
+  DEFAULT_LAYOUT_SLUG,
   emailVerificationTemplate,
-  layoutFooterTemplate,
-  layoutHeaderTemplate,
   passwordResetTemplate,
   welcomeTemplate,
   BUILT_IN_TEMPLATES,

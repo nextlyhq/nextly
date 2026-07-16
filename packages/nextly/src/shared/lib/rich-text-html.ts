@@ -25,10 +25,20 @@ export interface RichTextBothFormat {
   html: string;
 }
 
+/**
+ * Token types the tokenizer emits, as a class-name fragment.
+ *
+ * Checked rather than trusted: the value arrives from stored content and is
+ * written into a class attribute, where a crafted string could otherwise
+ * close the attribute and inject markup.
+ */
+const SAFE_HIGHLIGHT_TYPE = /^[a-z][a-z0-9-]*$/;
+
 interface LexicalSerializedNode {
   type: string;
   children?: LexicalSerializedNode[];
   text?: string;
+  highlightType?: string | null;
   format?: number;
   style?: string;
   tag?: string;
@@ -176,7 +186,9 @@ function applyTextFormat(text: string, format: number): string {
   let result = escapeHtml(text);
 
   if (format & TEXT_FORMAT.CODE) {
-    result = `<code style="background-color:#f3f4f6;padding:0.125rem 0.25rem;border-radius:0.25rem;font-family:ui-monospace,monospace;font-size:0.875em">${result}</code>`;
+    // Class, not an inline style: the site owns how its code reads, and an
+    // inline background here is unreachable from its stylesheet.
+    result = `<code class="nextly-rich-text-code">${result}</code>`;
   }
   if (format & TEXT_FORMAT.SUBSCRIPT) {
     result = `<sub style="font-size:0.75em;vertical-align:sub">${result}</sub>`;
@@ -197,7 +209,12 @@ function applyTextFormat(text: string, format: number): string {
     result = `<strong style="font-weight:700">${result}</strong>`;
   }
   if (format & TEXT_FORMAT.HIGHLIGHT) {
-    result = `<mark style="background-color:#fef08a;padding:0.125rem 0.25rem">${result}</mark>`;
+    // Class, not an inline style, for the same reason as the code format
+    // above: a baked-in colour outranks the site's stylesheet, and this one
+    // was a light yellow that a dark page could neither restyle nor read.
+    // `mark` carries a highlight of its own even unstyled, so dropping the
+    // colour leaves the meaning intact rather than the text bare.
+    result = `<mark class="nextly-rich-text-highlight">${result}</mark>`;
   }
 
   return result;
@@ -398,18 +415,29 @@ function serializeCodeNode(
     ? ` data-language="${escapeHtml(node.language)}"`
     : "";
 
+  // No inline colours: an inline style outranks the site's stylesheet, so
+  // baking one here fixes every code block to one palette and leaves the site
+  // no way to theme it — including in dark mode.
   const className = ' class="nextly-rich-text-code-block"';
-  const preStyle =
-    ' style="background-color:#1f2937;color:#f9fafb;padding:1rem;border-radius:0.5rem;overflow-x:auto;margin:1rem 0"';
-  const codeStyle =
-    ' style="font-family:ui-monospace,monospace;font-size:0.875rem;line-height:1.5"';
 
-  return `<pre${className}${language}${preStyle}><code${codeStyle}>${content}</code></pre>`;
+  return `<pre${className}${language}><code>${content}</code></pre>`;
 }
 
+/**
+ * A single syntax token.
+ *
+ * The tokenizer already worked out what this text is and stored it on the
+ * node; emitting it as a class hands the site the same information, so it can
+ * colour code with its own tokens instead of receiving colours it cannot
+ * change. Text with no type is emitted bare rather than wrapped in an
+ * element that would say nothing.
+ */
 function serializeCodeHighlightNode(node: LexicalSerializedNode): string {
-  const text = node.text || "";
-  return escapeHtml(text);
+  const text = escapeHtml(node.text || "");
+  const type = node.highlightType;
+  if (!type || !SAFE_HIGHLIGHT_TYPE.test(type)) return text;
+
+  return `<span class="nextly-code-token nextly-code-token--${type}">${text}</span>`;
 }
 
 function serializeHorizontalRuleNode(): string {

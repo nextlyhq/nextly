@@ -12,9 +12,19 @@ export interface CollectedPermission {
   slug: string;
   name: string;
   description?: string;
-  /** Declaring plugin name — provenance for logs (not persisted in P3a). */
+  /** Declaring plugin name ("app" for app-declared). Persisted on the row. */
   owner: string;
+  /**
+   * Heading within the owner's section. Defaulted here rather than left
+   * undefined, so grouping never has to decide what an absent group means.
+   */
+  group: string;
+  /** True for a permission the admin should warn before granting. */
+  danger: boolean;
 }
+
+/** Where a permission lands when its plugin does not group its own. */
+export const DEFAULT_PERMISSION_GROUP = "General";
 
 const CRUD_ACTIONS = new Set(["create", "read", "update", "delete"]);
 const SINGLE_ACTIONS = new Set(["read", "update"]);
@@ -89,6 +99,10 @@ export function collectCustomPermissions(
       name: perm.label ?? `${titleCase(action)} ${titleCase(resource)}`,
       description: perm.description,
       owner,
+      // `group` was accepted and dropped: the interface documented it, the
+      // canonical example set it, and nothing ever read it.
+      group: perm.group?.trim() || DEFAULT_PERMISSION_GROUP,
+      danger: perm.danger === true,
     });
   };
 

@@ -89,7 +89,7 @@ export function DocumentPanel({
     | undefined;
 
   return (
-    <div className="px-5 py-4 border-b border-primary/5">
+    <div className="px-5 py-4 border-b border-border">
       <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
         Document
       </p>
@@ -136,7 +136,7 @@ function TranslationsRow({
 }
 
 function Separator() {
-  return <div className="border-t border-primary/5 -mx-5" aria-hidden="true" />;
+  return <div className="border-t border-border -mx-5" aria-hidden="true" />;
 }
 
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
@@ -157,7 +157,7 @@ function StatusRow({ state }: { state: PillState }) {
   const PILL_CLASS: Record<PillState, string> = {
     draft: "bg-muted text-muted-foreground border border-primary/10",
     modified:
-      "bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900",
+      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
     published: "bg-foreground text-background",
   };
   const PILL_LABEL: Record<PillState, string> = {
@@ -215,7 +215,7 @@ function IdRow({ id }: { id?: string | null }) {
             aria-label={copied ? "ID copied" : "Copy ID to clipboard"}
           >
             {copied ? (
-              <Check className="h-3 w-3 text-green-600" />
+              <Check className="h-3 w-3 text-success-600" />
             ) : (
               <Copy className="h-3 w-3 text-muted-foreground" />
             )}

@@ -294,6 +294,24 @@
       "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
     },
 
+    // test:e2e - Drive the admin in a real browser (see e2e/README.md)
+    //
+    // Never cached: the suite starts a server and a fresh database, and its
+    // result depends on the whole composed product rather than on any file set
+    // turbo can fingerprint.
+    //
+    // dependsOn ^build because the playground loads the admin and the plugins
+    // from their built output — a stale dist is a stale test. This only reaches
+    // them because the e2e package declares them as devDependencies; without
+    // that, ^build would build only e2e's own config deps and the suite would
+    // run against whatever dist happened to be lying around.
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": false,
+      "env": ["CI", "E2E_PORT"]
+    },
+
     // test:coverage - Generate and display code coverage report
     //
     // Same as 'test' but with coverage reporting enabled.

@@ -42,11 +42,11 @@ const BLOCK_TYPE = "nx-block";
 const placeholderStyle = {
   padding: "14px 16px",
   fontSize: 13,
-  color: "#6b7280",
-  border: "1px dashed #cbd5e1",
+  color: "var(--nx-pb-ed-muted-foreground)",
+  border: "1px dashed var(--nx-pb-ed-border-strong)",
   borderRadius: 6,
   textAlign: "center" as const,
-  background: "#f8fafc",
+  background: "var(--nx-pb-ed-muted)",
 };
 
 /** Containers whose children lay out horizontally — no interleaved DropZones (parity). */
@@ -289,8 +289,9 @@ function DraggableNode({
           style={{
             padding: 8,
             fontSize: 12,
-            color: "#b91c1c",
-            border: "1px dashed #fca5a5",
+            color: "var(--nx-pb-ed-destructive)",
+            border:
+              "1px dashed color-mix(in srgb, var(--nx-pb-ed-destructive) 50%, transparent)",
             borderRadius: 6,
           }}
         >

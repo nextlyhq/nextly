@@ -11,6 +11,9 @@ export const NEXTLY_ERROR_STATUS = {
   AUTH_INVALID_CREDENTIALS: 401,
   TOKEN_EXPIRED: 401,
   FORBIDDEN: 403,
+  // The schema builder is off in this environment (production by default).
+  // Separate from FORBIDDEN: the caller's permissions are not the problem.
+  BUILDER_DISABLED: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   DUPLICATE: 409,

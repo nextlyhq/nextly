@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { sanitizeCustomCss } from "./css-sanitize";
+import { sanitizeBlockCss, sanitizeCustomCss } from "./css-sanitize";
 
 const SCOPE = "nx-pb-page-abc";
 
@@ -57,5 +57,41 @@ describe("sanitizeCustomCss", () => {
 
   it("returns empty string for empty input", () => {
     expect(sanitizeCustomCss("", SCOPE)).toBe("");
+  });
+});
+
+describe("sanitizeBlockCss", () => {
+  it("rewrites the `selector` keyword to the block scope class", () => {
+    const out = sanitizeBlockCss("selector { color: red; }", "nx-pb-abc");
+    expect(out).toContain(".nx-pb-abc");
+    expect(out).toContain("color:red");
+    expect(out).not.toMatch(/(^|[^-.])selector\b/);
+  });
+
+  it("scopes descendant selectors under the block", () => {
+    const out = sanitizeBlockCss(
+      "selector .title { font-weight: 700; }",
+      "nx-pb-abc"
+    );
+    expect(out).toContain(".nx-pb-abc");
+    expect(out).toContain(".title");
+  });
+
+  it("scopes a bare selector under the block too", () => {
+    const out = sanitizeBlockCss("p { margin: 0; }", "nx-pb-abc");
+    expect(out).toMatch(/\.nx-pb-abc\s+p/);
+  });
+
+  it("drops dangerous declarations", () => {
+    const out = sanitizeBlockCss(
+      "selector { background: url(javascript:alert(1)); }",
+      "nx-pb-abc"
+    );
+    expect(out).not.toContain("javascript");
+  });
+
+  it("does not double-scope a selector already prefixed with the block class", () => {
+    const out = sanitizeBlockCss("selector { color: red; }", "nx-pb-abc");
+    expect(out).not.toMatch(/\.nx-pb-abc\s+\.nx-pb-abc/);
   });
 });

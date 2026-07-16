@@ -1,30 +1,5 @@
 "use client";
 
-/**
- * ComponentTable Component
- *
- * Displays a responsive table/card view of Components with search, pagination, and CRUD actions.
- * Uses ResponsiveTable for mobile responsiveness and TanStack Query for data fetching.
- *
- * ## Features
- * - Mobile responsive: Card view (< 768px), table view (>= 768px)
- * - Search components by slug or label (debounced 300ms)
- * - Filter by source (code, ui) and migration status
- * - Server-side pagination (10/25/50 rows per page)
- * - Source badges with color coding (code=primary, ui=success)
- * - Locked indicator for code-first components
- * - Migration status badges
- * - Field count display
- * - Category display
- * - CRUD actions: Edit, Delete
- * - Bulk delete with partial failure handling
- * - Automatic caching: 5-minute staleTime
- * - Cache invalidation: Automatic refetch after delete
- *
- * @see hooks/queries/useComponents.ts - Component query hooks
- */
-
-import type { Column } from "@nextlyhq/ui";
 import {
   Alert,
   Badge,
@@ -32,27 +7,30 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  ResponsiveTable,
   Skeleton,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { MoreHorizontal, Pencil, Trash2, Filter } from "lucide-react";
-import { useState, useMemo, useCallback } from "react";
+import { Eye, Pencil, Trash2, Filter } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type {
+  DataTableSelection,
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -73,39 +51,22 @@ import type {
 import { ComponentsEmptyState } from "./ComponentsEmptyState";
 import { ComponentTableSkeleton } from "./ComponentTableSkeleton";
 
-/**
- * Get the badge variant and label for a component source
- */
+/** Source badge label + icon. */
 function getSourceBadge(source?: ComponentSource): {
-  variant: "default";
   label: string;
   icon: React.ReactNode;
 } {
   switch (source) {
     case "code":
-      return {
-        variant: "default",
-        label: "Code",
-        icon: <Icons.Code className="h-3 w-3 mr-1" />,
-      };
+      return { label: "Code", icon: <Icons.Code className="mr-1 h-3 w-3" /> };
     case "ui":
-      return {
-        variant: "default",
-        label: "UI",
-        icon: <Icons.FileText className="h-3 w-3 mr-1" />,
-      };
+      return { label: "UI", icon: <Icons.FileText className="mr-1 h-3 w-3" /> };
     default:
-      return {
-        variant: "default",
-        label: "Unknown",
-        icon: null,
-      };
+      return { label: "Unknown", icon: null };
   }
 }
 
-/**
- * Get the badge variant and label for a migration status
- */
+/** Migration-status badge variant + label. */
 function getMigrationBadge(status?: ComponentMigrationStatus): {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
@@ -126,19 +87,30 @@ function getMigrationBadge(status?: ComponentMigrationStatus): {
   }
 }
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
+
 /**
- * ComponentTable Component
+ * ComponentTable
+ *
+ * Lists components with search, source/migration-status filters, server-side
+ * pagination, column visibility, whole-row navigation to the builder, per-row
+ * actions, and bulk delete. Locked (code-first) components cannot be edited,
+ * selected, or deleted from the UI. Data + mutations run through TanStack Query;
+ * rendering is delegated to the unified DataTableView.
  */
 export default function ComponentTable() {
-  // Pagination state
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-
-  // Search state (debounced to reduce API calls)
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
 
-  // Filter state
+  // Reset to the first page when the search term changes so a later page does not
+  // request out-of-range results and show a false empty state.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
   const [sourceFilter, setSourceFilter] = useState<ComponentSource | "all">(
     "all"
   );
@@ -146,44 +118,33 @@ export default function ComponentTable() {
     ComponentMigrationStatus | "all"
   >("all");
 
-  // Delete dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [componentToDelete, setComponentToDelete] = useState<{
     id: string;
     slug: string;
     label: string;
   } | null>(null);
-
-  // Bulk delete dialog state
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
-
-  // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
-  // TanStack Query: Fetch components with automatic caching
   const { data, isLoading, isFetching, isError, error } = useComponents({
     pagination: { page, pageSize },
     sorting: [],
     filters: { search: debouncedSearch },
   });
 
-  // TanStack Query: Delete mutation with automatic cache invalidation
   const { mutate: deleteComponent, isPending: isDeleting } =
     useDeleteComponent();
 
-  // Row selection state management
   const {
     selectedIds,
     selectedCount,
@@ -191,24 +152,24 @@ export default function ComponentTable() {
     selectAllOnPage,
     deselectAllOnPage,
     clearSelection,
-    isSelected,
-    getSelectedCountOnPage,
   } = useRowSelection();
 
-  // Bulk mutation hooks
+  // Selection is page-scoped: clear it whenever the page, search, or source
+  // filter changes so a bulk action never targets rows that are no longer
+  // shown/confirmed.
+  useEffect(() => {
+    clearSelection();
+  }, [page, debouncedSearch, sourceFilter, clearSelection]);
+
   const { mutate: bulkDeleteComponents, isPending: isBulkDeleting } =
     useBulkDeleteComponents();
 
-  // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
     if (!data?.items) return [];
-
     return data.items.filter(component => {
-      // Filter by source
       if (sourceFilter !== "all" && component.source !== sourceFilter) {
         return false;
       }
-      // Filter by migration status
       if (
         migrationFilter !== "all" &&
         component.migrationStatus !== migrationFilter
@@ -219,14 +180,9 @@ export default function ComponentTable() {
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
-  // Action handlers
+  // Code-first (locked) components open the same builder route; the builder
+  // renders read-only when the loaded component is locked.
   const handleEdit = useCallback((component: ApiComponent) => {
-    if (component.locked) {
-      toast.error("Cannot edit locked component", {
-        description: "Code-first components cannot be edited from the UI.",
-      });
-      return;
-    }
     navigateTo(
       buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug: component.slug })
     );
@@ -249,7 +205,6 @@ export default function ComponentTable() {
 
   const handleConfirmDelete = useCallback(() => {
     if (!componentToDelete) return;
-
     deleteComponent(componentToDelete.slug, {
       onSuccess: () => {
         toast.success("Component deleted", {
@@ -258,18 +213,17 @@ export default function ComponentTable() {
         setDeleteDialogOpen(false);
         setComponentToDelete(null);
       },
-      onError: error => {
+      onError: err => {
         toast.error("Delete failed", {
           description:
-            error instanceof Error
-              ? error.message
+            err instanceof Error
+              ? err.message
               : "Failed to delete the component.",
         });
       },
     });
   }, [componentToDelete, deleteComponent]);
 
-  // Bulk delete handlers
   const handleBulkDelete = useCallback(() => {
     if (selectedCount === 0) {
       toast.error("No components selected");
@@ -282,7 +236,6 @@ export default function ComponentTable() {
     const selectedComponentSlugs = filteredData
       .filter(c => selectedIds.includes(c.id) && !c.locked)
       .map(c => c.slug);
-
     void bulkDeleteComponents(selectedComponentSlugs, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
@@ -307,116 +260,34 @@ export default function ComponentTable() {
     });
   }, [filteredData, selectedIds, bulkDeleteComponents, clearSelection]);
 
-  // Helper: Get page component IDs for select all
-  const pageComponentIds = useMemo(() => {
-    return filteredData.map(c => c.id) || [];
-  }, [filteredData]);
-
-  // Determine "select all on page" checkbox state
-  const selectedOnPage = getSelectedCountOnPage(pageComponentIds);
-  const selectAllCheckboxState: boolean | "indeterminate" =
-    selectedOnPage === 0
-      ? false
-      : selectedOnPage === pageComponentIds.length
-        ? true
-        : "indeterminate";
-
-  // Handle select all on page toggle
-  const handleToggleSelectAllOnPage = useCallback(() => {
-    const selectedOnPage = getSelectedCountOnPage(pageComponentIds);
-    if (selectedOnPage === pageComponentIds.length) {
-      deselectAllOnPage(pageComponentIds);
-    } else {
-      selectAllOnPage(pageComponentIds);
-    }
-  }, [
-    pageComponentIds,
-    getSelectedCountOnPage,
-    deselectAllOnPage,
-    selectAllOnPage,
-  ]);
-
-  // No-op handlers for bulk actions not applicable to components
-
-  const _handleBulkAssignRole = useCallback(() => {
-    // Not applicable to components
-  }, []);
-
-  const _handleBulkToggleStatus = useCallback(() => {
-    // Not applicable to components
-  }, []);
-
-  // Format date helper (using centralized utility)
-  const formatDate = useCallback(
-    (dateValue?: string) => formatDateTime(dateValue),
-    []
-  );
-
-  // Get field count from component
   const getFieldCount = useCallback((component: ApiComponent): number => {
-    if (component.fieldCount !== undefined) {
-      return component.fieldCount;
-    }
+    if (component.fieldCount !== undefined) return component.fieldCount;
     return component.fields?.length || 0;
   }, []);
 
-  // ResponsiveTable columns
-  const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
-
-  const columnDefs = useMemo<Column<ApiComponent>[]>(
+  const allColumns = useMemo<NextlyColumn<ApiComponent>[]>(
     () => [
-      // Checkbox column for bulk selection
       {
-        key: "select" as keyof ApiComponent,
-        label: (
-          <BulkSelectCheckbox
-            checked={selectAllCheckboxState}
-            onCheckedChange={handleToggleSelectAllOnPage}
-            rowId="select-all"
-            rowLabel="Select all components on page"
-          />
-        ),
-        hideLabelOnMobile: true,
-        render: (_value, component) => (
-          <BulkSelectCheckbox
-            checked={isSelected(component.id)}
-            onCheckedChange={() => toggleSelection(component.id)}
-            rowId={component.id}
-            rowLabel={component.label}
-          />
-        ),
-      },
-      {
-        key: "label",
-        label: "COMPONENT",
-        hideLabelOnMobile: true,
-        render: (_value, component) => {
-          const iconName = component.admin?.icon || "Puzzle";
+        name: "label",
+        header: "COMPONENT",
+        cell: ({ row }) => {
+          const iconName = row.admin?.icon || "Puzzle";
           const IconComponent =
             (Icons as Record<string, React.ElementType>)[iconName] || Icons.Box;
-
           return (
             <div className="flex items-center gap-3">
               <div className="table-row-icon-cover">
                 <IconComponent className="h-4 w-4" />
               </div>
-              <div className="min-w-0 flex-1 flex flex-col">
+              <div className="flex min-w-0 flex-1 flex-col">
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      handleEdit(component);
-                    }}
-                    disabled={component.locked}
-                    className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {component.label}
-                  </button>
-                  {component.locked && (
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {row.label}
+                  </span>
+                  {row.locked && (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>Locked: Cannot be edited or deleted from UI</p>
@@ -424,19 +295,19 @@ export default function ComponentTable() {
                     </Tooltip>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground truncate">
-                  {component.slug}
-                </div>
+                <span className="truncate text-xs text-muted-foreground">
+                  {row.slug}
+                </span>
               </div>
             </div>
           );
         },
       },
       {
-        key: "admin",
-        label: "CATEGORY",
-        render: (_value, component) => {
-          const category = component.admin?.category;
+        name: "admin",
+        header: "CATEGORY",
+        cell: ({ row }) => {
+          const category = row.admin?.category;
           if (!category) {
             return <span className="text-muted-foreground">-</span>;
           }
@@ -448,14 +319,14 @@ export default function ComponentTable() {
         },
       },
       {
-        key: "source",
-        label: "SOURCE",
-        render: (_value, component) => {
-          const sourceBadge = getSourceBadge(component.source);
+        name: "source",
+        header: "SOURCE",
+        cell: ({ row }) => {
+          const sourceBadge = getSourceBadge(row.source);
           return (
             <Badge
-              variant={sourceBadge.variant}
-              className="whitespace-nowrap text-muted-foreground font-normal"
+              variant="default"
+              className="whitespace-nowrap font-normal text-muted-foreground"
             >
               {sourceBadge.icon}
               {sourceBadge.label}
@@ -464,10 +335,10 @@ export default function ComponentTable() {
         },
       },
       {
-        key: "migrationStatus",
-        label: "STATUS",
-        render: (_value, component) => {
-          const migrationBadge = getMigrationBadge(component.migrationStatus);
+        name: "migrationStatus",
+        header: "STATUS",
+        cell: ({ row }) => {
+          const migrationBadge = getMigrationBadge(row.migrationStatus);
           return (
             <Badge variant={migrationBadge.variant}>
               {migrationBadge.label}
@@ -476,100 +347,42 @@ export default function ComponentTable() {
         },
       },
       {
-        key: "fields",
-        label: "FIELDS",
-        render: (_value, component) => (
-          <span className="text-sm tabular-nums">
-            {getFieldCount(component)}
-          </span>
+        name: "fields",
+        header: "FIELDS",
+        cell: ({ row }) => (
+          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
         ),
       },
       {
-        key: "createdAt",
-        label: "CREATED",
+        name: "createdAt",
+        header: "CREATED",
         hideOnMobile: true,
-        render: createdAt => (
+        cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatDate(createdAt as string | undefined)}
+            {formatDateTime(value as string | undefined)}
           </span>
         ),
-      },
-      {
-        key: "actions" as keyof ApiComponent,
-        label: "ACTIONS",
-        render: (_, component) => {
-          const isLocked = component.locked;
-          return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontal className="h-4 w-4" />
-                  <span className="sr-only">Open menu</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation();
-                    handleEdit(component);
-                  }}
-                  className={isLocked ? "opacity-50" : ""}
-                >
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                  {isLocked && (
-                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                  )}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation();
-                    handleDelete(component);
-                  }}
-                  disabled={isLocked}
-                  className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                  {isLocked && (
-                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                  )}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          );
-        },
       },
     ],
-    [
-      selectAllCheckboxState,
-      handleToggleSelectAllOnPage,
-      isSelected,
-      toggleSelection,
-      handleEdit,
-      handleDelete,
-      formatDate,
-      getFieldCount,
-    ]
+    [getFieldCount]
   );
 
   const columns = useMemo(
-    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
-    [columnDefs, hiddenColumns]
+    () =>
+      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
+    [allColumns, hiddenColumns]
   );
 
-  const toggleableColumns = columnDefs.filter(
-    col => !ALWAYS_VISIBLE.has(String(col.key))
+  const toggleableColumns = useMemo(
+    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
+    [allColumns]
   );
 
-  // Handle page size change (reset to first page)
   const handlePageSizeChange = (newPageSize: number) => {
     setPageSize(newPageSize);
     setPage(0);
   };
 
-  // Handle filter changes (reset to first page)
   const handleSourceFilterChange = (value: string) => {
     setSourceFilter(value as ComponentSource | "all");
     setPage(0);
@@ -580,18 +393,52 @@ export default function ComponentTable() {
     setPage(0);
   };
 
-  // Error and loading states within the unified layout
+  const selection = useMemo<DataTableSelection<ApiComponent>>(
+    () => ({
+      selectedIds,
+      isSelectable: component => !component.locked,
+      onToggle: component => toggleSelection(component.id),
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(r => r.id);
+        if (allSelected) deselectAllOnPage(ids);
+        else selectAllOnPage(ids);
+      },
+    }),
+    [selectedIds, toggleSelection, deselectAllOnPage, selectAllOnPage]
+  );
+
+  const rowActions = useCallback(
+    (component: ApiComponent): RowAction<ApiComponent>[] => [
+      {
+        id: "edit",
+        label: component.locked ? "View" : "Edit",
+        icon: component.locked ? (
+          <Eye className="h-4 w-4" />
+        ) : (
+          <Pencil className="h-4 w-4" />
+        ),
+        onSelect: () => handleEdit(component),
+      },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        isDisabled: () => Boolean(component.locked),
+        onSelect: () => handleDelete(component),
+      },
+    ],
+    [handleEdit, handleDelete]
+  );
+
   const showLoadingSkeleton =
     (isLoading || isFetching) && (!data || data.items.length === 0);
-
-  // Render table with data
   const isEmpty = filteredData.length === 0;
   const isSearching = search.trim() !== "";
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
     <div className="space-y-4">
-      {/* Bulk selection toolbar */}
       {selectedCount > 0 && (
         <BulkActionBar
           selectedCount={selectedCount}
@@ -602,147 +449,137 @@ export default function ComponentTable() {
         />
       )}
 
-      {/* Search and filters */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto mt-1">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search components..."
-            isLoading={isFetching}
-            className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
-          />
-        </div>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search components..."
+          isLoading={isFetching}
+          className="w-full border-border bg-background text-foreground md:max-w-sm"
+        />
 
-        {/* Right: Column visibility & Filters */}
-        <div className="flex items-center justify-between sm:justify-end gap-2 w-full md:w-auto">
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            {showLoadingSkeleton ? (
-              <>
-                <Skeleton className="w-20" />
-                <Skeleton className="w-24" />
-              </>
-            ) : (
-              <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="md"
-                      className="relative bg-background text-foreground border-primary/5 hover:bg-accent/10"
-                    >
-                      <Filter className="h-4 w-4" />
-                      Filter
-                      {(sourceFilter !== "all" ||
-                        migrationFilter !== "all") && (
-                        <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
-                      )}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
+        <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
+          {showLoadingSkeleton ? (
+            <>
+              <Skeleton className="h-9 w-20" />
+              <Skeleton className="h-9 w-24" />
+            </>
+          ) : (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="md"
+                    className="relative border-border bg-background text-foreground hover:bg-accent/10"
+                  >
+                    <Filter className="h-4 w-4" />
+                    Filter
+                    {isFiltering && (
+                      <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-none bg-primary" />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={sourceFilter === "all"}
+                    onCheckedChange={() => handleSourceFilterChange("all")}
+                  >
+                    All Sources
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={sourceFilter === "code"}
+                    onCheckedChange={() => handleSourceFilterChange("code")}
+                  >
+                    Code
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={sourceFilter === "ui"}
+                    onCheckedChange={() => handleSourceFilterChange("ui")}
+                  >
+                    UI
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "all"}
+                    onCheckedChange={() => handleMigrationFilterChange("all")}
+                  >
+                    All Status
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "synced"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("synced")
+                    }
+                  >
+                    Synced
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "pending"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("pending")
+                    }
+                  >
+                    Pending
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "generated"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("generated")
+                    }
+                  >
+                    Generated
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "applied"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("applied")
+                    }
+                  >
+                    Applied
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "failed"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("failed")
+                    }
+                  >
+                    Failed
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="md"
+                    className="border-border bg-background text-foreground hover:bg-accent/10"
+                  >
+                    <Icons.Columns className="h-4 w-4" />
+                    Columns
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {toggleableColumns.map(col => (
                     <DropdownMenuCheckboxItem
-                      checked={sourceFilter === "all"}
-                      onCheckedChange={() => handleSourceFilterChange("all")}
+                      key={col.name}
+                      checked={!hiddenColumns.has(col.name)}
+                      onCheckedChange={() => toggleColumn(col.name)}
                     >
-                      All Sources
+                      {typeof col.header === "string" ? col.header : col.name}
                     </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={sourceFilter === "code"}
-                      onCheckedChange={() => handleSourceFilterChange("code")}
-                    >
-                      Code
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={sourceFilter === "ui"}
-                      onCheckedChange={() => handleSourceFilterChange("ui")}
-                    >
-                      UI
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "all"}
-                      onCheckedChange={() => handleMigrationFilterChange("all")}
-                    >
-                      All Status
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "synced"}
-                      onCheckedChange={() =>
-                        handleMigrationFilterChange("synced")
-                      }
-                    >
-                      Synced
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "pending"}
-                      onCheckedChange={() =>
-                        handleMigrationFilterChange("pending")
-                      }
-                    >
-                      Pending
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "generated"}
-                      onCheckedChange={() =>
-                        handleMigrationFilterChange("generated")
-                      }
-                    >
-                      Generated
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "applied"}
-                      onCheckedChange={() =>
-                        handleMigrationFilterChange("applied")
-                      }
-                    >
-                      Applied
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={migrationFilter === "failed"}
-                      onCheckedChange={() =>
-                        handleMigrationFilterChange("failed")
-                      }
-                    >
-                      Failed
-                    </DropdownMenuCheckboxItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="md"
-                      className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
-                    >
-                      <Icons.Columns className="h-4 w-4" />
-                      Columns
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {toggleableColumns.map(col => (
-                      <DropdownMenuCheckboxItem
-                        key={String(col.key)}
-                        checked={!hiddenColumns.has(String(col.key))}
-                        onCheckedChange={() => toggleColumn(String(col.key))}
-                      >
-                        {typeof col.label === "string"
-                          ? col.label
-                          : String(col.key)}
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            )}
-          </div>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Main content area (States) */}
       {isError ? (
         <Alert variant="destructive">
           {error instanceof Error
@@ -754,13 +591,17 @@ export default function ComponentTable() {
       ) : isEmpty ? (
         <ComponentsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
-          <ResponsiveTable
-            data={filteredData}
+        <>
+          <DataTableView<ApiComponent>
             columns={columns}
-            emptyMessage="No components found. Try adjusting your search or filters."
+            rows={filteredData}
+            onRowClick={component => handleEdit(component)}
+            primaryColumn="label"
+            selection={selection}
+            rowActions={rowActions}
+            registryKey="components"
             ariaLabel="Components table"
-            tableWrapperClassName="border-0 rounded-none shadow-none"
+            emptyMessage="No components found. Try adjusting your search or filters."
           />
           {data && (
             <Pagination
@@ -774,10 +615,9 @@ export default function ComponentTable() {
               totalItems={data.meta.total}
             />
           )}
-        </div>
+        </>
       )}
 
-      {/* Single delete confirmation dialog */}
       <BulkDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -798,7 +638,6 @@ export default function ComponentTable() {
         isLoading={isDeleting}
       />
 
-      {/* Bulk delete confirmation dialog */}
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
@@ -806,11 +645,7 @@ export default function ComponentTable() {
         entityTypePlural="Components"
         items={filteredData
           .filter(c => selectedIds.includes(c.id) && !c.locked)
-          .map(c => ({
-            id: c.id,
-            name: c.label,
-            secondary: c.slug,
-          }))}
+          .map(c => ({ id: c.id, name: c.label, secondary: c.slug }))}
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />

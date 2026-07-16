@@ -12,7 +12,9 @@ export type ContentFieldType =
   | "number"
   | "boolean"
   | "link"
-  | "media";
+  | "media"
+  | "icon"
+  | "repeater";
 
 export interface ContentFieldOption {
   value: string;
@@ -28,6 +30,10 @@ export interface ContentField {
   placeholder?: string;
   /** Marks a field as bindable to a Query Loop item (bind UI wired in M6). */
   bindable?: boolean;
+  /** For `repeater` — the fields that make up one item. */
+  itemFields?: ContentField[];
+  /** For `repeater` — label for the add button. */
+  addLabel?: string;
 }
 
 const TYPES = new Set<ContentFieldType>([
@@ -38,6 +44,8 @@ const TYPES = new Set<ContentFieldType>([
   "boolean",
   "link",
   "media",
+  "icon",
+  "repeater",
 ]);
 
 const TYPE_DEFAULTS: Record<ContentFieldType, unknown> = {
@@ -48,6 +56,8 @@ const TYPE_DEFAULTS: Record<ContentFieldType, unknown> = {
   boolean: false,
   link: undefined,
   media: undefined,
+  icon: "Star",
+  repeater: [],
 };
 
 /** Narrow an untyped `def.contentFields` into validated ContentField entries. */
@@ -74,6 +84,10 @@ export function narrowContentFields(
       placeholder:
         typeof r.placeholder === "string" ? r.placeholder : undefined,
       bindable: r.bindable === true,
+      itemFields: Array.isArray(r.itemFields)
+        ? narrowContentFields(r.itemFields)
+        : undefined,
+      addLabel: typeof r.addLabel === "string" ? r.addLabel : undefined,
     });
   }
   return out;

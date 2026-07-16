@@ -14,7 +14,7 @@
  * @since 1.0.0
  */
 
-import { CodeNode, CodeHighlightNode } from "@lexical/code";
+import { CodeNode, CodeHighlightNode } from "@lexical/code-core";
 import { LinkNode, AutoLinkNode } from "@lexical/link";
 import { ListNode, ListItemNode } from "@lexical/list";
 import { TRANSFORMERS } from "@lexical/markdown";
@@ -51,6 +51,7 @@ import { cn } from "@admin/lib/utils";
 // Custom nodes
 import { ButtonGroupNode } from "./ButtonGroupNode";
 import { ButtonLinkNode } from "./ButtonLinkNode";
+import { CodeHighlightPlugin } from "./CodeHighlightPlugin";
 import {
   CollapsibleContainerNode,
   CollapsibleTitleNode,
@@ -103,7 +104,10 @@ const editorTheme = {
     underline: "underline",
     strikethrough: "line-through",
     code: "bg-primary/5 px-1.5 py-0.5 rounded-none font-mono text-sm",
-    highlight: "bg-yellow-200 dark:bg-yellow-800",
+    // Its own token rather than a status one: a marker drawn over text is not
+    // a warning, and it carries its own foreground so the text stays readable
+    // when the page's own flips to white.
+    highlight: "bg-highlight text-highlight-foreground",
     subscript: "align-sub text-xs",
     superscript: "align-super text-xs",
   },
@@ -127,7 +131,7 @@ const editorTheme = {
     ol: "list-decimal ml-6 mb-2",
     listitem: "mb-1",
     listitemChecked:
-      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-green-500",
+      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-success-500",
     listitemUnchecked:
       "list-none relative pl-6 before:content-['○'] before:absolute before:left-0",
     nested: {
@@ -137,52 +141,53 @@ const editorTheme = {
 
   // Blockquote
   quote:
-    "border-l-4 border-primary/5-foreground/30 pl-4 italic text-muted-foreground mb-2",
+    "border-l-4 border-border-foreground/30 pl-4 italic text-muted-foreground mb-2",
 
   // Links
   link: "text-primary underline hover-unified cursor-pointer",
 
-  // Code blocks
-  code: "block bg-primary/5 p-4 rounded-none font-mono text-sm mb-2 overflow-x-auto",
+  // Code blocks. The tokenizer names what each token is; these classes decide
+  // how it looks, so the palette lives in the design tokens and both modes are
+  // settled by CSS rather than stored with the content.
+  code: "block bg-code-bg text-code-fg p-4 rounded-none font-mono text-sm mb-2 overflow-x-auto",
   codeHighlight: {
-    atrule: "text-purple-500",
-    attr: "text-primary",
-    boolean: "text-orange-500",
-    builtin: "text-cyan-500",
-    cdata: "text-gray-500",
-    char: "text-green-500",
-    class: "text-yellow-500",
-    "class-name": "text-yellow-500",
-    comment: "text-gray-500 italic",
-    constant: "text-orange-500",
-    deleted: "text-red-500",
-    doctype: "text-gray-500",
-    entity: "text-red-500",
-    function: "text-primary",
-    important: "text-red-500 font-bold",
-    inserted: "text-green-500",
-    keyword: "text-purple-500",
-    namespace: "text-gray-500",
-    number: "text-orange-500",
-    operator: "text-pink-500",
-    prolog: "text-gray-500",
-    property: "text-primary",
-    punctuation: "text-gray-600",
-    regex: "text-red-500",
-    selector: "text-green-500",
-    string: "text-green-500",
-    symbol: "text-orange-500",
-    tag: "text-red-500",
-    url: "text-primary underline",
-    variable: "text-orange-500",
+    atrule: "text-code-keyword",
+    attr: "text-code-function",
+    boolean: "text-code-number",
+    builtin: "text-code-function",
+    cdata: "text-code-comment",
+    char: "text-code-string",
+    class: "text-code-variable",
+    "class-name": "text-code-variable",
+    comment: "text-code-comment italic",
+    constant: "text-code-number",
+    deleted: "text-code-deleted",
+    doctype: "text-code-comment",
+    entity: "text-code-tag",
+    function: "text-code-function",
+    important: "text-code-tag font-bold",
+    inserted: "text-code-inserted",
+    keyword: "text-code-keyword",
+    namespace: "text-code-comment",
+    number: "text-code-number",
+    operator: "text-code-operator",
+    prolog: "text-code-comment",
+    property: "text-code-function",
+    punctuation: "text-code-punctuation",
+    regex: "text-code-string",
+    selector: "text-code-tag",
+    string: "text-code-string",
+    symbol: "text-code-number",
+    tag: "text-code-tag",
+    url: "text-code-function underline",
+    variable: "text-code-variable",
   },
 
   // Tables
   table: "border-collapse w-full my-4",
-  tableCell:
-    "border border-primary/5 px-3 py-2 text-left align-top min-w-[75px]",
+  tableCell: "border border-border px-3 py-2 text-left align-top min-w-[75px]",
   tableCellHeader:
-    "border border-primary/5 px-3 py-2 text-left font-bold bg-primary/5 align-top",
+    "border border-border px-3 py-2 text-left font-bold bg-primary/5 align-top",
   tableRow: "",
   tableRowStriping: "even:bg-primary/5",
 };
@@ -262,7 +267,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none  border border-primary/5 bg-background",
+        "relative rounded-none  border border-border bg-background",
         !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}
@@ -304,6 +309,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
         <LinkPlugin />
         <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
         <HorizontalRulePlugin />
+        <CodeHighlightPlugin />
         <TablePlugin />
         <TableActionMenuPlugin disabled={!isEditable} />
 

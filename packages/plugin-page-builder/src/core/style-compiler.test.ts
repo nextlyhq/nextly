@@ -122,3 +122,161 @@ describe("style compiler", () => {
     expect(css).toContain("#000");
   });
 });
+
+describe("compileNodeCss — extended scalars", () => {
+  it("emits extended typography + dimensions", () => {
+    const n = makeNode(
+      "core/heading",
+      {},
+      {
+        base: {
+          fontWeight: "700",
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          minHeight: "200px",
+          objectFit: "cover",
+          overflow: "hidden",
+          opacity: "0.5",
+        },
+      }
+    );
+    const css = compileNodeCss(n);
+    expect(css).toContain("font-weight: 700");
+    expect(css).toContain("letter-spacing: 0.05em");
+    expect(css).toContain("text-transform: uppercase");
+    expect(css).toContain("min-height: 200px");
+    expect(css).toContain("object-fit: cover");
+    expect(css).toContain("overflow: hidden");
+    expect(css).toContain("opacity: 0.5");
+  });
+
+  it("drops values that fail css-tree validation", () => {
+    const n = makeNode(
+      "core/heading",
+      {},
+      { base: { fontWeight: "700; color:red" } }
+    );
+    expect(compileNodeCss(n)).not.toContain("color:red");
+  });
+});
+
+describe("compileNodeCss — structured values", () => {
+  it("emits per-side border + style + color", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            border: {
+              width: { top: "2px", bottom: "2px" },
+              style: "solid",
+              color: "#333",
+            },
+          },
+        }
+      )
+    );
+    expect(css).toContain("border-top-width: 2px");
+    expect(css).toContain("border-bottom-width: 2px");
+    expect(css).toContain("border-style: solid");
+    expect(css).toContain("border-color: #333");
+  });
+
+  it("emits position with offsets and z-index", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            position: { type: "absolute", top: "10px", left: "0", zIndex: "5" },
+          },
+        }
+      )
+    );
+    expect(css).toContain("position: absolute");
+    expect(css).toContain("top: 10px");
+    expect(css).toContain("left: 0");
+    expect(css).toContain("z-index: 5");
+  });
+
+  it("emits background image object + gradient", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: {
+            backgroundImageObj: {
+              url: "/x.jpg",
+              position: "center",
+              size: "cover",
+              repeat: "no-repeat",
+            },
+            backgroundGradient: "linear-gradient(90deg, #fff, #000)",
+          },
+        }
+      )
+    );
+    expect(css).toContain('background-image: url("/x.jpg")');
+    expect(css).toContain("background-position: center");
+    expect(css).toContain("background-size: cover");
+    expect(css).toContain("background-repeat: no-repeat");
+    expect(css).toMatch(/background-image: linear-gradient/);
+  });
+
+  it("rejects a javascript: url in the background object", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        { base: { backgroundImageObj: { url: "javascript:alert(1)" } } }
+      )
+    );
+    expect(css).not.toContain("javascript");
+  });
+});
+
+describe("compileNodeCss — visibility", () => {
+  it("hides at a breakpoint via display:none media query", () => {
+    const n = makeNode("core/heading", {});
+    n.visibility = { mobile: false };
+    const css = compileNodeCss(n);
+    expect(css).toContain("@media (max-width: 640px)");
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ \{ display: none; \}/);
+  });
+
+  it("does not emit anything when the breakpoint is visible", () => {
+    const n = makeNode("core/heading", {});
+    n.visibility = { mobile: true };
+    expect(compileNodeCss(n)).toBe("");
+  });
+});
+
+describe("compileNodeCss — width alignment + link colors", () => {
+  it("emits wide/full width alignment", () => {
+    expect(
+      compileNodeCss(
+        makeNode("core/heading", {}, { base: { widthAlign: "wide" } })
+      )
+    ).toContain("max-width: 1100px");
+    expect(
+      compileNodeCss(
+        makeNode("core/container", {}, { base: { widthAlign: "full" } })
+      )
+    ).toContain("width: 100%");
+  });
+
+  it("emits descendant link colors on .cls a and :hover", () => {
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        { base: { linkColor: "#f00", linkColorHover: "#0f0" } }
+      )
+    );
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+  });
+});

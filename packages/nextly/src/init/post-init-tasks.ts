@@ -8,6 +8,11 @@
  * @module init/post-init-tasks
  */
 
+import {
+  repairSqliteTimestamps,
+  TIMESTAMP_REPAIR_META_KEY,
+} from "../database/repair-sqlite-timestamps";
+import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
@@ -87,9 +92,16 @@ export async function runPostInitTasks(): Promise<void> {
     const singleResult = await permissionSeedService.seedAllSinglePermissions();
 
     const config = getService("config");
-    const customResult = await permissionSeedService.seedCustomPermissions(
-      collectCustomPermissions(config, config.plugins ?? [])
-    );
+    const declared = collectCustomPermissions(config, config.plugins ?? []);
+    const customResult =
+      await permissionSeedService.seedCustomPermissions(declared);
+
+    // Seeding only ever adds. A permission whose package has stopped declaring
+    // it keeps the attribution it had, which is read to decide whether it is a
+    // plugin's — so a declaration that goes away quietly changes what the
+    // presets grant. Marked here, against the same list that was just seeded;
+    // grants are untouched and nothing is deleted.
+    await permissionSeedService.markOrphanedPermissions(declared);
 
     const allNewIds = [
       ...systemResult.newPermissionIds,
@@ -104,6 +116,18 @@ export async function runPostInitTasks(): Promise<void> {
   } catch {
     // Silently skip — permissions table may not exist yet (migrations not run),
     // or permissionSeedService may not be registered
+  }
+
+  // Bring the preset roles in line with the permissions that now exist. Runs
+  // every boot rather than once: each preset is a predicate, so a collection
+  // added since last boot is covered without anyone editing a role. Presets
+  // are never assigned to anyone — defining a role is not granting it.
+  try {
+    const adapter = getService("adapter");
+    const logger = getService("logger");
+    await seedRolePresets(adapter, logger);
+  } catch {
+    // Silently skip — roles/permissions tables may not exist yet.
   }
 
   // Seed plugin/app-declared role bundles (D67) AFTER permissions exist, so each
@@ -121,5 +145,33 @@ export async function runPostInitTasks(): Promise<void> {
     );
   } catch {
     // Silently skip — roles/permissions tables may not exist yet.
+  }
+
+  // Rewrite timestamps an older SQLite writer stored as text. Runs once and
+  // records that it has; the guard matters because it scans every table, and
+  // leaving both encodings in one column is worse than either alone — SQLite
+  // orders integers before text whatever the values say, so a half-repaired
+  // database sorts wrongly while looking fine.
+  try {
+    const adapter = getService("adapter");
+    if (adapter.dialect === "sqlite") {
+      const meta = getService("metaService");
+      const done = await meta.get<string>(TIMESTAMP_REPAIR_META_KEY);
+      if (!done) {
+        const logger = getService("logger");
+        const { repaired, columns } = await repairSqliteTimestamps(adapter);
+        if (repaired > 0) {
+          logger.info(
+            `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
+            { columns }
+          );
+        }
+        await meta.set(TIMESTAMP_REPAIR_META_KEY, new Date().toISOString());
+      }
+    }
+  } catch {
+    // Silently skip — meta or the adapter may not be registered, or the tables
+    // may not exist yet. A failed repair must never stop the app booting; the
+    // marker stays unset, so the next boot tries again.
   }
 }

@@ -129,7 +129,7 @@ export function DraggableBlockMenuPlugin({
             transition:
               "transform 140ms ease-in-out, opacity 160ms ease-in-out",
           }}
-          className="flex items-center gap-0.5 rounded-none] p-[2px_1px] z-10"
+          className="flex items-center gap-0.5 rounded-none p-[2px_1px] z-10"
         >
           <button
             type="button"

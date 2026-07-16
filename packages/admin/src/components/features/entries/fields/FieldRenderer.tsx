@@ -76,7 +76,7 @@ const CodeInput = lazy(() =>
  */
 function EditorSkeleton() {
   return (
-    <div className="flex h-[200px] items-center justify-center rounded-none  border border-primary/5 bg-primary/5 animate-pulse">
+    <div className="flex h-[200px] items-center justify-center rounded-none  border border-border bg-primary/5 animate-pulse">
       <span className="text-sm text-muted-foreground">Loading editor...</span>
     </div>
   );
@@ -525,7 +525,7 @@ export function FieldRenderer({
           );
         }
         return (
-          <div className="rounded-none  border border-primary/5 border-destructive/50 bg-destructive/10 p-4 text-center">
+          <div className="rounded-none  border border-border border-destructive/50 bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">
               Unknown field type: {(field as { type: string }).type}
             </p>

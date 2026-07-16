@@ -52,10 +52,10 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
 
   const colors: Record<ComponentMigrationStatus, string> = {
     synced: "",
-    pending: "bg-yellow-500",
+    pending: "bg-warning-500",
     generated: "bg-primary",
-    applied: "bg-green-500",
-    failed: "bg-red-500",
+    applied: "bg-success-500",
+    failed: "bg-destructive-500",
   };
 
   const titles: Record<ComponentMigrationStatus, string> = {
@@ -292,7 +292,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                           </SidebarMenuSubButton>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                          <div className="ml-4  border-l border-primary/5 border-sidebar-border/30 pl-2">
+                          <div className="ml-4  border-l border-border border-sidebar-border/30 pl-2">
                             {categoryComponents.map(component => {
                               const href = getComponentUrl(component);
                               const isSubActive = isActive(href);

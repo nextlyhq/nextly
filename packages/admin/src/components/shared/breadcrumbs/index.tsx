@@ -44,7 +44,7 @@ export interface BreadcrumbsProps {
 export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
   return (
     <nav aria-label="Breadcrumb" className={cn("mb-2", className)}>
-      <ol className="flex items-center gap-2 text-sm text-primary/50">
+      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
         {items.map((item, index) => {
           const isLast = index === items.length - 1;
           const isDashboard =
@@ -68,14 +68,14 @@ export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
               ) : item.href ? (
                 <Link
                   href={item.href}
-                  className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
+                  className="flex items-center gap-1 hover:text-foreground hover:underline transition-colors cursor-pointer"
                 >
                   {content}
                 </Link>
               ) : item.onClick ? (
                 <button
                   onClick={item.onClick}
-                  className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
+                  className="flex items-center gap-1 hover:text-foreground hover:underline transition-colors cursor-pointer"
                 >
                   {content}
                 </button>

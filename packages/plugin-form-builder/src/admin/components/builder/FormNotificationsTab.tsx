@@ -201,7 +201,7 @@ function IntegrationModal({
       ref={overlayRef}
       onClick={handleOverlayClick}
     >
-      <div className="bg-background rounded-none border border-primary/5 shadow-md w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-background rounded-none border border-primary/5 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
         <div className="px-6 py-5 border-b border-primary/5 flex items-center justify-between sticky top-0 bg-background z-10">
           <h3 className="text-lg font-semibold text-foreground">
             {isEditing ? "Edit Email Integration" : "Add Email Integration"}
@@ -491,12 +491,12 @@ function IntegrationModal({
                 checked={form.enabled}
                 onChange={e => update("enabled", e.target.checked)}
               />
-              <div className="w-9 h-5 bg-primary/5 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-primary/5 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary border border-primary/5"></div>
+              <div className="w-9 h-5 bg-primary/5 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-background after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-background after:border-primary/5 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary border border-primary/5"></div>
             </label>
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-primary/5 bg-primary/5/20 flex items-center justify-end gap-3 rounded-b-xl">
+        <div className="px-6 py-4 border-t border-primary/5 bg-muted flex items-center justify-end gap-3 rounded-none">
           <Button type="button" variant="outline" onClick={onCancel}>
             Cancel
           </Button>
@@ -598,7 +598,7 @@ export function FormNotificationsTab() {
 
       {/* List */}
       {notifications.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-12 mt-6 border-2 border-dashed border-primary/5 rounded-none bg-primary/5/20">
+        <div className="flex flex-col items-center justify-center p-12 mt-6 border-2 border-dashed border-primary/5 rounded-none bg-muted">
           <div className="flex items-center justify-center w-12 h-12 rounded-none border border-primary/5 bg-background mb-4 text-primary">
             <svg
               className="h-6 w-6"

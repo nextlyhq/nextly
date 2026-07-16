@@ -1,6 +1,7 @@
 import { NotificationBell } from "@admin/components/features/notifications";
 import { Discord, Github, HelpCircle } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { ThemeToggle } from "@admin/components/shared/theme-toggle";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
@@ -29,7 +30,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
   return (
     <header
       className={cn(
-        "h-16 border-b border-primary/5 bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
+        "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center justify-between px-6",
         className
       )}
@@ -80,9 +81,18 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
           <PluginSlot key={p.name} path={p.slot} />
         ))}
 
-        {/* F10 PR 5: bell renders only for super-admins (component
-            self-gates via useCurrentUserPermissions). */}
-        {!hidden.has("notifications") && <NotificationBell />}
+        <ThemeToggle />
+
+        {/* Bell renders only for super-admins (self-gated via
+            useCurrentUserPermissions), and only where the builder runs: the
+            dropdown lists schema changes, which are journaled by the builder
+            and the dev-time code-first push. Elsewhere the schema arrives
+            through committed migrations, which write no journal, so the
+            dropdown would have nothing to list. Gated on an explicit `false`
+            so the in-flight `undefined` does not hide it mid-load. */}
+        {!hidden.has("notifications") && branding?.showBuilder !== false && (
+          <NotificationBell />
+        )}
         <div className="ml-2">
           <UserProfileDropdown
             user={user}

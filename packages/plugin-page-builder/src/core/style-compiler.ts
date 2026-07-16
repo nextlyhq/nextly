@@ -9,6 +9,8 @@
  */
 import * as csstree from "css-tree";
 
+import { sanitizeBlockCss } from "./css-sanitize";
+import { compileMotionCss, MOTION_KEYFRAMES } from "./motion";
 import { walk } from "./tree";
 import type {
   BlockDocument,
@@ -44,8 +46,11 @@ export const DEFAULT_TOKENS: Record<string, string> = {
   "color.secondary": "#0ea5e9",
   "color.accent": "#f59e0b",
   "color.text": "#111827",
+  "color.heading": "#0f172a",
   "color.muted": "#6b7280",
   "color.surface": "#f8fafc",
+  "color.background": "#ffffff",
+  "color.border": "#e5e7eb",
 };
 
 /** Emit the token palette as CSS custom properties on the page root. */
@@ -118,6 +123,24 @@ const SIMPLE: [keyof StyleValues, string][] = [
   ["gap", "gap"],
   ["justifyContent", "justify-content"],
   ["alignItems", "align-items"],
+  ["fontFamily", "font-family"],
+  ["fontWeight", "font-weight"],
+  ["letterSpacing", "letter-spacing"],
+  ["wordSpacing", "word-spacing"],
+  ["textTransform", "text-transform"],
+  ["fontStyle", "font-style"],
+  ["textDecoration", "text-decoration"],
+  ["textShadow", "text-shadow"],
+  ["minHeight", "min-height"],
+  ["objectFit", "object-fit"],
+  ["overflow", "overflow"],
+  ["aspectRatio", "aspect-ratio"],
+  ["boxShadow", "box-shadow"],
+  ["opacity", "opacity"],
+  ["filters", "filter"],
+  ["mixBlendMode", "mix-blend-mode"],
+  ["transform", "transform"],
+  ["transition", "transition"],
 ];
 
 function compileStyleValues(sv: StyleValues): string[] {
@@ -146,6 +169,79 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.backgroundImage != null) {
     const url = safeUrl(resolveScalar(sv.backgroundImage));
     if (url) out.push(`background-image: url("${url}")`);
+  }
+
+  // Structured border (per-side width + style + color).
+  if (sv.border) {
+    const b = sv.border;
+    if (b.width) {
+      for (const side of ["top", "right", "bottom", "left"] as const) {
+        const raw = b.width[side];
+        if (raw == null) continue;
+        const v = safeValue(raw);
+        if (v) out.push(`border-${side}-width: ${v}`);
+      }
+    }
+    if (b.style) {
+      const v = safeValue(b.style);
+      if (v) out.push(`border-style: ${v}`);
+    }
+    if (b.color != null) {
+      const v = safeValue(resolveScalar(b.color));
+      if (v) out.push(`border-color: ${v}`);
+    }
+  }
+
+  // Position + offsets + z-index.
+  if (sv.position) {
+    const p = sv.position;
+    if (p.type) {
+      const v = safeValue(p.type);
+      if (v) out.push(`position: ${v}`);
+    }
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const raw = p[side];
+      if (raw == null) continue;
+      const v = safeValue(raw);
+      if (v) out.push(`${side}: ${v}`);
+    }
+    if (p.zIndex != null) {
+      const v = safeValue(String(p.zIndex));
+      if (v) out.push(`z-index: ${v}`);
+    }
+  }
+
+  // Structured background image.
+  if (sv.backgroundImageObj) {
+    const bg = sv.backgroundImageObj;
+    if (bg.url != null) {
+      const url = safeUrl(resolveScalar(bg.url));
+      if (url) out.push(`background-image: url("${url}")`);
+    }
+    for (const [k, cssName] of [
+      ["position", "background-position"],
+      ["size", "background-size"],
+      ["repeat", "background-repeat"],
+      ["attachment", "background-attachment"],
+    ] as const) {
+      const raw = bg[k];
+      if (raw == null) continue;
+      const v = safeValue(raw);
+      if (v) out.push(`${cssName}: ${v}`);
+    }
+  }
+
+  // Gradient (emitted as background-image; safeValue validates the function).
+  if (sv.backgroundGradient) {
+    const v = safeValue(sv.backgroundGradient);
+    if (v) out.push(`background-image: ${v}`);
+  }
+
+  // Width alignment (Gutenberg none / wide / full).
+  if (sv.widthAlign === "wide") {
+    out.push("max-width: 1100px", "margin-left: auto", "margin-right: auto");
+  } else if (sv.widthAlign === "full") {
+    out.push("max-width: none", "width: 100%");
   }
 
   return out;
@@ -181,6 +277,35 @@ export function compileNodeCss(
   emit(node.style, "");
   emit(node.styleHover, ":hover");
 
+  // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
+  const base = node.style?.base;
+  if (base?.linkColor != null) {
+    const v = safeValue(resolveScalar(base.linkColor));
+    if (v) blocks.push(`.${cls} a { color: ${v}; }`);
+  }
+  if (base?.linkColorHover != null) {
+    const v = safeValue(resolveScalar(base.linkColorHover));
+    if (v) blocks.push(`.${cls} a:hover { color: ${v}; }`);
+  }
+
+  // Entrance motion.
+  const motionCss = compileMotionCss(node, cls);
+  if (motionCss) blocks.push(motionCss);
+
+  // Per-breakpoint visibility → display:none media queries.
+  if (node.visibility) {
+    if (node.visibility.base === false) {
+      blocks.push(`.${cls} { display: none; }`);
+    }
+    for (const bp of bps) {
+      if (node.visibility[bp.id] === false) {
+        blocks.push(
+          `@media (max-width: ${bp.maxWidth}px) { .${cls} { display: none; } }`
+        );
+      }
+    }
+  }
+
   return blocks.join("\n");
 }
 
@@ -193,6 +318,27 @@ export function compileDocumentCss(
   walk(doc.root, n => {
     const css = compileNodeCss(n, opts);
     if (css) parts.push(css);
+  });
+  return parts.join("\n");
+}
+
+/** Emit the shared motion keyframes once, if any node in the document animates. */
+export function compileDocumentMotionCss(doc: BlockDocument): string {
+  let any = false;
+  walk(doc.root, n => {
+    if (n.motion?.entrance && n.motion.entrance !== "none") any = true;
+  });
+  return any ? MOTION_KEYFRAMES : "";
+}
+
+/** Collect every node's sanitized per-block custom CSS for the page <style> (spec §4.4). */
+export function compileDocumentBlockCss(doc: BlockDocument): string {
+  const parts: string[] = [];
+  walk(doc.root, n => {
+    if (n.customCss) {
+      const scoped = sanitizeBlockCss(n.customCss, nodeClass(n.id));
+      if (scoped) parts.push(scoped);
+    }
   });
   return parts.join("\n");
 }

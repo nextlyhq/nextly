@@ -44,7 +44,7 @@ import {
 } from "./entryFilters";
 import {
   EntryTable,
-  type EntryTablePagination,
+  type TablePaginationState,
   type EntryTableRef,
 } from "./EntryTable";
 import {
@@ -76,10 +76,10 @@ export interface EntryListProps {
  * (canonical wire is 1-based per spec §5.1; the table component
  * uses a 0-based React index internally).
  */
-function toTablePagination(
+function toTablePaginationState(
   response: ListResponse<Entry> | undefined,
   limit: number
-): EntryTablePagination {
+): TablePaginationState {
   if (!response) {
     return {
       page: 0,
@@ -380,7 +380,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   );
 
   const entries = entriesResponse?.items ?? [];
-  const pagination = toTablePagination(entriesResponse, limit);
+  const pagination = toTablePaginationState(entriesResponse, limit);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -536,10 +536,10 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <div className="space-y-2">
-            <div className="h-8 w-48 animate-pulse rounded-none bg-primary/5" />
-            <div className="h-4 w-64 animate-pulse rounded-none bg-primary/5" />
+            <div className="h-8 w-48 animate-pulse rounded-none bg-muted" />
+            <div className="h-4 w-64 animate-pulse rounded-none bg-muted" />
           </div>
-          <div className="h-10 w-32 animate-pulse rounded-none bg-primary/5" />
+          <div className="h-10 w-32 animate-pulse rounded-none bg-muted" />
         </div>
         <EntryTableSkeleton />
       </div>
@@ -588,7 +588,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
             {labels.plural}
           </h1>
           {collection?.description && (
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               {collection.description}
             </p>
           )}

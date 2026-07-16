@@ -126,7 +126,11 @@ export default function SingleAPIPlaygroundPage({
 
         {/* API Playground component */}
         <div className="flex-1 min-h-0">
-          <APIPlayground collectionSlug={slug} isSingle={true} />
+          <APIPlayground
+            collectionSlug={slug}
+            isSingle={true}
+            fields={schema?.fields}
+          />
         </div>
       </div>
     </PageContainer>

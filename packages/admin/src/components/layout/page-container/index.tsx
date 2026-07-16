@@ -117,10 +117,12 @@ export const PageContainer = React.forwardRef<
       className={cn(
         // Responsive max-width container (Full width requested)
         "w-full max-w-full min-h-[calc(100vh-4rem)]",
-        // Horizontal padding: 16px → 24px → 32px
-        "px-4 sm:px-6 lg:px-8",
+        // Horizontal padding scales with the content-panel width (not the
+        // viewport): 16px -> 24px -> 32px. The 32px step aligns with the
+        // edge-to-edge forms' -m-8, which fires at a wider panel (@4xl).
+        "px-4 @sm/content:px-6 @2xl/content:px-8",
         // Vertical padding: 24px → 32px
-        "py-6 sm:py-8",
+        "py-6 @sm/content:py-8",
         // Background (Use slate-100 as requested for full content bg)
         "admin-page-container",
         // Custom overrides

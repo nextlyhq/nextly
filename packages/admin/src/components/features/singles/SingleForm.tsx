@@ -476,11 +476,11 @@ export function SingleForm({
           className="mx-6 mt-3"
         />
 
-        <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+        <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
           {/* Main column */}
           <div className="flex-1 min-w-0 flex flex-col">
-            {/* Why: same fix as EntryForm — the parent flex's lg:-m-8 already
-                cancels PageContainer's lg:p-8, so wrapping the header / meta
+            {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
+                already cancels PageContainer's px-8, so wrapping the header / meta
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}
             <EntrySystemHeader
@@ -529,7 +529,7 @@ export function SingleForm({
             />
 
             {mainFields.length > 0 && (
-              <div className="lg:p-8 pt-6">
+              <div className="@4xl/content:p-8 pt-6">
                 <EntryFormContent
                   fields={mainFields}
                   disabled={isSubmitting}
@@ -541,8 +541,8 @@ export function SingleForm({
 
           {/* Rail (collapsible). Same shape and width as collections. */}
           {!railCollapsed && (
-            <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
-              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+            <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+              <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
                 <EntryFormSidebar
                   mode="edit"
                   entry={entryLike}

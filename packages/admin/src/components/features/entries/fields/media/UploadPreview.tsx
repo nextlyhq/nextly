@@ -127,8 +127,12 @@ export interface UploadPreviewProps {
 // ============================================================
 
 /**
- * Get appropriate icon with color based on MIME type.
- * Colors: blue (image), purple (video), green (audio), red (PDF), gray (other)
+ * Get the icon for a MIME type.
+ *
+ * The glyph says what the file is; each type used to be tinted a different
+ * hue as well, which said the same thing a second time in a vocabulary the
+ * admin uses for something else — a document came out the red it uses for
+ * destructive actions, and audio the green it uses for success.
  */
 function getFileIcon(mimeType?: string) {
   if (!mimeType) {
@@ -136,20 +140,20 @@ function getFileIcon(mimeType?: string) {
   }
 
   if (mimeType.startsWith("image/")) {
-    return <FileImage className="h-12 w-12 text-primary" />;
+    return <FileImage className="h-12 w-12 text-muted-foreground" />;
   }
   if (mimeType.startsWith("video/")) {
-    return <FileVideo className="h-12 w-12 text-purple-500" />;
+    return <FileVideo className="h-12 w-12 text-muted-foreground" />;
   }
   if (mimeType.startsWith("audio/")) {
-    return <FileAudio className="h-12 w-12 text-green-500" />;
+    return <FileAudio className="h-12 w-12 text-muted-foreground" />;
   }
   if (
     mimeType === "application/pdf" ||
     mimeType.includes("document") ||
     mimeType.includes("text")
   ) {
-    return <FileText className="h-12 w-12 text-red-500" />;
+    return <FileText className="h-12 w-12 text-muted-foreground" />;
   }
 
   return <File className="h-12 w-12 text-muted-foreground" />;

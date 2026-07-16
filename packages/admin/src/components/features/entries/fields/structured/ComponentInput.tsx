@@ -291,13 +291,13 @@ function SingleComponentNonRepeatable({
       <div
         className={cn("flex flex-col relative -mt-px", field.admin?.className)}
       >
-        {/* Accordion header — top and bottom  border border-primary/5 always */}
+        {/* Accordion header — top and bottom  border border-border always */}
         <button
           type="button"
           onClick={() => setIsOpen(v => !v)}
           className={cn(
             "w-full flex items-center justify-between bg-primary/5 px-8 py-4 transition-all duration-200 cursor-pointer",
-            "border-y border-primary/5 hover:border-primary/50 relative z-10"
+            "border-y border-border hover:border-primary/50 relative z-10"
           )}
         >
           <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-primary">
@@ -313,7 +313,7 @@ function SingleComponentNonRepeatable({
 
         {/* Accordion content */}
         {isOpen && (
-          <div className="space-y-4 px-6 pt-4 pb-4  border-b border-primary/5 border-primary/5 z-0">
+          <div className="space-y-4 px-6 pt-4 pb-4  border-b border-border z-0">
             {field.admin?.description && (
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {field.admin.description}
@@ -346,7 +346,7 @@ function SingleComponentNonRepeatable({
   return (
     <div
       className={cn(
-        "border border-primary/5 dark:border-primary/5 shadow-none rounded-none overflow-hidden",
+        "border border-border dark:border-border shadow-none rounded-none overflow-hidden",
         field.admin?.className
       )}
     >
@@ -354,7 +354,7 @@ function SingleComponentNonRepeatable({
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900 transition-colors  border-b border-primary/5 dark:border-primary/5"
+        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent transition-colors  border-b border-border dark:border-border"
       >
         <ChevronDown
           className={cn(
@@ -502,7 +502,7 @@ function MultiComponentNonRepeatable({
 
         {/* Component Fields */}
         {currentType && currentFields.length > 0 && (
-          <div className="space-y-4 pt-2  border-t border-primary/5">
+          <div className="space-y-4 pt-2  border-t border-border">
             {currentFields.map((subField, idx) => {
               if (!("name" in subField) || !subField.name) return null;
               return (
@@ -519,7 +519,7 @@ function MultiComponentNonRepeatable({
         )}
 
         {!currentType && (
-          <p className="text-sm text-muted-foreground text-center py-4  border border-primary/5 border-dashed rounded-none bg-primary/5">
+          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-none bg-primary/5">
             Select a component type to add fields.
           </p>
         )}
@@ -703,7 +703,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Empty State */}
       {items.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground  border border-primary/5 border-dashed rounded-none bg-primary/5">
+        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-none bg-primary/5">
           <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
           {canAdd && (
@@ -758,7 +758,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
       {field.minRows !== undefined &&
         items.length < field.minRows &&
         items.length > 0 && (
-          <p className="text-sm text-amber-600 dark:text-amber-500">
+          <p className="text-sm text-warning-600 dark:text-warning-500">
             Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
             Currently have {items.length}.
           </p>
@@ -916,14 +916,14 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-none  border border-primary/5 border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 p-4",
+        "rounded-none  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
         className
       )}
     >
-      <p className="text-sm text-amber-700 dark:text-amber-300">
+      <p className="text-sm text-warning-700 dark:text-warning-300">
         <strong>Component field:</strong> {field.name}
       </p>
-      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+      <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
         Schema data not available. Ensure the collection schema API returns
         enriched component fields.
       </p>

@@ -17,11 +17,11 @@
  * - Width: Full width (w-full)
  *
  * **Visual States**:
- * - Default: Dashed  border border-primary/5 (border-2 border-dashed border-primary/5)
- * - Hover: Primary  border border-primary/5 (border-primary-300 bg-accent/50)
- * - Active (dragging): Primary  border border-primary/5 (border-primary-500 bg-primary-50)
+ * - Default: Dashed  border border-border (border-2 border-dashed border-border)
+ * - Hover: Primary  border border-border (border-primary-300 bg-accent/50)
+ * - Active (dragging): Primary  border border-border (border-primary-500 bg-primary-50)
  * - Uploading: Progress bars for each file
- * - Error: Red  border border-primary/5 (border-destructive bg-destructive/10)
+ * - Error: Red  border border-border (border-destructive bg-destructive/10)
  * - Collapsed: Compact 64px height with small icon
  *
  * **Supported File Types**:
@@ -470,23 +470,24 @@ export function MediaUploadDropzone({
   // Border styles — border-2 dashed, prominent, mode-aware
   const borderStyles = {
     default:
-      "border-2 border-dashed border-primary/5 hover:border-primary/50 dark:border-primary/5-foreground/40 dark:hover:border-primary/60",
+      "border-2 border-dashed border-border hover:border-primary/50 dark:border-border-foreground/40 dark:hover:border-primary/60",
     active: "border-2 border-dashed border-primary",
     reject: "border-2 border-dashed border-destructive",
     uploading: "border-2 border-dashed border-primary/80",
     error: "border-2 border-dashed border-destructive",
-    success: "border-2 border-dashed border-green-500 dark:border-green-400",
+    success:
+      "border-2 border-dashed border-success-500 dark:border-success-400",
   };
 
   // Background styles — use CSS variables (bg-card) so both light and dark modes resolve correctly.
-  // Avoid bg-white: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
+  // Avoid bg-card: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
   const backgroundStyles = {
     default: "bg-card",
     active: "bg-primary/5 dark:bg-primary/5",
     reject: "bg-destructive/5 dark:bg-destructive/10",
     uploading: "bg-card",
     error: "bg-destructive/5 dark:bg-destructive/10",
-    success: "bg-green-500/5 dark:bg-green-500/10",
+    success: "bg-success-500/5 dark:bg-success-500/10",
   };
 
   // Icon component based on state
@@ -506,7 +507,7 @@ export function MediaUploadDropzone({
     reject: "text-destructive",
     uploading: "text-primary",
     error: "text-destructive",
-    success: "text-green-500 dark:text-green-400",
+    success: "text-success-500 dark:text-success-400",
   };
 
   if (isCollapsed) return null;
@@ -567,7 +568,8 @@ export function MediaUploadDropzone({
             visualState === "uploading" && "bg-primary/15 dark:bg-primary/20",
             (visualState === "reject" || visualState === "error") &&
               "bg-destructive/15 dark:bg-destructive/20",
-            visualState === "success" && "bg-green-500/15 dark:bg-green-500/20"
+            visualState === "success" &&
+              "bg-success-500/15 dark:bg-success-500/20"
           )}
         >
           <IconComponent
@@ -657,13 +659,13 @@ export function MediaUploadDropzone({
                   <Loader2 className="h-4 w-4 animate-spin text-primary-500" />
                 )}
                 {item.status === "success" && (
-                  <Check className="h-4 w-4 text-green-500" />
+                  <Check className="h-4 w-4 text-success-500" />
                 )}
                 {item.status === "error" && (
                   <X className="h-4 w-4 text-destructive" />
                 )}
                 {item.status === "pending" && (
-                  <div className="h-4 w-4 rounded-none border-2 border-primary/5-foreground" />
+                  <div className="h-4 w-4 rounded-none border-2 border-border-foreground" />
                 )}
               </div>
 

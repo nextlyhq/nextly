@@ -1,5 +1,6 @@
 import { Button } from "@nextlyhq/ui";
 
+import { actionsForContentTypes } from "@admin/constants/permissions";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
 
 import { PermissionMatrixHeader } from "./PermissionMatrixHeader";
@@ -32,7 +33,7 @@ export interface PermissionMatrixTableProps {
   /** Callback to toggle all permissions for an action */
   onToggleAllForAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"],
+    action: string,
     checked: boolean
   ) => void;
   /** Check if all permissions for a content type are selected */
@@ -42,12 +43,12 @@ export interface PermissionMatrixTableProps {
   /** Check if all permissions for an action are selected */
   isAllSelectedForAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"]
+    action: string
   ) => boolean;
   /** Check if some permissions for an action are selected */
   isPartiallySelectedForAction: (
     contentTypes: ContentTypePermissions[],
-    action: keyof ContentTypePermissions["permissions"]
+    action: string
   ) => boolean;
 }
 
@@ -81,6 +82,9 @@ export function PermissionMatrixTable({
   isAllSelectedForAction,
   isPartiallySelectedForAction,
 }: PermissionMatrixTableProps) {
+  // Resolved once here so the header and every row agree on the columns.
+  const actions = actionsForContentTypes(contentTypes);
+
   // Empty state
   if (contentTypes.length === 0) {
     return (
@@ -105,10 +109,30 @@ export function PermissionMatrixTable({
   return (
     <>
       {/* Desktop Table View (≥ 1024px) */}
-      <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-primary/5 relative">
-        <table className="w-full border-collapse">
+      <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-border relative">
+        <table className="w-full border-collapse table-fixed">
+          {/*
+            Widths declared once, here, instead of letting the browser
+            distribute them. Left to itself it gave Name every spare pixel —
+            over a thousand of them for words like "Categories" — and pushed
+            the first checkbox a thousand more from the label it belongs to.
+            Proximity is what says these things are related, so that gap was
+            actively claiming they were not.
+
+            The trailing column has no content and exists to absorb the slack
+            that Name used to. `table-fixed` is what makes these hold; without
+            it the browser still negotiates from content.
+          */}
+          <colgroup>
+            <col className="w-70" />
+            {actions.map(action => (
+              <col key={action} className="w-28" />
+            ))}
+            <col />
+          </colgroup>
           <PermissionMatrixHeader
             contentTypes={contentTypes}
+            actions={actions}
             disabled={disabled}
             lockedIds={lockedIds}
             onToggleAction={onToggleAllForAction}
@@ -120,6 +144,7 @@ export function PermissionMatrixTable({
               <PermissionMatrixRow
                 key={contentType.id}
                 contentType={contentType}
+                actions={actions}
                 value={value}
                 lockedIds={lockedIds}
                 disabled={disabled}

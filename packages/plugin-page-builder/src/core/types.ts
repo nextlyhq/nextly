@@ -8,6 +8,9 @@
  */
 import type { ReactNode } from "react";
 
+import type { MotionConfig } from "./motion";
+import type { BlockSupports } from "./supports";
+
 // ---------------------------------------------------------------------------
 // Document + node model (spec §6)
 // ---------------------------------------------------------------------------
@@ -52,6 +55,20 @@ export interface BlockNode {
   bindings?: Record<string, Binding>;
   /** Author escape hatch. */
   customClass?: string;
+  /** Per-block raw custom CSS; `selector` is rewritten to this node's scoped class. */
+  customCss?: string;
+  /** Per-breakpoint visibility; `false` hides at that breakpoint. Base = default. */
+  visibility?: Partial<Record<Breakpoint, boolean>>;
+  /** Author-facing instance label (navigator). */
+  name?: string;
+  /** Author lock: block cannot be moved/deleted while true. */
+  locked?: boolean;
+  /** CSS id applied to the block root. */
+  cssId?: string;
+  /** Sanitized custom HTML attributes applied to the block root. */
+  attributes?: Record<string, string>;
+  /** Entrance motion (spec §5). */
+  motion?: MotionConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +106,52 @@ export interface StyleValues {
   gap?: StyleScalar;
   justifyContent?: string;
   alignItems?: string;
+  // Typography (extended)
+  fontFamily?: StyleScalar;
+  fontWeight?: StyleScalar;
+  letterSpacing?: StyleScalar;
+  wordSpacing?: StyleScalar;
+  textTransform?: "none" | "uppercase" | "lowercase" | "capitalize";
+  fontStyle?: "normal" | "italic";
+  textDecoration?: string;
+  textShadow?: string;
+  // Dimensions (extended)
+  minHeight?: StyleScalar;
+  objectFit?: "fill" | "contain" | "cover" | "none" | "scale-down";
+  overflow?: "visible" | "hidden" | "auto" | "scroll";
+  aspectRatio?: StyleScalar;
+  // Border (structured; borderRadius already above)
+  border?: { width?: BoxSides; style?: string; color?: StyleScalar };
+  // Effects
+  boxShadow?: string; // built by BoxShadowControl, validated by css-tree
+  backgroundGradient?: string; // emitted as background-image
+  opacity?: StyleScalar;
+  filters?: string; // css `filter` value
+  mixBlendMode?: string;
+  transform?: string;
+  transition?: string;
+  // Background image (structured)
+  backgroundImageObj?: {
+    url?: StyleScalar;
+    position?: string;
+    size?: string;
+    repeat?: string;
+    attachment?: string;
+  };
+  // Position
+  position?: {
+    type?: "static" | "relative" | "absolute" | "fixed" | "sticky";
+    top?: string;
+    right?: string;
+    bottom?: string;
+    left?: string;
+    zIndex?: string;
+  };
+  // Width alignment (Gutenberg none / wide / full)
+  widthAlign?: "none" | "wide" | "full";
+  // Descendant link colors → compiled to `.cls a` / `.cls a:hover`
+  linkColor?: StyleScalar;
+  linkColorHover?: StyleScalar;
 }
 
 /** Per-breakpoint style overrides. The base breakpoint holds defaults; others override. */
@@ -110,7 +173,13 @@ export interface Binding {
 // Block definition + control contracts (spec §7) — the extensibility core
 // ---------------------------------------------------------------------------
 
-export type BlockCategory = "basic" | "layout" | "media" | "dynamic";
+export type BlockCategory =
+  | "basic"
+  | "layout"
+  | "media"
+  | "dynamic"
+  | "content"
+  | "utility";
 
 export interface SlotSpec {
   name: string;
@@ -125,6 +194,8 @@ export interface ControlRef {
   /** Style key this control writes (e.g. "padding", "backgroundColor"). */
   styleKey: string;
   label: string;
+  /** Choices for `select`-type style controls (typography weight/transform/etc.). */
+  options?: { value: string; label: string }[];
 }
 
 export interface BlockRenderArgs<P = Record<string, unknown>> {
@@ -144,6 +215,8 @@ export interface BlockDefinition<P = Record<string, unknown>> {
   icon: string;
   category: BlockCategory;
   isContainer?: boolean;
+  /** Declarative style capabilities → inspector controls + compiled CSS (spec §4.1). */
+  supports?: BlockSupports;
   slots?: SlotSpec[];
   /**
    * Content fields — reuse Nextly's field system so the inspector "Content" tab and

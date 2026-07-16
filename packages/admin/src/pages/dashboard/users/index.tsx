@@ -20,7 +20,7 @@ import UserTable from "./components/UserTable";
  * ## Features
  * - Page header with title, description, "Create User" button
  * - Full-page Create User form (better for complex input and future extensibility)
- * - UserTable component with ResponsiveTable (mobile card view, desktop table view)
+ * - UserTable component with DataTableView (mobile card view, desktop table view)
  * - Consistent spacing via PageContainer
  * - Mobile responsive layout
  *

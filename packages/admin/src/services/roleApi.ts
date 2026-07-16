@@ -43,14 +43,13 @@ const transformRole = (
   id: apiRole.id,
   roleName: apiRole.name,
   name: apiRole.name,
+  slug: apiRole.slug,
   subtitle: apiRole.isSystem ? "System role" : "Custom role",
   description: apiRole.description || `Role with level ${apiRole.level}`,
   type: apiRole.isSystem ? "System" : "Custom",
   permissions: normalizePermissions(
     apiRole.permissionIds ?? (apiRole as { permissions?: unknown }).permissions
   ),
-  status: "Active",
-  created: new Date().toISOString().split("T")[0],
 });
 
 // Build query string for pagination and search using shared utility

@@ -4,7 +4,7 @@
  * Admin dev orchestrator.
  *
  * Runs `tsup --watch` (JS/TS bundling) and `build-css-watch.mjs`
- * (Tailwind compile + .adminapp scoping post-process) as parallel
+ * (Tailwind compile + .nextly-admin scoping post-process) as parallel
  * children of a single Node process, so admin's package.json can expose
  * one command (`dev`) that Turborepo runs alongside the playground's
  * `next dev` and admin contributors can invoke directly without juggling

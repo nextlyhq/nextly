@@ -203,7 +203,7 @@ export function EmailProviderForm({
                           <CardContent className="p-3 flex items-center justify-center">
                             <div className="w-full h-full max-w-[90px] max-h-[36px] flex items-center justify-center">
                               <p.icon
-                                className="max-w-full max-h-full"
+                                className="max-w-full max-h-full text-foreground"
                                 aria-label={`${p.name} logo`}
                               />
                             </div>
@@ -250,7 +250,7 @@ export function EmailProviderForm({
                   description={
                     selectedType === "resend" ? (
                       <span className="flex items-start gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
                           Must be an email from a{" "}
                           <strong>verified domain</strong> in your Resend
@@ -263,7 +263,7 @@ export function EmailProviderForm({
                       </span>
                     ) : selectedType === "sendlayer" ? (
                       <span className="flex items-start gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
                           Must be an email from a{" "}
                           <strong>verified domain</strong> in your SendLayer
@@ -326,6 +326,28 @@ export function EmailProviderForm({
                 <SettingsRow
                   label="Set as Default Provider"
                   description="When enabled, this provider will be used to send all transactional emails unless a specific provider is requested."
+                >
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isPending}
+                    />
+                  </FormControl>
+                  <FormMessage className="mt-1.5" />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="isActive"
+            render={({ field }) => (
+              <FormItem className="m-0">
+                <SettingsRow
+                  label="Active"
+                  description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
                 >
                   <FormControl>
                     <Switch

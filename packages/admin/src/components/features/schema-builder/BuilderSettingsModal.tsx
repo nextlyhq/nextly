@@ -56,6 +56,9 @@ type Props = {
   mode: "create" | "edit";
   config: BuilderConfig;
   initialValues: BuilderSettingsValues | null;
+  /** Code-first entities open this dialog to inspect config; every control
+   *  is disabled and the footer collapses to a single Close button. */
+  readOnly?: boolean;
   onCancel: () => void;
   onSubmit: (values: BuilderSettingsValues) => void;
 };
@@ -96,6 +99,7 @@ export function BuilderSettingsModal({
   mode,
   config,
   initialValues,
+  readOnly = false,
   onCancel,
   onSubmit,
 }: Props) {
@@ -109,8 +113,9 @@ export function BuilderSettingsModal({
     mode === "create"
       ? `New ${kindLabel}`
       : `${values.singularName || "Untitled"} settings`;
-  const description =
-    mode === "create"
+  const description = readOnly
+    ? `This ${kindLabel} is defined in code and shown read-only.`
+    : mode === "create"
       ? `Set up a new ${kindLabel}`
       : `Update settings for this ${kindLabel}`;
   const primaryLabel = mode === "create" ? "Continue" : "Save";
@@ -129,27 +134,42 @@ export function BuilderSettingsModal({
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
           </TabsList>
           <TabsContent value="basics">
-            <BasicsTab
-              fields={config.basicsFields}
-              kind={config.kind}
-              values={values}
-              onChange={setValues}
-            />
+            {/* A disabled fieldset natively disables every descendant control
+                (inputs + Radix Select/Switch triggers) so read-only mode needs
+                no per-field wiring; the tab triggers stay outside it. */}
+            <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
+              <BasicsTab
+                fields={config.basicsFields}
+                kind={config.kind}
+                values={values}
+                onChange={setValues}
+              />
+            </fieldset>
           </TabsContent>
           <TabsContent value="advanced">
-            <AdvancedTab
-              fields={config.advancedFields}
-              values={values}
-              onChange={setValues}
-            />
+            <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
+              <AdvancedTab
+                fields={config.advancedFields}
+                values={values}
+                onChange={setValues}
+              />
+            </fieldset>
           </TabsContent>
         </Tabs>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button onClick={() => onSubmit(values)}>{primaryLabel}</Button>
+          {readOnly ? (
+            <Button variant="outline" onClick={onCancel}>
+              Close
+            </Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button onClick={() => onSubmit(values)}>{primaryLabel}</Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -22,6 +22,10 @@ export type PaginationProps = {
   isLoading?: boolean;
   /** Total number of items across all pages */
   totalItems?: number;
+  /** Noun used in the count, e.g. "entries" -> "Showing 1-10 of 42 entries" */
+  itemLabel?: string;
+  /** Accessible name for the pagination landmark */
+  ariaLabel?: string;
   /** Optional custom className for the container */
   className?: string;
 };

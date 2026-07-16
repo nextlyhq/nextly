@@ -175,23 +175,6 @@ const EMAIL_TEMPLATE_METHODS: Record<
       });
     },
   },
-  getLayout: {
-    // The layout is a `{header, footer}` pair, not a single document,
-    // so the bare data shape fits better than respondDoc here.
-    execute: async svc => {
-      const layout = await svc.templateService.getLayout();
-      return respondData(layout);
-    },
-  },
-  updateLayout: {
-    // Service returns void; the action result is a confirmation toast.
-    execute: async (svc, _p, body) => {
-      await svc.templateService.updateLayout(
-        body as Parameters<typeof svc.templateService.updateLayout>[0]
-      );
-      return respondAction("Email layout updated.");
-    },
-  },
   previewTemplate: {
     // previewTemplate is a non-CRUD read returning a `{subject, html}`
     // pair (no document identity, no mutation, no pagination), which

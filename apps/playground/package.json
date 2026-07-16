@@ -27,6 +27,7 @@
     "@nextlyhq/adapter-postgres": "workspace:^",
     "@nextlyhq/adapter-sqlite": "workspace:^",
     "@nextlyhq/admin": "workspace:^",
+    "@nextlyhq/plugin-form-builder": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
     "drizzle-orm": "^0.45.2",
     "mysql2": "^3.12.0",

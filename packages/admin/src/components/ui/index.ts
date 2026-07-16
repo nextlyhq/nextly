@@ -144,7 +144,6 @@ export {
   TableHeader,
   TableRow,
 } from "@nextlyhq/ui";
-export { ResponsiveTable } from "@nextlyhq/ui";
 
 // ─── Local (staying in admin) ──────────────────────────────────
 export * from "./form";

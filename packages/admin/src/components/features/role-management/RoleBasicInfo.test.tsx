@@ -28,7 +28,6 @@ function RoleBasicInfoWrapper({
       slug: "",
       description: "",
       permissions: [],
-      status: "active",
       ...defaultValues,
     },
   });

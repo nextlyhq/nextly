@@ -28,6 +28,7 @@ import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
+import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { respondList, respondMutation } from "./response-shapes";
@@ -204,6 +205,10 @@ export const GET = withErrorHandler(async (request: Request) => {
  * - 500 Internal Server Error: Creation failed
  */
 export const POST = withErrorHandler(async (request: Request) => {
+  // Creating a collection is DDL. Refuse before auth so a disabled builder
+  // reads the same to every caller, super-admin or not.
+  requireBuilderEnabled("create-collection");
+
   const user = await requireUser(request);
 
   // Initialize services (required for permission check via RBAC tables).

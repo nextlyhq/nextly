@@ -245,7 +245,7 @@ export function RelationshipEditor({
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-0" align="start">
-              <div className="p-2  border-b border-primary/5">
+              <div className="p-2  border-b border-border">
                 <div className="relative">
                   <Icons.Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
@@ -314,7 +314,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Relationship Options */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         {/* Has Many Toggle */}
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
@@ -356,7 +356,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Admin Options */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>
@@ -448,7 +448,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Filter Options (Simplified) */}
-      <div className="space-y-3 pt-2  border-t border-primary/5">
+      <div className="space-y-3 pt-2  border-t border-border">
         <div className="flex items-center justify-between">
           <FormLabelWithTooltip
             className="text-xs font-medium"
@@ -469,7 +469,7 @@ export function RelationshipEditor({
         </div>
 
         {filterOptions ? (
-          <div className="space-y-2 p-3 rounded-none  border border-primary/5 bg-background">
+          <div className="space-y-2 p-3 rounded-none  border border-border bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Only show documents where:
             </p>

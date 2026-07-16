@@ -4,7 +4,7 @@
  * Named handler functions for the five API key endpoints. Each handler owns
  * its full auth + validation + service-call cycle:
  *
- *   requirePermission("update", "api-keys")  to  manage-api-keys system permission
+ *   requirePermission("update", "api-keys")  to  update-api-keys system permission
  *   authMethod !== "session" guard           to  create / update / revoke are session-only
  *
  * These functions are called by the main route handler when it detects
@@ -78,7 +78,7 @@ function denySessionOnly(action: "create" | "update" | "delete"): never {
  * Super-admins see all keys across all users (`allUsers: true`).
  * Regular users see only their own keys.
  *
- * Auth: session or API key + `manage-api-keys` permission.
+ * Auth: session or API key + `update-api-keys` permission.
  *
  * Response: `{ items: ApiKeyMeta[], meta: PaginationMeta }`. The list is
  * not server-paginated (callers see every key they're allowed to read);
@@ -114,7 +114,7 @@ export const listApiKeys = withErrorHandler(
  * `null` for keys that don't exist or aren't owned by the caller, and this
  * handler returns 404 in both cases (no ownership leakage).
  *
- * Auth: session or API key + `manage-api-keys` permission.
+ * Auth: session or API key + `update-api-keys` permission.
  *
  * Response: bare `ApiKeyMeta` document body via `respondDoc`.
  */
@@ -148,7 +148,7 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
  * escalation. The raw key is returned exactly once in this response; it
  * is never stored and cannot be retrieved again.
  *
- * Auth: **session only** + `manage-api-keys` permission.
+ * Auth: **session only** + `update-api-keys` permission.
  *
  * Response: `{ message, item: { doc: ApiKeyMeta, key: string } }` via
  * `respondMutation`. `key` is the one-time raw secret; status 201.
@@ -194,7 +194,7 @@ export const createApiKey = withErrorHandler(
  *
  * Session-only; cannot be called via an API key.
  *
- * Auth: **session only** + `manage-api-keys` permission.
+ * Auth: **session only** + `update-api-keys` permission.
  *
  * Response: `{ message, item: ApiKeyMeta }` via `respondMutation`.
  */
@@ -234,7 +234,7 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
  *
  * Session-only; cannot be called via an API key.
  *
- * Auth: **session only** + `manage-api-keys` permission.
+ * Auth: **session only** + `update-api-keys` permission.
  *
  * Response: `{ message, id }` via `respondAction`. Revoke is non-CRUD
  * (the row is preserved with `isActive = false`), so the action shape

@@ -11,7 +11,7 @@ type ThemeProviderProps = ComponentProps<typeof NextThemesProvider>;
 /**
  * Theme Sync Component
  *
- * Syncs next-themes state with .adminapp container classes.
+ * Syncs next-themes state with .nextly-admin container classes.
  * This allows scoped theme switching for the admin panel.
  *
  * Performance optimizations:
@@ -32,9 +32,9 @@ function ThemeSync() {
     const isDark = resolvedTheme === "dark";
     let timeoutId: NodeJS.Timeout | null = null;
 
-    // Apply theme to all existing .adminapp containers
+    // Apply theme to all existing .nextly-admin containers
     const applyTheme = () => {
-      const containers = document.querySelectorAll(".adminapp");
+      const containers = document.querySelectorAll(".nextly-admin");
       containers.forEach(container => {
         container.classList.toggle("dark", isDark);
       });
@@ -54,13 +54,13 @@ function ThemeSync() {
           mutation.addedNodes.forEach(node => {
             if (
               node instanceof HTMLElement &&
-              node.classList.contains("adminapp")
+              node.classList.contains("nextly-admin")
             ) {
               node.classList.toggle("dark", isDark);
             }
             // Also check children of added nodes
             if (node instanceof HTMLElement) {
-              const children = node.querySelectorAll(".adminapp");
+              const children = node.querySelectorAll(".nextly-admin");
               children.forEach(child => {
                 child.classList.toggle("dark", isDark);
               });
@@ -71,7 +71,7 @@ function ThemeSync() {
       }, 50); // Balance between responsiveness and performance
     };
 
-    // Watch for dynamically added .adminapp containers (e.g., portals)
+    // Watch for dynamically added .nextly-admin containers (e.g., portals)
     let observer: MutationObserver | null = null;
 
     try {
@@ -106,8 +106,8 @@ function ThemeSync() {
 /**
  * Theme Provider for Nextly Admin
  *
- * Wraps next-themes ThemeProvider with adminapp-specific configuration.
- * Applies dark mode to .adminapp container for scoped theme switching.
+ * Wraps next-themes ThemeProvider with nextly-admin-specific configuration.
+ * Applies dark mode to .nextly-admin container for scoped theme switching.
  *
  * **Default Configuration** (can be overridden via props):
  * - `defaultTheme`: "system" - Respects OS preference on first load

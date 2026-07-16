@@ -39,10 +39,13 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
+  SettingsRow,
+  SettingsSection,
+} from "@admin/components/features/settings";
+import {
   ChevronDown,
   ChevronUp,
   Info,
-  Key,
   Loader2,
   Shield,
 } from "@admin/components/icons";
@@ -51,7 +54,6 @@ import {
   FormControl,
   FormField,
   FormItem,
-  FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
@@ -289,292 +291,251 @@ export function CreateApiKeyForm({
   };
 
   return (
-    <div className="space-y-6">
-      <Form {...form}>
-        <form
-          onSubmit={e => {
-            void form.handleSubmit(handleSubmit)(e);
-          }}
-          className="space-y-6"
-        >
-          <div className="bg-card  border border-primary/5 rounded-none overflow-hidden">
-            {/* Page Header */}
-            <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
-              <div className="flex items-center gap-3">
-                <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary">
-                  <Key className="h-4 w-4" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold">Create API Key</h2>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    Generate a new key for programmatic API access
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6">
-              <div className="space-y-8 max-w-2xl">
-                {/* ── Details ─────────────────────────────────────── */}
-                <section className="space-y-4">
-                  <div>
-                    <h3 className="text-base font-medium">Details</h3>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      A label and optional description to identify this key.
-                    </p>
-                  </div>
-
-                  <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Name</FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder="e.g. Frontend App Key"
-                            autoFocus
-                            disabled={isPending}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="description"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Description{" "}
-                          <span className="font-normal text-muted-foreground">
-                            (optional)
-                          </span>
-                        </FormLabel>
-                        <FormControl>
-                          <Textarea
-                            placeholder="What is this key used for?"
-                            disabled={isPending}
-                            rows={3}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </section>
-
-                {/* ── Configuration ───────────────────────────────── */}
-                <section className="space-y-4">
-                  <div>
-                    <h3 className="text-base font-medium">Configuration</h3>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      Set the token type and how long the key will be valid.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    {/* Token Duration */}
-                    <FormField
-                      control={form.control}
-                      name="expiresIn"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Token Duration</FormLabel>
-                          <Select
-                            disabled={isPending}
-                            onValueChange={field.onChange}
-                            defaultValue={field.value}
-                          >
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select duration" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="7d">7 days</SelectItem>
-                              <SelectItem value="30d">30 days</SelectItem>
-                              <SelectItem value="90d">90 days</SelectItem>
-                              <SelectItem value="unlimited">
-                                Unlimited
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+    <Form {...form}>
+      <form
+        onSubmit={e => {
+          void form.handleSubmit(handleSubmit)(e);
+        }}
+        className="space-y-6"
+      >
+        {/* Details */}
+        <SettingsSection label="Details">
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field }) => (
+              <FormItem>
+                <SettingsRow
+                  label="Name"
+                  description="A label to identify this key."
+                >
+                  <FormControl>
+                    <Input
+                      placeholder="e.g. Frontend App Key"
+                      autoFocus
+                      disabled={isPending}
+                      {...field}
                     />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
 
-                    {/* Token Type */}
-                    <FormField
-                      control={form.control}
-                      name="tokenType"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Token Type</FormLabel>
-                          <Select
-                            disabled={isPending}
-                            onValueChange={value => {
-                              field.onChange(value);
-                              // Clear roleId when switching away from role-based
-                              if (value !== "role-based") {
-                                form.setValue("roleId", undefined);
-                              }
-                            }}
-                            defaultValue={field.value}
-                          >
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select token type" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="read-only">
-                                Read-only
-                              </SelectItem>
-                              <SelectItem value="full-access">
-                                Full access
-                              </SelectItem>
-                              <SelectItem value="role-based">
-                                Role-based
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+          <FormField
+            control={form.control}
+            name="description"
+            render={({ field }) => (
+              <FormItem>
+                <SettingsRow
+                  label="Description"
+                  description="Optional. What this key is used for."
+                >
+                  <FormControl>
+                    <Textarea
+                      placeholder="What is this key used for?"
+                      disabled={isPending}
+                      rows={3}
+                      {...field}
                     />
-                  </div>
+                  </FormControl>
+                  <FormMessage />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
+        </SettingsSection>
 
-                  {/* Token type descriptor */}
-                  <Alert variant="info" role="status">
-                    <DescriptorIcon className="h-4 w-4" />
-                    <AlertDescription>{descriptor.text}</AlertDescription>
-                  </Alert>
-
-                  {/* Role selector — only for "role-based" */}
-                  {tokenType === "role-based" && (
-                    <FormField
-                      control={form.control}
-                      name="roleId"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Role</FormLabel>
-                          <Select
-                            disabled={isPending || rolesLoading}
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                          >
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue
-                                  placeholder={
-                                    rolesLoading
-                                      ? "Loading roles…"
-                                      : "Select a role"
-                                  }
-                                />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {rolesData?.items.map(role => (
-                                <SelectItem key={role.id} value={role.id}>
-                                  {role.roleName}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  )}
-                </section>
-
-                {/* ── Access Preview (collapsible) ─────────────────── */}
-                <section>
-                  <Collapsible
-                    open={accessPreviewOpen}
-                    onOpenChange={setAccessPreviewOpen}
+        {/* Configuration */}
+        <SettingsSection label="Configuration">
+          <FormField
+            control={form.control}
+            name="expiresIn"
+            render={({ field }) => (
+              <FormItem>
+                <SettingsRow
+                  label="Token Duration"
+                  description="How long the key stays valid."
+                >
+                  <Select
+                    disabled={isPending}
+                    onValueChange={field.onChange}
+                    defaultValue={field.value}
                   >
-                    <CollapsibleTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-between rounded-none  border border-primary/5 px-3 py-2.5 text-sm font-medium transition-colors"
-                      >
-                        <span>What can this key access?</span>
-                        {accessPreviewOpen ? (
-                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </button>
-                    </CollapsibleTrigger>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select duration" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="7d">7 days</SelectItem>
+                      <SelectItem value="30d">30 days</SelectItem>
+                      <SelectItem value="90d">90 days</SelectItem>
+                      <SelectItem value="unlimited">Unlimited</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
 
-                    <CollapsibleContent>
-                      <div className="rounded-none  border border-primary/5 border-t-0 px-3 py-3">
-                        {tokenType === "read-only" &&
-                          (permissionsLoading ? (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              Loading your permissions…
-                            </div>
-                          ) : (
-                            <ReadOnlyPreview permissions={permissions} />
-                          ))}
+          <FormField
+            control={form.control}
+            name="tokenType"
+            render={({ field }) => (
+              <FormItem>
+                <SettingsRow
+                  label="Token Type"
+                  description="What this key is allowed to do."
+                >
+                  <Select
+                    disabled={isPending}
+                    onValueChange={value => {
+                      field.onChange(value);
+                      // Clear roleId when switching away from role-based
+                      if (value !== "role-based") {
+                        form.setValue("roleId", undefined);
+                      }
+                    }}
+                    defaultValue={field.value}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select token type" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="read-only">Read-only</SelectItem>
+                      <SelectItem value="full-access">Full access</SelectItem>
+                      <SelectItem value="role-based">Role-based</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </SettingsRow>
+              </FormItem>
+            )}
+          />
 
-                        {tokenType === "full-access" && (
-                          <p className="text-sm text-muted-foreground">
-                            This key can access all resources you are currently
-                            authorized for. Its effective permissions will match
-                            your account&apos;s permissions at the time of each
-                            request.
-                          </p>
-                        )}
+          {/* Role selector — only for "role-based" */}
+          {tokenType === "role-based" && (
+            <FormField
+              control={form.control}
+              name="roleId"
+              render={({ field }) => (
+                <FormItem>
+                  <SettingsRow
+                    label="Role"
+                    description="The key acts as this role."
+                  >
+                    <Select
+                      disabled={isPending || rolesLoading}
+                      onValueChange={field.onChange}
+                      value={field.value ?? ""}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue
+                            placeholder={
+                              rolesLoading ? "Loading roles…" : "Select a role"
+                            }
+                          />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {rolesData?.items.map(role => (
+                          <SelectItem key={role.id} value={role.id}>
+                            {role.roleName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </SettingsRow>
+                </FormItem>
+              )}
+            />
+          )}
+        </SettingsSection>
 
-                        {tokenType === "role-based" && !roleId && (
-                          <p className="text-sm text-muted-foreground">
-                            Select a role above to preview its permissions.
-                          </p>
-                        )}
+        {/* Token type descriptor */}
+        <Alert variant="info" role="status">
+          <DescriptorIcon className="h-4 w-4" />
+          <AlertDescription>{descriptor.text}</AlertDescription>
+        </Alert>
 
-                        {tokenType === "role-based" && roleId && (
-                          <RolePermissionsPreview roleId={roleId} />
-                        )}
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                </section>
-              </div>
+        {/* Access Preview (collapsible) */}
+        <Collapsible
+          open={accessPreviewOpen}
+          onOpenChange={setAccessPreviewOpen}
+        >
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-md border border-input bg-card px-4 py-3 text-sm font-medium transition-colors hover:bg-muted"
+            >
+              <span>What can this key access?</span>
+              {accessPreviewOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+          </CollapsibleTrigger>
+
+          <CollapsibleContent>
+            <div className="rounded-md border border-input border-t-0 px-4 py-3">
+              {tokenType === "read-only" &&
+                (permissionsLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading your permissions…
+                  </div>
+                ) : (
+                  <ReadOnlyPreview permissions={permissions} />
+                ))}
+
+              {tokenType === "full-access" && (
+                <p className="text-sm text-muted-foreground">
+                  This key can access all resources you are currently authorized
+                  for. Its effective permissions will match your account&apos;s
+                  permissions at the time of each request.
+                </p>
+              )}
+
+              {tokenType === "role-based" && !roleId && (
+                <p className="text-sm text-muted-foreground">
+                  Select a role above to preview its permissions.
+                </p>
+              )}
+
+              {tokenType === "role-based" && roleId && (
+                <RolePermissionsPreview roleId={roleId} />
+              )}
             </div>
+          </CollapsibleContent>
+        </Collapsible>
 
-            {/* Form Actions */}
-            <div className="border-t border-primary/5 px-6 py-4 bg-primary/5">
-              <div className="flex justify-end gap-3">
-                <Link href={ROUTES.SETTINGS_API_KEYS}>
-                  <Button type="button" variant="outline" disabled={isPending}>
-                    Cancel
-                  </Button>
-                </Link>
-                <Button type="submit" disabled={isPending}>
-                  {isPending ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Creating…
-                    </>
-                  ) : (
-                    "Create API Key"
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </form>
-      </Form>
-    </div>
+        {/* Form Actions */}
+        <div className="flex justify-end gap-3">
+          <Link href={ROUTES.SETTINGS_API_KEYS}>
+            <Button type="button" variant="outline" disabled={isPending}>
+              Cancel
+            </Button>
+          </Link>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Creating…
+              </>
+            ) : (
+              "Create API Key"
+            )}
+          </Button>
+        </div>
+      </form>
+    </Form>
   );
 }

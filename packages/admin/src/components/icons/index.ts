@@ -124,6 +124,7 @@ export {
   MessageCircle, // Collection Settings: icon picker
   MessageSquare, // Collection Settings: icon picker
   Minus,
+  Monitor, // Email Template editor: desktop preview
   MousePointerClick, // Rich text editor: button link
   Moon,
   MoreHorizontal,
@@ -151,7 +152,6 @@ export {
   RotateCcw, // Column visibility: reset to default
   RemoveFormatting, // Rich text editor
   SeparatorHorizontal, // Rich text editor: horizontal rule
-  Save, // Collection Builder
   Search,
   Send, // Collection Settings: icon picker
   Settings,
@@ -161,6 +161,7 @@ export {
   ShoppingBag, // Collection Settings: icon picker
   ShoppingCart, // Collection Settings: icon picker
   SlidersHorizontal, // EntryTableToolbar: filters
+  Smartphone, // Email Template editor: mobile preview
   Sparkles,
   Square,
   Star, // Collection Settings: icon picker

@@ -10,7 +10,6 @@ export { RoleDeleteDialog } from "./RoleDeleteDialog";
 export { RoleForm } from "./RoleForm";
 export { RoleInheritance } from "./RoleInheritance";
 export { RolePermissionsSection } from "./RolePermissionsSection";
-export { RoleStatusSection } from "./RoleStatusSection";
 
 // Subdirectories
 export * from "./breadcrumbs";

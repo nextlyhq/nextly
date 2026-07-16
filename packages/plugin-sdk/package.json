@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-sdk",
-  "version": "0.0.2-alpha.33",
+  "version": "0.0.2-alpha.34",
   "description": "Nextly Plugin SDK — the author-facing surface for building Nextly plugins; the plugin API stability boundary (see STABILITY.md).",
   "license": "MIT",
   "repository": {
@@ -19,19 +19,23 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",
-      "import": "./dist/testing.mjs"
+      "import": "./dist/testing.mjs",
+      "default": "./dist/testing.mjs"
     },
     "./client": {
       "types": "./dist/client.d.ts",
-      "import": "./dist/client.mjs"
+      "import": "./dist/client.mjs",
+      "default": "./dist/client.mjs"
     },
     "./admin": {
       "types": "./dist/admin.d.ts",
-      "import": "./dist/admin.mjs"
+      "import": "./dist/admin.mjs",
+      "default": "./dist/admin.mjs"
     }
   },
   "files": [
