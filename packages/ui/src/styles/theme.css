@@ -628,11 +628,13 @@
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant */
-  --nx-destructive: oklch(0.6368 0.2078 25.33);
+  /* Darkened so white on-color text clears WCAG 4.5:1 (was 3.76:1). */
+  --nx-destructive: oklch(0.5778 0.2078 25.33);
   /* red-500 (#ef4444) */
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  --nx-success: oklch(0.6273 0.17 149.2);
+  /* Darkened so white on-color text clears WCAG 4.5:1 (was 3.29:1). */
+  --nx-success: oklch(0.53 0.17 149.2);
   /* green-600 (#16a34a) - AA compliant */
   --nx-success-foreground: oklch(1 0 0);
   /* white */
@@ -656,13 +658,15 @@
    * held above 4.5:1 on --nx-code-bg since code is small text. */
   --nx-code-bg: oklch(0.9761 0.0035 247.86);
   --nx-code-fg: oklch(0.2079 0.0399 265.73);
-  --nx-code-comment: oklch(0.5547 0.0407 257.44);
+  /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
+  --nx-code-comment: oklch(0.541 0.0407 257.44);
   --nx-code-keyword: oklch(0.4882 0.2172 303.9);
   --nx-code-string: oklch(0.4478 0.1189 152.1);
   --nx-code-number: oklch(0.5106 0.1518 44.2);
   --nx-code-function: oklch(0.4757 0.1444 254.6);
   --nx-code-operator: oklch(0.4936 0.1418 8.4);
-  --nx-code-punctuation: oklch(0.5547 0.0407 257.44);
+  /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
+  --nx-code-punctuation: oklch(0.541 0.0407 257.44);
   --nx-code-variable: oklch(0.4694 0.1173 62.3);
   --nx-code-tag: oklch(0.5054 0.1905 27.5);
   --nx-code-deleted: oklch(0.5054 0.1905 27.5);
@@ -673,11 +677,12 @@
    * subtle = decorative dividers/cards; default = tables/groups;
    * strong = interactive control edges (inputs/checkbox) for prominence. */
   --nx-border-subtle: oklch(0 0 0 / 0.08);
-  --nx-border: oklch(0 0 0 / 0.13);
-  --nx-border-strong: oklch(0 0 0 / 0.3);
-  --nx-input: oklch(
-    0.7384 0.0116 286.11
-  ); /* zinc-400: stronger visible field border (was zinc-300, too faint) */
+  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.35:1). */
+  --nx-border: oklch(0 0 0 / 0.445);
+  /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
+  --nx-border-strong: oklch(0 0 0 / 0.502);
+  /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
+  --nx-input: oklch(0.6454 0.0116 286.11);
   --nx-ring: var(--nx-primary);
 
   /* Chart colors for data visualization */
@@ -720,7 +725,8 @@
   /* slate-100 */
   --nx-sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
-  --nx-sidebar-border: oklch(0.929 0.0126 255.53);
+  /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
+  --nx-sidebar-border: oklch(0.6446 0.0126 255.53);
   /* slate-200 */
   --nx-sidebar-ring: var(--nx-primary);
 
@@ -774,11 +780,13 @@
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant (Dark Mode) */
-  --nx-destructive: oklch(0.6368 0.2078 25.33);
+  /* Darkened so white on-color text clears WCAG 4.5:1 (was 3.76:1). */
+  --nx-destructive: oklch(0.5778 0.2078 25.33);
   /* red-500 */
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  --nx-success: oklch(0.7229 0.1921 149.58);
+  /* Darkened so white on-color text clears WCAG 4.5:1 (was 2.28:1). */
+  --nx-success: oklch(0.5225 0.1921 149.58);
   /* green-500 - brighter for dark mode */
   --nx-success-foreground: oklch(1 0 0);
   /* white */
@@ -815,8 +823,10 @@
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
    * on the deep background without glowing. Was ~1.2:1 (too faint). */
   --nx-border-subtle: oklch(1 0 0 / 0.08);
-  --nx-border: oklch(1 0 0 / 0.13);
-  --nx-border-strong: oklch(1 0 0 / 0.34);
+  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.36:1). */
+  --nx-border: oklch(1 0 0 / 0.366);
+  /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */
+  --nx-border-strong: oklch(1 0 0 / 0.418);
   --nx-input: oklch(
     0.4987 0.0128 285.92
   ); /* stronger visible field border (was zinc-700, too faint) */
@@ -846,8 +856,8 @@
   /* slate-800 */
   --nx-sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
-  --nx-sidebar-border: oklch(0.2321 0.0129 257.43);
-  /* subtle slate-900 */
+  /* Lightened so the sidebar border clears WCAG 3:1 on its surface (was 1.19:1). */
+  --nx-sidebar-border: oklch(0.4975 0.0129 257.43);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors - dark mode */
