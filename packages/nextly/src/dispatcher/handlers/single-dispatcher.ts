@@ -967,7 +967,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Post-apply: update dynamic_singles fields JSON + schema_hash, and
       // advance schema_version so the optimistic-lock check above sees a new
       // value on the next save. Without this bump the stored version never
-      // changes and a second stale save would pass the guard.
+      // changes and a second stale save would pass the guard. The write is
+      // non-fatal (the DDL already succeeded), but track whether it landed so
+      // the response never reports a version the database did not persist.
+      let versionPersisted = true;
       try {
         await adapter.update(
           "dynamic_singles",
@@ -981,9 +984,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
       } catch (err) {
+        versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
         );
       }
 
@@ -1003,7 +1008,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       }
 
       return respondAction(`Schema applied for single '${slug}'`, {
-        newSchemaVersion,
+        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
       });
     },
   },

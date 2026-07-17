@@ -530,7 +530,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // (not via the registry helper, whose auto-bump would also reset
       // migration_status). Advance schema_version here so the optimistic-lock
       // check above sees a new value on the next save; without the bump the
-      // stored version never changes and a second stale save would pass.
+      // stored version never changes and a second stale save would pass. The
+      // write is non-fatal (the DDL already succeeded), but track whether it
+      // landed so the response never reports a version the DB did not persist.
+      let versionPersisted = true;
       try {
         await adapter.update(
           "dynamic_components",
@@ -544,9 +547,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
       } catch (err) {
+        versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
         );
       }
 
@@ -564,7 +569,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       );
 
       return respondAction(`Schema applied for component '${slug}'`, {
-        newSchemaVersion,
+        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
       });
     },
   },
