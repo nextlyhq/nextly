@@ -184,7 +184,9 @@ export function applyFormDefaults(config: FormConfig): FormConfig {
       // Preserve other settings that don't have defaults
       redirectUrl: config.settings?.redirectUrl,
       redirectRelation: config.settings?.redirectRelation,
-      captcha: config.settings?.captcha,
+      honeypotEnabled: config.settings?.honeypotEnabled,
+      captchaEnabled: config.settings?.captchaEnabled,
+      captchaSiteKey: config.settings?.captchaSiteKey,
     },
 
     // Apply notification defaults if notifications are configured

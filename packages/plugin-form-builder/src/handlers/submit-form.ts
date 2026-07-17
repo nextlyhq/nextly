@@ -16,6 +16,7 @@ import type {
   ResolvedFormBuilderConfig,
   FormField,
 } from "../types";
+import { normalizeFormSettings } from "../utils/form-settings";
 import {
   generateZodSchema,
   transformFormData,
@@ -158,6 +159,37 @@ export async function submitForm(
       };
     }
 
+    // 2b. Settings come through the one canonical reader — stored settings
+    // may carry legacy keys from earlier builder versions.
+    const settings = normalizeFormSettings(form.settings);
+
+    // 2c. Single-submission forms: the same visitor (by IP) submits once.
+    // Checked before spam so a repeat visitor gets the honest message
+    // instead of an inexplicable success that stored nothing new.
+    if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
+      const existing = await collections.count(
+        pluginConfig.formSubmissionOverrides.slug,
+        {
+          where: {
+            form: { equals: form.id },
+            ipAddress: { equals: metadata.ipAddress },
+            status: { not_equals: "spam" },
+          },
+        },
+        { as: "system" }
+      );
+      if (existing > 0) {
+        logger.info?.("Repeat submission rejected (single-submission form)", {
+          formSlug,
+          ipAddress: metadata.ipAddress,
+        });
+        return {
+          success: false,
+          error: "You have already submitted this form.",
+        };
+      }
+    }
+
     // 3. Spam detection — BEFORE validation, so a bot that trips the trap
     // while also failing validation still receives the same fake success as
     // any other bot instead of a distinguishable validation error.
@@ -174,9 +206,17 @@ export async function submitForm(
       ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
-        honeypot: pluginConfig.spamProtection.honeypot,
+        // Per-form overrides win where set; blank inherits the plugin config.
+        honeypot:
+          settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
         rateLimit: pluginConfig.spamProtection.rateLimit,
-        recaptcha: pluginConfig.spamProtection.recaptcha,
+        recaptcha: {
+          ...pluginConfig.spamProtection.recaptcha,
+          enabled:
+            settings.captchaEnabled ??
+            pluginConfig.spamProtection.recaptcha?.enabled ??
+            false,
+        },
       },
     });
 

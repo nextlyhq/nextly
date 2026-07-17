@@ -342,6 +342,13 @@ export function formBuilder(
                   defaultFrom: resolvedConfig.notifications.defaultFrom,
                   defaultToEmail: resolvedConfig.notifications.defaultToEmail,
                 },
+                // Spam defaults the Settings tab surfaces, so per-form
+                // override selects can show what "inherit" resolves to.
+                spamProtection: {
+                  honeypot: resolvedConfig.spamProtection.honeypot,
+                  recaptchaEnabled:
+                    resolvedConfig.spamProtection.recaptcha?.enabled ?? false,
+                },
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
                 // never hardcode "forms"/"form-submissions".

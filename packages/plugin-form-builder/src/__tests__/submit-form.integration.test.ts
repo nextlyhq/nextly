@@ -129,6 +129,72 @@ describe("submitForm end-to-end", () => {
     ).toBe(0);
   });
 
+  it("rejects a second submission from the same IP on single-submission forms", async () => {
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-single");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "RSVP",
+        slug: "rsvp",
+        status: "published",
+        fields: [{ type: "text", name: "name", label: "Name" }],
+        settings: { allowMultipleSubmissions: false },
+      },
+    });
+
+    const submit = () =>
+      submitForm(
+        {
+          formSlug: "rsvp",
+          data: { name: "Ada" },
+          metadata: { ipAddress: "203.0.113.9" },
+        },
+        { pluginContext: probe.get(), pluginConfig: fb.config }
+      );
+
+    expect((await submit()).success).toBe(true);
+    const second = await submit();
+    expect(second.success).toBe(false);
+    expect(second.error).toContain("already submitted");
+  });
+
+  it("lets a per-form honeypot override disable the plugin-level trap", async () => {
+    const fb = formBuilder({
+      spamProtection: { honeypot: true, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-hp-override");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Open",
+        slug: "open",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        // The form opts out of the honeypot even though the plugin has it on.
+        settings: { honeypotEnabled: false },
+      },
+    });
+
+    const result = await submitForm(
+      { formSlug: "open", data: { message: "hi", _hp: "filled" } },
+      { pluginContext: probe.get(), pluginConfig: fb.config }
+    );
+
+    expect(result.success).toBe(true);
+    const stored = await current.nextly.find({
+      collection: "form-submissions",
+      where: { status: { equals: "new" } },
+    });
+    expect(stored.items).toHaveLength(1);
+  });
+
   it("gives a honeypot bot the same fake success even when validation would fail", async () => {
     const fb = formBuilder({
       spamProtection: { honeypot: true, recaptcha: { enabled: false } },

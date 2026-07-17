@@ -834,14 +834,23 @@ export interface FormSettings {
     value: string; // Document ID
   };
 
-  /** Allow multiple submissions from same user/IP */
+  /** Allow multiple submissions from same IP (default true) */
   allowMultipleSubmissions?: boolean;
 
-  /** reCAPTCHA configuration */
-  captcha?: {
-    enabled: boolean;
-    siteKey?: string;
-  };
+  /**
+   * Per-form honeypot override. Unset inherits the plugin's
+   * `spamProtection.honeypot`; the form wins where set.
+   */
+  honeypotEnabled?: boolean;
+
+  /**
+   * Per-form reCAPTCHA override. Unset inherits the plugin's
+   * `spamProtection.recaptcha.enabled`; the form wins where set.
+   */
+  captchaEnabled?: boolean;
+
+  /** reCAPTCHA site key (client-facing) when captcha is enabled per-form */
+  captchaSiteKey?: string;
 }
 
 // ============================================================
