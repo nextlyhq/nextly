@@ -56,6 +56,7 @@ describe("UserExtSchemaService — built-in url/phone runtime columns", () => {
   });
 
   it("builds text runtime columns for url and phone on sqlite", () => {
+    // SQLite stores these text-family fields as text, matching the generated DDL.
     const table = new UserExtSchemaService("sqlite").generateRuntimeSchema([
       field("website", "url"),
       field("mobile", "phone"),
