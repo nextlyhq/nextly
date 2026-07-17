@@ -13,6 +13,7 @@
 "use client";
 import {
   FieldOptionsEditor,
+  withOptionIds,
   type FieldOptionsEditorProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
@@ -412,11 +413,7 @@ function OptionsEditor({
   const optionsField = field as SelectFormField | RadioFormField;
 
   const [kitOptions, setKitOptions] = useState<KitOption[]>(() =>
-    (optionsField.options || []).map((opt, index) => ({
-      id: `opt_initial_${index}`,
-      label: opt.label,
-      value: opt.value,
-    }))
+    withOptionIds(optionsField.options || [])
   );
 
   const handleOptionsChange = useCallback(
@@ -438,7 +435,6 @@ function OptionsEditor({
       <FieldOptionsEditor
         options={kitOptions}
         onOptionsChange={handleOptionsChange}
-        fieldType={field.type === "radio" ? "radio" : "select"}
       />
     </div>
   );
