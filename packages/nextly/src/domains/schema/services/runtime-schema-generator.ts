@@ -151,8 +151,14 @@ function buildDrizzleColumnRecord(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
   const out: Record<string, any> = {};
 
-  const hasTitleField = fields.some(f => f.name === "title");
-  const hasSlugField = fields.some(f => f.name === "slug");
+  // A column-less field (e.g. a component, stored in its own table) must not
+  // suppress the system title/slug column, or the table would have neither.
+  const producesColumn = (f: FieldDefinition): boolean =>
+    getColumnDescriptor(f, dialect) !== null;
+  const hasTitleField = fields.some(
+    f => f.name === "title" && producesColumn(f)
+  );
+  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
 
   // System columns first (id, created_at, updated_at; conditionally title,
   // slug, and status). Source-of-truth descriptor list lives in

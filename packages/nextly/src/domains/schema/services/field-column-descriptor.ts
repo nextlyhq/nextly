@@ -213,10 +213,15 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "repeater":
     case "group":
-    case "component":
     case "json":
     case "chips":
       return "json";
+
+    case "component":
+      // Component values live in their own comp_{slug} tables and are stripped
+      // from the parent row on write, so the parent needs no column. Emitting
+      // one (NOT NULL when required) produced an orphan that broke every insert.
+      return "skip";
 
     default: {
       // Plugin-contributed custom field type maps to its declared storage

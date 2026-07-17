@@ -89,6 +89,27 @@ describe("addMissingColumnsForFields", () => {
     expect(alter?.sql).toBe(`ALTER TABLE "dc_posts" ADD COLUMN "excerpt" TEXT`);
   });
 
+  it("never adds a parent column for a component field", async () => {
+    const { adapter, calls } = makeAdapter({
+      dialect: "postgresql",
+      existingColumns: ["id"],
+    });
+    const fields: FieldConfig[] = [
+      { name: "hero", type: "component" } as FieldConfig,
+    ];
+
+    const added = await addMissingColumnsForFields(
+      adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
+      fakeLogger,
+      "dc_pages",
+      fields,
+      { timestamps: false }
+    );
+
+    expect(added).toEqual([]);
+    expect(calls.find(c => c.sql.startsWith("ALTER TABLE"))).toBeUndefined();
+  });
+
   it("uses backtick-quoted identifiers on MySQL", async () => {
     const { adapter, calls } = makeAdapter({
       dialect: "mysql",

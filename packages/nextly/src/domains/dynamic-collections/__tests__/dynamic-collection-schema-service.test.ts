@@ -41,6 +41,25 @@ describe("DynamicCollectionSchemaService — index naming (snake_case)", () => {
   });
 });
 
+describe("DynamicCollectionSchemaService: component fields are column-less", () => {
+  it("emits no parent column and no index for a component field", () => {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const sql = service.generateMigrationSQL("dc_pages", [
+      { name: "hero", type: "component", index: true } as FieldDefinition,
+    ]);
+    expect(sql).not.toContain('"hero"');
+    expect(sql).not.toContain("idx_dc_pages_hero");
+  });
+
+  it("keeps the system title column when a component field is named 'title'", () => {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const sql = service.generateMigrationSQL("dc_pages", [
+      { name: "title", type: "component" } as FieldDefinition,
+    ]);
+    expect(sql).toContain('"title" text NOT NULL');
+  });
+});
+
 describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D rename detection", () => {
   let service: DynamicCollectionSchemaService;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -134,9 +153,7 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     // Old: { salary: text }, New: { compensation: number }.
     // Types differ → would lose data even with rename (varchar vs int).
     // Bail out and warn; let user do an explicit two-step migration.
-    const oldFields: FieldDefinition[] = [
-      { name: "salary", type: "text" },
-    ];
+    const oldFields: FieldDefinition[] = [{ name: "salary", type: "text" }];
     const newFields: FieldDefinition[] = [
       { name: "compensation", type: "number" },
     ];
@@ -247,9 +264,7 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
   });
 
   it("pure add (only added fields, no removed) does not trigger rename detection", () => {
-    const oldFields: FieldDefinition[] = [
-      { name: "title", type: "text" },
-    ];
+    const oldFields: FieldDefinition[] = [{ name: "title", type: "text" }];
     const newFields: FieldDefinition[] = [
       { name: "title", type: "text" },
       { name: "summary", type: "text" },
@@ -271,9 +286,7 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
       { name: "title", type: "text" },
       { name: "summary", type: "text" },
     ];
-    const newFields: FieldDefinition[] = [
-      { name: "title", type: "text" },
-    ];
+    const newFields: FieldDefinition[] = [{ name: "title", type: "text" }];
 
     const sql = service.generateAlterTableMigration(
       "dc_posts",
@@ -296,9 +309,7 @@ describe("DynamicCollectionSchemaService.detectFieldRename — direct unit", () 
 
   it("returns the from→to pair for a single compatible rename", () => {
     const service = new DynamicCollectionSchemaService(undefined, "postgresql");
-    const oldFields: FieldDefinition[] = [
-      { name: "salary", type: "number" },
-    ];
+    const oldFields: FieldDefinition[] = [{ name: "salary", type: "number" }];
     const newFields: FieldDefinition[] = [
       { name: "compensation", type: "number" },
     ];
