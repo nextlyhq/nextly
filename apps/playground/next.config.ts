@@ -135,9 +135,6 @@ const nextConfig: NextConfig = {
       "@nextlyhq/plugin-form-builder/admin": [
         "../../packages/plugin-form-builder/src/admin/index.ts",
       ],
-      "@nextlyhq/plugin-form-builder/components": [
-        "../../packages/plugin-form-builder/src/components/index.ts",
-      ],
       // Source aliases for server-side workspace packages — Payload-style.
       // With these in place AND the packages omitted from serverExternalPackages
       // in dev, Turbopack reads .ts directly and HMR fires on source edits.

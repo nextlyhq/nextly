@@ -98,9 +98,22 @@ export function submissionsCollection(
         { label: "New", value: "new" },
         { label: "Read", value: "read" },
         { label: "Archived", value: "archived" },
+        // Spam is stored and flagged, never silently dropped: a false
+        // positive stays reviewable and recoverable ("Not spam" = back to new).
+        { label: "Spam", value: "spam" },
       ],
       admin: {
         description: "Track whether this submission has been reviewed",
+      },
+    }),
+
+    text({
+      name: "spamReason",
+      label: "Spam Reason",
+      admin: {
+        readOnly: true,
+        description:
+          "Which spam check flagged this submission (empty for clean submissions)",
       },
     }),
 
@@ -143,6 +156,26 @@ export function submissionsCollection(
       admin: {
         readOnly: true,
         description: "When the form was submitted",
+      },
+    }),
+
+    // Honesty stamps for admin edits of submitted data: a corrected
+    // submission must never be indistinguishable from what the visitor sent.
+    date({
+      name: "editedAt",
+      label: "Edited At",
+      admin: {
+        readOnly: true,
+        description: "When an admin last edited the submitted data",
+      },
+    }),
+
+    text({
+      name: "editedBy",
+      label: "Edited By",
+      admin: {
+        readOnly: true,
+        description: "ID of the admin who last edited the submitted data",
       },
     }),
   ];
@@ -202,12 +235,18 @@ export function submissionsCollection(
     },
 
     hooks: {
-      // Auto-set submittedAt timestamp on creation
+      // Auto-set submittedAt on creation; stamp admin edits of submitted data
       beforeValidate: [
         (context: HookContext) => {
           const { data, operation } = context;
           if (operation === "create" && data && !data.submittedAt) {
             data.submittedAt = new Date();
+          }
+          // Changing what the visitor submitted must leave a visible trace —
+          // an edited submission is never indistinguishable from the original.
+          if (operation === "update" && data && data.data !== undefined) {
+            data.editedAt = new Date();
+            data.editedBy = context.user?.id ?? null;
           }
           return data;
         },

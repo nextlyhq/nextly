@@ -82,17 +82,6 @@ export {
 export { FormSettingsTab } from "./components/builder/FormSettingsTab";
 export { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 
-// ============================================================================
-// Submission Components
-// ============================================================================
-
-export {
-  SubmissionList,
-  SubmissionDetail,
-  type SubmissionListProps,
-  type SubmissionDetailProps,
-} from "../components/submissions";
-
 /** Component path for FormBuilderView */
 export const FORM_BUILDER_VIEW_PATH: ComponentPath =
   "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
