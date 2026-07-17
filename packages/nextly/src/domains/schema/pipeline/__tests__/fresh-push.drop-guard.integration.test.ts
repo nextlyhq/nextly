@@ -19,7 +19,7 @@ let db: ReturnType<typeof drizzle>;
 beforeEach(() => {
   sqlite = new Database(":memory:");
   sqlite.pragma("foreign_keys = ON");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 });
 
 afterEach(() => {
@@ -52,9 +52,10 @@ describe("freshPushSchema drop-guard (real SQLite)", () => {
     await freshPushSchema("sqlite", db, core);
 
     // The table and row must still be there.
-    const rows = db.all(
-      sql`SELECT "id", "title" FROM "dc_articles"`
-    ) as Array<{ id: string; title: string }>;
+    const rows = db.all(sql`SELECT "id", "title" FROM "dc_articles"`) as Array<{
+      id: string;
+      title: string;
+    }>;
     expect(rows).toEqual([{ id: "a1", title: "Hello" }]);
 
     // And the guard logged that it blocked the drop.

@@ -19,7 +19,7 @@ import { getSchemaEventsDdl } from "../schema-events-ddl";
 describe("nextly_schema_events declared-as-managed (sqlite)", () => {
   it("raw-DDL-created, populated ledger round-trips with no changes or warnings", async () => {
     const sqlite = new Database(":memory:");
-    const db = drizzle(sqlite);
+    const db = drizzle({ client: sqlite });
 
     // Create the ledger exactly as first-run / `nextly upgrade` does, with a row.
     for (const stmt of getSchemaEventsDdl("sqlite")) sqlite.exec(stmt);
@@ -39,9 +39,9 @@ describe("nextly_schema_events declared-as-managed (sqlite)", () => {
 
     sqlite.close();
 
-    // Clean round-trip: no data-loss warning (the orphan-drop bug) and no
-    // churn — drizzle-kit wants to change nothing.
-    expect(result.warnings).toEqual([]);
-    expect(result.statementsToExecute).toEqual([]);
+    // Clean round-trip: no hints (v1's successor to the data-loss warning
+    // channel) and no churn — drizzle-kit wants to change nothing.
+    expect(result.hints).toEqual([]);
+    expect(result.sqlStatements).toEqual([]);
   });
 });

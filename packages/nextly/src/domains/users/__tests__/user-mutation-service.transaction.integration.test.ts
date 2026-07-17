@@ -77,6 +77,8 @@ const CREATE_USERS_TABLE = `
     image                TEXT,
     password_hash        TEXT,
     is_active            INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until         INTEGER,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
   )

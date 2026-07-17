@@ -1,0 +1,4 @@
+{
+  "sqlStatements": ["DROP INDEX IF EXISTS `g1_title_idx`;"],
+  "hints": []
+}

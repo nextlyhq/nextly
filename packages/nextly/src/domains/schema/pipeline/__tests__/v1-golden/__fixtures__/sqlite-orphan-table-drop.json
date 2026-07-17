@@ -1,0 +1,4 @@
+{
+  "sqlStatements": ["DROP TABLE `orphan_tbl`;"],
+  "hints": []
+}

@@ -26,7 +26,7 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create the events table from raw SQL mirroring schema-events/postgres.ts.
     await pool.query('DROP TABLE IF EXISTS "nextly_schema_events"');
@@ -44,6 +44,7 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
         "ended_at" timestamptz,
         "duration_ms" integer,
         "applied_by" text,
+        "note" text,
         "statements_planned" integer,
         "statements_executed" integer,
         "renames_applied" integer,
@@ -96,7 +97,9 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
     expect(row?.scopeSlug).toBe("posts");
     expect(row?.statementsExecuted).toBe(3);
     // Only renames are carried over from the journal summary (§4.3).
-    expect((row as { renamesApplied?: number } | undefined)?.renamesApplied).toBe(1);
+    expect(
+      (row as { renamesApplied?: number } | undefined)?.renamesApplied
+    ).toBe(1);
   });
 
   it("maps fresh-push scope → global (events has no fresh-push kind)", async () => {

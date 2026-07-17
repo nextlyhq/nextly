@@ -21,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // `pipeline/__tests__/preview.test.ts`. F8 PR 7's cross-dialect
 // integration matrix exercises the new preview/apply paths end-to-end
 // against real PG/MySQL/SQLite.
-import { generateRuntimeSchema } from "../../../../domains/schema/services/runtime-schema-generator";
+import { generateRuntimeSchema } from "../../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaRegistry } from "../../schema-registry";
 
@@ -60,7 +60,7 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: TEST_DB_URL });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
     // This simulates what pushSchema would do, letting us test CRUD via Drizzle API

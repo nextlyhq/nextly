@@ -175,7 +175,9 @@ async function currentMysqlDatabase(db: unknown): Promise<string> {
 // `PRAGMA foreign_keys=OFF/ON` choreography inside the statement stream —
 // dropping those would run rebuilds with FK enforcement in an unknown
 // state (#5782 territory).
-function splitStatements(sqlStatements: string[]): string[] {
+// Exported for the v1-golden fixture suite (Phase 7), which asserts every
+// captured kit statement survives the split executable.
+export function splitStatements(sqlStatements: string[]): string[] {
   const out: string[] = [];
   for (const raw of sqlStatements) {
     for (const piece of raw

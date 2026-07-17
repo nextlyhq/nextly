@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
+import { RealPreCleanupExecutor } from "../pre-cleanup/executor";
 import { PushSchemaPipeline } from "../pushschema-pipeline";
 import type {
   PromptDispatcher,
@@ -61,7 +62,7 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
     await dropTestTables();
   });
 
@@ -119,6 +120,7 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
       classifier: noopClassifier,
       promptDispatcher,
       preRenameExecutor: noopPreRenameExecutor, // not used in Option E flow
+      preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
     });

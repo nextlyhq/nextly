@@ -1,0 +1,4 @@
+{
+  "sqlStatements": ["ALTER TABLE `g1` ADD `extra` text;"],
+  "hints": []
+}

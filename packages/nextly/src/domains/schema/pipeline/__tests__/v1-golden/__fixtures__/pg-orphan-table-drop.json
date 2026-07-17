@@ -1,0 +1,4 @@
+{
+  "sqlStatements": ["DROP TABLE \"vg_orphan\";"],
+  "hints": []
+}

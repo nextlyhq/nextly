@@ -28,7 +28,7 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     await pool.query('DROP TABLE IF EXISTS "nextly_schema_events"');
     await pool.query(`
@@ -45,6 +45,7 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
         "ended_at" timestamptz,
         "duration_ms" integer,
         "applied_by" text,
+        "note" text,
         "statements_planned" integer,
         "statements_executed" integer,
         "renames_applied" integer,
@@ -130,14 +131,30 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
       limit: 20,
       before: oldestOnPage1,
     });
+    if (page2.rows.length !== 5)
+      console.error(
+        "PAGE2_DEBUG",
+        JSON.stringify({
+          oldestOnPage1,
+          page2ids: page2.rows.map(r => [r.id, r.startedAt]),
+        })
+      );
     expect(page2.rows).toHaveLength(5);
     expect(page2.hasMore).toBe(false);
     expect(page2.rows.map(r => r.id)).toEqual(ids.slice(20));
   });
 
   it("hasMore=false when total rows fit in one page", async () => {
-    await seedRows({ count: 5, baseTime: new Date("2026-04-29T18:00:00.000Z") });
+    await seedRows({
+      count: 5,
+      baseTime: new Date("2026-04-29T18:00:00.000Z"),
+    });
     const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
+    if (result.rows.length !== 5)
+      console.error(
+        "HASMORE_DEBUG",
+        JSON.stringify(result.rows.map(r => [r.id, r.startedAt]))
+      );
     expect(result.rows).toHaveLength(5);
     expect(result.hasMore).toBe(false);
   });
