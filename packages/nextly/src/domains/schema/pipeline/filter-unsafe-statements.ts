@@ -183,3 +183,103 @@ export function filterUnsafeStatements(
     return true;
   });
 }
+
+/**
+ * v1 drizzle-kit INCLUDES destructive statements in sqlStatements (hints are
+ * empty even for drops — observed on SQLite, Postgres and MySQL, 2026-07).
+ * By the time the pipeline's Phase D runs, every user-approved destructive
+ * operation has already been executed by the pre-resolution executor, so any
+ * DROP TABLE / DROP COLUMN remaining in the kit's additive remainder is
+ * unexpected and must fail the apply.
+ *
+ * Exception: SQLite's table-rebuild block (CREATE `__new_x` → INSERT SELECT →
+ * DROP TABLE x → RENAME `__new_x` TO x) is data-preserving — its internal
+ * DROP targets a table that is being rebuilt, identified by a matching
+ * `__new_<table>` RENAME in the same statement set.
+ */
+export function findUnexpectedDestructiveStatements(
+  statements: string[],
+  // When provided (the pipeline's Phase D, which KNOWS the approved
+  // operations), a rebuild block is only exempt if Nextly's own diff
+  // approved a rebuild-justifying change for that table. This closes the
+  // hole where the kit encodes a column DROP as a "rebuild" (CREATE __new_
+  // without the column + INSERT of survivors + DROP + RENAME — verified
+  // rc.4 emission): text-level the block looks data-preserving, but if
+  // Nextly approved no change to that table, the kit's differ disagrees
+  // with ours and the block must fail the apply. The boot-time fresh-push
+  // path passes nothing here (it has no op context) and keeps the
+  // exemption — its reconcile legitimately rebuilds drifted core tables.
+  allowedRebuildTables?: Set<string>,
+  // When provided, restrict the scan to destructive statements that target a
+  // MANAGED table (a table in the desired schema). This lets the caller run
+  // the scan on the RAW kit output — BEFORE filterUnsafeStatements — so the
+  // guarantee no longer rests on the filter having correctly stripped every
+  // orphan drop first. Drops of tables/objects
+  // outside the desired schema are the expected orphan emission the filter
+  // handles separately; identifying them by table membership here (rather than
+  // by "the filter already removed it") makes the destructive-on-managed
+  // guard independent of the filter. Omitted on the fresh-push boot path,
+  // which has no desired-table context and scans everything.
+  managedTables?: Set<string>
+): string[] {
+  // A statement only counts as an offender when it hits a table we manage.
+  // With no managed set, every table is in scope (fresh-push boot path).
+  const targetsManaged = (table: string): boolean =>
+    managedTables === undefined || managedTables.has(table.toLowerCase());
+
+  const rebuildTargets = new Set<string>();
+  for (const s of statements) {
+    const m = s.match(
+      // Optionally schema-qualified and/or quoted: `__new_x`, "__new_x",
+      // "main"."__new_x", main.__new_x. The RENAME destination is captured
+      // too: a rebuild is only a rebuild when `__new_x` renames back to `x`
+      // itself — `ALTER TABLE __new_g1 RENAME TO other` must NOT exempt
+      // `DROP TABLE g1` from the guard.
+      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (m && (m[1] ?? "").toLowerCase() === (m[2] ?? "").toLowerCase()) {
+      rebuildTargets.add((m[1] ?? "").toLowerCase());
+    }
+  }
+  const offenders: string[] = [];
+  for (const s of statements) {
+    const dropTable = s.match(
+      // Skip an optional schema qualifier so `DROP TABLE "main"."posts"`
+      // captures `posts`, not `main`.
+      /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (dropTable) {
+      const target = (dropTable[1] ?? "").toLowerCase();
+      // A drop of a non-managed table is the expected orphan emission
+      // (stripped by filterUnsafeStatements); it is never an offender here.
+      if (!targetsManaged(target)) continue;
+      const isRebuild = rebuildTargets.has(target);
+      const rebuildApproved =
+        allowedRebuildTables === undefined || allowedRebuildTables.has(target);
+      if (!isRebuild || !rebuildApproved) offenders.push(s);
+      continue;
+    }
+    // The COLUMN keyword is OPTIONAL in both PG and MySQL
+    // (`ALTER TABLE t DROP "body"` drops the column) — match both forms,
+    // scoped to ALTER TABLE so DROP INDEX/CONSTRAINT statements aren't
+    // misclassified. TRUNCATE is destructive by definition and must never
+    // appear on an additive remainder — fail closed on it too.
+    const alterDropColumn = s.match(
+      /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i
+    );
+    if (
+      alterDropColumn &&
+      !/\bDROP\s+(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b/i.test(
+        s
+      )
+    ) {
+      if (targetsManaged(alterDropColumn[1] ?? "")) offenders.push(s);
+      continue;
+    }
+    const truncate = s.match(
+      /\bTRUNCATE\s+(?:TABLE\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (truncate && targetsManaged(truncate[1] ?? "")) offenders.push(s);
+  }
+  return offenders;
+}

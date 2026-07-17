@@ -22,7 +22,7 @@ describe("classifyError", () => {
 
   it("maps drizzle-kit shaped errors to PUSHSCHEMA_FAILED", () => {
     // drizzle-kit throws plain Error objects whose .stack contains
-    // drizzle-kit/api.js. We use that as the signal because drizzle-kit
+    // drizzle-kit's payload entrypoints. We use that as the signal because drizzle-kit
     // does not expose a typed error hierarchy.
     const err = new Error("snapshot mismatch");
     err.stack =

@@ -21,7 +21,7 @@ import {
   not,
   type SQL,
 } from "drizzle-orm";
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 
 import type { WhereClause, WhereCondition } from "./types";
 
@@ -31,7 +31,7 @@ export function buildDrizzleWhere(
   table: Record<string, unknown>,
   where: WhereClause
 ): SQL | undefined {
-  const columns = getTableColumns(table as never);
+  const columns = getColumns(table as never);
   return processWhereClause(columns, where);
 }
 

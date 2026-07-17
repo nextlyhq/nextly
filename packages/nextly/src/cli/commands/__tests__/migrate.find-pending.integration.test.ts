@@ -23,7 +23,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-pending-"));
   writeFileSync(join(dir, "20260101_000000_000_init.sql"), "-- UP\nSELECT 1;");
   sqlite = new Database(":memory:");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 });
 
 afterEach(() => {

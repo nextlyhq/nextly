@@ -40,6 +40,10 @@ const NEXTLY_SERVER_EXTERNAL_PACKAGES = [
   "better-sqlite3",
   // ORM
   "drizzle-orm",
+  // Kit — loaded lazily via createRequire (bundler-opaque), so this entry is
+  // defense-in-depth rather than load-bearing; the bare package covers the
+  // per-dialect payload/* subpaths in Next's externals matching.
+  "drizzle-kit",
   // Auth (jose is a pure ESM package, no native bindings)
   "jose",
 ];

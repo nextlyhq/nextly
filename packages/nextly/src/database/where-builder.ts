@@ -26,7 +26,7 @@ import {
   not,
   type SQL,
 } from "drizzle-orm";
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 
 // Build a Drizzle SQL condition from a WhereClause object.
 // Returns undefined if the where clause is empty.
@@ -34,7 +34,7 @@ export function buildDrizzleWhere(
   table: Record<string, unknown>,
   where: WhereClause
 ): SQL | undefined {
-  const columns = getTableColumns(table as never);
+  const columns = getColumns(table as never);
   return processWhereClause(columns, where);
 }
 

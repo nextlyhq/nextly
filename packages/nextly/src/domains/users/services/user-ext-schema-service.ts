@@ -788,7 +788,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   private generateMySQLSchema(fields: UserFieldConfig[]): DrizzleRuntimeTable {
@@ -821,7 +821,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   private generateSQLiteSchema(fields: UserFieldConfig[]): DrizzleRuntimeTable {
@@ -858,7 +858,7 @@ export class UserExtSchemaService {
           table.user_id as never
         ),
       })
-    ) as DrizzleRuntimeTable;
+    );
   }
 
   // ============================================================

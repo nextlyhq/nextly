@@ -23,3 +23,5 @@ coverage/
 
 # Template files (contain {{placeholder}} markers that aren't valid syntax)
 packages/create-nextly-app/templates/
+# Vitest file snapshots — byte-exact fixtures, must not be reformatted
+**/__tests__/v1-golden/__fixtures__/

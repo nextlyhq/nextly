@@ -309,7 +309,7 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Verify permission is gone
       const permissions = await testDb.db.query.permissions.findMany({
-        where: (permissions, { eq }) => eq(permissions.id, permission.id),
+        where: { id: permission.id },
       });
       expectArrayLength(permissions, 0);
     });
@@ -736,7 +736,7 @@ describe("PermissionService - Smoke Tests", () => {
 
     it("should return 404 for null permission ID", async () => {
       // Act
-       
+
       const result = await service.getPermissionById(null as any);
 
       // Assert
@@ -745,7 +745,7 @@ describe("PermissionService - Smoke Tests", () => {
 
     it("should return 404 for undefined permission ID", async () => {
       // Act
-       
+
       const result = await service.getPermissionById(undefined as any);
 
       // Assert
@@ -791,7 +791,7 @@ describe("PermissionService - Smoke Tests", () => {
         "users",
         "Read Users",
         "read-users",
-         
+
         null as any
       );
 
@@ -948,7 +948,6 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Act
       const result = await service.updatePermission(permission.id, {
-         
         description: null as any,
       });
 

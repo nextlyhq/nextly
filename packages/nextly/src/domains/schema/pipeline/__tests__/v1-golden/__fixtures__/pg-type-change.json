@@ -1,0 +1,6 @@
+{
+  "sqlStatements": [
+    "ALTER TABLE \"vg1\" ALTER COLUMN \"num\" SET DATA TYPE integer USING \"num\"::integer;"
+  ],
+  "hints": []
+}

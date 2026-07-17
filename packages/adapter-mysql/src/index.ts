@@ -63,7 +63,9 @@ import {
   type SslConfig,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import type { Pool as CallbackPool } from "mysql2";
 import mysql from "mysql2/promise";
 import type {
   PoolOptions,
@@ -233,6 +235,15 @@ function delay(ms: number): Promise<void> {
  * ```
  */
 export class MySqlAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'mysql' for this adapter.
    */
@@ -328,18 +339,25 @@ export class MySqlAdapter extends DrizzleAdapter {
    * It waits for all connections to be released before shutting down.
    */
   async disconnect(): Promise<void> {
-    if (!this.pool) {
+    // Detach the pool FIRST, then drop the memoized drizzle instances —
+    // this closes the repopulation window where a concurrent getDrizzle()
+    // call during the (async) pool.end() could cache an instance wrapping
+    // the closing pool.
+    const pool = this.pool;
+    this.pool = null;
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
+    if (!pool) {
       return;
     }
 
     try {
-      await this.pool.end();
+      await pool.end();
 
       if (this.config.logger?.info) {
         this.config.logger.info("MySQL connection closed");
       }
     } finally {
-      this.pool = null;
       this.connected = false;
     }
   }
@@ -600,22 +618,26 @@ export class MySqlAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the mysql2 pool connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = MySql2Database<any>>(schema?: Record<string, unknown>): T {
+  getDrizzle<T = MySql2Database<AnyRelations>>(relations?: AnyRelations): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    // Cast needed because mysql2/promise Pool type differs from drizzle's expected type
-    // MySQL requires mode when schema is provided
-
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    return (
-      schema
-        ? drizzle({ client: pool as any, schema, mode: "default" })
-        : drizzle(pool as any)
-    ) as T;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
+    // drizzle v1's mysql2 driver accepts the CALLBACK pool — handing it the
+    // mysql2/promise wrapper throws ("Cannot set properties of undefined
+    // (setting 'supportBigNumbers')"), so unwrap to the underlying pool.
+    // The pre-v1 `mode` option no longer exists.
+    const client = (pool as unknown as { pool: CallbackPool }).pool;
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**

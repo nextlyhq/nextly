@@ -17,7 +17,7 @@
  *
  * @example
  * ```typescript
- * import { createTestDb } from "../fixtures/db";
+ * import { createTestDb, type TestDrizzleDb } from "../fixtures/db";
  * import { ensureDynamicTables, seedTestCollection, seedTestUser } from "../helpers/seed-helpers";
  *
  * const testDb = await createTestDb();
@@ -42,6 +42,7 @@ import { createHash, randomUUID } from "crypto";
 import type Database from "better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
+import type { TestDrizzleDb } from "../fixtures/db";
 import * as schema from "../fixtures/sqlite-schema";
 
 // Re-export existing factories for convenience
@@ -252,7 +253,7 @@ function computeSchemaHash(fields: SeedField[]): string {
  * ```
  */
 export async function seedTestCollection(
-  db: BetterSQLite3Database<typeof schema>,
+  db: TestDrizzleDb,
   options: {
     name: string;
     fields: SeedField[];
@@ -315,7 +316,7 @@ export async function seedTestCollection(
  * ```
  */
 export async function seedTestSingle(
-  db: BetterSQLite3Database<typeof schema>,
+  db: TestDrizzleDb,
   options: {
     name: string;
     fields: SeedField[];
@@ -372,7 +373,7 @@ export async function seedTestSingle(
  * ```
  */
 export async function seedTestComponent(
-  db: BetterSQLite3Database<typeof schema>,
+  db: TestDrizzleDb,
   options: {
     slug: string;
     fields: SeedField[];
@@ -441,7 +442,7 @@ export async function seedTestComponent(
  * ```
  */
 export async function seedTestUser(
-  db: BetterSQLite3Database<typeof schema>,
+  db: TestDrizzleDb,
   options?: {
     role?: "admin" | "editor" | "viewer";
     permissions?: string[];

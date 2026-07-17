@@ -31,6 +31,7 @@ import {
   noopMigrationJournal,
   noopNotifier,
   noopPreRenameExecutor,
+  noopPreCleanupExecutor,
   noopPromptDispatcher,
   noopRenameDetector,
 } from "../pushschema-pipeline-stubs";
@@ -49,7 +50,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Pre-create three tables: two managed (dc_*), one unmanaged
     // (orders) so scenario #6 can verify it survives.
@@ -81,6 +82,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           classifier: noopClassifier,
           promptDispatcher: noopPromptDispatcher,
           preRenameExecutor: noopPreRenameExecutor,
+          preCleanupExecutor: noopPreCleanupExecutor,
           migrationJournal: noopMigrationJournal,
           notifier: noopNotifier,
         },
@@ -88,9 +90,8 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           _kitOverride: {
             pushSchema: () =>
               Promise.resolve({
-                statementsToExecute: statements,
-                warnings: [],
-                hasDataLoss: false,
+                sqlStatements: statements,
+                hints: [],
               }),
           },
           _buildDrizzleSchemaOverride: () => staticSchema,
@@ -101,12 +102,24 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
   it("scenario #1: single-field add executes ALTER inside transaction", async () => {
     // Pre-create the managed table.
     await pool.query(
-      `CREATE TABLE "${ctx.prefix}_dc_posts" (id integer PRIMARY KEY)`
+      `CREATE TABLE "${ctx.prefix}_dc_posts" (id text PRIMARY KEY)`
     );
 
-    const pipeline = makePipeline({})([
-      `ALTER TABLE "${ctx.prefix}_dc_posts" ADD COLUMN body text`,
-    ]);
+    // Post-Option-E the pipeline derives operations from its OWN diff of
+    // `desired` vs the live snapshot (the F3-era pattern of injecting
+    // statements through a kit override no longer reaches the executor for
+    // additive ops — the fast path emits from the diff). Declare the field
+    // and let the real flow add it.
+    const pipeline = new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("postgresql", db),
+      renameDetector: noopRenameDetector,
+      classifier: noopClassifier,
+      promptDispatcher: noopPromptDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+    });
 
     const result = await pipeline.apply({
       desired: {
@@ -114,7 +127,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           posts: {
             slug: "posts",
             tableName: `${ctx.prefix}_dc_posts`,
-            fields: [],
+            fields: [{ name: "body", type: "text" }] as never,
           },
         },
         singles: {},
@@ -139,54 +152,55 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
   });
 
   it("scenario #2: rename detection emits candidate via recording PromptDispatcher (F4 PR 2)", async () => {
-    // F4 PR 2 end-to-end assertion: drizzle-kit emits DROP+ADD on the same
-    // managed table, RegexRenameDetector identifies the (DROP, ADD) pair as
-    // a rename candidate, the pipeline forwards it to PromptDispatcher.
-    //
-    // We assert the candidate the detector produced reaches the dispatcher
-    // with the right shape (including typesCompatible: true derived from
-    // live column-type introspection). We do NOT yet assert "rename
-    // preserves data" - F6 (PreRenameExecutor) and F7 (real PromptDispatcher
-    // with confirm) are still stubs/unimplemented; the recording dispatcher
-    // here returns confirmedRenames: [] so the pipeline still drops+adds.
+    // Option-E end-to-end assertion: the pipeline's own diff produces
+    // DROP(nickname)+ADD(name) on the same managed table (a RESERVED column
+    // like title can never form a rename pair — it is always part of the
+    // desired snapshot), RegexRenameDetector
+    // pairs them into a rename candidate, and the pipeline forwards it to
+    // the PromptDispatcher with the right shape (typesCompatible: true from
+    // live column-type introspection). The dispatcher confirms, so the
+    // pre-resolution executor RENAMEs and data survives.
     await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_users" CASCADE`);
+    // Pre-create with the reserved columns (as a real managed table would
+    // have) so the only diff against `desired` is title→name; a populated
+    // table can't take a bare ADD COLUMN … NOT NULL for missing reserved
+    // columns.
     await pool.query(
-      `CREATE TABLE "${ctx.prefix}_dc_users" (id integer PRIMARY KEY, title text)`
+      `CREATE TABLE "${ctx.prefix}_dc_users" (
+        "id" text PRIMARY KEY,
+        "title" text,
+        "slug" text NOT NULL,
+        "created_at" timestamp,
+        "updated_at" timestamp,
+        "nickname" text
+      )`
+    );
+    await pool.query(
+      `INSERT INTO "${ctx.prefix}_dc_users" (id, title, slug, nickname) VALUES ('r1', 't', 'r1-slug', 'keep-me')`
     );
 
     const captured: RenameCandidate[][] = [];
     const recordingDispatcher: PromptDispatcher = {
       dispatch: async ({ candidates }) => {
-        captured.push(candidates);
-        return { confirmedRenames: [], resolutions: [], proceed: true };
+        captured.push([...candidates]);
+        return {
+          confirmedRenames: [...candidates],
+          resolutions: [],
+          proceed: true,
+        };
       },
     };
 
-    const pipeline = new PushSchemaPipeline(
-      {
-        executor: new DrizzleStatementExecutor("postgresql", db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: noopClassifier,
-        promptDispatcher: recordingDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        migrationJournal: noopMigrationJournal,
-        notifier: noopNotifier,
-      },
-      {
-        _kitOverride: {
-          pushSchema: () =>
-            Promise.resolve({
-              statementsToExecute: [
-                `ALTER TABLE "${ctx.prefix}_dc_users" DROP COLUMN "title"`,
-                `ALTER TABLE "${ctx.prefix}_dc_users" ADD COLUMN "name" text`,
-              ],
-              warnings: [],
-              hasDataLoss: false,
-            }),
-        },
-        _buildDrizzleSchemaOverride: () => ({}),
-      }
-    );
+    const pipeline = new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("postgresql", db),
+      renameDetector: new RegexRenameDetector(),
+      classifier: noopClassifier,
+      promptDispatcher: recordingDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+    });
 
     const result = await pipeline.apply({
       desired: {
@@ -194,7 +208,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           users: {
             slug: "users",
             tableName: `${ctx.prefix}_dc_users`,
-            fields: [],
+            fields: [{ name: "name", type: "text" }] as never,
           },
         },
         singles: {},
@@ -209,17 +223,21 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
     expect(result.success).toBe(true);
 
     expect(captured).toHaveLength(1);
-    expect(captured[0]).toEqual([
-      {
-        tableName: `${ctx.prefix}_dc_users`,
-        fromColumn: "title",
-        toColumn: "name",
-        fromType: "text",
-        toType: "text",
-        typesCompatible: true,
-        defaultSuggestion: "rename",
-      },
-    ]);
+    expect(
+      captured[0].some(
+        c =>
+          c.tableName === `${ctx.prefix}_dc_users` &&
+          c.fromColumn === "nickname" &&
+          c.toColumn === "name" &&
+          c.typesCompatible === true
+      )
+    ).toBe(true);
+
+    // Confirmed rename preserves the row's data under the new column.
+    const rows = await pool.query(
+      `SELECT name FROM "${ctx.prefix}_dc_users" WHERE id = 'r1'`
+    );
+    expect(rows.rows[0]).toEqual({ name: "keep-me" });
 
     await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_users" CASCADE`);
   });
@@ -269,6 +287,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
         classifier: noopClassifier,
         promptDispatcher: noopPromptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: noopPreCleanupExecutor,
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
       },
@@ -280,6 +299,21 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
             ),
         },
         _buildDrizzleSchemaOverride: () => ({}),
+        // Post-Option-E the additive fast path skips drizzle-kit entirely, so
+        // an empty/additive op set would never reach the failing kit. Inject a
+        // resolved op OUTSIDE the fast-path set (rename_column) and stub
+        // pre-resolution so Phase D must call the (failing) kit.
+        _resolvedOpsOverride: [
+          {
+            type: "rename_column",
+            tableName: `${ctx.prefix}_dc_x`,
+            fromColumn: "a",
+            toColumn: "b",
+            fromType: "text",
+            toType: "text",
+          },
+        ],
+        _executePreResolutionOverride: async () => 0,
       }
     );
 

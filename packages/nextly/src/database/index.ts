@@ -49,6 +49,8 @@ export { withDbErrors } from "./with-db-errors";
  * @param dialect - Optional dialect override. If not provided, uses env.DB_DIALECT
  * @returns Schema object for the configured dialect (postgres, mysql, or sqlite)
  */
+export { getStaticRelations } from "./static-relations";
+
 export function getDialectTables(dialect?: string) {
   const dbDialect = dialect || env.DB_DIALECT;
   if (dbDialect === "postgresql") return schema.postgres;

@@ -6,7 +6,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks live in `./mysql-relations.ts` and are
+ * Cross-table `relations()` blocks live in `../_dialect-bundles/mysql.relations.ts` and are
  * re-exported at the bottom of this file. See `./postgres.ts` for the
  * rationale.
  *
@@ -14,6 +14,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   boolean,
@@ -34,8 +35,17 @@ export const roles = mysqlTable(
     description: varchar("description", { length: 255 }),
     level: int("level").notNull().default(0),
     isSystem: int("is_system").notNull().default(0),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    // DDL-side CURRENT_TIMESTAMP (matching postgres's defaultNow()):
+    // a JavaScript `new Date()` default bakes one module-load-time literal
+    // into the emitted DDL, so every boot saw a different default and v1's
+    // differ emitted MODIFY COLUMN churn forever (the pre-v1 MySQL differ
+    // returned empty statement lists and masked this).
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("roles_name_unique").on(t.name),
@@ -88,8 +98,12 @@ export const permissions = mysqlTable(
      * drizzle-kit refuses the change rather than guess. Absent reads as false.
      */
     danger: boolean("danger"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("permissions_action_resource_unique").on(t.action, t.resource),
@@ -105,7 +119,9 @@ export const rolePermissions = mysqlTable(
     id: varchar("id", { length: 191 }).primaryKey(),
     roleId: varchar("role_id", { length: 191 }).notNull(),
     permissionId: varchar("permission_id", { length: 191 }).notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("role_permissions_role_permission_unique").on(
@@ -122,7 +138,9 @@ export const userRoles = mysqlTable(
     id: varchar("id", { length: 191 }).primaryKey(),
     userId: varchar("user_id", { length: 191 }).notNull(),
     roleId: varchar("role_id", { length: 191 }).notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
     expiresAt: datetime("expires_at"),
   },
   t => [
@@ -182,7 +200,9 @@ export const userPermissionCache = mysqlTable(
     // Store role IDs for invalidation (JSON array of strings)
     roleIds: json("role_ids").$type<string[]>().notNull(),
     expiresAt: datetime("expires_at").notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     // Primary invalidation path: by user

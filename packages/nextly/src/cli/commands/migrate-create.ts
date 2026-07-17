@@ -59,7 +59,6 @@ import {
   type MinimalConfigEntity,
 } from "../../domains/schema/migrate-create/generate";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
   applyDeferredExtendsToManifest,
@@ -71,7 +70,11 @@ import {
   buildSingleMetadataUpsert,
 } from "../../domains/schema/ui-schema/metadata-sql";
 import { createContext, type CommandContext } from "../program";
-import { getDialectDisplayName, validateDatabaseEnv } from "../utils/adapter";
+import {
+  getDialectDisplayName,
+  validateDatabaseEnv,
+  type SupportedDialect,
+} from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
