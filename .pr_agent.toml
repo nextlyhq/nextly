@@ -1,0 +1,21 @@
+# Qodo (qodo.ai) code-review configuration.
+# Docs: https://docs.qodo.ai/install-and-configure/configuration-overview/configuration-file
+#
+# nextlyhq/nextly qualifies for Qodo's free open-source plan. This file makes
+# Qodo run an agentic code review automatically when a pull request is opened,
+# and refresh its review as new commits are pushed. You can also trigger a
+# review at any time by commenting `/agentic_review` on a PR.
+#
+# NOTE: this config only takes effect for pull requests opened AFTER it lands
+# on the default branch (`main`). Open PRs need a manual `/agentic_review`.
+
+[github_app]
+# Commands Qodo runs automatically on pull-request open. Kept to review only
+# (no `/agentic_describe`) so Qodo never overwrites a PR description authored
+# by the team.
+pr_commands = ["/agentic_review"]
+
+[review_agent]
+# Post both an inline, line-anchored review and a summary comment, matching how
+# our other review bots surface findings.
+comments_location_policy = "both"
