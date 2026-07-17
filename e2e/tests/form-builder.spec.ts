@@ -139,3 +139,24 @@ test("seeds a default notification, edits it in the sheet, and guards referenced
   });
   await expect(page.getByText("Conditional")).toBeVisible();
 });
+
+test("the preview is an interactive simulation with real confirmation", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/collections/forms");
+  await page.getByRole("button", { name: /E2E Notifications Form/ }).click();
+  await page.getByRole("tab", { name: "Preview" }).click();
+
+  // Inputs are enabled — this is a simulation, not a screenshot.
+  const emailInput = page.getByRole("textbox", { name: /^Email/ });
+  await expect(emailInput).toBeEnabled();
+  await emailInput.fill("visitor@example.com");
+
+  // The simulated submit shows the form's real confirmation behavior.
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page.getByText("Thank you for your submission!")).toBeVisible();
+
+  // Reset returns to a fresh form.
+  await page.getByRole("button", { name: "Fill again" }).click();
+  await expect(emailInput).toHaveValue("");
+});
