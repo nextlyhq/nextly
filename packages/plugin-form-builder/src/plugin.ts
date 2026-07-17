@@ -18,13 +18,14 @@ import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
 import type {
   BeforeEmailFilterContext,
-  FormNotificationItem,
+  FormNotification,
   FormBuilderPluginOptions,
   FormEmailNotification,
   FormDocument,
   SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "./types";
+import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -242,7 +243,18 @@ export function formBuilder(
           // overridden slug, users hold read-<slug>, not read-forms.
           requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
           handler: () =>
-            Promise.resolve(Response.json({ fields: resolvedConfig.fields })),
+            Promise.resolve(
+              Response.json({
+                fields: resolvedConfig.fields,
+                // Notification defaults the builder surfaces: defaultToEmail
+                // seeds a new form's first rule, defaultFrom renders as the
+                // inherited sender placeholder.
+                notifications: {
+                  defaultFrom: resolvedConfig.notifications.defaultFrom,
+                  defaultToEmail: resolvedConfig.notifications.defaultToEmail,
+                },
+              })
+            ),
         },
       ],
       // Admin UI — the canonical contributes.admin example. Paths
@@ -415,6 +427,150 @@ export function collectAttachmentInputs(
 // ---------------------------------------------------------------------------
 
 /**
+ * Normalize a JSON column value from a raw DB row into an object. Hook
+ * contexts carry the row as stored, so the value may be an already-parsed
+ * object (jsonb dialects) or a serialized string (text-storage dialects).
+ *
+ * @internal Exported for testing — not part of the public plugin API.
+ */
+export function parseJsonColumn(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** Trim an address list and drop blanks; undefined when nothing remains. */
+function normalizeAddressList(
+  addresses: readonly string[] | undefined
+): string[] | undefined {
+  if (!Array.isArray(addresses)) return undefined;
+  const cleaned = addresses
+    .map(address => (typeof address === "string" ? address.trim() : ""))
+    .filter(Boolean);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/** Why a notification rule produced no email for a given submission. */
+export interface SkippedNotification {
+  notificationId: string;
+  reason: "empty-recipient" | "condition-unmet" | "no-template";
+}
+
+/**
+ * Resolve a form's notification rules against one submission into outgoing
+ * email descriptors, honoring everything a rule can configure: the send
+ * condition gates the rule, the recipient/reply-to resolve `{{fieldName}}`
+ * references, and the sender falls back from the rule's own address to the
+ * plugin's `notifications.defaultFrom` (undefined lets the template/provider
+ * default apply downstream).
+ *
+ * @internal Exported for testing — not part of the public plugin API.
+ */
+export function buildNotificationEmails(input: {
+  notifications: readonly FormNotification[];
+  submittedData: Record<string, unknown>;
+  formName: unknown;
+  submissionId: unknown;
+  defaultFrom?: string;
+}): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
+  const { notifications, submittedData, formName, submissionId, defaultFrom } =
+    input;
+
+  const seen = new Set<string>();
+  const emails: FormEmailNotification[] = [];
+  const skipped: SkippedNotification[] = [];
+
+  for (const notification of notifications) {
+    if (!notification.enabled) continue;
+
+    if (!notification.templateSlug) {
+      skipped.push({ notificationId: notification.id, reason: "no-template" });
+      continue;
+    }
+
+    // Deduplicate (UI can append duplicates on repeated saves). For id-less
+    // rules (API-authored), only an exact structural duplicate counts — a
+    // to+template key would silently drop distinct rules that share a
+    // recipient and template but differ elsewhere (e.g. their condition).
+    const key = notification.id || JSON.stringify(notification);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    // An unmet send condition skips the rule for this submission — an
+    // expected state, never an error.
+    if (
+      notification.condition &&
+      !evaluateSingleCondition(notification.condition, submittedData)
+    ) {
+      skipped.push({
+        notificationId: notification.id,
+        reason: "condition-unmet",
+      });
+      continue;
+    }
+
+    // Trim every address on the way out: whitespace-only values must count
+    // as empty, and stray spaces must not reach the provider as headers.
+    const to = (
+      notification.recipientType === "field"
+        ? resolveFieldRef(notification.to, submittedData)
+        : notification.to
+    ).trim();
+
+    if (!to) {
+      skipped.push({
+        notificationId: notification.id,
+        reason: "empty-recipient",
+      });
+      continue;
+    }
+
+    const cc = normalizeAddressList(notification.cc);
+    const bcc = normalizeAddressList(notification.bcc);
+
+    // Sender resolution: the rule's own address wins, then the plugin's
+    // configured default; undefined defers to the template/provider chain.
+    const from =
+      notification.senderEmail?.trim() || defaultFrom?.trim() || undefined;
+
+    // Reply-To resolves {{fieldName}} like recipients do; a reference to a
+    // field the visitor left empty degrades to "no Reply-To header" rather
+    // than an invalid address.
+    const replyTo = notification.replyTo
+      ? resolveFieldRef(notification.replyTo, submittedData).trim() || undefined
+      : undefined;
+
+    emails.push({
+      to,
+      templateSlug: notification.templateSlug,
+      variables: {
+        ...submittedData,
+        formName,
+        submissionId,
+      },
+      providerId: notification.providerId,
+      from,
+      replyTo,
+      cc,
+      bcc,
+      notificationId: notification.id,
+    });
+  }
+
+  return { emails, skipped };
+}
+
+/**
  * Send email notifications after a form submission is created.
  */
 async function handleSubmissionCreated(
@@ -422,6 +578,10 @@ async function handleSubmissionCreated(
   config: ResolvedFormBuilderConfig,
   nextly: NextlyInstance
 ): Promise<void> {
+  // The plugin-level kill switch: `notifications.enabled: false` turns off
+  // all form emails regardless of per-rule state.
+  if (!config.notifications.enabled) return;
+
   const submission = (context as { data?: Record<string, unknown> }).data;
   if (!submission) return;
 
@@ -440,14 +600,18 @@ async function handleSubmissionCreated(
   if (!form) return;
 
   const notifications = Array.isArray(form.notifications)
-    ? (form.notifications as FormNotificationItem[])
+    ? (form.notifications as FormNotification[])
     : [];
   if (notifications.length === 0) return;
 
   const emailService = nextly.services.email;
   if (!emailService) return;
 
-  const submittedData = (submission.data ?? {}) as Record<string, unknown>;
+  // The afterCreate hook receives the raw DB row, so on dialects that store
+  // JSON columns as text (e.g. SQLite) `data` arrives serialized. Without
+  // parsing it, {{field}} recipients, reply-to references, and send
+  // conditions all silently see an empty submission.
+  const submittedData = parseJsonColumn(submission.data);
 
   // Collect mediaIds from file fields marked for email attachment
   const formFields = Array.isArray(form.fields)
@@ -455,56 +619,31 @@ async function handleSubmissionCreated(
     : [];
   const fileAttachments = collectAttachmentInputs(formFields, submittedData);
 
-  const seen = new Set<string>();
-
   // -- Build phase: resolve each enabled notification into an outgoing
   // descriptor (the value the D63 seam transforms).
-  const emails: FormEmailNotification[] = [];
+  const { emails, skipped } = buildNotificationEmails({
+    notifications,
+    submittedData,
+    formName: form.name,
+    submissionId: submission.id,
+    defaultFrom: config.notifications.defaultFrom,
+  });
 
-  for (const notification of notifications) {
-    if (!notification.enabled || !notification.templateSlug) continue;
-
-    // Deduplicate (UI can append duplicates on repeated saves)
-    const key =
-      notification.id || `${notification.to}::${notification.templateSlug}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    const to =
-      notification.recipientType === "field"
-        ? resolveFieldRef(notification.to, submittedData)
-        : notification.to;
-
-    if (!to) {
+  for (const skip of skipped) {
+    if (skip.reason === "empty-recipient") {
       nextly.logger.warn?.(
         "Form Builder: empty recipient, skipping notification",
-        { notificationId: notification.id, formSlug: form.slug }
+        { notificationId: skip.notificationId, formSlug: form.slug }
       );
-      continue;
+    } else {
+      // Unmet conditions and missing templates are expected states, not
+      // faults — surface them only at debug level.
+      nextly.logger.debug?.("Form Builder: notification skipped", {
+        notificationId: skip.notificationId,
+        formSlug: form.slug,
+        reason: skip.reason,
+      });
     }
-
-    const cc =
-      Array.isArray(notification.cc) && notification.cc.length
-        ? notification.cc
-        : undefined;
-    const bcc =
-      Array.isArray(notification.bcc) && notification.bcc.length
-        ? notification.bcc
-        : undefined;
-
-    emails.push({
-      to,
-      templateSlug: notification.templateSlug,
-      variables: {
-        ...submittedData,
-        formName: form.name,
-        submissionId: submission.id,
-      },
-      providerId: notification.providerId,
-      cc,
-      bcc,
-      notificationId: notification.id,
-    });
   }
 
   if (emails.length === 0) return;
@@ -525,6 +664,8 @@ async function handleSubmissionCreated(
         email.variables,
         {
           providerId: email.providerId,
+          from: email.from,
+          replyTo: email.replyTo,
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,

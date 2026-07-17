@@ -23,7 +23,6 @@
       "import": "./dist/components/index.js",
       "default": "./dist/components/index.js"
     },
-    "./styles/builder.css": "./dist/styles/form-builder.css",
     "./styles/submissions-filter.css": "./dist/styles/submissions-filter.css"
   },
   "files": [

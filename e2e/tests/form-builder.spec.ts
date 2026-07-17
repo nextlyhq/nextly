@@ -76,3 +76,66 @@ test("builds a form with catalog fields, keyboard reorder, and a guarded delete"
   await page.getByRole("button", { name: "Actions for Email" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
 });
+
+test("seeds a default notification, edits it in the sheet, and guards referenced fields", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/collections/forms/create");
+
+  await page
+    .getByRole("textbox", { name: "Form Name" })
+    .fill("E2E Notifications Form");
+
+  // One email field for reply-to / condition targets.
+  await page.getByRole("button", { name: "Add field" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: /^Email/ }).click();
+  await dialog.getByRole("button", { name: "Add field" }).click();
+
+  // A new form arrives pre-seeded with one admin-notification rule, honest
+  // about why it will not send yet.
+  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await expect(page.getByText("Admin notification")).toBeVisible();
+  await expect(page.getByText("No template — will not send")).toBeVisible();
+
+  // Edit in the sheet: recipient, visitor reply-to, and a send condition.
+  await page
+    .getByRole("button", { name: "Edit notification Admin notification" })
+    .click();
+  const sheet = page.getByRole("dialog");
+  await sheet
+    .getByRole("textbox", { name: "Recipient address" })
+    .fill("team@example.com");
+
+  await sheet.getByLabel("Reply-To").click();
+  await page.getByRole("option", { name: "The visitor (email field)" }).click();
+  await sheet.getByLabel("Visitor email field").click();
+  await page.getByRole("option", { name: "Email" }).click();
+
+  await sheet.getByRole("button", { name: "Add condition" }).click();
+  await sheet.getByLabel("Comparison").click();
+  await page.getByRole("option", { name: "Is not empty" }).click();
+
+  await sheet.getByRole("button", { name: "Save changes" }).click();
+
+  // The card now shows the condition badge and the recipient summary.
+  await expect(page.getByText("Conditional")).toBeVisible();
+  await expect(page.getByText("To team@example.com")).toBeVisible();
+
+  // The email field is referenced by the rule's reply-to and condition, so
+  // its delete is blocked back on the Builder tab.
+  await page.getByRole("tab", { name: "Builder" }).click();
+  await page.getByRole("button", { name: "Actions for Email" }).click();
+  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+
+  // Round trip: the rule, its condition, and the guard all persist.
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
+  await page.getByRole("button", { name: /E2E Notifications Form/ }).click();
+  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await expect(page.getByText("Admin notification")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText("Conditional")).toBeVisible();
+});

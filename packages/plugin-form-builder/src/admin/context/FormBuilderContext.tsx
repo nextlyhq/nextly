@@ -22,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { FormField, FormFieldType } from "../../types";
+import type { FormField, FormFieldType, FormNotification } from "../../types";
 
 // ============================================================================
 // Types
@@ -50,29 +50,11 @@ export interface FormSettings {
   submissionLimit?: number;
 }
 
-/** Email notification configuration */
-export interface FormNotification {
-  /** Unique ID for this notification */
-  id: string;
-  /** Notification name */
-  name: string;
-  /** Whether this notification is enabled */
-  enabled: boolean;
-  /** ID of the email provider to use; undefined = system default */
-  providerId?: string;
-  /** Sender email override; undefined = use provider's configured address */
-  senderEmail?: string;
-  /** How the recipient address is determined */
-  recipientType: "static" | "field";
-  /** Recipient address: static email or a {{fieldName}} reference */
-  to: string;
-  /** CC email addresses */
-  cc: string[];
-  /** BCC email addresses */
-  bcc: string[];
-  /** Slug of the email template to use */
-  templateSlug?: string;
-}
+/**
+ * The notification rule type lives in `types.ts` (the same shape the send
+ * path consumes); re-exported here so admin components keep one import site.
+ */
+export type { FormNotification } from "../../types";
 
 export interface FormBuilderState {
   /** Form fields array */
@@ -122,10 +104,14 @@ export interface FormBuilderActions {
   updateSettings: (updates: Partial<FormSettings>) => void;
   /** Add a notification */
   addNotification: (notification: FormNotification) => void;
+  /** Duplicate a notification (the copy starts disabled) */
+  duplicateNotification: (id: string) => void;
   /** Update a notification */
   updateNotification: (id: string, updates: Partial<FormNotification>) => void;
   /** Delete a notification */
   deleteNotification: (id: string) => void;
+  /** Seed default notifications into an empty list without dirtying the form */
+  seedNotifications: (rules: FormNotification[]) => void;
   /** Mark form as saved (clears dirty flag) */
   markAsSaved: () => void;
 }
@@ -163,12 +149,12 @@ export const DEFAULT_SETTINGS: FormSettings = {
   submissionLimit: undefined,
 };
 
-/** Create a new email integration with default values */
+/** Create a new notification rule with default values */
 export function createNotification(): FormNotification {
   const id = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
   return {
     id,
-    name: "Email Notification",
+    name: "New notification",
     enabled: true,
     recipientType: "static",
     to: "",
@@ -450,6 +436,36 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
+  const duplicateNotification = useCallback((id: string) => {
+    // The non-deterministic id is generated outside the updater (updaters
+    // must stay pure and may re-run); the copy itself derives from `prev`
+    // so rapid duplications never work from a stale snapshot.
+    const copyId = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    setNotifications(prev => {
+      const index = prev.findIndex(n => n.id === id);
+      if (index === -1) return prev;
+      const source = prev[index];
+      const copy: FormNotification = {
+        ...source,
+        id: copyId,
+        name: `${source.name} (Copy)`,
+        // Copies start disabled so duplicating never doubles the emails a
+        // live rule sends until the copy is deliberately turned on.
+        enabled: false,
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      return next;
+    });
+    setIsDirty(true);
+  }, []);
+
+  const seedNotifications = useCallback((rules: FormNotification[]) => {
+    // Only fills an empty list, and does not mark the form dirty: the seed
+    // is a starting point the user hasn't authored, not an unsaved edit.
+    setNotifications(prev => (prev.length > 0 ? prev : rules));
+  }, []);
+
   const updateNotification = useCallback(
     (id: string, updates: Partial<FormNotification>) => {
       setNotifications(prev =>
@@ -492,8 +508,10 @@ export function FormBuilderProvider({
       updateFormData,
       updateSettings,
       addNotification,
+      duplicateNotification,
       updateNotification,
       deleteNotification,
+      seedNotifications,
       markAsSaved,
     }),
     [
@@ -514,8 +532,10 @@ export function FormBuilderProvider({
       updateFormData,
       updateSettings,
       addNotification,
+      duplicateNotification,
       updateNotification,
       deleteNotification,
+      seedNotifications,
       markAsSaved,
     ]
   );
