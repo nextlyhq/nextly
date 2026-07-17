@@ -232,8 +232,11 @@ async function withResolverCrashFallback(
 async function currentMysqlDatabase(db: unknown): Promise<string> {
   const { sql: sqlTag } = await import("drizzle-orm");
   type AsyncExecuteDb = { execute: (q: unknown) => Promise<unknown> };
+  // Tagged `sql` (not sql.raw): the query is static with no interpolation, so
+  // the tagged form is the idiomatic, injection-safe default and keeps drizzle
+  // in charge of parameter handling.
   const raw = await (db as AsyncExecuteDb).execute(
-    sqlTag.raw("SELECT DATABASE() AS db")
+    sqlTag`SELECT DATABASE() AS db`
   );
   // drizzle-orm/mysql2 execute() resolves to [rows, fields].
   const rows = Array.isArray(raw) ? raw[0] : raw;

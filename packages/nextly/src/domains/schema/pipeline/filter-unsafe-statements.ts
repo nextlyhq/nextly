@@ -209,8 +209,24 @@ export function findUnexpectedDestructiveStatements(
   // with ours and the block must fail the apply. The boot-time fresh-push
   // path passes nothing here (it has no op context) and keeps the
   // exemption — its reconcile legitimately rebuilds drifted core tables.
-  allowedRebuildTables?: Set<string>
+  allowedRebuildTables?: Set<string>,
+  // When provided, restrict the scan to destructive statements that target a
+  // MANAGED table (a table in the desired schema). This lets the caller run
+  // the scan on the RAW kit output — BEFORE filterUnsafeStatements — so the
+  // guarantee no longer rests on the filter having correctly stripped every
+  // orphan drop first (review: scan before filtering). Drops of tables/objects
+  // outside the desired schema are the expected orphan emission the filter
+  // handles separately; identifying them by table membership here (rather than
+  // by "the filter already removed it") makes the destructive-on-managed
+  // guard independent of the filter. Omitted on the fresh-push boot path,
+  // which has no desired-table context and scans everything.
+  managedTables?: Set<string>
 ): string[] {
+  // A statement only counts as an offender when it hits a table we manage.
+  // With no managed set, every table is in scope (fresh-push boot path).
+  const targetsManaged = (table: string): boolean =>
+    managedTables === undefined || managedTables.has(table.toLowerCase());
+
   const rebuildTargets = new Set<string>();
   for (const s of statements) {
     const m = s.match(
@@ -234,6 +250,9 @@ export function findUnexpectedDestructiveStatements(
     );
     if (dropTable) {
       const target = (dropTable[1] ?? "").toLowerCase();
+      // A drop of a non-managed table is the expected orphan emission
+      // (stripped by filterUnsafeStatements); it is never an offender here.
+      if (!targetsManaged(target)) continue;
       const isRebuild = rebuildTargets.has(target);
       const rebuildApproved =
         allowedRebuildTables === undefined || allowedRebuildTables.has(target);
@@ -245,18 +264,22 @@ export function findUnexpectedDestructiveStatements(
     // scoped to ALTER TABLE so DROP INDEX/CONSTRAINT statements aren't
     // misclassified. TRUNCATE is destructive by definition and must never
     // appear on an additive remainder — fail closed on it too.
+    const alterDropColumn = s.match(
+      /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i
+    );
     if (
-      /\bALTER\s+TABLE\b[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i.test(
-        s
-      ) &&
+      alterDropColumn &&
       !/\bDROP\s+(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b/i.test(
         s
       )
     ) {
-      offenders.push(s);
+      if (targetsManaged(alterDropColumn[1] ?? "")) offenders.push(s);
       continue;
     }
-    if (/\bTRUNCATE\s+(?:TABLE\s+)?/i.test(s)) offenders.push(s);
+    const truncate = s.match(
+      /\bTRUNCATE\s+(?:TABLE\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (truncate && targetsManaged(truncate[1] ?? "")) offenders.push(s);
   }
   return offenders;
 }

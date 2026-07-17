@@ -138,3 +138,83 @@ describe("findUnexpectedDestructiveStatements — review hardening", () => {
     ).toEqual([]);
   });
 });
+
+// The `managedTables` restriction lets the pipeline scan the RAW kit output
+// (before filterUnsafeStatements) without false-flagging the orphan drops the
+// filter strips separately: a destructive statement is only an offender when it
+// targets a table in the desired schema. This is the scan-before-filtering
+// hardening — the guard no longer depends on the filter having pre-stripped
+// orphans correctly.
+describe("findUnexpectedDestructiveStatements — managed-table restriction", () => {
+  it("ignores drops of NON-managed (orphan) tables when a managed set is given", () => {
+    const raw = [
+      'DROP TABLE "dc_orphan";',
+      'ALTER TABLE "other_orphan" DROP COLUMN "x";',
+      "TRUNCATE TABLE legacy_orphan",
+    ];
+    // None of these tables are managed → all are expected orphan emissions.
+    expect(
+      findUnexpectedDestructiveStatements(raw, undefined, new Set(["dc_posts"]))
+    ).toEqual([]);
+  });
+
+  it("still flags destructive statements that target a MANAGED table", () => {
+    const managed = new Set(["dc_posts"]);
+    expect(
+      findUnexpectedDestructiveStatements(
+        ['DROP TABLE "dc_posts";'],
+        undefined,
+        managed
+      )
+    ).toEqual(['DROP TABLE "dc_posts";']);
+    expect(
+      findUnexpectedDestructiveStatements(
+        ['ALTER TABLE "dc_posts" DROP COLUMN "body";'],
+        undefined,
+        managed
+      )
+    ).toEqual(['ALTER TABLE "dc_posts" DROP COLUMN "body";']);
+    expect(
+      findUnexpectedDestructiveStatements(
+        ["TRUNCATE TABLE dc_posts"],
+        undefined,
+        managed
+      )
+    ).toEqual(["TRUNCATE TABLE dc_posts"]);
+  });
+
+  it("separates managed offenders from orphan noise in one raw statement set", () => {
+    const raw = [
+      'CREATE TABLE "x" (id text);',
+      'DROP TABLE "dc_orphan";', // not managed → ignored
+      'DROP TABLE "dc_posts";', // managed → offender
+    ];
+    expect(
+      findUnexpectedDestructiveStatements(raw, undefined, new Set(["dc_posts"]))
+    ).toEqual(['DROP TABLE "dc_posts";']);
+  });
+
+  it("keeps the approved-rebuild exemption alongside the managed restriction", () => {
+    const rebuild = [
+      "CREATE TABLE `__new_dc_posts` (id text)",
+      "INSERT INTO `__new_dc_posts`(`id`) SELECT `id` FROM `dc_posts`",
+      "DROP TABLE `dc_posts`",
+      "ALTER TABLE `__new_dc_posts` RENAME TO `dc_posts`",
+    ];
+    const managed = new Set(["dc_posts"]);
+    // Approved rebuild op for a managed table → not an offender.
+    expect(
+      findUnexpectedDestructiveStatements(
+        rebuild,
+        new Set(["dc_posts"]),
+        managed
+      )
+    ).toEqual([]);
+    // Managed table, but NO approved rebuild op → the kit encoded an
+    // unapproved change; still flagged even though the block looks like a
+    // rebuild.
+    expect(
+      findUnexpectedDestructiveStatements(rebuild, new Set(), managed)
+    ).toEqual(["DROP TABLE `dc_posts`"]);
+  });
+});

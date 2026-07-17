@@ -834,13 +834,17 @@ export class PushSchemaPipeline {
         //   - It runs on BOTH routes (fast path and kit path), so the
         //     guarantee never depends on FAST_PATH_OP_TYPES staying
         //     drop-free forever.
-        //   - It runs AFTER filterUnsafeStatements, deliberately: on
-        //     MySQL/SQLite the kit cannot be scoped, so orphan DROPs for
-        //     tables outside the desired schema are an EXPECTED emission
-        //     that the filter strips (and console.warns about) — treating
-        //     them as fatal would fail every scoped apply on those
-        //     dialects. The scan's job is the REMAINDER: destructive SQL
-        //     aimed at tables we DO manage.
+        //   - It scans the RAW kit output (`emittedStatements`) BEFORE
+        //     filterUnsafeStatements, restricted to MANAGED tables (the
+        //     desired schema). Scanning the post-filter remainder would make
+        //     the guarantee depend on the filter having correctly stripped
+        //     every orphan drop first; a filter bug that mis-classified a
+        //     managed-table drop as an orphan would then hide it from the
+        //     scan. Identifying orphans here by table membership instead —
+        //     drops of tables outside the desired schema are the EXPECTED
+        //     emission the filter handles separately — keeps the
+        //     destructive-on-managed guard independent of the filter. `safe`
+        //     is still what actually executes.
         // Rebuild blocks are only trusted for tables where OUR diff
         // approved a rebuild-justifying change — a rebuild on any other
         // table is the kit encoding a column drop we never approved
@@ -855,13 +859,17 @@ export class PushSchemaPipeline {
             )
             .map(op => op.tableName.toLowerCase())
         );
+        const managedTables = new Set(
+          desiredTableNames.map(t => t.toLowerCase())
+        );
         const safe = filterUnsafeStatements(
           emittedStatements,
           desiredTableNames
         );
         const unexpectedDestructive = findUnexpectedDestructiveStatements(
-          safe,
-          allowedRebuildTables
+          emittedStatements,
+          allowedRebuildTables,
+          managedTables
         );
         if (unexpectedDestructive.length > 0) {
           throw new PushSchemaError(
