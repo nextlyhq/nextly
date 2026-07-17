@@ -64,3 +64,52 @@ describe("freshPushSchema drop-guard (real SQLite)", () => {
     );
   });
 });
+
+// Regression (Phase 7, drizzle v1): freshPushSchema on PostgreSQL must scope
+// the kit's introspection to the DESIRED tables. Without the entities filter,
+// a live table outside the desired set — e.g. the migrate lock table, which
+// exists before the core reconcile runs inside the lock — pairs against an
+// added table in v1's differ and its rename resolver crashes
+// (`resolver(table) was called without a HintsHandler`), killing every
+// `nextly migrate` on a fresh PG database. Reproduced live in the Phase 7
+// production-path walk.
+const PG_URL = process.env.TEST_POSTGRES_URL;
+
+describe.skipIf(!PG_URL)(
+  "freshPushSchema orphan scoping (real PostgreSQL)",
+  () => {
+    it("reconciles core with an unmanaged orphan table present (no resolver crash, orphan preserved)", async () => {
+      const { Pool } = await import("pg");
+      const { drizzle: drizzlePg } = await import("drizzle-orm/node-postgres");
+      const admin = new Pool({ connectionString: PG_URL });
+      await admin.query("DROP DATABASE IF EXISTS nextly_freshpush_scope");
+      await admin.query("CREATE DATABASE nextly_freshpush_scope");
+      const url = new URL(PG_URL as string);
+      url.pathname = "/nextly_freshpush_scope";
+      const pool = new Pool({ connectionString: url.toString() });
+      try {
+        // The orphan exists BEFORE the reconcile — the migrate-lock shape.
+        await pool.query(
+          'CREATE TABLE "nextly_migrate_lock" ("id" text PRIMARY KEY, "acquired_at" timestamptz)'
+        );
+        const pgDb = drizzlePg({ client: pool });
+        const core = getDialectTables("postgresql");
+
+        const result = await freshPushSchema("postgresql", pgDb, core);
+        expect(result.applied).toBe(true);
+
+        // Orphan untouched; core tables created alongside it.
+        const t = await pool.query(
+          "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('nextly_migrate_lock','users')"
+        );
+        const names = t.rows.map((r: { table_name: string }) => r.table_name);
+        expect(names).toContain("nextly_migrate_lock");
+        expect(names).toContain("users");
+      } finally {
+        await pool.end();
+        await admin.query("DROP DATABASE IF EXISTS nextly_freshpush_scope");
+        await admin.end();
+      }
+    });
+  }
+);

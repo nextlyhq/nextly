@@ -1279,8 +1279,11 @@ export abstract class DrizzleAdapter {
           break;
 
         case "mysql":
+          // The alias matters: MySQL 8's information_schema returns the
+          // column key as uppercase TABLE_NAME without it, so `row.table_name`
+          // was undefined and every caller mapping the rows crashed.
           sql = `
-            SELECT table_name
+            SELECT table_name AS table_name
             FROM information_schema.tables
             WHERE table_schema = DATABASE()
             AND table_type = 'BASE TABLE'

@@ -134,7 +134,20 @@ async function pushForDialect(
   switch (dialect) {
     case "postgresql": {
       const kit = await getPgDrizzleKit();
-      return kit.pushSchema(schema, db, { schemas: ["public"] });
+      // Scope introspection to the DESIRED tables (same W6 fix as the
+      // pipeline's Phase D). Without the tables filter, any live table
+      // outside the desired set — e.g. the migrate lock table, which exists
+      // BEFORE the core reconcile runs inside the lock — pairs against an
+      // added table in v1's differ and crashes its rename resolver
+      // (`resolver(table) was called without a HintsHandler`). 0.31 emitted
+      // a DROP instead, which filterUnsafeStatements blocked; v1 crashes
+      // before emission, so the scoping must happen at introspection time.
+      // fresh-push is create-only reconcile — orphans are none of its
+      // business.
+      return kit.pushSchema(schema, db, {
+        schemas: ["public"],
+        tables: drizzleTableNames(schema),
+      });
     }
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
