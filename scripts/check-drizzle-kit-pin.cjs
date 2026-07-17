@@ -22,15 +22,50 @@ const ROOT = path.join(__dirname, "..");
 const EXACT_SEMVER =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-// package.json path (relative to repo root) → packages that must be exact-pinned there.
-const TARGETS = [
-  ["packages/nextly/package.json", ["drizzle-kit", "drizzle-orm"]],
-  ["packages/adapter-drizzle/package.json", ["drizzle-orm"]],
-  ["packages/adapter-postgres/package.json", ["drizzle-orm"]],
-  ["packages/adapter-mysql/package.json", ["drizzle-orm"]],
-  ["packages/adapter-sqlite/package.json", ["drizzle-orm"]],
-  ["apps/playground/package.json", ["drizzle-orm"]],
+// The drizzle deps this gate governs. A package is subject to the pin the
+// moment it DECLARES either of these in any dependency section.
+const GOVERNED_DEPS = ["drizzle-kit", "drizzle-orm"];
+const DEP_SECTIONS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
 ];
+
+// Discover every workspace package.json rather than hard-coding a list: a new
+// package that starts depending on drizzle-orm would otherwise silently escape
+// the pin (review #26). The workspace globs are apps/*, packages/*, and e2e
+// (pnpm-workspace.yaml); expand them here without a YAML parser.
+function discoverPackageJsons() {
+  const found = [];
+  const globDirs = ["apps", "packages"];
+  for (const base of globDirs) {
+    const baseAbs = path.join(ROOT, base);
+    if (!fs.existsSync(baseAbs)) continue;
+    for (const entry of fs.readdirSync(baseAbs, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const rel = path.join(base, entry.name, "package.json");
+      if (fs.existsSync(path.join(ROOT, rel))) found.push(rel);
+    }
+  }
+  // e2e is a single named workspace member, not a glob.
+  if (fs.existsSync(path.join(ROOT, "e2e", "package.json"))) {
+    found.push(path.join("e2e", "package.json"));
+  }
+  return found;
+}
+
+// Only the packages that actually declare a governed dep are enforced, so an
+// unrelated workspace member never trips the gate.
+const TARGETS = discoverPackageJsons()
+  .map(relPath => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, relPath), "utf8"));
+    const declared = GOVERNED_DEPS.filter(dep =>
+      DEP_SECTIONS.some(section => pkg[section] && pkg[section][dep])
+    );
+    return declared.length > 0 ? [relPath, declared] : null;
+  })
+  .filter(Boolean);
 
 const errors = [];
 
