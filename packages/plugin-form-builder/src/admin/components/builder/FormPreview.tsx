@@ -16,6 +16,7 @@
 import {
   Badge,
   Button,
+  Checkbox,
   Input,
   Label,
   RadioGroup,
@@ -25,7 +26,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   Tabs,
   TabsList,
   TabsTrigger,
@@ -64,8 +64,14 @@ function PreviewFieldInput({
         />
       );
     case "checkbox":
+      // A real checkbox, not a toggle switch — the preview should look like
+      // what a frontend form renders for this type.
       return (
-        <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} />
+        <Checkbox
+          id={id}
+          checked={Boolean(value)}
+          onCheckedChange={checked => onChange(checked === true)}
+        />
       );
     case "select": {
       const options = "options" in field ? (field.options ?? []) : [];
@@ -187,24 +193,55 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [confirmed, setConfirmed] = useState(false);
+  const [missingRequired, setMissingRequired] = useState<Set<string>>(
+    new Set()
+  );
 
   // Conditional logic runs against the live values with the SAME evaluator
   // the runtime uses — typing into the preview shows/hides fields for real.
-  const visibleFields = useMemo(
-    () =>
-      fields.filter(field => {
-        if (field.type === "hidden") return false;
-        if (!field.conditionalLogic?.enabled) return true;
-        return evaluateConditions(field.conditionalLogic, values);
-      }),
-    [fields, values]
-  );
+  // Visibility is computed in field order against the values of fields that
+  // are themselves visible: a hidden field's leftover value must not keep
+  // satisfying a downstream condition (chained show/hide would misbehave).
+  const visibleFields = useMemo(() => {
+    const effectiveValues: Record<string, unknown> = {};
+    const visible: FormField[] = [];
+    for (const field of fields) {
+      if (field.type === "hidden") continue;
+      const isVisible =
+        !field.conditionalLogic?.enabled ||
+        evaluateConditions(field.conditionalLogic, effectiveValues);
+      if (isVisible) {
+        visible.push(field);
+        if (field.name in values) {
+          effectiveValues[field.name] = values[field.name];
+        }
+      }
+    }
+    return visible;
+  }, [fields, values]);
 
   const hiddenCount = fields.filter(field => field.type === "hidden").length;
 
   const reset = () => {
     setValues({});
     setConfirmed(false);
+    setMissingRequired(new Set());
+  };
+
+  // The real form would refuse an empty required field, so the simulation
+  // does too — an admin previewing required fields sees the requirement.
+  const simulateSubmit = () => {
+    const missing = new Set(
+      visibleFields
+        .filter(field => {
+          if (!field.required || field.type === "file") return false;
+          const value = values[field.name];
+          return value === undefined || value === "" || value === false;
+        })
+        .map(field => field.name)
+    );
+    setMissingRequired(missing);
+    if (missing.size === 0) setConfirmed(true);
   };
 
   return (
@@ -306,6 +343,9 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
                       />
                       <Label htmlFor={`preview-${field.name}`}>
                         {field.label || field.name}
+                        {field.required && (
+                          <span className="ml-1 text-destructive">*</span>
+                        )}
                       </Label>
                     </div>
                   ) : (
@@ -322,12 +362,17 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
                       {field.helpText}
                     </p>
                   )}
+                  {missingRequired.has(field.name) && (
+                    <p className="text-xs text-destructive">
+                      This field is required.
+                    </p>
+                  )}
                 </div>
               ))}
 
               <Button
                 type="button"
-                onClick={() => setConfirmed(true)}
+                onClick={simulateSubmit}
                 disabled={visibleFields.length === 0}
               >
                 {settings.submitButtonText || "Submit"}

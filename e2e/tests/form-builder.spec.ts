@@ -143,8 +143,16 @@ test("seeds a default notification, edits it in the sheet, and guards referenced
 test("the preview is an interactive simulation with real confirmation", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/collections/forms");
-  await page.getByRole("button", { name: /E2E Notifications Form/ }).click();
+  // Self-sufficient: the preview needs no saved form — the builder state
+  // previews live, so an unsaved form with one field is enough.
+  await gotoAdmin(page, "/collections/forms/create");
+  await page
+    .getByRole("textbox", { name: "Form Name" })
+    .fill("E2E Preview Form");
+  await page.getByRole("button", { name: "Add field" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: /^Email/ }).click();
+  await dialog.getByRole("button", { name: "Add field" }).click();
   await page.getByRole("tab", { name: "Preview" }).click();
 
   // Inputs are enabled — this is a simulation, not a screenshot.
