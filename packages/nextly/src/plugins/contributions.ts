@@ -1,4 +1,8 @@
 import type { CollectionConfig } from "../collections/config/define-collection";
+import type {
+  FieldSurface,
+  FieldTypeCategory,
+} from "../collections/fields/catalog";
 import type { FieldConfig } from "../collections/fields/types";
 import type { ComponentConfig } from "../components/config/types";
 import type { GeneratedTypes } from "../direct-api/types/shared";
@@ -114,13 +118,9 @@ export interface PluginEmailTemplate {
  * the given admin `component`. Validation rides on the primitive + the field's
  * standard `validate` option. (Typed builders + Visual-Builder UI are full-M9.)
  */
-/**
- * The admin surfaces a field type can appear on. Each surface narrows the
- * visible type set independently: what a picker shows resolves as the
- * surface's own capability set ∩ the type's declared surfaces ∩ the host's
- * excludes — every level can only remove types, never force one in.
- */
-export type FieldSurface = "entries" | "users" | "forms";
+// Re-exported from the field catalog (its canonical home, beside the built-in
+// surface types) so plugin authors keep importing it from the plugin surface.
+export type { FieldSurface };
 
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
@@ -129,6 +129,20 @@ export interface PluginFieldType {
   storage: "text" | "longText" | "boolean" | "number" | "timestamp" | "json";
   /** Admin field-editor component path, resolved via the component registry. */
   component: ComponentPath;
+  /**
+   * Human label shown in field-type pickers. Defaults to a title-cased `type`
+   * (e.g. `"rating"` → `"Rating"`).
+   */
+  label?: string;
+  /** One-line hint shown under the label in pickers. */
+  description?: string;
+  /**
+   * Lucide icon name shown on the picker card, resolved by the admin's icon
+   * set. Falls back to a generic icon when the name does not resolve.
+   */
+  icon?: string;
+  /** Picker grouping. Defaults to `"Advanced"`. */
+  category?: FieldTypeCategory;
   /**
    * Which admin surfaces may offer this type in their field pickers. Omitted
    * means the entry/single editing surface only — a type never auto-appears
