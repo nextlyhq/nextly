@@ -25,8 +25,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { resolve, basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -46,6 +46,11 @@ import {
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 
 /**
  * Options specific to the migrate:status command
@@ -288,27 +293,24 @@ export async function runMigrateStatus(
 async function discoverMigrations(
   migrationsDir: string
 ): Promise<ParsedMigration[]> {
-  let files: string[];
-
-  try {
-    files = await readdir(migrationsDir);
-  } catch {
-    return [];
-  }
-
-  const sqlFiles = files
-    .filter(f => f.endsWith(".sql"))
-    .sort((a, b) => a.localeCompare(b));
-
+  // Use shared migration discovery to group dialect variants
+  const groups = await discoverMigrationGroups(migrationsDir);
   const migrations: ParsedMigration[] = [];
 
-  for (const file of sqlFiles) {
-    const filePath = resolve(migrationsDir, file);
-    const name = basename(file, ".sql");
+  // Process each migration group in sorted order
+  for (const baseName of getSortedBaseNames(groups)) {
+    const group = groups.get(baseName)!;
+    const selectedFile = selectVariant(group.variants);
+
+    if (!selectedFile) {
+      continue;
+    }
+
+    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
-      const parsed = parseMigrationFile(name, filePath, content);
+      const parsed = parseMigrationFile(baseName, filePath, content);
       migrations.push(parsed);
     } catch {
       // Skip files that can't be read

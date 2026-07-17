@@ -14,7 +14,7 @@
 CREATE TABLE IF NOT EXISTS `dc_posts` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` text NOT NULL,
-  `slug` text NOT NULL UNIQUE,
+  `slug` varchar(255) NOT NULL,
   `content` json,
   `excerpt` text,
   `featured_image` text,
@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `reading_time` integer,
   `word_count` integer,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_posts_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Categories collection
@@ -36,11 +37,12 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` text NOT NULL,
   `name` text NOT NULL,
-  `slug` text NOT NULL UNIQUE,
+  `slug` varchar(255) NOT NULL,
   `icon` text,
   `description` text,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_categories_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Tags collection
@@ -48,10 +50,11 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` text NOT NULL,
   `name` text NOT NULL,
-  `slug` text NOT NULL UNIQUE,
+  `slug` varchar(255) NOT NULL,
   `description` text,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_tags_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============ USER EXTENSION TABLE ============
@@ -148,7 +151,6 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
 -- ============ INDEXES ============
 
 -- Posts indexes
-CREATE INDEX IF NOT EXISTS `idx_posts_slug` ON `dc_posts`(`slug`(255));
 CREATE INDEX IF NOT EXISTS `idx_posts_status` ON `dc_posts`(`status`);
 CREATE INDEX IF NOT EXISTS `idx_posts_published` ON `dc_posts`(`published_at` DESC);
 CREATE INDEX IF NOT EXISTS `idx_posts_featured` ON `dc_posts`(`featured`) WHERE `featured` = 1;
@@ -209,13 +211,13 @@ ALTER TABLE `single_site_settings` DROP CONSTRAINT IF EXISTS `fk_site_settings_l
 ALTER TABLE `user_ext` DROP CONSTRAINT IF EXISTS `fk_user_ext_user_id`;
 
 -- Drop indexes
-DROP INDEX IF EXISTS `idx_posts_slug` ON `dc_posts`;
+DROP INDEX IF EXISTS `uq_posts_slug` ON `dc_posts`;
+DROP INDEX IF EXISTS `uq_categories_slug` ON `dc_categories`;
+DROP INDEX IF EXISTS `uq_tags_slug` ON `dc_tags`;
 DROP INDEX IF EXISTS `idx_posts_status` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_published` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_featured` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_author` ON `dc_posts`;
-DROP INDEX IF EXISTS `idx_categories_slug` ON `dc_categories`;
-DROP INDEX IF EXISTS `idx_tags_slug` ON `dc_tags`;
 DROP INDEX IF EXISTS `idx_posts_categories_category` ON `dc_posts_categories`;
 DROP INDEX IF EXISTS `idx_posts_tags_tag` ON `dc_posts_tags`;
 DROP INDEX IF EXISTS `uq_user_ext_user_id` ON `user_ext`;

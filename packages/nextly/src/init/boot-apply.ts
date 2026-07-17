@@ -45,13 +45,15 @@ export async function runBootTimeApplyIfDev(opts?: {
 
   const label = callerLabel(opts?.caller);
   try {
-    // Step 1: Apply pending SQL migrations first
+    // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers)
     await applyPendingMigrations(label);
 
     // Step 1.5: Register collections from migration metadata
-    // This bridges the gap for visual approach where config has empty collections
-    // but migrations define the schema. Reads snapshot files and populates
-    // dynamic_collections and dynamic_singles tables.
+    // NOTE: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
+    // execute this concurrently. The select-then-insert pattern is racy (workers
+    // can both check existence, then both insert), but slug unique constraints
+    // prevent duplicates. If a worker loses the race, it continues normally.
+    // Any metadata-table-to-physical-table mismatch self-heals on next boot.
     await registerMigrationMetadata(label);
 
     // Step 1.6: Reload dynamic tables into schema registry
@@ -66,11 +68,23 @@ export async function runBootTimeApplyIfDev(opts?: {
     await reloadNextlyConfig();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // NOTE: Errors are logged but don't block dev server startup. This is intentional:
+    // - Dev boot should remain resilient even if migrations/metadata have issues
+    // - The app still works against the live DB schema (code-first edits won't apply)
+    // - Users can run `nextly migrate` manually to see actual errors
+    // Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 to throw instead of warn (useful for debugging)
+    if (process.env.NEXTLY_BOOT_APPLY_FAIL_LOUDLY === "1") {
+      console.error(
+        `${label} Boot-time schema apply FAILED ( NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 ): ${msg}`
+      );
+      throw err;
+    }
     console.warn(
       `${label} Boot-time schema apply failed: ${msg}. ` +
         `The dev server still works against the live DB schema, ` +
         `but code-first edits won't be applied until next restart, ` +
-        `HMR fires, or you run \`nextly db:sync\`.`
+        `HMR fires, or you run \`nextly db:sync\`. ` +
+        `Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 for full error details.`
     );
   }
 }
@@ -177,6 +191,11 @@ async function reloadDynamicTables(label: string): Promise<void> {
  * - Migration snapshots define the schema metadata
  * - This function registers that metadata in dynamic_collections/dynamic_singles tables
  *
+ * CONCURRENCY: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
+ * execute this concurrently. The select-then-insert pattern is racy (workers can both
+ * check existence, then both insert), but slug unique constraints prevent duplicates.
+ * Any metadata-table-to-physical-table mismatch self-heals on next boot.
+ *
  * Without this, the collections registry stays empty because visual.config.ts has
  * empty collections array (by design - users create collections via Admin Panel).
  */
@@ -203,9 +222,9 @@ async function registerMigrationMetadata(label: string): Promise<void> {
       "../domains/schema/migrate/metadata-register"
     );
 
-    // Get the adapter from DI - same method as applyPendingMigrations
-    const { getService } = await import("../di/register");
-    const drizzleAdapter = getService("adapter");
+    // Get the adapter from DI (consistent with reloadDynamicTables)
+    const { container } = await import("../di/container");
+    const drizzleAdapter = container.get("adapter");
 
     if (!drizzleAdapter) {
       console.warn(
@@ -338,7 +357,7 @@ async function applyPendingMigrations(label: string): Promise<void> {
     // Import migrateCore and related dependencies
     const { migrateCore } = await import("../cli/commands/migrate");
     const { validateDatabaseEnv } = await import("../cli/utils/adapter");
-    const { getService } = await import("../di/register");
+    const { container } = await import("../di/container");
 
     // Validate database environment
     const dbValidation = validateDatabaseEnv();
@@ -350,8 +369,8 @@ async function applyPendingMigrations(label: string): Promise<void> {
       return;
     }
 
-    // Get adapter from DI
-    const drizzleAdapter = getService("adapter");
+    // Get adapter from DI (consistent with reloadDynamicTables)
+    const drizzleAdapter = container.get("adapter");
 
     if (!drizzleAdapter) {
       console.warn(

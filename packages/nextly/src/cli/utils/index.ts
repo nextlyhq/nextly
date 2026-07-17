@@ -43,3 +43,11 @@ export {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "./adapter";
+
+export {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+  type MigrationVariant,
+  type MigrationGroup,
+} from "./migration-discovery";

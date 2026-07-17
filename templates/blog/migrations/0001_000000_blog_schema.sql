@@ -12,7 +12,7 @@
 
 -- Posts collection
 CREATE TABLE IF NOT EXISTS "dc_posts" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
   "content" jsonb,
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
 
 -- Categories collection
 CREATE TABLE IF NOT EXISTS "dc_categories" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL,
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
 
 -- Tags collection
 CREATE TABLE IF NOT EXISTS "dc_tags" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL,
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
@@ -88,8 +88,8 @@ ALTER TABLE "user_ext"
 
 -- Posts <-> Categories (many-to-many)
 CREATE TABLE IF NOT EXISTS "dc_posts_categories" (
-  "post_id" uuid NOT NULL,
-  "category_id" uuid NOT NULL,
+  "post_id" text NOT NULL,
+  "category_id" text NOT NULL,
   PRIMARY KEY ("post_id", "category_id"),
   CONSTRAINT "fk_posts_categories_post"
     FOREIGN KEY ("post_id") REFERENCES "dc_posts"("id") ON DELETE CASCADE,
@@ -99,8 +99,8 @@ CREATE TABLE IF NOT EXISTS "dc_posts_categories" (
 
 -- Posts <-> Tags (many-to-many)
 CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
-  "post_id" uuid NOT NULL,
-  "tag_id" uuid NOT NULL,
+  "post_id" text NOT NULL,
+  "tag_id" text NOT NULL,
   PRIMARY KEY ("post_id", "tag_id"),
   CONSTRAINT "fk_posts_tags_post"
     FOREIGN KEY ("post_id") REFERENCES "dc_posts"("id") ON DELETE CASCADE,
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
 
 -- Site Settings single
 CREATE TABLE IF NOT EXISTS "single_site_settings" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Site Settings',
   "slug" text NOT NULL DEFAULT 'site-settings',
   "site_name" text NOT NULL DEFAULT 'My Blog',
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
 
 -- Navigation single
 CREATE TABLE IF NOT EXISTS "single_navigation" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Navigation',
   "slug" text NOT NULL DEFAULT 'navigation',
   "header_links" jsonb,
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
 
 -- Homepage single
 CREATE TABLE IF NOT EXISTS "single_homepage" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Homepage',
   "slug" text NOT NULL DEFAULT 'homepage',
   "hero_title" text NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',

@@ -33,7 +33,26 @@ import type { CollectionAdminConfig } from "@nextly/schemas/dynamic-collections/
 import { dynamicSinglesMysql } from "@nextly/schemas/dynamic-singles/mysql";
 import { dynamicSinglesPg } from "@nextly/schemas/dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
-import type { SingleAdminOptions } from "@nextly/singles/config/types";
+
+import type { SingleAdminOptions } from "../../../config";
+import { simplePluralize } from "../../../shared/lib/pluralization";
+
+/**
+ * Minimal Drizzle database interface for the operations needed in metadata registration.
+ * Provides type safety for getDrizzle calls without relying on dialect-specific types.
+ */
+interface DrizzleDatabase {
+  select(): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(n: number): Promise<unknown[]>;
+      };
+    };
+  };
+  insert(table: unknown): {
+    values(data: unknown): Promise<unknown[]>;
+  };
+}
 
 /**
  * Collection definition from migration snapshot
@@ -113,13 +132,17 @@ export interface RegisterFromMigrationsOptions {
  * Read all migration snapshot files from the migrations/meta directory
  */
 async function readSnapshotFiles(
-  migrationsDir: string
+  migrationsDir: string,
+  logger?: { warn?: (msg: string) => void }
 ): Promise<MigrationSnapshot[]> {
   const metaDir = resolve(migrationsDir, "meta");
 
   try {
     const files = await readdir(metaDir);
-    const snapshotFiles = files.filter(f => f.endsWith(".snapshot.json"));
+    // Sort files lexicographically to ensure deterministic "later snapshot wins" behavior
+    const snapshotFiles = files
+      .filter(f => f.endsWith(".snapshot.json"))
+      .sort();
 
     if (snapshotFiles.length === 0) {
       return [];
@@ -135,9 +158,7 @@ async function readSnapshotFiles(
         snapshots.push(snapshot);
       } catch (err) {
         // Skip invalid snapshot files but continue processing others
-        console.warn(
-          `Warning: Could not read snapshot file ${file}: ${String(err)}`
-        );
+        logger?.warn?.(`Could not read snapshot file ${file}: ${String(err)}`);
       }
     }
 
@@ -199,13 +220,7 @@ function normalizeCollection(collection: SnapshotCollection): {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
 
-  const plural =
-    collection.labels?.plural ??
-    (singular.endsWith("s")
-      ? `${singular}es`
-      : singular.endsWith("y")
-        ? `${singular.slice(0, -1)}ies`
-        : `${singular}s`);
+  const plural = collection.labels?.plural ?? simplePluralize(singular);
 
   return { singular, plural };
 }
@@ -265,15 +280,18 @@ function getDynamicSinglesSchema(dialect: SupportedDialect) {
  *
  * Uses Drizzle ORM for type-safe inserts that are checked against the
  * actual schema definition. This prevents silent drift if columns change.
+ *
+ * @returns true if inserted, false if already exists
  */
 async function registerCollection(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   collection: SnapshotCollection
-): Promise<void> {
+): Promise<boolean> {
   const schema = getDynamicCollectionsSchema(dialect);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = adapter.getDrizzle<any>({ dynamicCollections: schema });
+  const db = adapter.getDrizzle<DrizzleDatabase>({
+    dynamicCollections: schema,
+  });
 
   // Check if collection already exists using Drizzle
   const existing = await db
@@ -284,7 +302,7 @@ async function registerCollection(
 
   if (existing.length > 0) {
     // Collection already registered, skip
-    return;
+    return false;
   }
 
   const { singular, plural } = normalizeCollection(collection);
@@ -307,6 +325,7 @@ async function registerCollection(
     schemaVersion: 1,
     migrationStatus: "applied",
   });
+  return true;
 }
 
 /**
@@ -314,15 +333,18 @@ async function registerCollection(
  *
  * Uses Drizzle ORM for type-safe inserts that are checked against the
  * actual schema definition. This prevents silent drift if columns change.
+ *
+ * @returns true if inserted, false if already exists
  */
 async function registerSingle(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   single: SnapshotSingle
-): Promise<void> {
+): Promise<boolean> {
   const schema = getDynamicSinglesSchema(dialect);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = adapter.getDrizzle<any>({ dynamicSingles: schema });
+  const db = adapter.getDrizzle<DrizzleDatabase>({
+    dynamicSingles: schema,
+  });
 
   // Check if single already exists using Drizzle
   const existing = await db
@@ -333,7 +355,7 @@ async function registerSingle(
 
   if (existing.length > 0) {
     // Single already registered, skip
-    return;
+    return false;
   }
 
   const label = normalizeSingle(single);
@@ -356,6 +378,7 @@ async function registerSingle(
     schemaVersion: 1,
     migrationStatus: "applied",
   });
+  return true;
 }
 
 /**
@@ -378,7 +401,7 @@ export async function registerFromMigrations(
   const typedAdapter = adapter as DrizzleAdapter;
 
   // Step 1: Read all snapshot files
-  const snapshots = await readSnapshotFiles(migrationsDir);
+  const snapshots = await readSnapshotFiles(migrationsDir, logger);
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
@@ -397,8 +420,12 @@ export async function registerFromMigrations(
   let collectionsRegistered = 0;
   for (const collection of collections) {
     try {
-      await registerCollection(typedAdapter, dialect, collection);
-      collectionsRegistered++;
+      const inserted = await registerCollection(
+        typedAdapter,
+        dialect,
+        collection
+      );
+      if (inserted) collectionsRegistered++;
       logger.debug?.(
         `[Migration Metadata] Registered collection: ${collection.slug}`
       );
@@ -413,8 +440,8 @@ export async function registerFromMigrations(
   let singlesRegistered = 0;
   for (const single of singles) {
     try {
-      await registerSingle(typedAdapter, dialect, single);
-      singlesRegistered++;
+      const inserted = await registerSingle(typedAdapter, dialect, single);
+      if (inserted) singlesRegistered++;
       logger.debug?.(`[Migration Metadata] Registered single: ${single.slug}`);
     } catch (err) {
       logger.warn?.(
