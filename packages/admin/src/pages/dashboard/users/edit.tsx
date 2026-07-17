@@ -406,7 +406,10 @@ export default function EditUserPage(): ReactElement {
               fullName={watchedFullName || user?.name || ""}
               disabled={isUpdating}
               className="border border-border"
-              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
+              // Keep text-primary in both modes: on the dark bg-primary/20 tint it
+              // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
+              // color meant for solid primary fills) fell to ~1.45:1 on the tint.
+              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
             />
             <div className="flex-1">
               <h2 className="text-xl font-semibold text-foreground">

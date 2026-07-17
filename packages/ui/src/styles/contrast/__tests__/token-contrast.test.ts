@@ -19,7 +19,7 @@ import {
   parseThemeTokens,
   type TokenMap,
 } from "../parse-theme";
-import { resolveColor, withAlpha, type ResolveContext } from "../resolve";
+import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const THEME_CSS = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -46,8 +46,10 @@ function surfaceOf(pairing: Pairing, ctx: ResolveContext): Rgb {
       `var(${pairing.bgOver ?? "--color-background"})`,
       ctx
     );
+    // Scale the tint's own alpha by the utility opacity (Tailwind multiplies,
+    // it does not overwrite) before compositing it over the underlying surface.
     return compositeOver(
-      withAlpha(raw, pairing.bgAlpha),
+      applyOpacity(raw, pairing.bgAlpha),
       opaque(over, OPAQUE_BASE)
     );
   }
@@ -61,7 +63,9 @@ function foregroundOf(
   surface: Rgb
 ): Rgb {
   let fg = resolveColor(`var(${pairing.fg})`, ctx);
-  if (pairing.fgAlpha !== undefined) fg = withAlpha(fg, pairing.fgAlpha);
+  // Multiply the foreground's own alpha by the utility opacity (Tailwind
+  // semantics) before compositing it onto its surface.
+  if (pairing.fgAlpha !== undefined) fg = applyOpacity(fg, pairing.fgAlpha);
   return opaque(fg, surface);
 }
 
