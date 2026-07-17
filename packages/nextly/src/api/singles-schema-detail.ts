@@ -31,8 +31,12 @@ import type { ComponentRegistryService } from "../services/components/component-
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
-import { requireAuthHeader } from "./auth-header-only";
+import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
+import {
+  requireRouteCollectionAccess,
+  requireRoutePermission,
+} from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -56,13 +60,13 @@ async function getComponentRegistry(): Promise<ComponentRegistryService> {
 /**
  * GET handler for retrieving a Single's schema/metadata by slug.
  *
- * Requires authentication.
+ * Requires a verified session or API key with read access to the Single,
+ * matching the dispatcher's `getSingleSchema` authorization.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
-    requireAuthHeader(request);
-
     const { slug } = await context.params;
+    await requireRouteCollectionAccess(request, "read", slug);
     const registry = await getSingleRegistry();
     const single = await registry.getSingle(slug);
 
@@ -97,7 +101,8 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a Single's schema/metadata.
  *
- * Requires authentication. The registry returns 403 if the Single is locked
+ * Requires manage-settings, matching the dispatcher's `updateSingleSchema`
+ * authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be modified via API).
  */
 export const PATCH = withErrorHandler(
@@ -105,7 +110,7 @@ export const PATCH = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("update-single-schema");
 
-    requireAuthHeader(request);
+    await requireRoutePermission(request, "manage", "settings");
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
@@ -138,6 +143,8 @@ export const PATCH = withErrorHandler(
     }
 
     if (body.fields !== undefined) {
+      // Same rules as the ui-schema.json mirror (see api/fields-payload).
+      assertValidFieldsPayload(body.fields);
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -200,7 +207,8 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a Single.
  *
- * Requires authentication. The registry returns 403 if the Single is locked
+ * Requires manage-settings, matching the dispatcher's `deleteSingle`
+ * authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be deleted via API). Singles require
  * `force: true` to delete because they represent persistent site-wide
  * configuration.
@@ -210,7 +218,7 @@ export const DELETE = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("delete-single");
 
-    requireAuthHeader(request);
+    await requireRoutePermission(request, "manage", "settings");
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();

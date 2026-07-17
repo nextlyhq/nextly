@@ -26,9 +26,9 @@ import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -84,7 +84,10 @@ const createTemplateSchema = z.object({
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const service = await getEmailTemplateService();
     const templates = await service.listTemplates();
@@ -113,7 +116,10 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const body = await readJsonBody(request);
 
@@ -128,6 +134,8 @@ export const POST = withErrorHandler(
     const service = await getEmailTemplateService();
     const template = await service.createTemplate(validated);
 
-    return respondMutation("Email template created.", template, { status: 201 });
+    return respondMutation("Email template created.", template, {
+      status: 201,
+    });
   }
 );

@@ -22,12 +22,13 @@ import { z } from "zod";
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
+import { assertValidFieldsPayload } from "./fields-payload";
 import { respondList, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -47,7 +48,9 @@ const createComponentSchema = z.object({
     ),
   label: z.string().min(1, "Label is required"),
   description: z.string().optional(),
-  fields: z.array(z.any()), // Field validation is complex, handled by service
+  // Validated against the shared manifest field rules after parse (see
+  // api/fields-payload); kept unknown here so passthrough keys survive.
+  fields: z.array(z.unknown()),
   admin: z
     .object({
       category: z.string().optional(),
@@ -62,8 +65,9 @@ const createComponentSchema = z.object({
 /**
  * GET handler for listing components with pagination and filters.
  *
- * This is a public endpoint - no authentication required.
- * Used by Admin UI to load component list for navigation.
+ * Requires read-settings (or manage-settings), matching the dispatcher's
+ * components authorization — component definitions are builder-surface
+ * metadata, not public content.
  *
  * Query Parameters:
  * - source: Filter by source type ("code" | "ui")
@@ -85,6 +89,11 @@ const createComponentSchema = z.object({
  * ```
  */
 export const GET = withErrorHandler(async (request: Request) => {
+  await requireRouteAnyPermission(request, [
+    { action: "read", resource: "settings" },
+    { action: "manage", resource: "settings" },
+  ]);
+
   const registry = await getComponentRegistry();
   const { searchParams } = new URL(request.url);
 
@@ -122,7 +131,9 @@ export const GET = withErrorHandler(async (request: Request) => {
 /**
  * POST handler for creating a new UI component.
  *
- * Requires authentication. Creates a new component with source="ui" and locked=false.
+ * Requires create-settings (or manage-settings), matching the dispatcher's
+ * components authorization. Creates a new component with source="ui" and
+ * locked=false.
  *
  * Request Body:
  * - slug: Unique identifier (lowercase, letters/numbers/hyphens)
@@ -145,10 +156,10 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Schema DDL: refuse when the builder is disabled for this environment.
   requireBuilderEnabled("create-component");
 
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    throw NextlyError.authRequired();
-  }
+  await requireRouteAnyPermission(request, [
+    { action: "create", resource: "settings" },
+    { action: "manage", resource: "settings" },
+  ]);
 
   const registry = await getComponentRegistry();
   const body = await request.json();
@@ -159,20 +170,29 @@ export const POST = withErrorHandler(async (request: Request) => {
   }
   const validated = parsed.data;
 
+  // Same rules as the ui-schema.json mirror (see api/fields-payload).
+  assertValidFieldsPayload(validated.fields);
+
   // Generate table name from slug (comp_ prefix added by service)
   const tableName = validated.slug
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
-  const schemaHash = calculateSchemaHash(validated.fields);
+  // Validated by assertValidFieldsPayload above; cast through `unknown`
+  // to the registry's config type while keeping the payload unstripped.
+  const fields = validated.fields as unknown as Parameters<
+    typeof registry.registerComponent
+  >[0]["fields"];
+
+  const schemaHash = calculateSchemaHash(fields);
 
   const component = await registry.registerComponent({
     slug: validated.slug,
     label: validated.label,
     tableName,
     description: validated.description,
-    fields: validated.fields,
+    fields,
     admin: validated.admin,
     source: "ui",
     locked: false,

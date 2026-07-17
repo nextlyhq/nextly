@@ -33,6 +33,7 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
+import { toast } from "@admin/components/ui";
 import {
   componentApi,
   type CreateComponentPayload,
@@ -358,8 +359,13 @@ export function useDeleteComponent() {
       // D-series: keep ui-schema.json in sync (best-effort, dev-only API).
       try {
         await schemaFileApi.deleteComponent(componentSlug);
-      } catch {
-        // Non-fatal: DB delete succeeded; manifest cleanup can be re-run.
+      } catch (mirrorError) {
+        // The DB delete succeeded; a stale manifest entry silently diverges
+        // the committed schema from the database, so the failure must be
+        // visible even though it is non-fatal.
+        toast.warning(
+          `Component deleted from the database, but ui-schema.json could not be updated: ${mirrorError instanceof Error ? mirrorError.message : String(mirrorError)}`
+        );
       }
       return result;
     },

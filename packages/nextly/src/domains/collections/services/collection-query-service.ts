@@ -63,6 +63,14 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
+import {
   buildPaginatedResponse,
   clampLimit,
   calculateOffset,
@@ -646,6 +654,17 @@ export class CollectionQueryService extends BaseService {
       // Use geo-filtered entries for the rest of the pipeline
       expandedEntries = geoFilteredEntries;
 
+      // Redact password hashes BEFORE any afterRead hook (collection,
+      // stored, or field-level) runs: a hook receiving the hash could copy
+      // it into another allowed property that the later redaction would not
+      // catch. The final redaction below stays as defense in depth.
+      const collectionHasPassword = hasPasswordField(fields);
+      if (collectionHasPassword) {
+        for (const entry of expandedEntries) {
+          stripPasswordFieldValues(entry, fields);
+        }
+      }
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -695,6 +714,14 @@ export class CollectionQueryService extends BaseService {
         convertTimestampsToCamelCase(entry)
       );
 
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (collectionHasPassword) {
+        for (const entry of finalData as Record<string, unknown>[]) {
+          stripPasswordFieldValues(entry, fields);
+        }
+      }
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
       finalData = (finalData as Record<string, unknown>[]).map(entry => {
         fields.forEach(field => {
@@ -713,6 +740,27 @@ export class CollectionQueryService extends BaseService {
 
         return entry;
       });
+
+      // Field-level afterRead hooks + read access (code-first functions
+      // resolved via the field-level registry): hooks may transform values;
+      // fields whose access.read denies are stripped from the response.
+      for (const entry of finalData as Record<string, unknown>[]) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterRead",
+          data: entry,
+          operation: "read",
+          user: params.user,
+        });
+        await applyFieldReadAccess({
+          kind: "collection",
+          slug: params.collectionName,
+          entry,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        });
+      }
 
       // Transform rich text fields to requested format (html, both)
       // Default is "json" which returns the Lexical JSON structure as-is
@@ -1204,6 +1252,14 @@ export class CollectionQueryService extends BaseService {
         });
       }
 
+      // Redact password hashes BEFORE any afterRead hook runs (a hook could
+      // copy the hash elsewhere); the final redaction below is defense in
+      // depth.
+      const detailHasPassword = hasPasswordField(fields);
+      if (detailHasPassword) {
+        stripPasswordFieldValues(expandedEntry, fields);
+      }
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -1249,6 +1305,12 @@ export class CollectionQueryService extends BaseService {
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = convertTimestampsToCamelCase(finalData);
 
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (detailHasPassword) {
+        stripPasswordFieldValues(finalData, fields);
+      }
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1262,6 +1324,24 @@ export class CollectionQueryService extends BaseService {
             // If parsing fails, keep as string
           }
         }
+      });
+
+      // Field-level afterRead hooks + read access — same semantics as the
+      // list path above.
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterRead",
+        data: finalData,
+        operation: "read",
+        user: params.user,
+      });
+      await applyFieldReadAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        entry: finalData,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
       });
 
       // Transform rich text fields to requested format (html, both)

@@ -1,9 +1,9 @@
 /**
  * Password Field Type
  *
- * A secure text field for password input.
- * Values are masked in the Admin UI and should be
- * hashed before storage using hooks.
+ * A secure text field for password input. Values are masked in the Admin
+ * UI, bcrypt-hashed automatically before storage, and never returned by
+ * any read or mutation response.
  *
  * @module collections/fields/types/password
  * @since 1.0.0
@@ -67,36 +67,20 @@ export interface PasswordFieldAdminOptions extends FieldAdminOptions {
  * Password fields are specialized text inputs that mask user input.
  * They render with `type="password"` in the Admin UI.
  *
- * **Important Security Notes:**
- * - Passwords should NEVER be stored in plain text
- * - Use a `beforeChange` hook to hash passwords before storage
- * - Set `read` access to `false` to prevent returning hashed passwords
- * - Consider using bcrypt, argon2, or similar secure hashing algorithms
+ * **Built-in security guarantees (no configuration needed):**
+ * - Values are bcrypt-hashed on every write before storage; the plaintext
+ *   is never persisted.
+ * - Stored hashes are write-only: reads, list responses, and mutation
+ *   responses never include the field's value, and `select` cannot opt it
+ *   back in.
+ * - On update, an absent or empty value keeps the stored hash unchanged;
+ *   an explicit `null` clears it.
+ * - Verify a submitted password against the stored hash with
+ *   `verifyPassword` from the auth utilities inside server code (a hook or
+ *   custom route) — the stored value is a hash, not the password.
  *
  * @example
  * ```typescript
- * // Basic password field
- * const passwordField: PasswordFieldConfig = {
- *   name: 'password',
- *   type: 'password',
- *   label: 'Password',
- *   required: true,
- *   minLength: 8,
- *   access: {
- *     read: () => false, // Never return password to client
- *   },
- *   hooks: {
- *     beforeChange: [
- *       async ({ value }) => {
- *         if (value) {
- *           return await bcrypt.hash(value, 10);
- *         }
- *         return value;
- *       },
- *     ],
- *   },
- * };
- *
  * // Password with strength requirements
  * const securePasswordField: PasswordFieldConfig = {
  *   name: 'password',
@@ -110,7 +94,7 @@ export interface PasswordFieldAdminOptions extends FieldAdminOptions {
  *     description: 'Must be at least 12 characters with mixed case and numbers',
  *   },
  *   validate: (value) => {
- *     if (!value) return true;
+ *     if (typeof value !== 'string' || value === '') return true;
  *     if (!/[A-Z]/.test(value)) return 'Must contain uppercase letter';
  *     if (!/[a-z]/.test(value)) return 'Must contain lowercase letter';
  *     if (!/[0-9]/.test(value)) return 'Must contain a number';
