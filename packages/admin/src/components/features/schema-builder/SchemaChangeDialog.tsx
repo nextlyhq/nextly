@@ -372,7 +372,7 @@ export function SchemaChangeDialog({
             className={
               // Solid emphasis fill so white on-color text stays AA in dark mode.
               hasDestructiveChanges
-                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-solid/90"
+                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
                 : ""
             }
           >

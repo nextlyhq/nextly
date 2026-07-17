@@ -183,6 +183,12 @@ const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
     kind: "text",
     label: `${s} text on card`,
   },
+  {
+    fg: `--color-${s}`,
+    bg: "--color-popover",
+    kind: "text",
+    label: `${s} text on popover`,
+  },
 ]);
 const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   (s): Pairing => ({

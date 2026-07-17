@@ -80,7 +80,7 @@ export function AvatarUploader({
           className={cn(
             "absolute -top-1 -right-1 inline-flex h-6 w-6 items-center justify-center rounded-none",
             "bg-destructive-solid text-destructive-foreground shadow-sm  border border-border border-background",
-            "hover:bg-destructive-solid/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+            "hover:bg-destructive-700 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
             "disabled:opacity-50 disabled:cursor-not-allowed"
           )}
         >

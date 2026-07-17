@@ -353,7 +353,7 @@ function FormBuilderViewInner({
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
             // Full-strength warning border so the unsaved-changes badge boundary is perceivable over its tinted fill.
-            <span className="text-xs font-medium text-warning bg-warning/10 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
+            <span className="text-xs font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
           )}

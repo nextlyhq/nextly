@@ -13,6 +13,25 @@
  *   Consumers define the equivalent @theme tokens in their CSS.
  *   This file serves as the reference contract.
  */
+/**
+ * The numbered shade scale for a status color, mixed from its base the same way
+ * the v4 `@theme` block does, so v3 preset consumers get the same utilities the
+ * components emit (`bg-destructive-700`, `bg-success-100 text-success-700`, ...).
+ */
+const statusScale = (base: string): Record<number, string> => ({
+  50: `color-mix(in srgb, var(${base}), white 95%)`,
+  100: `color-mix(in srgb, var(${base}), white 90%)`,
+  200: `color-mix(in srgb, var(${base}), white 70%)`,
+  300: `color-mix(in srgb, var(${base}), white 50%)`,
+  400: `color-mix(in srgb, var(${base}), white 30%)`,
+  500: `var(${base})`,
+  600: `color-mix(in srgb, var(${base}), black 10%)`,
+  700: `color-mix(in srgb, var(${base}), black 30%)`,
+  800: `color-mix(in srgb, var(${base}), black 50%)`,
+  900: `color-mix(in srgb, var(${base}), black 70%)`,
+  950: `color-mix(in srgb, var(${base}), black 85%)`,
+});
+
 const uiPreset = {
   theme: {
     extend: {
@@ -35,15 +54,18 @@ const uiPreset = {
           // Saturated fill for solid buttons, distinct from the text-tuned base.
           solid: "var(--nx-destructive-solid)",
           foreground: "var(--nx-destructive-foreground)",
+          ...statusScale("--nx-destructive"),
         },
         success: {
           DEFAULT: "var(--nx-success)",
           solid: "var(--nx-success-solid)",
           foreground: "var(--nx-success-foreground)",
+          ...statusScale("--nx-success"),
         },
         warning: {
           DEFAULT: "var(--nx-warning)",
           foreground: "var(--nx-warning-foreground)",
+          ...statusScale("--nx-warning"),
         },
         muted: {
           DEFAULT: "var(--nx-muted)",

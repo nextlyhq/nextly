@@ -800,14 +800,16 @@
    * dark page at 4.5:1; `-solid` keeps the darker fill so white on-color text
    * on buttons still clears 4.5:1. Warning is already light enough to read on
    * dark, so its base is unchanged here. */
-  /* Lightened red so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
-  --nx-destructive: oklch(0.63 0.2078 25.33);
+  /* Lightened red so it reads as text at WCAG 4.5:1 on the dark page and on the
+   * lighter popover surface (was 4.17:1 on the page, 4.25:1 on a popover). */
+  --nx-destructive: oklch(0.65 0.2078 25.33);
   /* Darker red fill so white on-color button text clears 4.5:1. */
   --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  /* Lightened green so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
-  --nx-success: oklch(0.58 0.1921 149.58);
+  /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
+   * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
+  --nx-success: oklch(0.6 0.1921 149.58);
   /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
