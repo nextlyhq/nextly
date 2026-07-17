@@ -90,13 +90,23 @@ describe("SchemaRegistry.getRelations", () => {
     ).toEqual(["author"]);
   });
 
-  it("skips edges whose target table is not registered (fail-soft, no throw)", () => {
+  it("fails FAST when an edge references an unregistered target table", () => {
+    // Review-driven contract change: the assembled relations are cached, so
+    // a silently-skipped edge surfaces far away at query time — malformed
+    // registration metadata must throw at assembly instead.
     const registry = makeRegistry();
     registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
       { key: "ghost", fromColumn: "authorId", targetTable: "not_a_table" },
     ]);
-    const relations = registry.getRelations() as unknown as RelationsShape;
-    expect(relations.dc_posts?.relations ?? {}).toEqual({});
+    expect(() => registry.getRelations()).toThrow();
+  });
+
+  it("fails FAST when an edge references an unknown column", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "author", fromColumn: "no_such_column", targetTable: "users" },
+    ]);
+    expect(() => registry.getRelations()).toThrow();
   });
 
   it("clear() drops dynamic edges and returns to the static fast path", () => {

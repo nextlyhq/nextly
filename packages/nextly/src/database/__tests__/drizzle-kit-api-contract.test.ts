@@ -163,44 +163,5 @@ describe("drizzle-kit v1 payload API contract (SQLite)", () => {
   });
 });
 
-// PG variant — runs only when a test database is configured (docker matrix in
-// CI, `docker compose -f docker-compose.test.yml up -d` locally). Covers the
-// dialect where pushSchema takes a real drizzle instance plus the named
-// entities filter — surface the SQLite test cannot reach.
-describe.skipIf(!process.env.TEST_POSTGRES_URL)(
-  "drizzle-kit v1 payload API contract (PostgreSQL)",
-  () => {
-    const contractSamplePg = pgTable("contract_sample_pg", {
-      id: serial("id").primaryKey(),
-      title: pgText("title"),
-    });
-
-    it("pushSchema accepts a NodePgDatabase + entitiesConfig and returns the v1 contract", async () => {
-      const pool = new Pool({
-        connectionString: process.env.TEST_POSTGRES_URL,
-      });
-      const db = drizzlePg({ client: pool });
-      const kit = await getPgDrizzleKit();
-
-      try {
-        await pool.query('DROP TABLE IF EXISTS "contract_sample_pg"');
-        const result = await kit.pushSchema(
-          { contract_sample_pg: contractSamplePg },
-          db,
-          { schemas: ["public"], tables: ["contract_sample_pg"] }
-        );
-
-        expect(Array.isArray(result.sqlStatements)).toBe(true);
-        expect(Array.isArray(result.hints)).toBe(true);
-        expect(typeof result.apply).toBe("function");
-        expect(result).not.toHaveProperty("statementsToExecute");
-        const joined = result.sqlStatements.join("\n").toLowerCase();
-        expect(joined).toContain("create table");
-        expect(joined).toContain("contract_sample_pg");
-      } finally {
-        await pool.query('DROP TABLE IF EXISTS "contract_sample_pg"');
-        await pool.end();
-      }
-    });
-  }
-);
+// The PostgreSQL variant lives in drizzle-kit-api-contract.pg.integration.test.ts
+// so its live-DDL path only runs under the sequential integration config.

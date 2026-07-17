@@ -8,6 +8,8 @@
 // nothing) — this suite fails if that regresses. Auto-skips without
 // TEST_MYSQL_URL (docker compose -f docker-compose.test.yml up -d).
 
+import { randomBytes } from "node:crypto";
+
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,7 +30,11 @@ import { DrizzleStatementExecutor } from "../../services/drizzle-statement-execu
 import type { DesiredSchema } from "../types";
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL;
-const DB_NAME = "nextly_pipeline_mysql";
+// Unique per-run database name — a fixed name could collide with (and the
+// pre-drop could destroy) a concurrent run's database. Hex suffix keeps it
+// a safe identifier, so interpolating it into DDL is not an injection
+// surface.
+const DB_NAME = `nextly_pipeline_mysql_${randomBytes(4).toString("hex")}`;
 
 describe.skipIf(!MYSQL_URL)("PushSchemaPipeline integration — MySQL", () => {
   let bootstrap: Pool;
@@ -37,7 +43,6 @@ describe.skipIf(!MYSQL_URL)("PushSchemaPipeline integration — MySQL", () => {
 
   beforeAll(async () => {
     bootstrap = createPool({ uri: MYSQL_URL });
-    await bootstrap.promise().query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
     await bootstrap.promise().query(`CREATE DATABASE ${DB_NAME}`);
     const url = new URL(MYSQL_URL as string);
     url.pathname = `/${DB_NAME}`;

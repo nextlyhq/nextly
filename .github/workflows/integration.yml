@@ -117,9 +117,40 @@ jobs:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
 
+      # drizzle-v1 data-safety proofs on real PostgreSQL (review-driven —
+      # the upgrade sim's "v1 proposes zero changes over a 0.31 schema" and
+      # the golden fixtures previously skipIf'd without a DB URL and ran in
+      # no CI job). The postgres service user can create databases, which
+      # the upgrade-sim and drop-guard suites need.
+      - name: Drizzle v1 safety suites (postgres)
+        if: matrix.dialect == 'postgres'
+        run: >-
+          pnpm --filter nextly exec vitest run
+          --config vitest.integration.config.ts
+          src/domains/schema/pipeline/__tests__/v1-golden/
+          src/domains/schema/pipeline/__tests__/fresh-push.drop-guard.integration.test.ts
+          src/database/__tests__/drizzle-kit-api-contract.pg.integration.test.ts
+        env:
+          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
+          TURBO_CACHE_DIR: .turbo
+
       - name: Run integration tests (mysql)
         if: matrix.dialect == 'mysql'
         run: pnpm turbo test:integration --filter=@nextlyhq/adapter-mysql
+        env:
+          TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
+          TURBO_CACHE_DIR: .turbo
+
+      # drizzle-v1 data-safety proofs on real MySQL: golden fixtures,
+      # upgrade sim (one metadata reconcile then zero), phantom-diff gate,
+      # and the pipeline suite pinning the tx-vs-$client regression.
+      - name: Drizzle v1 safety suites (mysql)
+        if: matrix.dialect == 'mysql'
+        run: >-
+          pnpm --filter nextly exec vitest run
+          --config vitest.integration.config.ts
+          src/domains/schema/pipeline/__tests__/v1-golden/
+          src/domains/schema/pipeline/__tests__/pushschema-pipeline-mysql.integration.test.ts
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo

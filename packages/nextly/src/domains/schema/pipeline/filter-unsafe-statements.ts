@@ -215,10 +215,15 @@ export function findUnexpectedDestructiveStatements(
   for (const s of statements) {
     const m = s.match(
       // Optionally schema-qualified and/or quoted: `__new_x`, "__new_x",
-      // "main"."__new_x", main.__new_x.
-      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO/i
+      // "main"."__new_x", main.__new_x. The RENAME destination is captured
+      // too: a rebuild is only a rebuild when `__new_x` renames back to `x`
+      // itself — `ALTER TABLE __new_g1 RENAME TO other` must NOT exempt
+      // `DROP TABLE g1` from the guard.
+      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
     );
-    if (m) rebuildTargets.add((m[1] ?? "").toLowerCase());
+    if (m && (m[1] ?? "").toLowerCase() === (m[2] ?? "").toLowerCase()) {
+      rebuildTargets.add((m[1] ?? "").toLowerCase());
+    }
   }
   const offenders: string[] = [];
   for (const s of statements) {
@@ -235,7 +240,23 @@ export function findUnexpectedDestructiveStatements(
       if (!isRebuild || !rebuildApproved) offenders.push(s);
       continue;
     }
-    if (/\bDROP\s+COLUMN\b/i.test(s)) offenders.push(s);
+    // The COLUMN keyword is OPTIONAL in both PG and MySQL
+    // (`ALTER TABLE t DROP "body"` drops the column) — match both forms,
+    // scoped to ALTER TABLE so DROP INDEX/CONSTRAINT statements aren't
+    // misclassified. TRUNCATE is destructive by definition and must never
+    // appear on an additive remainder — fail closed on it too.
+    if (
+      /\bALTER\s+TABLE\b[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i.test(
+        s
+      ) &&
+      !/\bDROP\s+(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b/i.test(
+        s
+      )
+    ) {
+      offenders.push(s);
+      continue;
+    }
+    if (/\bTRUNCATE\s+(?:TABLE\s+)?/i.test(s)) offenders.push(s);
   }
   return offenders;
 }

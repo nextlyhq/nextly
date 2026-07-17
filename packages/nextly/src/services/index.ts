@@ -11,6 +11,7 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
 import type { EmailService } from "./email/email-service";
@@ -175,11 +176,11 @@ export class ServiceContainer {
   // and (b) a SchemaRegistry invalidation propagates instead of freezing
   // whichever snapshot existed when the container was built. The adapter
   // memoizes per relations object, so this is two map lookups when
-  // nothing changed.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private get db(): any {
+  // nothing changed. Typed as DatabaseInstance — the shape its one
+  // consumer (CollectionsHandler) declares.
+  private get db(): DatabaseInstance {
     const dialect = this.adapter.getCapabilities().dialect;
-    return this.adapter.getDrizzle(resolveRelations(dialect));
+    return this.adapter.getDrizzle<DatabaseInstance>(resolveRelations(dialect));
   }
 
   private getLogger(): Logger {

@@ -4,6 +4,8 @@
 // executed it, wiping all collection content on every `nextly migrate` that
 // reconciled core. Uses a real in-memory SQLite DB + real drizzle-kit.
 
+import { randomBytes } from "node:crypto";
+
 import Database from "better-sqlite3";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -83,10 +85,12 @@ describe.skipIf(!PG_URL)(
       const { Pool } = await import("pg");
       const { drizzle: drizzlePg } = await import("drizzle-orm/node-postgres");
       const admin = new Pool({ connectionString: PG_URL });
-      await admin.query("DROP DATABASE IF EXISTS nextly_freshpush_scope");
-      await admin.query("CREATE DATABASE nextly_freshpush_scope");
+      // Unique per-run database — never pre-drop a fixed name that a
+      // concurrent run (or an unrelated database) might own.
+      const dbName = `nextly_freshpush_scope_${randomBytes(4).toString("hex")}`;
+      await admin.query(`CREATE DATABASE ${dbName}`);
       const url = new URL(PG_URL as string);
-      url.pathname = "/nextly_freshpush_scope";
+      url.pathname = `/${dbName}`;
       const pool = new Pool({ connectionString: url.toString() });
       try {
         // The orphan exists BEFORE the reconcile — the REAL migrate-lock

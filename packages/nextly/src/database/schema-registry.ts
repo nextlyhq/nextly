@@ -21,6 +21,7 @@ import { MySqlTable } from "drizzle-orm/mysql-core";
 import { PgTable } from "drizzle-orm/pg-core";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 
+import { NextlyError } from "../errors/nextly-error";
 import * as mysqlBundle from "../schemas/_dialect-bundles/mysql";
 import {
   buildMysqlEdges,
@@ -204,11 +205,35 @@ export class SchemaRegistry {
           const fromCols = r[tableKey];
           const toCols = r[edge.targetTable];
           const oneFn = r.one[edge.targetTable];
-          if (!fromCols || !toCols || typeof oneFn !== "function") continue;
-          tableEdges[edge.key] = oneFn({
-            from: fromCols[edge.fromColumn],
-            to: toCols[edge.toColumn ?? "id"],
-          });
+          // Fail FAST on malformed registration metadata: the assembled
+          // relations are cached, so a silently-skipped edge (or an edge
+          // built from an undefined column, which drizzle would treat as a
+          // bare inference hint joining on the wrong column) surfaces far
+          // away at query time. Registration is the right place to blow up.
+          if (!fromCols || !toCols || typeof oneFn !== "function") {
+            throw NextlyError.internal({
+              logContext: {
+                reason:
+                  `SchemaRegistry: dynamic relation edge "${edge.key}" on ` +
+                  `"${tableKey}" references unknown table ` +
+                  `"${!fromCols ? tableKey : edge.targetTable}" — the ` +
+                  `table must be registered before edges that use it`,
+              },
+            });
+          }
+          const fromCol = fromCols[edge.fromColumn];
+          const toCol = toCols[edge.toColumn ?? "id"];
+          if (fromCol === undefined || toCol === undefined) {
+            throw NextlyError.internal({
+              logContext: {
+                reason:
+                  `SchemaRegistry: dynamic relation edge "${edge.key}" on ` +
+                  `"${tableKey}" references unknown column ` +
+                  `"${fromCol === undefined ? edge.fromColumn : (edge.toColumn ?? "id")}"`,
+              },
+            });
+          }
+          tableEdges[edge.key] = oneFn({ from: fromCol, to: toCol });
         }
         if (Object.keys(tableEdges).length > 0) {
           dynamicConfig[tableKey] = tableEdges;

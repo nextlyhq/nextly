@@ -279,9 +279,12 @@ describe("freshPushSchema", () => {
       expect(result.statementsExecuted).toBeDefined();
       // v1 emits the FK-pragma choreography inside the statement stream;
       // dropping it would run rebuilds with FK enforcement in an unknown
-      // state (#5782 territory), so PRAGMAs must pass the piece filter.
+      // state (#5782 territory), so PRAGMAs must pass through. On top of
+      // the 3 kit statements, fresh-push adds its OWN independent #5782
+      // defense: PRAGMA foreign_keys = OFF before, foreign_key_check via
+      // .all() (absent on this mock), and PRAGMA foreign_keys = ON after.
       expect(result.statementsExecuted).toHaveLength(3);
-      expect(fakeDb.run).toHaveBeenCalledTimes(3);
+      expect(fakeDb.run).toHaveBeenCalledTimes(5);
     });
 
     it("swallows 'already exists' errors and continues", async () => {
@@ -291,7 +294,8 @@ describe("freshPushSchema", () => {
         apply: vi.fn(),
       };
       const fakeDb = {
-        run: vi.fn().mockImplementation(() => {
+        run: vi.fn().mockImplementation((q: unknown) => {
+          if (JSON.stringify(q).includes("PRAGMA")) return;
           throw new Error("table already exists");
         }),
       };
@@ -309,7 +313,8 @@ describe("freshPushSchema", () => {
         apply: vi.fn(),
       };
       const fakeDb = {
-        run: vi.fn().mockImplementation(() => {
+        run: vi.fn().mockImplementation((q: unknown) => {
+          if (JSON.stringify(q).includes("PRAGMA")) return;
           throw new Error("Failed query: CREATE TABLE ...", {
             cause: new Error("table users already exists"),
           });
@@ -327,7 +332,8 @@ describe("freshPushSchema", () => {
         apply: vi.fn(),
       };
       const fakeDb = {
-        run: vi.fn().mockImplementation(() => {
+        run: vi.fn().mockImplementation((q: unknown) => {
+          if (JSON.stringify(q).includes("PRAGMA")) return;
           throw new Error("syntax error near 'PRIMARY'");
         }),
       };
@@ -391,7 +397,7 @@ describe("freshPushSchema", () => {
       });
     });
 
-    it("swallows 'Duplicate' errors and continues", async () => {
+    it("swallows 'Duplicate column name' errors and continues", async () => {
       mockPushSchemaResult = {
         sqlStatements: ["CREATE TABLE `users` (`id` varchar(36) PRIMARY KEY)"],
         hints: [],
@@ -405,7 +411,7 @@ describe("freshPushSchema", () => {
           if (text.includes("SELECT DATABASE()")) {
             return Promise.resolve([[{ db: "nextly_test" }], []]);
           }
-          return Promise.reject(new Error("Duplicate column"));
+          return Promise.reject(new Error("Duplicate column name 'id'"));
         }),
       };
 
@@ -427,5 +433,28 @@ describe("freshPushSchema", () => {
         },
       });
     });
+  });
+});
+
+// The idempotency matcher must NEVER swallow MySQL's `Duplicate entry` (1062):
+// that is a runtime DATA failure from a rebuild's INSERT..SELECT, and
+// tolerating it would let the subsequent DROP destroy the uncopied rows.
+describe("isIdempotencyError boundary (data-safety)", () => {
+  it("re-throws 'Duplicate entry ... for key' instead of continuing", async () => {
+    const { isIdempotencyError } = await import("../sql-statement-utils");
+    expect(
+      isIdempotencyError(
+        new Error("Duplicate entry 'a@x.com' for key 'users.email'")
+      )
+    ).toBe(false);
+    expect(isIdempotencyError(new Error("Duplicate key name 'idx_x'"))).toBe(
+      true
+    );
+    expect(isIdempotencyError(new Error("duplicate column name: id"))).toBe(
+      true
+    );
+    expect(isIdempotencyError(new Error("table users already exists"))).toBe(
+      true
+    );
   });
 });

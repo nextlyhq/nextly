@@ -461,22 +461,25 @@ export class PostgresAdapter extends DrizzleAdapter {
    * It waits for all checked-out clients to be returned before shutting down.
    */
   async disconnect(): Promise<void> {
-    // Drop memoized drizzle instances — they wrap the connection being
-    // closed and must not survive a reconnect.
+    // Detach the pool FIRST, then drop the memoized drizzle instances —
+    // this closes the repopulation window where a concurrent getDrizzle()
+    // call during the (async) pool.end() could cache an instance wrapping
+    // the closing pool.
+    const pool = this.pool;
+    this.pool = null;
     this.drizzleBare = undefined;
     this.drizzleByRelations = new WeakMap();
-    if (!this.pool) {
+    if (!pool) {
       return;
     }
 
     try {
-      await this.pool.end();
+      await pool.end();
 
       if (this.config.logger?.info) {
         this.config.logger.info("PostgreSQL connection closed");
       }
     } finally {
-      this.pool = null;
       this.connected = false;
     }
   }

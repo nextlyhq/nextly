@@ -110,3 +110,31 @@ describe("findUnexpectedDestructiveStatements — v1 hardening", () => {
     ]);
   });
 });
+
+describe("findUnexpectedDestructiveStatements — review hardening", () => {
+  it("does NOT exempt a drop when __new_ renames to a DIFFERENT table", () => {
+    const stmts = [
+      "CREATE TABLE `__new_g1` (id text)",
+      "DROP TABLE `g1`",
+      "ALTER TABLE `__new_g1` RENAME TO `other`",
+    ];
+    expect(findUnexpectedDestructiveStatements(stmts)).toEqual([
+      "DROP TABLE `g1`",
+    ]);
+  });
+
+  it("flags the keyword-optional column drop and TRUNCATE", () => {
+    expect(
+      findUnexpectedDestructiveStatements(['ALTER TABLE "t" DROP "body"'])
+    ).toEqual(['ALTER TABLE "t" DROP "body"']);
+    expect(
+      findUnexpectedDestructiveStatements(["TRUNCATE TABLE dc_posts"])
+    ).toEqual(["TRUNCATE TABLE dc_posts"]);
+    // Non-column ALTER drops are NOT column drops.
+    expect(
+      findUnexpectedDestructiveStatements([
+        'ALTER TABLE "t" DROP CONSTRAINT "t_fk"',
+      ])
+    ).toEqual([]);
+  });
+});

@@ -39,7 +39,7 @@ describe("UserRoleService", () => {
         expect(result.message).toBe("Role assigned successfully");
 
         const userRoles = await testDb.db.query.userRoles.findMany({
-          where: (userRoles, { eq }) => eq(userRoles.userId, user.id),
+          where: { userId: user.id },
         });
 
         expectArrayLength(userRoles, 1);
@@ -66,7 +66,7 @@ describe("UserRoleService", () => {
         expectSuccessResponse(result, 201);
 
         const userRoles = await testDb.db.query.userRoles.findMany({
-          where: (userRoles, { eq }) => eq(userRoles.userId, user.id),
+          where: { userId: user.id },
         });
 
         expectArrayLength(userRoles, 1);
@@ -91,7 +91,7 @@ describe("UserRoleService", () => {
         expectSuccessResponse(result2, 201);
 
         const userRoles = await testDb.db.query.userRoles.findMany({
-          where: (userRoles, { eq }) => eq(userRoles.userId, user.id),
+          where: { userId: user.id },
         });
 
         expectArrayLength(userRoles, 2);
@@ -177,7 +177,7 @@ describe("UserRoleService", () => {
         expect(result.message).toBe("Role unassigned successfully");
 
         const userRoles = await testDb.db.query.userRoles.findMany({
-          where: (userRoles, { eq }) => eq(userRoles.userId, user.id),
+          where: { userId: user.id },
         });
 
         expectArrayLength(userRoles, 0);
@@ -201,7 +201,7 @@ describe("UserRoleService", () => {
         expectSuccessResponse(result, 200);
 
         const userRoles = await testDb.db.query.userRoles.findMany({
-          where: (userRoles, { eq }) => eq(userRoles.userId, user.id),
+          where: { userId: user.id },
         });
 
         expectArrayLength(userRoles, 1);

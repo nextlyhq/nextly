@@ -35,6 +35,11 @@ export const roles = mysqlTable(
     description: varchar("description", { length: 255 }),
     level: int("level").notNull().default(0),
     isSystem: int("is_system").notNull().default(0),
+    // DDL-side CURRENT_TIMESTAMP (matching postgres's defaultNow()):
+    // a JavaScript `new Date()` default bakes one module-load-time literal
+    // into the emitted DDL, so every boot saw a different default and v1's
+    // differ emitted MODIFY COLUMN churn forever (the pre-v1 MySQL differ
+    // returned empty statement lists and masked this).
     createdAt: datetime("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),

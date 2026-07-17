@@ -24,6 +24,25 @@ import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
+// v1's RQB object filters silently DROP keys whose value is `undefined`
+// (drizzle-orm/relations.js skips them) — so `{ id: undefined }` compiles to
+// NO WHERE clause and `findFirst` returns an arbitrary row. The removed
+// callback form (`eq(col, undefined)`) bound a parameter and matched zero
+// rows — it failed safe. On the auth path that behavioral flip is
+// security-critical, so every single-key lookup routes its value through
+// this guard: a nullish/empty value is a programming error upstream and
+// must throw, never widen the query.
+function requireFilterValue<T>(value: T, field: string): NonNullable<T> {
+  if (value === undefined || value === null || value === "") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: `auth query filter "${field}" resolved to an empty value — refusing to run an unfiltered lookup`,
+      },
+    });
+  }
+  return value;
+}
+
 interface RegisterUserData {
   email: string;
   password: string;
@@ -228,7 +247,7 @@ export class AuthService extends BaseService {
       ? normalizedEmailResult.data
       : String(email).trim().toLowerCase();
     const user = await this.db.query.users.findFirst({
-      where: { email: normalizedEmail },
+      where: { email: requireFilterValue(normalizedEmail, "email") },
       columns: {
         id: true,
         email: true,
@@ -287,7 +306,7 @@ export class AuthService extends BaseService {
     let user;
     try {
       user = await this.db.query.users.findFirst({
-        where: { id: userId },
+        where: { id: requireFilterValue(userId, "userId") },
         columns: {
           passwordHash: true,
         },
@@ -366,7 +385,7 @@ export class AuthService extends BaseService {
 
     try {
       const user = await this.db.query.users.findFirst({
-        where: { email: normalizedEmail },
+        where: { email: requireFilterValue(normalizedEmail, "email") },
         columns: {
           id: true,
           email: true,
@@ -456,7 +475,10 @@ export class AuthService extends BaseService {
       const tokenHash = createHash("sha256").update(token).digest("hex");
 
       resetToken = await this.db.query.passwordResetTokens.findFirst({
-        where: { tokenHash: tokenHash, usedAt: { isNull: true } },
+        where: {
+          tokenHash: requireFilterValue(tokenHash, "tokenHash"),
+          usedAt: { isNull: true },
+        },
         columns: {
           id: true,
           identifier: true,
@@ -501,7 +523,7 @@ export class AuthService extends BaseService {
     const email = resetToken.identifier;
 
     const targetUser = await this.db.query.users.findFirst({
-      where: { email: email },
+      where: { email: requireFilterValue(email, "email") },
       columns: { id: true },
     });
 
@@ -580,7 +602,7 @@ export class AuthService extends BaseService {
   ): Promise<{ token?: string }> {
     try {
       const user = await this.db.query.users.findFirst({
-        where: { email: email },
+        where: { email: requireFilterValue(email, "email") },
         columns: {
           id: true,
           email: true,
@@ -664,7 +686,7 @@ export class AuthService extends BaseService {
 
       verificationToken = await this.db.query.emailVerificationTokens.findFirst(
         {
-          where: { tokenHash: tokenHash },
+          where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
           columns: {
             id: true,
             identifier: true,
@@ -754,7 +776,7 @@ export class AuthService extends BaseService {
   async generateInviteToken(userId: string): Promise<InviteTokenResult> {
     const user = await this.db.query.users.findFirst({
       // rqb v2 object filter (drizzle v1)
-      where: { id: userId },
+      where: { id: requireFilterValue(userId, "userId") },
       columns: { id: true },
     });
     if (!user) {
@@ -946,7 +968,7 @@ export class AuthService extends BaseService {
     // reject an account that is not (or no longer) in the must-change state.
     const current = await this.db.query.users.findFirst({
       // rqb v2 object filter (drizzle v1)
-      where: { id: userId },
+      where: { id: requireFilterValue(userId, "userId") },
       columns: { passwordHash: true, mustChangePassword: true },
     });
     if (!current || current.mustChangePassword !== true) {

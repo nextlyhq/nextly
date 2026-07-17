@@ -820,47 +820,59 @@ export class PushSchemaPipeline {
           }
           emittedStatements = pushResult.sqlStatements;
         }
+        // Safety net, v1 semantics (observed on all three dialects,
+        // 2026-07): drizzle-kit now INCLUDES destructive statements in
+        // sqlStatements with EMPTY hints — the pre-v1 "omit + warn"
+        // contract is gone (that omission caused three false-success
+        // applies on a live site: rext-site-v2 / `dc_case_studies`,
+        // May 2026). Every user-approved destructive op has already run
+        // in the pre-resolution phase, so anything destructive emitted
+        // here means the emitter disagrees with our differ — never
+        // execute it; fail the apply so the journal records failure.
+        //
+        // Review-driven properties of this scan:
+        //   - It runs on BOTH routes (fast path and kit path), so the
+        //     guarantee never depends on FAST_PATH_OP_TYPES staying
+        //     drop-free forever.
+        //   - It runs AFTER filterUnsafeStatements, deliberately: on
+        //     MySQL/SQLite the kit cannot be scoped, so orphan DROPs for
+        //     tables outside the desired schema are an EXPECTED emission
+        //     that the filter strips (and console.warns about) — treating
+        //     them as fatal would fail every scoped apply on those
+        //     dialects. The scan's job is the REMAINDER: destructive SQL
+        //     aimed at tables we DO manage.
+        // Rebuild blocks are only trusted for tables where OUR diff
+        // approved a rebuild-justifying change — a rebuild on any other
+        // table is the kit encoding a column drop we never approved
+        // (rc.4 emits exactly that shape; probe-verified).
+        const allowedRebuildTables = new Set(
+          resolvedOps
+            .filter(
+              op =>
+                op.type === "change_column_type" ||
+                op.type === "change_column_nullable" ||
+                op.type === "change_column_default"
+            )
+            .map(op => op.tableName.toLowerCase())
+        );
         const safe = filterUnsafeStatements(
           emittedStatements,
           desiredTableNames
         );
+        const unexpectedDestructive = findUnexpectedDestructiveStatements(
+          safe,
+          allowedRebuildTables
+        );
+        if (unexpectedDestructive.length > 0) {
+          throw new PushSchemaError(
+            `schema emitter produced ${unexpectedDestructive.length} ` +
+              `destructive statement(s) on the purely-additive ` +
+              `remainder. The schema was NOT applied. Statements: ` +
+              unexpectedDestructive.join("; ")
+          );
+        }
 
         if (pushResult) {
-          // Safety net, v1 semantics (observed on all three dialects,
-          // 2026-07): drizzle-kit now INCLUDES destructive statements in
-          // sqlStatements with EMPTY hints — the pre-v1 "omit + warn"
-          // contract is gone (that omission caused three false-success
-          // applies on a live site: rext-site-v2 / `dc_case_studies`,
-          // May 2026). Every user-approved destructive op has already run
-          // in the pre-resolution phase, so anything destructive the kit
-          // emits here means its differ disagrees with ours — never
-          // execute it; fail the apply so the journal records failure.
-          // Rebuild blocks are only trusted for tables where OUR diff
-          // approved a rebuild-justifying change — a rebuild on any other
-          // table is the kit encoding a column drop we never approved
-          // (rc.4 emits exactly that shape; probe-verified).
-          const allowedRebuildTables = new Set(
-            resolvedOps
-              .filter(
-                op =>
-                  op.type === "change_column_type" ||
-                  op.type === "change_column_nullable" ||
-                  op.type === "change_column_default"
-              )
-              .map(op => op.tableName.toLowerCase())
-          );
-          const unexpectedDestructive = findUnexpectedDestructiveStatements(
-            safe,
-            allowedRebuildTables
-          );
-          if (unexpectedDestructive.length > 0) {
-            throw new PushSchemaError(
-              `drizzle-kit emitted ${unexpectedDestructive.length} ` +
-                `destructive statement(s) on the purely-additive ` +
-                `remainder. The schema was NOT applied. Statements: ` +
-                unexpectedDestructive.join("; ")
-            );
-          }
           // Secondary tripwire: hints were empty in every observed rc.4
           // scenario. If one ever appears here, the kit's semantics
           // changed underneath us — fail loudly rather than ignore an

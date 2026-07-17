@@ -62,6 +62,27 @@ jobs:
       - name: Drizzle v1 legacy gate
         run: pnpm check:drizzle-v1-legacy
 
+      # The drizzle-v1 migration's own safety net (review-driven: these
+      # suites previously executed in NO CI job because the `nextly`
+      # package's full test task carries a pre-existing failing baseline).
+      # Runs the migration-critical GREEN suites explicitly: kit contract +
+      # tripwires, golden SQL fixtures, guard scanners, fresh-push unit
+      # coverage, the #5782 cascade regression, RQB v2 conversions, and the
+      # relations registry.
+      - name: Drizzle v1 safety suites (unit)
+        run: >-
+          pnpm --filter nextly exec vitest run
+          src/database/__tests__/drizzle-kit-lazy.test.ts
+          src/database/__tests__/drizzle-kit-api-contract.test.ts
+          src/database/__tests__/schema-registry.relations.test.ts
+          src/domains/schema/pipeline/__tests__/v1-golden/sqlite.golden.test.ts
+          src/domains/schema/pipeline/__tests__/filter-unsafe-statements.scanner.test.ts
+          src/domains/schema/pipeline/__tests__/filter-unsafe-statements.test.ts
+          src/domains/schema/pipeline/__tests__/fresh-push.test.ts
+          src/domains/schema/pipeline/__tests__/sqlite-cascade-dataloss.regression.test.ts
+          src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts
+          src/domains/auth/__tests__/rqb-v2-conversions.test.ts
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.

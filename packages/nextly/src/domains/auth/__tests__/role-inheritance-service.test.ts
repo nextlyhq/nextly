@@ -38,8 +38,7 @@ describe("RoleInheritanceService", () => {
 
         // Assert: Verify relationship was created
         const relationships = await testDb.db.query.roleInherits.findMany({
-          where: (roleInherits, { eq }) =>
-            eq(roleInherits.childRoleId, childRole.id),
+          where: { childRoleId: childRole.id },
         });
 
         expect(relationships).toHaveLength(1);
@@ -104,8 +103,7 @@ describe("RoleInheritanceService", () => {
         // Assert: Bottom should have 2 parents
         const bottomRelationships = await testDb.db.query.roleInherits.findMany(
           {
-            where: (roleInherits, { eq }) =>
-              eq(roleInherits.childRoleId, bottom.id),
+            where: { childRoleId: bottom.id },
           }
         );
 
@@ -130,8 +128,7 @@ describe("RoleInheritanceService", () => {
 
         // Assert: Should only have one relationship
         const relationships = await testDb.db.query.roleInherits.findMany({
-          where: (roleInherits, { eq }) =>
-            eq(roleInherits.childRoleId, child.id),
+          where: { childRoleId: child.id },
         });
 
         expectArrayLength(relationships, 1);
@@ -229,7 +226,7 @@ describe("RoleInheritanceService", () => {
 
       // Verify it exists
       let relationships = await testDb.db.query.roleInherits.findMany({
-        where: (roleInherits, { eq }) => eq(roleInherits.childRoleId, child.id),
+        where: { childRoleId: child.id },
       });
       expect(relationships).toHaveLength(1);
 
@@ -238,7 +235,7 @@ describe("RoleInheritanceService", () => {
 
       // Assert: Relationship should be gone
       relationships = await testDb.db.query.roleInherits.findMany({
-        where: (roleInherits, { eq }) => eq(roleInherits.childRoleId, child.id),
+        where: { childRoleId: child.id },
       });
       expect(relationships).toHaveLength(0);
     });
@@ -274,7 +271,7 @@ describe("RoleInheritanceService", () => {
 
       // Assert: Other relationship should remain
       const relationships = await testDb.db.query.roleInherits.findMany({
-        where: (roleInherits, { eq }) => eq(roleInherits.childRoleId, child.id),
+        where: { childRoleId: child.id },
       });
 
       expect(relationships).toHaveLength(1);
@@ -725,7 +722,7 @@ describe("RoleInheritanceService", () => {
 
       // Assert: Should only have one relationship (idempotent)
       const relationships = await testDb.db.query.roleInherits.findMany({
-        where: (roleInherits, { eq }) => eq(roleInherits.childRoleId, child.id),
+        where: { childRoleId: child.id },
       });
 
       expectArrayLength(relationships, 1);

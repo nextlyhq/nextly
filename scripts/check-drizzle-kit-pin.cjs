@@ -13,7 +13,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const { REQUIRED_DRIZZLE_VERSION } = require("./drizzle-version.cjs");
+
 const ROOT = path.join(__dirname, "..");
+
+// Exact semver (optionally with prerelease/build) — rejects *, latest,
+// ranges, 1.x, workspace:*, git/file specs, and anything else non-exact.
+const EXACT_SEMVER =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 // package.json path (relative to repo root) → packages that must be exact-pinned there.
 const TARGETS = [
@@ -36,10 +43,21 @@ for (const [relPath, deps] of TARGETS) {
         `${relPath}: ${dep} is not in \`dependencies\`. The pin policy ` +
           "(F1 §3 / F21-Q4 / drizzle-v1 Step 0.3) requires it there as an exact pin."
       );
-    } else if (/^[\^~]/.test(depVersion)) {
+    } else if (!EXACT_SEMVER.test(depVersion)) {
+      // Not just ^/~: *, latest, >=, 1.x, workspace:*, git/file specs are
+      // all non-exact and must fail the gate.
       errors.push(
-        `${relPath}: ${dep} version uses a caret or tilde (got "${depVersion}"). ` +
+        `${relPath}: ${dep} version is not an exact semver (got "${depVersion}"). ` +
           'The pin policy requires an exact pin (e.g. "1.0.0-rc.4").'
+      );
+    } else if (depVersion !== REQUIRED_DRIZZLE_VERSION) {
+      // "Exact and consistent" is not enough — a consistent WRONG version
+      // (rc.3 everywhere, or kit/orm skew) would otherwise pass. The single
+      // source of truth lives in scripts/drizzle-version.cjs.
+      errors.push(
+        `${relPath}: ${dep} is pinned to "${depVersion}" but the required ` +
+          `version is "${REQUIRED_DRIZZLE_VERSION}" (scripts/drizzle-version.cjs). ` +
+          "Bump the constant in a dedicated pin-bump PR that re-runs Phase 7."
       );
     }
     if (pkg.peerDependencies && pkg.peerDependencies[dep]) {

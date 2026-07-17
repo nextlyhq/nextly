@@ -117,6 +117,9 @@ export async function freshPushSchema(
   // run first), that is an uninterpreted signal — surface it loudly so a
   // boot log never silently swallows a data-loss precondition.
   for (const h of result.hints) {
+    // Nextly-authored diagnostics (the resolver-crash fallback) are already
+    // interpreted — only genuinely-unknown kit hints deserve the warning.
+    if (h.hint.startsWith("[nextly]")) continue;
     console.warn(
       `[Nextly schema] fresh-push received a drizzle-kit hint it does not ` +
         `interpret: ${h.hint}${h.statement ? ` [${h.statement}]` : ""}`
@@ -212,10 +215,14 @@ async function withResolverCrashFallback(
       sqlStatements,
       hints: [
         {
+          // The `[nextly]` prefix marks this as a Nextly-authored
+          // diagnostic — freshPushSchema's warn loop skips it so operators
+          // are not told a fully-handled fallback is an "uninterpreted
+          // drizzle-kit hint".
           hint:
-            "pushSchema hit v1's rename-resolver crash (live tables outside " +
-            "the desired schema); fell back to the additive-only baseline — " +
-            "no drops were considered this pass",
+            "[nextly] pushSchema hit v1's rename-resolver crash (live " +
+            "tables outside the desired schema); fell back to the " +
+            "additive-only baseline — no drops were considered this pass",
         },
       ],
     };
@@ -281,13 +288,48 @@ async function executeStatements(
     return executed;
   }
 
+  if (dialect === "sqlite") {
+    // #5782 defense, independent of drizzle-kit's emitted choreography: the
+    // interactive pipeline toggles PRAGMA foreign_keys OFF/ON outside any
+    // transaction and runs foreign_key_check after apply — this boot path
+    // must not rely on the kit's INLINE pragma statements staying present
+    // and correctly ordered across RC bumps. The toggle is done here (no
+    // transaction is open on this path), and the integrity check fails the
+    // reconcile if a rebuild left orphaned child rows.
+    const run = (q: string) => (db as SqliteRunDb).run(sqlTag.raw(q));
+    run("PRAGMA foreign_keys = OFF");
+    try {
+      for (const stmt of statements) {
+        try {
+          run(stmt);
+          executed.push(stmt);
+        } catch (err) {
+          if (isIdempotencyError(err)) continue;
+          throw err;
+        }
+      }
+      const violations = (db as { all?: (q: unknown) => unknown[] }).all?.(
+        sqlTag.raw("PRAGMA foreign_key_check")
+      );
+      if (violations && violations.length > 0) {
+        throw NextlyError.internal({
+          logContext: {
+            reason:
+              `fresh-push: PRAGMA foreign_key_check reported ` +
+              `${violations.length} violation(s) after the reconcile — a ` +
+              `table rebuild left orphaned child rows (#5782 class)`,
+          },
+        });
+      }
+    } finally {
+      run("PRAGMA foreign_keys = ON");
+    }
+    return executed;
+  }
+
   for (const stmt of statements) {
     try {
-      if (dialect === "sqlite") {
-        (db as SqliteRunDb).run(sqlTag.raw(stmt));
-      } else {
-        await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
-      }
+      await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
       executed.push(stmt);
     } catch (err) {
       if (isIdempotencyError(err)) continue;

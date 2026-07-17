@@ -33,6 +33,9 @@ import type {
  */
 export function drizzleTableToTableSpec(table: Table): TableSpec {
   const name = getTableName(table);
+  // Drizzle v1 exposes table column metadata through getColumns()
+  // (the pre-v1 accessor is deprecated); the TableSpec conversion below is
+  // unchanged — only the metadata accessor moved.
   const drizzleColumns = getColumns(table);
 
   const columns: ColumnSpec[] = Object.values(drizzleColumns).map(col => ({

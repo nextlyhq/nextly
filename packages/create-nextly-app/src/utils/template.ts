@@ -341,6 +341,14 @@ export async function generatePackageJson(
     }
   }
 
+  // drizzle-orm is pinned EXACTLY in the scaffold (review-driven): Nextly
+  // requires 1.0.0-rc.4 and a user's `pnpm add drizzle-orm` would resolve
+  // npm `latest` (an older line), silently breaking Drizzle's
+  // cross-instance is() checks the first time they write a custom query.
+  // Pinning it here makes the required version visible and correct from
+  // day one. Must match scripts/drizzle-version.cjs.
+  dependencies["drizzle-orm"] = "1.0.0-rc.4";
+
   // DB drivers are regular deps of their respective adapter packages and
   // will be installed as transitive deps. No need to list them here.
 
