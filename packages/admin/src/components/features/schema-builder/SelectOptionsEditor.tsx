@@ -110,9 +110,16 @@ export function SelectOptionsEditor({
             label="Layout"
             description="Whether radio options stack vertically or sit side-by-side"
           />
-          <div className="inline-flex divide-x divide-border overflow-hidden rounded-none border border-border">
+          {/* role=group + aria-pressed so the selected layout is conveyed to
+              assistive tech, not by color alone. */}
+          <div
+            role="group"
+            aria-label="Radio option layout"
+            className="inline-flex divide-x divide-border overflow-hidden rounded-none border border-border"
+          >
             <button
               type="button"
+              aria-pressed={(layout ?? "horizontal") === "horizontal"}
               onClick={() => onLayoutChange("horizontal")}
               className={`px-3 py-1 text-xs ${
                 (layout ?? "horizontal") === "horizontal"
@@ -124,6 +131,7 @@ export function SelectOptionsEditor({
             </button>
             <button
               type="button"
+              aria-pressed={layout === "vertical"}
               onClick={() => onLayoutChange("vertical")}
               className={`px-3 py-1 text-xs ${
                 layout === "vertical"
