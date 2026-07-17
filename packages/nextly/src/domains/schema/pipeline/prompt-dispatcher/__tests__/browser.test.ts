@@ -353,6 +353,123 @@ describe("BrowserPromptDispatcher", () => {
     expect(result.resolutions).toEqual([]);
   });
 
+  // A column drop destroys the data in that column. The classifier emits one
+  // destructive_drop event per such column; the dispatcher must refuse to
+  // proceed unless the client explicitly acknowledged that specific drop, so
+  // the coarse request-level `confirmed` flag cannot silently authorize data
+  // loss from a buggy client or an agent.
+  const dropEvent = (tableName: string, columnName: string) =>
+    ({
+      id: `destructive_drop:${tableName}.${columnName}`,
+      kind: "destructive_drop" as const,
+      tableName,
+      columnName,
+      columnType: "text",
+      tableRowCount: 5,
+      applicableResolutions: ["confirm_drop" as const, "abort" as const],
+    }) as const;
+
+  it("fails closed on a destructive_drop with no acknowledgment", async () => {
+    const dispatcher = new BrowserPromptDispatcher([]);
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("dc_posts", "body")],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("proceeds on a destructive_drop with a typed confirm_drop resolution", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [{ kind: "confirm_drop", eventId: ev.id }]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toContainEqual({
+      kind: "confirm_drop",
+      eventId: ev.id,
+    });
+  });
+
+  it("proceeds when confirm_drop arrives via the legacy per-field channel", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_posts",
+      byFieldName: { body: { action: "confirm_drop" } },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toContainEqual({
+      kind: "confirm_drop",
+      eventId: ev.id,
+    });
+  });
+
+  it("fails closed when only some of several destructive_drops are acknowledged", async () => {
+    const e1 = dropEvent("dc_posts", "body");
+    const e2 = dropEvent("dc_posts", "legacy");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [{ kind: "confirm_drop", eventId: e1.id }]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [e1, e2],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("fails closed when a destructive_drop is aborted (legacy cancel)", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_posts",
+      byFieldName: { body: { action: "cancel" } },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("still proceeds when there are no destructive_drop events", async () => {
+    const dispatcher = new BrowserPromptDispatcher([]);
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        {
+          id: "add_not_null_with_nulls:dc_users.email",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "email",
+          nullCount: 0,
+          tableRowCount: 5,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+      ],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+  });
+
   it("handles multi-table renames independently", async () => {
     const cPosts = candidate("dc_posts", "body", "summary");
     const cUsers = candidate("dc_users", "phone", "contact");

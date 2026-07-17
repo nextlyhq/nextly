@@ -35,7 +35,9 @@ export interface BrowserRenameResolution {
 // translator inside dispatch() so admin UIs work end-to-end without
 // having to ship dialog updates first.
 export interface LegacyFieldResolution {
-  action: "provide_default" | "mark_nullable" | "cancel";
+  // "confirm_drop" acknowledges a destructive column drop for that field so
+  // the apply may destroy its data; without it the drop fails closed.
+  action: "provide_default" | "mark_nullable" | "cancel" | "confirm_drop";
   value?: unknown;
 }
 export interface LegacyResolutionsBundle {
@@ -86,6 +88,38 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
       ...translated.filter(r => !usedEventIds.has(r.eventId)),
     ];
 
+    // A column drop is irreversible data loss. The classifier emits one
+    // destructive_drop event per column whose data will be destroyed; require
+    // an explicit confirm_drop resolution for every one before proceeding.
+    // Any drop that is unacknowledged (no resolution) or explicitly aborted
+    // fails the whole apply closed, so the coarse request-level `confirmed`
+    // flag can never authorize data loss on its own and a buggy client or
+    // agent cannot silently drop a populated column.
+    const acknowledgedDrops = new Set(
+      mergedEventResolutions
+        .filter(r => r.kind === "confirm_drop")
+        .map(r => r.eventId)
+    );
+    const unacknowledgedDrops = events.filter(
+      e => e.kind === "destructive_drop" && !acknowledgedDrops.has(e.id)
+    );
+    const proceed = unacknowledgedDrops.length === 0;
+    if (!proceed) {
+      const sample = unacknowledgedDrops
+        .slice(0, 3)
+        .map(e => `${e.columnName} on ${e.tableName}`)
+        .join(", ");
+      const more =
+        unacknowledgedDrops.length > 3
+          ? `, +${unacknowledgedDrops.length - 3} more`
+          : "";
+      console.warn(
+        `[BrowserPromptDispatcher] refusing apply: ${unacknowledgedDrops.length} ` +
+          `destructive column drop(s) were not acknowledged: ${sample}${more}. ` +
+          `Attach a confirm_drop resolution for each column to authorize the drop.`
+      );
+    }
+
     if (candidates.length === 0) {
       // No rename ambiguities, but events may still need resolution
       // (e.g. NOT-NULL on a populated column with the user's pre-confirmed
@@ -93,7 +127,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
       return Promise.resolve({
         confirmedRenames: [],
         resolutions: mergedEventResolutions,
-        proceed: true,
+        proceed,
       });
     }
 
@@ -146,7 +180,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     return Promise.resolve({
       confirmedRenames,
       resolutions: mergedEventResolutions,
-      proceed: true,
+      proceed,
     });
   }
 }
@@ -156,6 +190,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 // - mark_nullable -> make_optional
 // - cancel        -> abort
 // - provide_default -> provide_default (with value)
+// - confirm_drop  -> confirm_drop (only for a destructive_drop event)
 // Fields without a matching emitted event are dropped (no resolution needed).
 function translateLegacyResolutions(
   bundle: LegacyResolutionsBundle,
@@ -183,6 +218,14 @@ function translateLegacyResolutions(
       out.push({ kind: "make_optional", eventId: event.id });
     } else if (legacy.action === "cancel") {
       out.push({ kind: "abort", eventId: event.id });
+    } else if (
+      legacy.action === "confirm_drop" &&
+      event.kind === "destructive_drop"
+    ) {
+      // Only a destructive_drop can be confirmed for drop; a confirm_drop
+      // aimed at any other event kind is ignored rather than producing a
+      // resolution the pipeline cannot apply.
+      out.push({ kind: "confirm_drop", eventId: event.id });
     }
   }
   return out;
