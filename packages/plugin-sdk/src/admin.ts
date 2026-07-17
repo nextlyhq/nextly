@@ -60,6 +60,9 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `usePluginFieldTypeEntries` — catalog rows for the plugin field types
+ *   offered on a picker surface, to merge after your surface's built-in
+ *   `entries` so contributed types appear in the picker, surface-filtered.
  * Compose them in plugin admin surfaces so field editing looks and behaves
  * like the rest of the admin; your plugin owns storage and the allowed-type
  * subset. See `STABILITY.md`.
@@ -69,6 +72,7 @@ export {
   FieldDefaultValueInput,
   FieldOptionsEditor,
   withOptionIds,
+  usePluginFieldTypeEntries,
 } from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,

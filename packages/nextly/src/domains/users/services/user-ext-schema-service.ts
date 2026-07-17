@@ -90,6 +90,7 @@ import type {
   UserPhoneFieldConfig,
 } from "../../../users/config/types";
 import { checkUserFieldName } from "../../../users/config/validate-user-config";
+import { getFieldType } from "../../schema/field-types/field-type-registry";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { UserFieldDefinitionService } from "./user-field-definition-service";
@@ -439,12 +440,19 @@ export class UserExtSchemaService {
           options: record.options || [],
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
-      default:
+      default: {
+        // A registered plugin type keeps its own id so the admin renders the
+        // plugin's editor component; its column comes from the declared storage
+        // primitive (see getColumnType). A genuinely unknown type degrades to a
+        // text column so stray data is never stranded.
+        const isPluginType = getFieldType(record.type) !== undefined;
         return {
           ...base,
-          type: "text",
+          ...textBounds,
+          type: isPluginType ? record.type : "text",
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
+      }
     }
   }
 
@@ -1010,11 +1018,23 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
    * one of the user-surface text types the shared guard cannot know about.
    */
   private isUserDataField(field: UserFieldConfig): boolean {
-    return this.isUserSurfaceTextField(field) || isDataField(field);
+    // Captured before the guards below narrow `field` to `never` on their
+    // false branch, which would leave `.type` inaccessible.
+    const fieldType = field.type;
+    return (
+      this.isUserSurfaceTextField(field) ||
+      isDataField(field) ||
+      // A plugin-contributed type is a real data field once registered — it
+      // passed surface-gated validation at creation and maps to a storage
+      // primitive column, so it must not be skipped by the built-in guards.
+      getFieldType(fieldType) !== undefined
+    );
   }
 
   private getColumnType(field: UserFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
+    // Captured before the built-in guards narrow `field` to `never`.
+    const fieldType = field.type;
 
     if (this.isUserSurfaceTextField(field)) {
       return field.maxLength
@@ -1044,6 +1064,31 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     }
     if (isRadioField(field)) {
       return types.varchar(255);
+    }
+
+    // Plugin-contributed types persist as their declared storage primitive, so
+    // a plugin field on the users surface gets a real column keyed off that
+    // primitive instead of being silently skipped (which would strand its data).
+    const pluginStorage = getFieldType(fieldType)?.storage;
+    if (pluginStorage) {
+      switch (pluginStorage) {
+        case "text": {
+          const maxLength = (field as { maxLength?: number }).maxLength;
+          return typeof maxLength === "number"
+            ? types.varchar(maxLength)
+            : types.text;
+        }
+        case "longText":
+          return types.text;
+        case "number":
+          return types.real;
+        case "boolean":
+          return types.boolean;
+        case "timestamp":
+          return types.timestamp;
+        case "json":
+          return types.json;
+      }
     }
 
     return null;

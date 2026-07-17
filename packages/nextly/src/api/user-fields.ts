@@ -28,6 +28,7 @@ import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
+import { checkUserFieldType } from "../users/config/validate-user-config";
 
 import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
@@ -58,24 +59,19 @@ const createFieldSchema = z
         "Name must start with a letter and contain only alphanumeric characters"
       ),
     label: z.string().min(1, "Label is required").max(255),
-    type: z.enum(
-      [
-        "text",
-        "textarea",
-        "number",
-        "email",
-        "url",
-        "phone",
-        "select",
-        "radio",
-        "checkbox",
-        "date",
-      ],
-      {
-        message:
-          "Type must be one of: text, textarea, number, email, url, phone, select, radio, checkbox, date",
+    // Delegates to the single source of truth (checkUserFieldType) instead of a
+    // hardcoded enum, so a plugin field type that opted into the users surface
+    // is accepted here as well as a built-in scalar. Non-string values report
+    // the same "type required" message the definition service would raise.
+    type: z.string().superRefine((value, ctx) => {
+      const rejection = checkUserFieldType(value);
+      if (rejection) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: rejection.message,
+        });
       }
-    ),
+    }),
     required: z.boolean().optional(),
     defaultValue: z.string().optional().nullable(),
     options: z.array(optionSchema).optional().nullable(),

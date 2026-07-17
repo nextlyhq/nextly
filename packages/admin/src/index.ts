@@ -159,6 +159,7 @@ export {
   FieldDefaultValueInput,
   FieldOptionsEditor,
   withOptionIds,
+  usePluginFieldTypeEntries,
 } from "./components/field-ui";
 export type {
   FieldTypePickerProps,

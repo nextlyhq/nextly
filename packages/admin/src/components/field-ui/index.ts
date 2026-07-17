@@ -24,3 +24,8 @@ export type {
   FieldOption,
   FieldOptionsEditorProps,
 } from "./FieldOptionsEditor";
+
+// Merges plugin-contributed field types for a picker surface into catalog rows
+// a FieldTypePicker renders; a surface passes the result alongside its built-in
+// entries so plugin types appear in the picker, surface-filtered.
+export { usePluginFieldTypeEntries } from "./usePluginFieldTypeEntries";

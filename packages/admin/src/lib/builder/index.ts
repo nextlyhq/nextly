@@ -25,3 +25,5 @@ export { nestedFieldPriorityCollision } from "./dnd-collision";
 export { convertHooksToStoredFormat } from "./hook-converters";
 
 export { DEFAULT_SYSTEM_FIELDS } from "./constants";
+
+export { pluginFieldTypeCatalogEntries } from "./plugin-field-type-entries";

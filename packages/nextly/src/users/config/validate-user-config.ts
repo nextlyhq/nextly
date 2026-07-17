@@ -29,6 +29,7 @@
  */
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
+import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 
 import type { UserConfig } from "./types";
 
@@ -240,7 +241,15 @@ export function checkUserFieldType(
   // is arbitrary caller data and must not be stringified into a message.
   const described = typeof type === "string" ? type : typeof type;
 
-  if (typeof type !== "string" || !ALLOWED_TYPES_SET.has(type)) {
+  // A plugin may contribute a field type that opts into the users surface; it
+  // persists as its declared storage primitive, so it is as usable here as a
+  // built-in scalar. Built-ins keep the fast allowlist; plugin types fall
+  // through to the registry, surface-gated.
+  const isAllowed =
+    typeof type === "string" &&
+    (ALLOWED_TYPES_SET.has(type) || isPluginFieldTypeOnSurface(type, "users"));
+
+  if (!isAllowed) {
     return {
       code: "USER_FIELD_TYPE_NOT_ALLOWED",
       message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}`,

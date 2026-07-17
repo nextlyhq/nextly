@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 import type {
-  UserFieldType,
+  UserFieldTypeId,
   UserFieldDefinitionRecord,
   CreateUserFieldPayload,
   UpdateUserFieldPayload,
@@ -14,7 +14,7 @@ import type {
 export interface UserFieldFormValues {
   label: string;
   name: string;
-  type: UserFieldType;
+  type: UserFieldTypeId;
   required: boolean;
   defaultValue: string;
   options: { label: string; value: string }[];
@@ -77,8 +77,10 @@ export function generateFieldName(label: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
-/** Types whose values are strings with length bounds. */
-export const LENGTH_BOUND_TYPES: readonly UserFieldType[] = [
+// Typed as `readonly string[]` (not the built-in union) so membership checks
+// accept a plugin-contributed type id too — a plugin type simply isn't a member,
+// which correctly hides the length-bound controls for it.
+export const LENGTH_BOUND_TYPES: readonly string[] = [
   "text",
   "textarea",
   "url",
@@ -227,18 +229,10 @@ export function buildUserFieldSchema(mode: "create" | "edit") {
     .object({
       label: z.string().min(1, "Label is required").max(255),
       name: nameSchema,
-      type: z.enum([
-        "text",
-        "textarea",
-        "number",
-        "email",
-        "url",
-        "phone",
-        "select",
-        "radio",
-        "checkbox",
-        "date",
-      ]),
+      // Accepts any non-empty type id so a plugin-contributed users-surface
+      // type validates client-side; the server does the authoritative,
+      // surface-gated check against the field-type registry.
+      type: z.string().min(1, "Field type is required"),
       required: z.boolean(),
       defaultValue: z.string().optional().or(z.literal("")),
       options: z.array(
