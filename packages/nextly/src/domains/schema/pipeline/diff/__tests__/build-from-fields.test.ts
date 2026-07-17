@@ -93,6 +93,21 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     expect(findColumn(table.columns, "updated_at")?.type).toBe("timestamp");
   });
 
+  it("keeps the system title column when a component field is named 'title'", () => {
+    // A component provides no column, so it must not suppress the system title
+    // column the way a real user 'title' field does.
+    const table = buildDesiredTableFromFields(
+      "dc_x",
+      [{ name: "title", type: "component" }] as never,
+      "postgresql"
+    );
+    expect(findColumn(table.columns, "title")).toEqual({
+      name: "title",
+      type: "text",
+      nullable: false,
+    });
+  });
+
   it("MySQL: id is varchar(36); title/slug varchar(255); timestamps", () => {
     const table = buildDesiredTableFromFields("dc_x", [], "mysql");
     expect(findColumn(table.columns, "id")?.type).toBe("varchar(36)");

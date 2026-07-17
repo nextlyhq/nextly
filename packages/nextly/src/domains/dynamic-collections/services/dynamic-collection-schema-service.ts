@@ -98,6 +98,13 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
+        // Component fields store their data in a separate comp_{slug} table and
+        // are stripped from the parent row on write, so they get no parent
+        // column (a NOT NULL one would break every insert).
+        if (f.type === "component") {
+          return null;
+        }
+
         const type = this.mapFieldTypeToSQL(
           f.type,
           f.length,
