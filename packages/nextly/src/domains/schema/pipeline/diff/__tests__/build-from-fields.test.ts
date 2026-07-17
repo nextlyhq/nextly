@@ -16,7 +16,6 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
     ["radio", "text"],
     ["repeater", "jsonb"],
     ["group", "jsonb"],
-    ["component", "jsonb"],
     ["json", "jsonb"],
     ["chips", "jsonb"],
   ];
@@ -31,6 +30,18 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
       expect(d?.dialectType).toBe(dialectType);
     });
   }
+
+  // component is storable but has no parent column: its values live in a
+  // separate comp_{slug} table, so the descriptor returns null (column-less).
+  it("maps component -> no parent column (stored in its own table)", () => {
+    const d = getColumnDescriptor(
+      { name: "f", type: "component", required: true } as unknown as Parameters<
+        typeof getColumnDescriptor
+      >[0],
+      "postgresql"
+    );
+    expect(d).toBeNull();
+  });
 });
 
 // Minimal FieldConfig shape used by the helper. The real type lives in
