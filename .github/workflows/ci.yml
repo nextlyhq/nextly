@@ -57,6 +57,11 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      # Drizzle v1 zero-legacy gate: no pre-v1 API, no removed kit symbols,
+      # no positional drizzle() constructors. Cheap check, fails fast.
+      - name: Drizzle v1 legacy gate
+        run: pnpm check:drizzle-v1-legacy
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.

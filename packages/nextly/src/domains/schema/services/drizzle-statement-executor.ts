@@ -79,7 +79,7 @@ export class DrizzleStatementExecutor
     // Note: drizzle-kit 0.31.10's silent-drop bug for MySQL applies to
     // pushSchema's apply() method, NOT to manual statement execution.
     // The pipeline owns pushSchema invocation and passes us the
-    // statementsToExecute array directly (which IS correct), so we can
+    // kit statements array directly (which IS correct), so we can
     // execute them straight. No applyViaGenerate workaround at this layer.
     //
     // MySQL DDL is auto-committed regardless of the BEGIN/COMMIT wrapper

@@ -1589,7 +1589,7 @@ describe("scoped pushSchema (Task 6)", () => {
   // Regression: rext-site-v2 / dc_case_studies (May 2026).
   // drizzle-kit's pushSchema returns successfully even when it has
   // declined to apply some changes — the skipped statements appear in
-  // `warnings`, NOT in `statementsToExecute`, and `success` is still
+  // `warnings`, NOT in the executable statements list, and `success` is still
   // true. Older Nextly versions wrote `status='success'` to the journal
   // and the same drift re-appeared on every subsequent preview. The
   // safety net now throws so the journal correctly records a failed

@@ -107,7 +107,7 @@ describe("MySQL Adapter Integration (Real MySQL 8)", async () => {
 
     // Create a pool for the Drizzle ORM client used in tests.
     pool = mysql.createPool(TEST_DB_URL);
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Drop and recreate test tables to ensure a clean slate.
     // Each column maps 1:1 to the Drizzle table definition above.

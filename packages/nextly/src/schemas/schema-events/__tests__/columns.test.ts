@@ -2,7 +2,7 @@
  * @module schemas/schema-events/__tests__/columns
  * @since v0.0.3-alpha (Plan B)
  */
-import { getTableColumns, getTableName } from "drizzle-orm";
+import { getColumns, getTableName } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
@@ -56,13 +56,13 @@ describe("nextly_schema_events — postgres", () => {
     expect(getTableName(nextlySchemaEventsPg)).toBe("nextly_schema_events");
   });
   it("has exactly the spec §4.3 columns", () => {
-    const names = Object.values(getTableColumns(nextlySchemaEventsPg))
+    const names = Object.values(getColumns(nextlySchemaEventsPg))
       .map(c => c.name)
       .sort();
     expect(names).toEqual(EXPECTED_COLUMNS);
   });
   it("requires event_type/status/source (notNull)", () => {
-    const cols = getTableColumns(nextlySchemaEventsPg);
+    const cols = getColumns(nextlySchemaEventsPg);
     expect(cols.eventType.notNull).toBe(true);
     expect(cols.status.notNull).toBe(true);
     expect(cols.source.notNull).toBe(true);
@@ -75,7 +75,7 @@ describe.each([
 ])("nextly_schema_events — %s", (_name, load) => {
   it("matches the canonical column set", async () => {
     const table = await load();
-    const names = Object.values(getTableColumns(table))
+    const names = Object.values(getColumns(table))
       .map(c => c.name)
       .sort();
     expect(names).toEqual(EXPECTED_COLUMNS);

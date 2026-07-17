@@ -1,7 +1,7 @@
 // Tests for the enhanced runtime schema generator.
 // Verifies that field definitions are correctly mapped to Drizzle table objects
 // and that the return shape includes schemaRecord for pushSchema() consumption.
-import { getTableName, getTableColumns } from "drizzle-orm";
+import { getTableName, getColumns } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -54,7 +54,7 @@ describe("generateRuntimeSchema", () => {
         baseFields,
         "postgresql"
       );
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("id");
       expect(columns).toHaveProperty("slug");
       expect(columns).toHaveProperty("created_at");
@@ -67,7 +67,7 @@ describe("generateRuntimeSchema", () => {
         { name: "slug", type: "text", required: true },
       ];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columnNames = Object.keys(getTableColumns(result.table));
+      const columnNames = Object.keys(getColumns(result.table));
       const titleCount = columnNames.filter(n => n === "title").length;
       const slugCount = columnNames.filter(n => n === "slug").length;
       expect(titleCount).toBe(1);
@@ -80,14 +80,14 @@ describe("generateRuntimeSchema", () => {
         baseFields,
         "postgresql"
       );
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("title");
     });
 
     it("maps number field to doublePrecision column", () => {
       const fields: FieldDefinition[] = [{ name: "price", type: "number" }];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("price");
     });
 
@@ -96,7 +96,7 @@ describe("generateRuntimeSchema", () => {
         { name: "isActive", type: "checkbox" },
       ];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       // Column key uses field name, SQL column name uses snake_case
       expect(columns).toHaveProperty("isActive");
     });
@@ -104,14 +104,14 @@ describe("generateRuntimeSchema", () => {
     it("maps date field to timestamp column", () => {
       const fields: FieldDefinition[] = [{ name: "publishedAt", type: "date" }];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("publishedAt");
     });
 
     it("maps json field to jsonb column", () => {
       const fields: FieldDefinition[] = [{ name: "metadata", type: "json" }];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("metadata");
     });
 
@@ -127,7 +127,7 @@ describe("generateRuntimeSchema", () => {
         },
       ];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("status");
     });
 
@@ -136,7 +136,7 @@ describe("generateRuntimeSchema", () => {
         { name: "author", type: "relationship", relationTo: "users" },
       ];
       const result = generateRuntimeSchema("dc_posts", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("author");
     });
 
@@ -150,14 +150,14 @@ describe("generateRuntimeSchema", () => {
         },
       ];
       const result = generateRuntimeSchema("dc_posts", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("tags");
     });
 
     it("maps chips field to jsonb column", () => {
       const fields: FieldDefinition[] = [{ name: "labels", type: "chips" }];
       const result = generateRuntimeSchema("dc_posts", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("labels");
     });
 
@@ -169,7 +169,7 @@ describe("generateRuntimeSchema", () => {
         { name: "ref", type: "relation" as FieldDefinition["type"] },
       ];
       const result = generateRuntimeSchema("dc_test", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("name");
       expect(columns).toHaveProperty("active");
       expect(columns).toHaveProperty("amount");
@@ -184,7 +184,7 @@ describe("generateRuntimeSchema", () => {
         { name: "row1", type: "row" as FieldDefinition["type"] },
       ];
       const result = generateRuntimeSchema("dc_test", fields, "postgresql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).not.toHaveProperty("layout");
       expect(columns).not.toHaveProperty("section");
       expect(columns).not.toHaveProperty("row1");
@@ -199,7 +199,7 @@ describe("generateRuntimeSchema", () => {
 
     it("includes system columns", () => {
       const result = generateRuntimeSchema("dc_products", baseFields, "mysql");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("id");
       expect(columns).toHaveProperty("slug");
     });
@@ -218,7 +218,7 @@ describe("generateRuntimeSchema", () => {
 
     it("includes system columns", () => {
       const result = generateRuntimeSchema("dc_products", baseFields, "sqlite");
-      const columns = getTableColumns(result.table);
+      const columns = getColumns(result.table);
       expect(columns).toHaveProperty("id");
       expect(columns).toHaveProperty("slug");
     });
@@ -248,35 +248,31 @@ describe("generateRuntimeSchema", () => {
         "postgresql",
         { status: true }
       );
-      expect(getTableColumns(result.table)).toHaveProperty("status");
+      expect(getColumns(result.table)).toHaveProperty("status");
     });
 
     it("includes a status column on MySQL when options.status is true", () => {
       const result = generateRuntimeSchema("dc_posts", baseFields, "mysql", {
         status: true,
       });
-      expect(getTableColumns(result.table)).toHaveProperty("status");
+      expect(getColumns(result.table)).toHaveProperty("status");
     });
 
     it("includes a status column on SQLite when options.status is true", () => {
       const result = generateRuntimeSchema("dc_posts", baseFields, "sqlite", {
         status: true,
       });
-      expect(getTableColumns(result.table)).toHaveProperty("status");
+      expect(getColumns(result.table)).toHaveProperty("status");
     });
 
     it("omits the status column when options.status is false or unset", () => {
-      const unset = generateRuntimeSchema(
-        "dc_posts",
-        baseFields,
-        "postgresql"
-      );
-      expect(getTableColumns(unset.table)).not.toHaveProperty("status");
+      const unset = generateRuntimeSchema("dc_posts", baseFields, "postgresql");
+      expect(getColumns(unset.table)).not.toHaveProperty("status");
 
       const off = generateRuntimeSchema("dc_posts", baseFields, "postgresql", {
         status: false,
       });
-      expect(getTableColumns(off.table)).not.toHaveProperty("status");
+      expect(getColumns(off.table)).not.toHaveProperty("status");
     });
   });
 });

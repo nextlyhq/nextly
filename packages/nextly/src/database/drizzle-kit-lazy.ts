@@ -18,7 +18,7 @@
 // v1 pushSchema contract changes absorbed here (verified 2026-07-15,
 // plan PHASE 1 FINDINGS):
 // - result: { sqlStatements, hints, apply } — `hasDataLoss` REMOVED,
-//   `statementsToExecute`→`sqlStatements`, `warnings`→`hints`. Destructive
+//   the pre-v1 statements field→`sqlStatements`, `warnings`→`hints`. Destructive
 //   statements are now INCLUDED in sqlStatements with EMPTY hints; the
 //   data-loss guard lives in the pipeline (destructive-statement scan),
 //   not in this wrapper.
