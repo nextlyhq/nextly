@@ -190,6 +190,12 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
 export type FieldSurface = "entries" | "users" | "forms";
 
 /**
+ * The surface a plugin field type targets when its author declares none. Shared
+ * so the server-side gate and the client-side picker projection never diverge.
+ */
+export const DEFAULT_FIELD_SURFACES: readonly FieldSurface[] = ["entries"];
+
+/**
  * Field types that exist only on specific admin surfaces. They are NOT part
  * of the canonical `FieldType` union: a collection cannot declare them, so
  * they can never reach the schema pipeline's column mappers. Their storage

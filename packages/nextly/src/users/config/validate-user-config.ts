@@ -261,7 +261,7 @@ export function checkUserFieldType(
   if (!isAllowed) {
     return {
       code: "USER_FIELD_TYPE_NOT_ALLOWED",
-      message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}`,
+      message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}. A plugin-contributed field type is also accepted when it declares the "users" surface.`,
     };
   }
 

@@ -77,10 +77,7 @@ import {
   isRadioField,
   isDataField,
 } from "../../../collections/fields/guards";
-import type {
-  DataFieldConfig,
-  FieldConfig,
-} from "../../../collections/fields/types";
+import type { DataFieldConfig } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../services/shared";
@@ -888,7 +885,7 @@ export class UserExtSchemaService {
     // Generate field columns
     // UserFieldConfig is already a subset of DataFieldConfig, no type predicate needed
     const fieldColumns = fields
-      .filter(f => isDataField(f as FieldConfig) && "name" in f && !!f.name)
+      .filter(f => this.isUserDataField(f) && "name" in f && !!f.name)
       .map(f => {
         const drizzleType = this.mapFieldToDrizzleCode(f);
         const modifiers: string[] = [];
@@ -922,7 +919,7 @@ export class UserExtSchemaService {
     const fieldIndexes = fields
       .filter(
         f =>
-          isDataField(f) &&
+          this.isUserDataField(f) &&
           "name" in f &&
           !!f.name &&
           "index" in f &&
@@ -1314,6 +1311,21 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     field: UserFieldConfig,
     colName: string
   ): string {
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      switch (pluginStorage) {
+        case "number":
+          return `doublePrecision('${colName}')`;
+        case "boolean":
+          return `boolean('${colName}')`;
+        case "timestamp":
+          return `timestamp('${colName}')`;
+        case "json":
+          return `jsonb('${colName}')`;
+        default:
+          return `text('${colName}')`; // text / longText
+      }
+    }
     if (this.isUserSurfaceTextField(field)) {
       return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
     }
@@ -1347,6 +1359,23 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private mapFieldToMySQLCode(field: UserFieldConfig, colName: string): string {
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      switch (pluginStorage) {
+        case "number":
+          return `double('${colName}')`;
+        case "boolean":
+          return `boolean('${colName}')`;
+        case "timestamp":
+          return `timestamp('${colName}')`;
+        case "json":
+          return `json('${colName}')`;
+        case "longText":
+          return `text('${colName}')`;
+        default:
+          return `varchar('${colName}', { length: 255 })`; // text
+      }
+    }
     if (this.isUserSurfaceTextField(field)) {
       return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
     }
@@ -1377,6 +1406,19 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     field: UserFieldConfig,
     colName: string
   ): string {
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      switch (pluginStorage) {
+        case "number":
+          return `real('${colName}')`;
+        case "boolean":
+          return `integer('${colName}', { mode: 'boolean' })`;
+        case "timestamp":
+          return `integer('${colName}', { mode: 'timestamp' })`;
+        default:
+          return `text('${colName}')`; // text / longText / json
+      }
+    }
     if (isNumberField(field)) {
       return `real('${colName}')`;
     }
@@ -1439,6 +1481,29 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
 
     for (const field of fields) {
       if (!this.isUserDataField(field)) continue;
+
+      // Plugin fields import the drizzle builder for their storage primitive,
+      // matching mapFieldTo*Code, so generated schemas compile.
+      const pluginStorage = this.pluginUserStorage(field);
+      if (pluginStorage) {
+        if (this.dialect === "sqlite") {
+          if (pluginStorage === "number") imports.add("real");
+          if (pluginStorage === "boolean" || pluginStorage === "timestamp")
+            imports.add("integer");
+        } else if (this.dialect === "mysql") {
+          if (pluginStorage === "number") imports.add("double");
+          if (pluginStorage === "boolean") imports.add("boolean");
+          if (pluginStorage === "timestamp") imports.add("timestamp");
+          if (pluginStorage === "json") imports.add("json");
+          if (pluginStorage === "text") imports.add("varchar");
+        } else {
+          if (pluginStorage === "number") imports.add("doublePrecision");
+          if (pluginStorage === "boolean") imports.add("boolean");
+          if (pluginStorage === "timestamp") imports.add("timestamp");
+          if (pluginStorage === "json") imports.add("jsonb");
+        }
+        continue;
+      }
 
       if (this.dialect === "sqlite") {
         if (isNumberField(field)) imports.add("real");
@@ -1561,9 +1626,22 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
         return "checkbox";
       case "timestamp":
         return "date";
+      case "json":
+        return "json";
       default:
-        return "text"; // text / longText / json
+        return "text"; // text / longText
     }
+  }
+
+  /** A valid empty-JSON default literal for the current dialect. */
+  private emptyJsonDefault(): string {
+    // MySQL requires a JSON default to be a parenthesized expression.
+    return this.dialect === "mysql" ? "('{}')" : "'{}'";
+  }
+
+  /** Coerce a stored default (which may be a string like "false") to boolean. */
+  private toBooleanDefault(value: string | number | boolean): boolean {
+    return value === true || value === 1 || value === "true" || value === "1";
   }
 
   private getDefaultValueForType(rawType: string): string {
@@ -1581,6 +1659,8 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
         return "0";
       case "checkbox":
         return this.dialect === "sqlite" ? "0" : "FALSE";
+      case "json":
+        return this.emptyJsonDefault();
       case "date":
         if (this.dialect === "sqlite") {
           return String(Math.floor(Date.now() / 1000));
@@ -1606,8 +1686,18 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       return `'${value}'`;
     }
     if (type === "checkbox") {
-      if (this.dialect === "sqlite") return value ? "1" : "0";
-      return value ? "TRUE" : "FALSE";
+      // A plugin boolean field's stored default is a string ("false"), which is
+      // truthy — coerce by value so "false" does not become TRUE.
+      const bool = this.toBooleanDefault(value);
+      if (this.dialect === "sqlite") return bool ? "1" : "0";
+      return bool ? "TRUE" : "FALSE";
+    }
+    if (type === "json") {
+      // The stored default is expected to be valid JSON text; emit it as a
+      // JSON literal (parenthesized for MySQL). An empty/blank value falls back
+      // to an empty object so a JSON column never gets an invalid DEFAULT ''.
+      const json = typeof value === "string" && value.trim() ? value : "{}";
+      return this.dialect === "mysql" ? `('${json}')` : `'${json}'`;
     }
     if (type === "date") {
       if (this.dialect === "sqlite" && typeof value === "string") {

@@ -132,7 +132,7 @@ export interface FormDocument {
   id: string;
   slug: string;
   name: string;
-  fields: FormField[];
+  fields: AnyFormField[];
   settings: FormSettings;
   notifications: FormNotification[];
   webhooks?: WebhookConfig[];
@@ -488,7 +488,7 @@ export interface FormConfig {
   /**
    * Form fields definition.
    */
-  fields: FormField[];
+  fields: AnyFormField[];
 
   /**
    * Form settings and behavior.

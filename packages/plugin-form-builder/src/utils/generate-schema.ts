@@ -10,7 +10,9 @@
 
 import { z } from "zod";
 
+import { isKnownFormField } from "../types";
 import type {
+  AnyFormField,
   FormField,
   TextFormField,
   EmailFormField,
@@ -53,11 +55,26 @@ import type {
  * ```
  */
 export function generateZodSchema(
-  fields: FormField[]
+  fields: AnyFormField[]
 ): z.ZodObject<Record<string, z.ZodTypeAny>> {
   const schemaShape: Record<string, z.ZodTypeAny> = {};
 
   for (const field of fields) {
+    // A plugin-contributed field's value shape is owned by the plugin: accept
+    // any value, but keep the base required check so a required plugin field
+    // cannot be omitted (z.unknown() alone treats a missing key as valid).
+    if (!isKnownFormField(field)) {
+      schemaShape[field.name] = field.required
+        ? z
+            .unknown()
+            .refine(
+              value => value !== undefined && value !== null && value !== "",
+              { message: `${field.label || field.name} is required` }
+            )
+        : z.unknown();
+      continue;
+    }
+
     // Skip hidden fields without required flag
     if (field.type === "hidden" && !field.required) {
       // Still add to schema but make optional
@@ -82,8 +99,6 @@ export function generateZodSchema(
  * Generate a Zod schema for a single field.
  */
 function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
-  // Captured before the switch narrows `field` to `never` in the default branch.
-  const { required, label, name } = field;
   switch (field.type) {
     case "text":
       return generateTextSchema(field);
@@ -112,18 +127,8 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
     case "hidden":
       return generateHiddenSchema(field);
     default:
-      // A plugin field's value shape is owned by the plugin, so accept any
-      // value — but still enforce the base required check, otherwise a required
-      // plugin field could be omitted from a submission the builder marks
-      // required (z.unknown() alone treats a missing key as valid).
-      if (required) {
-        return z
-          .unknown()
-          .refine(
-            value => value !== undefined && value !== null && value !== "",
-            { message: `${label || name} is required` }
-          );
-      }
+      // Unreachable for a known FormField; plugin types are handled in
+      // generateZodSchema before this switch is reached.
       return z.unknown();
   }
 }
@@ -477,7 +482,7 @@ function applyRequired(
  */
 export function transformFormData(
   data: Record<string, unknown>,
-  fields: FormField[]
+  fields: AnyFormField[]
 ): Record<string, unknown> {
   const transformed: Record<string, unknown> = {};
 
@@ -489,7 +494,11 @@ export function transformFormData(
       continue;
     }
 
-    transformed[field.name] = transformFieldValue(value, field);
+    // A plugin field's value passes through untransformed — the plugin owns its
+    // value shape; only built-in types get type coercion.
+    transformed[field.name] = isKnownFormField(field)
+      ? transformFieldValue(value, field)
+      : value;
   }
 
   return transformed;
@@ -572,7 +581,7 @@ function transformFieldValue(value: unknown, field: FormField): unknown {
  */
 export function validateFormData(
   data: Record<string, unknown>,
-  fields: FormField[]
+  fields: AnyFormField[]
 ): z.ZodSafeParseResult<Record<string, unknown>> {
   const transformed = transformFormData(data, fields);
   const schema = generateZodSchema(fields);

@@ -145,6 +145,35 @@ describe("FieldOptionsEditor", () => {
     expect(next[2]).toMatchObject({ label: "Archived", value: "archived" });
   });
 
+  it("splits CSV on the first comma only, so the value keeps later commas", () => {
+    const onOptionsChange = vi.fn();
+    render(
+      <FieldOptionsEditor options={[]} onOptionsChange={onOptionsChange} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /import/i }));
+    fireEvent.change(screen.getByLabelText("CSV options"), {
+      target: { value: "Label,a,b,c" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /import options/i }));
+    const next = onOptionsChange.mock.calls[0][0] as FieldOption[];
+    // No token dropped: everything after the first comma is the value.
+    expect(next[0]).toMatchObject({ label: "Label", value: "a,b,c" });
+  });
+
+  it("rejects a CSV row with a blank label", () => {
+    const onOptionsChange = vi.fn();
+    render(
+      <FieldOptionsEditor options={[]} onOptionsChange={onOptionsChange} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /import/i }));
+    fireEvent.change(screen.getByLabelText("CSV options"), {
+      target: { value: ",some_value" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /import options/i }));
+    expect(screen.getByText(/non-empty string/i)).toBeInTheDocument();
+    expect(onOptionsChange).not.toHaveBeenCalled();
+  });
+
   it("imports a JSON array of objects and appends them", async () => {
     const user = userEvent.setup();
     const onOptionsChange = vi.fn();

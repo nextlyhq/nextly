@@ -108,7 +108,9 @@ function valueFromLabel(label: string): string {
 
 /**
  * Parse pasted CSV into options. Each non-empty line is `label,value` or just
- * `label` (value auto-generated). Extra commas beyond the first are ignored.
+ * `label` (value auto-generated). Only the FIRST comma delimits label from
+ * value; everything after it (including further commas) is the value, so no
+ * token is silently dropped.
  */
 function parseCsv(csv: string, idPrefix: string): FieldOption[] {
   return csv
@@ -116,7 +118,14 @@ function parseCsv(csv: string, idPrefix: string): FieldOption[] {
     .map(line => line.trim())
     .filter(line => line.length > 0)
     .map(line => {
-      const [label = "", value] = line.split(",").map(part => part.trim());
+      const comma = line.indexOf(",");
+      const label = (comma === -1 ? line : line.slice(0, comma)).trim();
+      const value = comma === -1 ? undefined : line.slice(comma + 1).trim();
+      // Reject a blank label rather than importing an empty row — matches the
+      // JSON import guard so both formats behave the same.
+      if (!label) {
+        throw new Error("Option labels must be non-empty strings");
+      }
       return {
         id: generateOptionId(idPrefix),
         label,

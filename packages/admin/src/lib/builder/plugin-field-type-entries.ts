@@ -6,11 +6,9 @@
 // declared `surfaces` include it; an omitted `surfaces` means the entry/single
 // surface only, so a type never auto-appears where its author did not opt in.
 import type { FieldSurface, FieldTypeCatalogEntry } from "nextly/field-catalog";
+import { DEFAULT_FIELD_SURFACES } from "nextly/field-catalog";
 
 import type { PluginMetadata } from "@admin/types/branding";
-
-/** The surface a plugin field type targets when its author declares none. */
-const DEFAULT_SURFACES: readonly FieldSurface[] = ["entries"];
 
 /**
  * Title-case a raw type id for a label when the plugin declared none
@@ -46,7 +44,7 @@ export function pluginFieldTypeCatalogEntries(
       .filter(plugin => plugin.enabled !== false)
       .flatMap(plugin => plugin.fieldTypes ?? [])
       .filter(fieldType =>
-        (fieldType.surfaces ?? DEFAULT_SURFACES).includes(surface)
+        (fieldType.surfaces ?? DEFAULT_FIELD_SURFACES).includes(surface)
       )
       .map(fieldType => ({
         type: fieldType.type,

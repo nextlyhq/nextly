@@ -14,13 +14,11 @@
  */
 
 import type { FieldSurface } from "../../../collections/fields/catalog";
+import { DEFAULT_FIELD_SURFACES } from "../../../collections/fields/catalog";
 import { ALL_FIELD_TYPES } from "../../../collections/fields/types";
 import type { PluginFieldType } from "../../../plugins/contributions";
 
 const BUILT_IN_TYPES = new Set<string>(ALL_FIELD_TYPES as readonly string[]);
-
-/** The surface a plugin field type targets when its author declares none. */
-const DEFAULT_FIELD_SURFACES: readonly FieldSurface[] = ["entries"];
 
 const globalForFieldTypes = globalThis as unknown as {
   __nextly_fieldTypes?: Map<string, PluginFieldType>;
