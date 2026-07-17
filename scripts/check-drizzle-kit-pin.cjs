@@ -34,7 +34,7 @@ const DEP_SECTIONS = [
 
 // Discover every workspace package.json rather than hard-coding a list: a new
 // package that starts depending on drizzle-orm would otherwise silently escape
-// the pin (review #26). The workspace globs are apps/*, packages/*, and e2e
+// the pin. The workspace globs are apps/*, packages/*, and e2e
 // (pnpm-workspace.yaml); expand them here without a YAML parser.
 function discoverPackageJsons() {
   const found = [];

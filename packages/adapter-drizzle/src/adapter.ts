@@ -178,7 +178,8 @@ export abstract class DrizzleAdapter {
    * - Consistent error handling
    * - Proper connection pooling
    *
-   * @param schema - Optional schema object for typed queries
+   * @param relations - Optional drizzle v1 relations config (defineRelations
+   *   output) that enables the typed relational query API on the instance
    * @returns Raw Drizzle ORM database instance
    *
    * @example

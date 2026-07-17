@@ -341,12 +341,12 @@ export async function generatePackageJson(
     }
   }
 
-  // drizzle-orm is pinned EXACTLY in the scaffold (review-driven): Nextly
-  // requires 1.0.0-rc.4 and a user's `pnpm add drizzle-orm` would resolve
-  // npm `latest` (an older line), silently breaking Drizzle's
-  // cross-instance is() checks the first time they write a custom query.
-  // Pinning it here makes the required version visible and correct from
-  // day one. Must match scripts/drizzle-version.cjs.
+  // drizzle-orm is pinned EXACTLY in the scaffold: Nextly requires 1.0.0-rc.4
+  // and a user's `pnpm add drizzle-orm` would resolve npm `latest` (an older
+  // line), silently breaking Drizzle's cross-instance is() checks the first
+  // time they write a custom query. Pinning it here makes the required
+  // version visible and correct from day one. Must match
+  // scripts/drizzle-version.cjs.
   dependencies["drizzle-orm"] = "1.0.0-rc.4";
 
   // DB drivers are regular deps of their respective adapter packages and
@@ -377,11 +377,11 @@ export async function generatePackageJson(
     version: "0.1.0",
     private: true,
     scripts: {
-      // F1 PR 4: dev now boots Nextly in single-process mode via `next dev`.
-      // The lazy per-dialect drizzle-kit import (PR 1) plus the in-process HMR
-      // listener (PR 2) replaced the wrapper that previously owned the
-      // terminal, schema prompts, and child supervision. `nextly dev` is
-      // gone; the only supported dev command is the standard `next dev`.
+      // Dev boots Nextly in single-process mode via `next dev`. The lazy
+      // per-dialect drizzle-kit import plus the in-process HMR listener
+      // replaced the wrapper that previously owned the terminal, schema
+      // prompts, and child supervision. `nextly dev` is gone; the only
+      // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
       // Build: migrate DB + compile Next.js + (if present) generate
       // the Pagefind search index. Templates without the search

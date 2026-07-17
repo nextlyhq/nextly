@@ -85,9 +85,10 @@ describe.skipIf(!PG_URL)(
       const { Pool } = await import("pg");
       const { drizzle: drizzlePg } = await import("drizzle-orm/node-postgres");
       const admin = new Pool({ connectionString: PG_URL });
-      // Unique per-run database — never pre-drop a fixed name that a
-      // concurrent run (or an unrelated database) might own.
-      const dbName = `nextly_freshpush_scope_${randomBytes(4).toString("hex")}`;
+      // Per-run database — never pre-drop a fixed name that a concurrent run
+      // (or an unrelated database) might own. 16 random bytes make the name
+      // collision-resistant across concurrent runs.
+      const dbName = `nextly_freshpush_scope_${randomBytes(16).toString("hex")}`;
       await admin.query(`CREATE DATABASE ${dbName}`);
       const url = new URL(PG_URL as string);
       url.pathname = `/${dbName}`;

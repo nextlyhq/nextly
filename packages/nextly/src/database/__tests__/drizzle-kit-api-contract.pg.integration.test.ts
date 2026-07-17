@@ -1,5 +1,5 @@
 // PostgreSQL variant of the drizzle-kit v1 payload API contract test.
-// Lives in an *.integration.test.ts file (review-driven): it executes live
+// Lives in an *.integration.test.ts file: it executes live
 // DDL against TEST_POSTGRES_URL, so it must only run under the integration
 // configuration (forks, single-fork, sequential) — never in the plain unit
 // pass just because the env var happens to be set.

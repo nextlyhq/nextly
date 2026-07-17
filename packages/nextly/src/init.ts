@@ -147,7 +147,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         "use `getCachedNextly()` instead.",
     });
   }
-  // Boot-time drizzle-orm version guard (review-driven): a consumer app
+  // Boot-time drizzle-orm version guard: a consumer app
   // that installed its own drizzle-orm at a different version than Nextly's
   // exact pin hits opaque cross-instance is() failures deep inside Drizzle,
   // with no pointer back to the cause. Warn loudly ONCE with the fix

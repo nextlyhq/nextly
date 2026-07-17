@@ -214,7 +214,7 @@ export function findUnexpectedDestructiveStatements(
   // MANAGED table (a table in the desired schema). This lets the caller run
   // the scan on the RAW kit output — BEFORE filterUnsafeStatements — so the
   // guarantee no longer rests on the filter having correctly stripped every
-  // orphan drop first (review: scan before filtering). Drops of tables/objects
+  // orphan drop first. Drops of tables/objects
   // outside the desired schema are the expected orphan emission the filter
   // handles separately; identifying them by table membership here (rather than
   // by "the filter already removed it") makes the destructive-on-managed

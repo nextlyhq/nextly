@@ -203,7 +203,7 @@ async function pushForDialect(
 // so the reconcile degrades to additive-TABLES-only instead of crashing the
 // boot.
 //
-// Deliberate scope (review): because the baseline is diffed from an EMPTY
+// Deliberate scope: because the baseline is diffed from an EMPTY
 // snapshot it emits only CREATE TABLE — never ALTER TABLE ADD COLUMN. A core
 // table that already exists but is missing a newly-added COLUMN is therefore
 // NOT reconciled in this degraded pass (its CREATE is skipped as

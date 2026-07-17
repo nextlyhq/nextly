@@ -91,9 +91,9 @@ describe("SchemaRegistry.getRelations", () => {
   });
 
   it("fails FAST when an edge references an unregistered target table", () => {
-    // Review-driven contract change: the assembled relations are cached, so
-    // a silently-skipped edge surfaces far away at query time — malformed
-    // registration metadata must throw at assembly instead.
+    // The assembled relations are cached, so a silently-skipped edge would
+    // surface far away at query time — malformed registration metadata must
+    // throw at assembly instead.
     const registry = makeRegistry();
     registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
       { key: "ghost", fromColumn: "authorId", targetTable: "not_a_table" },

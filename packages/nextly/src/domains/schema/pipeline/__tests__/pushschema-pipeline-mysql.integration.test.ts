@@ -30,11 +30,11 @@ import { DrizzleStatementExecutor } from "../../services/drizzle-statement-execu
 import type { DesiredSchema } from "../types";
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL;
-// Unique per-run database name — a fixed name could collide with (and the
-// pre-drop could destroy) a concurrent run's database. Hex suffix keeps it
-// a safe identifier, so interpolating it into DDL is not an injection
-// surface.
-const DB_NAME = `nextly_pipeline_mysql_${randomBytes(4).toString("hex")}`;
+// Per-run database name — a fixed name could collide with (and the pre-drop
+// could destroy) a concurrent run's database. 16 random bytes make it
+// collision-resistant across concurrent runs; the hex suffix keeps it a safe
+// identifier, so interpolating it into DDL is not an injection surface.
+const DB_NAME = `nextly_pipeline_mysql_${randomBytes(16).toString("hex")}`;
 
 describe.skipIf(!MYSQL_URL)("PushSchemaPipeline integration — MySQL", () => {
   let bootstrap: Pool;

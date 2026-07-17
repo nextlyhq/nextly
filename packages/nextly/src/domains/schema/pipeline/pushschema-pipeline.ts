@@ -830,7 +830,7 @@ export class PushSchemaPipeline {
         // here means the emitter disagrees with our differ — never
         // execute it; fail the apply so the journal records failure.
         //
-        // Review-driven properties of this scan:
+        // Properties of this scan:
         //   - It runs on BOTH routes (fast path and kit path), so the
         //     guarantee never depends on FAST_PATH_OP_TYPES staying
         //     drop-free forever.
