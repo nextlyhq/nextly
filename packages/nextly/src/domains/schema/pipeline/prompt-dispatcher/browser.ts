@@ -12,6 +12,7 @@
 // channels, and a future F10 SSE-based browser channel can swap this
 // implementation out without touching the pipeline.
 
+import { toSnakeCase } from "../../services/field-column-descriptor";
 import type {
   ClassifierEvent,
   DestructiveDropEvent,
@@ -105,36 +106,50 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     const confirmedRenames = candidates.filter(c =>
       confirmedKeys.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`)
     );
+    // A drop covered by a confirmed rename preserves the column's data (it is
+    // renamed, not dropped), so any other candidate for that same from-column
+    // is a moot alternate. Track those from-columns so their unchosen
+    // alternates are not counted as unresolved below.
+    const renamedFromKeys = new Set(
+      confirmedRenames.map(c => `${c.tableName}::${c.fromColumn}`)
+    );
 
     // A candidate with no resolution at all falls through as drop_and_add and
     // destroys the `from` column's data. Its destructive_drop event was
     // filtered upstream (covered-by-candidate), so it never reaches the
     // acknowledgment gate below — treat an unresolved candidate as an
-    // unacknowledged drop and fail closed. This is also the sibling-table
-    // drift case: the apply path diffs EVERY managed table while preview only
-    // computes candidates for the edited one, so a drifted sibling column
-    // would otherwise be dropped silently.
+    // unacknowledged drop and fail closed, UNLESS its from-column is already
+    // consumed by a confirmed rename (then no data is lost). This is also the
+    // sibling-table drift case: the apply path diffs EVERY managed table while
+    // preview only computes candidates for the edited one, so a drifted sibling
+    // column would otherwise be dropped silently.
     const unresolvedCandidates = candidates.filter(
-      c => !knownKeys.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`)
+      c =>
+        !knownKeys.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`) &&
+        !renamedFromKeys.has(`${c.tableName}::${c.fromColumn}`)
     );
 
     // A column drop is irreversible data loss. The classifier emits one
-    // destructive_drop event per column whose data will be destroyed; require
-    // an explicit confirm_drop resolution for every one. An abort for the same
-    // event wins over a co-present confirm_drop, so conflicting resolutions
-    // fail closed rather than dropping the column and then throwing after the
-    // DDL has already run (auto-committed on MySQL, non-transactional SQLite).
-    const abortedDrops = new Set(
-      mergedEventResolutions.filter(r => r.kind === "abort").map(r => r.eventId)
-    );
-    const acknowledgedDrops = new Set(
-      mergedEventResolutions
-        .filter(r => r.kind === "confirm_drop" && !abortedDrops.has(r.eventId))
-        .map(r => r.eventId)
-    );
+    // destructive_drop event per column whose data will be destroyed; a drop is
+    // acknowledged only when it carries EXACTLY ONE resolution and that
+    // resolution is confirm_drop. Zero (missing ack), an abort, duplicate
+    // confirm_drops, or a confirm_drop alongside any other resolution all fail
+    // closed here, so the drop never runs and then throws in a later phase
+    // (DUPLICATE_RESOLUTION_FOR_EVENT / abort) after the DDL has committed
+    // (auto-committed on MySQL, non-transactional SQLite).
+    const resolutionsByEvent = new Map<string, Resolution[]>();
+    for (const r of mergedEventResolutions) {
+      const list = resolutionsByEvent.get(r.eventId) ?? [];
+      list.push(r);
+      resolutionsByEvent.set(r.eventId, list);
+    }
+    const isDropAcknowledged = (eventId: string): boolean => {
+      const list = resolutionsByEvent.get(eventId) ?? [];
+      return list.length === 1 && list[0].kind === "confirm_drop";
+    };
     const unacknowledgedDrops = events.filter(
       (e): e is DestructiveDropEvent =>
-        e.kind === "destructive_drop" && !acknowledgedDrops.has(e.id)
+        e.kind === "destructive_drop" && !isDropAcknowledged(e.id)
     );
 
     // Fail the whole apply closed when any data-losing drop was not explicitly
@@ -204,7 +219,13 @@ function translateLegacyResolutions(
   }
 
   for (const [fieldName, legacy] of Object.entries(bundle.byFieldName)) {
-    const event = eventByColumn.get(fieldName);
+    // The classifier keys events by DB column name, which is the snake_case
+    // form of the field name (matching how columns are generated). The admin
+    // sends resolutions keyed by the field's public name, so normalize before
+    // matching or a camelCase field's resolution is silently dropped and its
+    // apply then fails closed. Fall back to the raw name for safety.
+    const event =
+      eventByColumn.get(toSnakeCase(fieldName)) ?? eventByColumn.get(fieldName);
     if (!event) continue;
 
     if (legacy.action === "provide_default") {
