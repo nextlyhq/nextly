@@ -176,9 +176,16 @@ test("the preview is an interactive simulation with real confirmation", async ({
   const desktopWidth = (await emailInput.boundingBox())?.width ?? 0;
   expect(desktopWidth).toBeGreaterThan(0);
   await page.getByRole("tab", { name: "Mobile" }).click();
+  // boundingBox() returns null while the pane is detached mid-transition; a
+  // null-to-zero fallback would let that transient state pass the narrower
+  // check, so only a real, positive measurement may satisfy the poll.
   await expect
-    .poll(async () => (await emailInput.boundingBox())?.width ?? 0, {
-      message: "mobile preview should be narrower than desktop",
-    })
-    .toBeLessThan(desktopWidth);
+    .poll(
+      async () => {
+        const box = await emailInput.boundingBox();
+        return box !== null && box.width > 0 && box.width < desktopWidth;
+      },
+      { message: "mobile preview should be narrower than desktop" }
+    )
+    .toBe(true);
 });
