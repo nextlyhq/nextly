@@ -61,6 +61,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -80,6 +81,8 @@ import {
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
+
+import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 // ============================================================
 // Default field helpers
@@ -465,6 +468,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             email: p._authenticatedUserEmail
               ? String(p._authenticatedUserEmail)
               : undefined,
+            // Forward decoded role slugs so field-level `access.read` redaction
+            // evaluates against the caller's roles, matching the collection and
+            // standalone-single paths.
+            roles: readAuthenticatedRoles(p),
           }
         : undefined;
       const result = await svc.entry.update(
@@ -897,6 +904,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       assertValidFieldsPayload(fields);
 
       const currentVersion = single.schemaVersion ?? 1;
+      // Reject a stale UI save before any DDL runs so two admins editing the
+      // same single cannot silently overwrite each other (last-write-wins).
+      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
       const tableName = single.tableName;
 
       const legacyBundle = resolutions
@@ -957,7 +967,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      // Post-apply: update dynamic_singles fields JSON + schema_hash.
+      const newSchemaVersion = currentVersion + 1;
+
+      // Post-apply: update dynamic_singles fields JSON + schema_hash, and
+      // advance schema_version so the optimistic-lock check above sees a new
+      // value on the next save. Without this bump the stored version never
+      // changes and a second stale save would pass the guard. The write is
+      // non-fatal (the DDL already succeeded), but track whether it landed so
+      // the response never reports a version the database did not persist.
+      let versionPersisted = true;
       try {
         await adapter.update(
           "dynamic_singles",
@@ -965,14 +983,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
       } catch (err) {
+        versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
         );
       }
 
@@ -991,11 +1012,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      const newSchemaVersion = currentVersion + 1;
-      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
-
       return respondAction(`Schema applied for single '${slug}'`, {
-        newSchemaVersion,
+        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
       });
     },
   },

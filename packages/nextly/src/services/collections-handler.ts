@@ -164,12 +164,13 @@ export class CollectionsHandler {
       userId?: string;
       userName?: string;
       userEmail?: string;
+      userRoles?: string[];
       user?: UserContext;
       overrideAccess?: boolean;
       routeAuthorized?: boolean;
     },
-  >(params: T): Omit<T, "userName" | "userEmail"> {
-    const { userName, userEmail, ...rest } = params;
+  >(params: T): Omit<T, "userName" | "userEmail" | "userRoles"> {
+    const { userName, userEmail, userRoles, ...rest } = params;
     if (!rest.user && rest.userId) {
       return {
         ...rest,
@@ -177,6 +178,9 @@ export class CollectionsHandler {
           id: rest.userId,
           name: userName,
           email: userEmail,
+          // Carry the authenticated role set so role-based access rules and
+          // field-level access.read evaluate against the real user.
+          roles: userRoles,
         },
         overrideAccess: true,
         routeAuthorized: true,
@@ -376,6 +380,8 @@ export class CollectionsHandler {
       userId?: string;
       userName?: string;
       userEmail?: string;
+      /** Authenticated role set, forwarded to role-based access rules. */
+      userRoles?: string[];
       /** Depth for relationship population in response (0-5) */
       depth?: number;
       /** User context for access control */
@@ -466,6 +472,8 @@ export class CollectionsHandler {
       userId?: string;
       userName?: string;
       userEmail?: string;
+      /** Authenticated role set, forwarded to role-based access rules. */
+      userRoles?: string[];
       /** Depth for relationship population in response (0-5) */
       depth?: number;
       /** User context for access control */
@@ -494,6 +502,8 @@ export class CollectionsHandler {
     userId?: string;
     userName?: string;
     userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -516,6 +526,8 @@ export class CollectionsHandler {
     userId?: string;
     userName?: string;
     userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -539,6 +551,8 @@ export class CollectionsHandler {
     userId?: string;
     userName?: string;
     userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -561,16 +575,29 @@ export class CollectionsHandler {
       collectionName: string;
       where: WhereFilter;
       data: Record<string, unknown>;
+      userId?: string;
+      userName?: string;
+      userEmail?: string;
+      /** Authenticated role set, forwarded to role-based access rules. */
+      userRoles?: string[];
       /** User context for access control */
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Route auth already ran; response is still redacted for this user */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     options?: { limit?: number }
   ) {
-    return this.entryService.bulkUpdateByQuery(params, options);
+    // Resolve userId -> user and mark route-authorized, mirroring
+    // bulkUpdateEntries so the query-based bulk update honors access control
+    // and redaction instead of running as an anonymous caller.
+    return this.entryService.bulkUpdateByQuery(
+      this.resolveUserParam(params),
+      options
+    );
   }
 
   /**
@@ -610,6 +637,8 @@ export class CollectionsHandler {
     userId?: string;
     userName?: string;
     userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
     /** Optional field overrides to apply to the duplicated entry */
     overrides?: Record<string, unknown>;
     /** User context for access control */

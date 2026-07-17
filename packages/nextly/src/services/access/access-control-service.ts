@@ -247,18 +247,23 @@ export class AccessControlService {
     rule: StoredAccessRule,
     context: RequestContext
   ): AccessEvaluationResult {
-    const userRole = context.user?.role;
     const allowedRoles = rule.allowedRoles ?? [];
 
     if (!context.user) {
       return { allowed: false, reason: "Authentication required" };
     }
 
-    if (!userRole) {
+    // Collect every role the user holds: the many-to-many `roles` set plus the
+    // single `role` when present (deduped). Role-based rules use OR logic, so
+    // access is granted if ANY held role is in the allowed list.
+    const userRoles = new Set<string>(context.user.roles ?? []);
+    if (context.user.role) userRoles.add(context.user.role);
+
+    if (userRoles.size === 0) {
       return { allowed: false, reason: "User has no role assigned" };
     }
 
-    const allowed = allowedRoles.includes(userRole);
+    const allowed = allowedRoles.some(role => userRoles.has(role));
 
     return {
       allowed,

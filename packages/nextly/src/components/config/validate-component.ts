@@ -33,6 +33,7 @@ import {
   validateComponentFieldRefShared,
   validateFieldNameShared,
   validateFieldTypeShared,
+  validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -97,6 +98,9 @@ export type ComponentValidationErrorCode =
   | "RELATIONSHIP_TARGET_INVALID"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
+  | "DECIMAL_PRECISION_INVALID"
+  | "DECIMAL_SCALE_INVALID"
+  | "DECIMAL_SCALE_EXCEEDS_PRECISION"
   // Component field errors
   | "COMPONENT_REF_REQUIRED"
   | "COMPONENT_REF_CONFLICT"
@@ -236,6 +240,10 @@ function validateField(
 
     case "component":
       validateComponentFieldRefShared(f, path, errsBase);
+      break;
+
+    case "number":
+      validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
   }
 }

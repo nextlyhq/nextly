@@ -434,6 +434,9 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        dbType?: "integer" | "decimal";
+        precision?: number;
+        scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
@@ -447,6 +450,11 @@ function toMinimalEntities(
       relationTo: f.relationTo,
       unique: f.unique,
       index: f.index,
+      // Forward decimal storage so migrate:create emits a decimal column, not
+      // the integer default, for a code-first `dbType: "decimal"` number field.
+      dbType: f.dbType,
+      precision: f.precision,
+      scale: f.scale,
     }));
     return {
       slug,
