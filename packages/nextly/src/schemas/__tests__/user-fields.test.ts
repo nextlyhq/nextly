@@ -27,6 +27,9 @@ function userField(cfg: FieldFixture): UserFieldConfig {
   return cfg as unknown as UserFieldConfig;
 }
 
+// buildUserFieldsSchema turns each field config into the zod schema that guards
+// a user's value for that field, so these cases pin the per-type value rules
+// (fieldConfigToZod) that the write path relies on.
 describe("buildUserFieldsSchema value validation", () => {
   it("validates a url field and enforces its length bounds", () => {
     const schema = buildUserFieldsSchema([
@@ -53,6 +56,7 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 
   it("enforces text minLength and maxLength", () => {
+    // A text field's declared length bounds become zod min/max on the string.
     const schema = buildUserFieldsSchema([
       userField({
         name: "bio",
@@ -68,6 +72,7 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 
   it("enforces number min and max", () => {
+    // A number field's min/max bound the numeric value, not its length.
     const schema = buildUserFieldsSchema([
       userField({
         name: "age",
@@ -83,6 +88,7 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 
   it("validates an email field", () => {
+    // An email field must parse as an email address, not just any string.
     const schema = buildUserFieldsSchema([
       userField({ name: "work", type: "email", required: true }),
     ]);
@@ -109,6 +115,7 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 
   it("accepts an array of option values for a hasMany select and rejects a bare value", () => {
+    // hasMany wraps the option enum in an array, so a scalar value is rejected.
     const schema = buildUserFieldsSchema([
       userField({
         name: "tags",
@@ -138,6 +145,8 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 
   it("treats a non-required field as nullable and optional", () => {
+    // An optional field wraps its schema in nullable().optional(), so a missing
+    // key, an explicit null, and a value are all accepted.
     const schema = buildUserFieldsSchema([
       userField({ name: "note", type: "text" }),
     ]);
@@ -147,7 +156,10 @@ describe("buildUserFieldsSchema value validation", () => {
   });
 });
 
+// The create and update schemas merge the same custom fields onto the core user
+// schema but treat `required` differently, so these pin that difference.
 describe("buildCreateUserSchema vs buildUpdateUserSchema", () => {
+  // A required custom field, reused across both create and update expectations.
   const requiredCustom = userField({
     name: "company",
     type: "text",
@@ -166,6 +178,7 @@ describe("buildCreateUserSchema vs buildUpdateUserSchema", () => {
   });
 
   it("makes the same required custom field optional on update (partial saves)", () => {
+    // Updates are partial, so even a required custom field may be omitted.
     const schema = buildUpdateUserSchema([requiredCustom]);
     expect(schema.safeParse({}).success).toBe(true);
   });
