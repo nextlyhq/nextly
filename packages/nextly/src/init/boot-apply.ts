@@ -40,7 +40,7 @@ export async function runBootTimeApplyIfDev(opts?: {
   caller?: string;
 }): Promise<void> {
   if (process.env.NODE_ENV !== "development") return;
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
+
   if (process.env.NEXTLY_DISABLE_BOOT_APPLY === "1") return;
 
   const label = callerLabel(opts?.caller);
@@ -386,7 +386,6 @@ async function applyPendingMigrations(label: string): Promise<void> {
     );
 
     // Operator-set override; never in CI config (spec §4.6.1).
-    // eslint-disable-next-line turbo/no-undeclared-env-vars
     const allowCoreDestructive =
       process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1";
 

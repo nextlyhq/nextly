@@ -98,6 +98,8 @@
     "TRUSTED_PROXY_IPS", // nextly trust-proxy CIDR list
     "ALLOWED_REDIRECT_HOSTS", // nextly forgot-password redirect allowlist
     "DB_PROVIDER", // @nextlyhq/adapter-postgres runtime driver selection
+    "NEXTLY_ALLOW_CORE_DESTRUCTIVE", // migrate: allow destructive core schema ops (F11)
+    "NEXTLY_DISABLE_BOOT_APPLY", // boot-apply: opt-out escape hatch for dev workflows
     "TMPDIR", // create-nextly-app temp dir override
     "PORT", // nextly HMR listener: Next.js dev port
     "USE_HTTPS", // nextly HMR listener: dev server protocol
