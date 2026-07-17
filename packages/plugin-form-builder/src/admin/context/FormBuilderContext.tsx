@@ -22,33 +22,27 @@ import {
   type ReactNode,
 } from "react";
 
-import type { FormField, FormFieldType, FormNotification } from "../../types";
+import type {
+  FormField,
+  FormFieldType,
+  FormNotification,
+  FormSettings,
+} from "../../types";
+import {
+  DEFAULT_FORM_SETTINGS,
+  normalizeFormSettings,
+} from "../../utils/form-settings";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/** Form settings configuration */
-export interface FormSettings {
-  /** Submit button text */
-  submitButtonText: string;
-  /** Show reset button */
-  showResetButton: boolean;
-  /** Reset button text */
-  resetButtonText: string;
-  /** Success message after submission */
-  confirmationMessage: string;
-  /** Redirect URL after submission (optional) */
-  redirectUrl?: string;
-  /** Enable honeypot spam protection */
-  honeypotEnabled: boolean;
-  /** Enable CAPTCHA */
-  captchaEnabled: boolean;
-  /** Store submissions in database */
-  storeSubmissions: boolean;
-  /** Limit submissions per user/IP */
-  submissionLimit?: number;
-}
+/**
+ * The canonical settings shape lives in `types.ts` (the same shape the
+ * collection group declares and the submit handler consumes); re-exported
+ * here so admin components keep one import site.
+ */
+export type { FormSettings } from "../../types";
 
 /**
  * The notification rule type lives in `types.ts` (the same shape the send
@@ -136,18 +130,8 @@ export interface FormBuilderProviderProps {
   children: ReactNode;
 }
 
-/** Default form settings */
-export const DEFAULT_SETTINGS: FormSettings = {
-  submitButtonText: "Submit",
-  showResetButton: false,
-  resetButtonText: "Reset",
-  confirmationMessage: "Thank you for your submission!",
-  redirectUrl: undefined,
-  honeypotEnabled: true,
-  captchaEnabled: false,
-  storeSubmissions: true,
-  submissionLimit: undefined,
-};
+/** Default form settings (the canonical defaults from the settings reader) */
+export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
 
 /** Create a new notification rule with default values */
 export function createNotification(): FormNotification {
@@ -311,10 +295,11 @@ export function FormBuilderProvider({
     description: initialData?.description,
     status: initialData?.status || "draft",
   });
-  const [settings, setSettings] = useState<FormSettings>({
-    ...DEFAULT_SETTINGS,
-    ...initialData?.settings,
-  });
+  // Stored settings may carry legacy keys from earlier builder versions —
+  // the normalizer migrates them on read (nothing rewrites until save).
+  const [settings, setSettings] = useState<FormSettings>(() =>
+    normalizeFormSettings(initialData?.settings)
+  );
   const [notifications, setNotifications] = useState<FormNotification[]>(
     initialData?.notifications || []
   );

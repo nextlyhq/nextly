@@ -177,11 +177,20 @@ export function formsCollection(
     }),
 
     checkbox({
+      name: "honeypotEnabled",
+      label: "Honeypot",
+      admin: {
+        description:
+          "Per-form honeypot override; unset inherits the plugin default",
+      },
+    }),
+
+    checkbox({
       name: "captchaEnabled",
       label: "Enable reCAPTCHA",
-      defaultValue: false,
       admin: {
-        description: "Protect this form with Google reCAPTCHA v3",
+        description:
+          "Per-form reCAPTCHA override; unset inherits the plugin default",
       },
     }),
 
