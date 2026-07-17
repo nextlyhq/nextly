@@ -101,7 +101,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                 }}
                 className="group flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors cursor-pointer hover-subtle-row"
               >
-                <UserIcon className="h-4 w-4 text-muted-foreground/70 group-hover-subtle-row transition-colors" />
+                <UserIcon className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                 <span>My Account</span>
               </DropdownMenuItem>
 
@@ -112,7 +112,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   rel="noopener noreferrer"
                   className="flex w-full items-center gap-3 px-3 py-2.5"
                 >
-                  <HelpCircle className="h-4 w-4 text-muted-foreground/70 group-hover-subtle-row transition-colors" />
+                  <HelpCircle className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                   <span>Documentation</span>
                 </a>
               </DropdownMenuItem>

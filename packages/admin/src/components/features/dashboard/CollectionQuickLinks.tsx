@@ -107,7 +107,7 @@ function CollectionCard({
                 {item.label}
               </h5>
             </div>
-            <div className="text-muted-foreground/60 group-hover:text-primary transition-colors pt-1">
+            <div className="text-muted-foreground group-hover:text-primary transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
             </div>
           </div>

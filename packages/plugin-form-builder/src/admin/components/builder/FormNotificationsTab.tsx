@@ -295,11 +295,11 @@ function NotificationCard({
               </span>
               {ccCount > 0 && (
                 <span>
-                  <span className="mx-1.5 text-muted-foreground/40">·</span>+
+                  <span className="mx-1.5 text-muted-foreground">·</span>+
                   {ccCount} cc/bcc
                 </span>
               )}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               {providerName}
             </span>
           </span>

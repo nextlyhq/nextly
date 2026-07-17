@@ -115,7 +115,7 @@ export const ProjectStatsGrid: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
+          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground">
             Resource Inventory
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-none" />

@@ -731,7 +731,7 @@ export function MediaUploadDropzone({
               {/* File type hint */}
               <p
                 id="upload-instructions"
-                className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground/80"
+                className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground"
               >
                 {fileTypeDescription}
               </p>

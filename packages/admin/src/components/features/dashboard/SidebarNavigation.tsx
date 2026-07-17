@@ -304,7 +304,7 @@ export function SidebarNavigation({
       <>
         <SidebarGroup>
           {!isCollapsed && !hideLabels.includes(label) && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
               {label}
             </SidebarGroupLabel>
           )}
@@ -350,7 +350,7 @@ export function SidebarNavigation({
       {showCollectionsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Collections
             </SidebarGroupLabel>
           )}
@@ -366,7 +366,7 @@ export function SidebarNavigation({
       {showSinglesSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Singles
             </SidebarGroupLabel>
           )}
@@ -420,7 +420,7 @@ export function SidebarNavigation({
       {showPluginsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Plugins
             </SidebarGroupLabel>
           )}
@@ -442,7 +442,7 @@ export function SidebarNavigation({
       {showSettingsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Settings
             </SidebarGroupLabel>
           )}
@@ -451,7 +451,7 @@ export function SidebarNavigation({
               {systemSettings.length > 0 && (
                 <>
                   {!isCollapsed && (
-                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground/50 font-medium">
+                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
                       System Settings
                     </li>
                   )}
@@ -468,7 +468,7 @@ export function SidebarNavigation({
               {emailSettings.length > 0 && (
                 <>
                   {!isCollapsed && (
-                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground/50 font-medium">
+                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
                       Email Configuration
                     </li>
                   )}

@@ -4,14 +4,13 @@
  * these because the opacity is applied per call site, not in the theme, so this
  * scans the source instead: it resolves each `text-`, `border-`, and `ring-`
  * color utility with an opacity (numeric or bracket, `ring-primary/[0.08]`),
- * composites it over the page surface, and fails any that drop below WCAG
- * unless the utility is in ALLOWED_DECORATIVE (below).
+ * composites it over the surface it renders on (see surfaceFor), and fails any
+ * that drop below WCAG unless the utility is in ALLOWED_DECORATIVE (below).
  *
  * Scope note: this reads sibling packages' source. Those trees are declared as
  * inputs to this package's `test` task (see packages/ui/turbo.json), so a change
  * in a scanned call-site package invalidates the cached result. It is a
- * supplementary call-site guard, deliberately narrow: text, border, and ring
- * color utilities, evaluated on the base surface.
+ * supplementary call-site guard for text, border, and ring color utilities.
  */
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -57,6 +56,12 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // Faint hairline / dashed decorative borders, like border-subtle.
   "border-primary/[0.08]",
   "border-primary/[0.18]",
+  // The faint track of a CSS spinner on a primary button; border-t is the solid
+  // moving indicator and the spinner is a transient loading affordance.
+  "border-primary-foreground/30",
+  // Supplementary hover outline; the hover state is conveyed by bg-accent and
+  // its text, so the thin border is decorative.
+  "border-accent-foreground/20",
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);
@@ -71,10 +76,45 @@ const SCANNED_DIRS = [
   "packages/plugin-page-builder/src",
 ];
 
+// Match any color utility with an opacity; the name is captured broadly so
+// multi-segment tokens (`muted-foreground`) are caught, then validated against
+// real theme colors below, which drops non-color matches (`text-sm/50`).
+const UTILITY_PATTERN =
+  "\\b(text|border|ring)-([a-z][a-z0-9-]*)/(\\[[0-9.]+\\]|[0-9]+)";
+
+// Every name a `--color-*` utility can carry, from the theme's @theme block.
+const COLOR_NAMES = new Set(
+  [...scale.keys()].map(k => k.replace("--color-", ""))
+);
+
+const nameOf = (combo: string): string | null =>
+  /^(?:text|border|ring)-(.+)\/(?:\[[0-9.]+\]|[0-9]+)$/.exec(combo)?.[1] ??
+  null;
+
 /**
- * Every distinct `(text|border|ring)-<token>/<NN>` utility used in the scanned
- * source, including arbitrary bracket opacities like `border-primary/[0.08]`.
- * Rings are included because a focus indicator is a UI boundary held to 3:1.
+ * The surface a token renders on, so contrast is measured where it is painted
+ * rather than always on the page. An on-color foreground (`primary-foreground`)
+ * sits on its fill, a surface foreground on that surface, everything else on the
+ * page. This keeps `text-primary-foreground/80` (light text on a dark button)
+ * from reading as a page failure.
+ */
+const ON_FILL_FOREGROUND =
+  /^(primary|secondary|accent|destructive|success|warning|highlight|sidebar-primary|sidebar-accent)-foreground$/;
+function surfaceFor(name: string): string {
+  if (name === "sidebar-foreground") return "--color-sidebar-background";
+  if (name === "card-foreground") return "--color-card";
+  if (name === "popover-foreground") return "--color-popover";
+  if (ON_FILL_FOREGROUND.test(name)) {
+    return `--color-${name.slice(0, -"-foreground".length)}`;
+  }
+  return "--color-background";
+}
+
+/**
+ * Every distinct color utility with an opacity used in the scanned source,
+ * including multi-segment names (`text-muted-foreground`) and bracket
+ * opacities (`border-primary/[0.08]`). Rings are included because a focus
+ * indicator is a UI boundary held to 3:1.
  */
 function scanCombos(): Map<string, number> {
   const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
@@ -85,26 +125,31 @@ function scanCombos(): Map<string, number> {
       throw new Error(`scanned dir does not exist: ${dir}`);
     }
   }
-  const pattern =
-    "\\b(text|border|ring)-(primary|foreground|destructive|success|warning|muted|accent|secondary|ring|border|input)(-[0-9]+)?/(\\[[0-9.]+\\]|[0-9]+)";
-  const out = execSync(`grep -rohE '${pattern}' ${dirs.join(" ")} || true`, {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const out = execSync(
+    `grep -rohE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
+    {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }
+  );
   const combos = new Map<string, number>();
   for (const line of out.split("\n")) {
     const t = line.trim();
-    if (t) combos.set(t, (combos.get(t) ?? 0) + 1);
+    if (!t) continue;
+    const name = nameOf(t);
+    if (name && COLOR_NAMES.has(name)) {
+      combos.set(t, (combos.get(t) ?? 0) + 1);
+    }
   }
   return combos;
 }
 
 /**
- * Worst-case contrast of a `token/NN` utility, painted on the page surface. A
- * token that fails to resolve throws (naming the utility) rather than skipping,
- * so a mistyped or removed token cannot silently bypass the assertion. The
- * scanned token names are a fixed set that all map to `--color-*`, so a failure
- * here means the theme lost a token the source still references.
+ * Worst-case contrast of a `token/NN` utility across both modes, painted on the
+ * surface it renders on (surfaceFor). A token that fails to resolve throws
+ * (naming the utility) rather than skipping, so a mistyped or removed token
+ * cannot silently bypass the assertion; the scan only admits names that map to
+ * a real `--color-*`, so a throw here means the theme dropped a used token.
  */
 function worstRatio(combo: string): { ratio: number; need: number } {
   const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+\]|\d+)$/.exec(combo);
@@ -119,6 +164,7 @@ function worstRatio(combo: string): { ratio: number; need: number } {
     : Number(alphaStr) / 100;
   // Text needs 4.5:1; borders and focus rings are UI boundaries at 3:1.
   const need = kind === "text" ? 4.5 : 3;
+  const surface = surfaceFor(name);
   let worst = Infinity;
   for (const tokens of [light, dark]) {
     const ctx: ResolveContext = { tokens, scale };
@@ -130,7 +176,7 @@ function worstRatio(combo: string): { ratio: number; need: number } {
         `${combo}: could not resolve --color-${name} (${(error as Error).message})`
       );
     }
-    const bg = opaque(resolveColor("var(--color-background)", ctx), {
+    const bg = opaque(resolveColor(`var(${surface})`, ctx), {
       r: 1,
       g: 1,
       b: 1,
@@ -150,23 +196,23 @@ describe("alpha-opacity color utilities", () => {
   });
 
   it("scans every package that uses these alpha utilities", () => {
-    // Fingerprint the packages that actually contain target utilities and fail
-    // if one is not covered by SCANNED_DIRS, so a new admin-UI package cannot be
-    // silently unscanned (the scan would pass while its call sites go unchecked).
-    const pattern =
-      "\\b(text|border|ring)-(primary|foreground|destructive|success|warning|muted|accent|secondary|ring|border|input)(-[0-9]+)?/(\\[[0-9.]+\\]|[0-9]+)";
+    // Fingerprint the packages that actually contain color alpha utilities and
+    // fail if one is not covered by SCANNED_DIRS, so a new admin-UI package
+    // cannot be silently unscanned. Matches are filtered to real theme colors,
+    // matching the scan, so a package using only non-color opacities is ignored.
     const hits = execSync(
-      `grep -rlE '${pattern}' ${repo}/packages/*/src 2>/dev/null || true`,
+      `grep -rHoE '${UTILITY_PATTERN}' ${repo}/packages/*/src 2>/dev/null || true`,
       { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
     );
-    const pkg = (p: string): string | null =>
-      /\/packages\/([^/]+)\/src\//.exec(p)?.[1] ?? null;
-    const used = new Set(
-      hits
-        .split("\n")
-        .map(pkg)
-        .filter((p): p is string => p !== null)
-    );
+    const used = new Set<string>();
+    for (const line of hits.split("\n")) {
+      const sep = line.indexOf(":");
+      if (sep === -1) continue;
+      const name = nameOf(line.slice(sep + 1).trim());
+      if (!name || !COLOR_NAMES.has(name)) continue;
+      const pkg = /\/packages\/([^/]+)\/src\//.exec(line.slice(0, sep))?.[1];
+      if (pkg) used.add(pkg);
+    }
     const scanned = new Set(
       SCANNED_DIRS.map(d => /packages\/([^/]+)\/src/.exec(d)?.[1])
     );

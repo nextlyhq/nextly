@@ -663,7 +663,7 @@ export function MediaLibrary({
                 align="end"
                 className="w-48 shadow-none border-border"
               >
-                <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 px-2 py-1.5">
+                <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground px-2 py-1.5">
                   Toggle Columns
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-border/50" />

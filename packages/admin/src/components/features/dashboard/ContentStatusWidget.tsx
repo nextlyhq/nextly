@@ -36,7 +36,7 @@ function StatusItem({
             } as React.CSSProperties
           }
         />
-        <span className="text-[12px] font-bold text-muted-foreground/80 group-hover/item:text-foreground transition-colors tracking-tight">
+        <span className="text-[12px] font-bold text-muted-foreground group-hover/item:text-foreground transition-colors tracking-tight">
           {label}
         </span>
       </div>
@@ -86,7 +86,7 @@ export const ContentStatusWidget: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
+          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground">
             Lifecycle Overview
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-none" />
@@ -103,7 +103,7 @@ export const ContentStatusWidget: React.FC = () => {
         ) : total === 0 ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
             <div className="p-6 rounded-none bg-primary/5  border border-border">
-              <FileText className="h-10 w-10 text-muted-foreground/10" />
+              <FileText className="h-10 w-10 text-muted-foreground" />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-bold text-foreground">
@@ -131,7 +131,7 @@ export const ContentStatusWidget: React.FC = () => {
                 <span className="text-3xl font-black text-foreground tracking-tighter tabular-nums leading-none">
                   {total}
                 </span>
-                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/40 mt-1">
+                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mt-1">
                   Total
                 </span>
               </div>
@@ -151,7 +151,7 @@ export const ContentStatusWidget: React.FC = () => {
                 color="#f59e0b"
               />
             </div>
-            <p className="text-[9px] text-center text-muted-foreground/40 font-black uppercase tracking-[0.2em] opacity-80 px-4">
+            <p className="text-[9px] text-center text-muted-foreground font-black uppercase tracking-[0.2em] opacity-80 px-4">
               Consolidated health status across production clusters
             </p>
           </div>

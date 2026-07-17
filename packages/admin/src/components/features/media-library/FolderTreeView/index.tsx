@@ -83,7 +83,7 @@ export function FolderTreeView({
     <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
       {/* Sidebar Heading */}
       <div className="flex items-center justify-between px-3 mb-2">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40 px-3">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3">
           Folders
         </span>
         <Button
@@ -117,7 +117,7 @@ export function FolderTreeView({
               "h-4 w-4 shrink-0 transition-colors mr-2.5",
               activeFolderId === null
                 ? "text-primary"
-                : "text-muted-foreground/60 group-hover:text-foreground"
+                : "text-muted-foreground group-hover:text-foreground"
             )}
           />
           <span className="truncate text-xs">All Media</span>
@@ -126,7 +126,7 @@ export function FolderTreeView({
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-10">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/80" />
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         )}
 
@@ -228,7 +228,7 @@ function FolderTreeItem({
                 // Full-strength primary so the active expander icon meets contrast.
                 isActive
                   ? "text-primary group-hover:text-primary"
-                  : "text-muted-foreground/40 group-hover:text-foreground"
+                  : "text-muted-foreground group-hover:text-foreground"
               )}
             >
               <ExpandIcon className="h-3.5 w-3.5" />
@@ -245,7 +245,7 @@ function FolderTreeItem({
               "h-4 w-4 shrink-0 transition-colors",
               isActive
                 ? "text-primary"
-                : "text-muted-foreground/60 group-hover:text-foreground"
+                : "text-muted-foreground group-hover:text-foreground"
             )}
           />
           <span className="truncate text-xs">{folder.name}</span>

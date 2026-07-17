@@ -81,7 +81,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
           <span className="font-bold text-foreground tracking-tight">
             {activity.user.name}
           </span>{" "}
-          <span className="text-muted-foreground/60 font-medium">
+          <span className="text-muted-foreground font-medium">
             {activity.action}
           </span>{" "}
           {activity.entryTitle ? (
@@ -89,7 +89,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
               <span className="font-bold text-foreground tracking-tight underline decoration-primary/20 underline-offset-4">
                 {activity.entryTitle}
               </span>{" "}
-              <span className="text-muted-foreground/40 font-bold uppercase text-[9px] tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-none">
+              <span className="text-muted-foreground font-bold uppercase text-[9px] tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-none">
                 {activity.collectionLabel}
               </span>
             </>
@@ -100,7 +100,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
           )}
         </p>
 
-        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/30">
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           <Clock className="w-3 h-3 opacity-60" />
           <time dateTime={activity.timestamp}>{activity.relativeTime}</time>
         </div>
@@ -121,13 +121,13 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 const EmptyState: React.FC = () => (
   <div className="py-20 text-center space-y-4">
     <div className="inline-flex p-6 rounded-none bg-primary/5  border border-border">
-      <Clock className="h-10 w-10 text-muted-foreground/10" />
+      <Clock className="h-10 w-10 text-muted-foreground" />
     </div>
     <div className="space-y-1">
       <p className="text-sm font-bold text-foreground tracking-tight">
         Activity log is currently silent
       </p>
-      <p className="text-[11px] font-medium text-muted-foreground/40 uppercase tracking-widest">
+      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-widest">
         Actions will appear here as you work
       </p>
     </div>
@@ -143,7 +143,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
     <Card className="border-border bg-card/40 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border">
         <div className="space-y-1">
-          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
+          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground">
             System Event Log
           </CardTitle>
           <div className="h-1 w-8 bg-primary/20 rounded-none" />
@@ -159,7 +159,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
             <Spinner size="md" className="text-primary/40" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/30 animate-pulse">
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
               Syncing events...
             </span>
           </div>
@@ -186,7 +186,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
                   ))}
                 </div>
                 <div className="mt-6 pt-4  border-t border-border text-center">
-                  <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/30 hover-unified transition-all duration-500 py-3 px-8 rounded-none hover-unified">
+                  <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground hover-unified transition-all duration-500 py-3 px-8 rounded-none hover-unified">
                     Sync Previous Events
                   </button>
                 </div>

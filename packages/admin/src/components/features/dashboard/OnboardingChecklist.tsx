@@ -29,7 +29,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
           className={cn(
             "text-[13px] font-bold tracking-tight transition-all duration-500",
             step.isComplete
-              ? "text-muted-foreground/30 line-through"
+              ? "text-muted-foreground line-through"
               : "text-foreground/80 group-hover-unified"
           )}
         >
@@ -79,7 +79,7 @@ export const OnboardingChecklist: React.FC = () => {
               <span className="text-[14px] font-black text-foreground tracking-tighter">
                 {progress.completedCount} of {progress.totalCount}
               </span>
-              <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none">
                 {Math.round(completionPct)}%
               </span>
             </div>
@@ -100,7 +100,7 @@ export const OnboardingChecklist: React.FC = () => {
             <StepRow key={step.id} step={step} />
           ))}
         </div>
-        <p className="text-[9px] text-center text-muted-foreground/30 font-black uppercase tracking-[0.25em] mt-6 px-4">
+        <p className="text-[9px] text-center text-muted-foreground font-black uppercase tracking-[0.25em] mt-6 px-4">
           Complete initial configuration to unlock full analysis
         </p>
       </CardContent>

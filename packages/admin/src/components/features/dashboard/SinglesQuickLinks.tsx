@@ -51,7 +51,7 @@ function SingleCard({ single }: { single: ApiSingle }) {
                 </p>
               )}
             </div>
-            <div className="text-muted-foreground/60 group-hover:text-primary transition-colors shrink-0">
+            <div className="text-muted-foreground group-hover:text-primary transition-colors shrink-0">
               <Icon className="h-5 w-5" />
             </div>
           </div>

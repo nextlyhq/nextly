@@ -199,7 +199,7 @@ export function MediaCard({
         )}
         {imageError && (
           <div className="absolute inset-0 bg-accent/50 flex items-center justify-center">
-            <MediaTypeIcon className="w-12 h-12 text-muted-foreground/40" />
+            <MediaTypeIcon className="w-12 h-12 text-muted-foreground" />
           </div>
         )}
       </div>

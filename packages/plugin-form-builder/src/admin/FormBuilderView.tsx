@@ -453,7 +453,7 @@ function FormBuilderViewInner({
                     value={formData.slug || ""}
                     onChange={e => updateFormData({ slug: e.target.value })}
                     placeholder="e.g., contact-form"
-                    className="bg-transparent placeholder:text-muted-foreground/50"
+                    className="bg-transparent placeholder:text-muted-foreground"
                   />
                 </div>
 

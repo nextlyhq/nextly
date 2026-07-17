@@ -1558,7 +1558,7 @@ export function EmailTemplateForm({
                   disabled={isPending}
                   placeholder="Untitled template"
                   aria-label="Template name"
-                  className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
+                  className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground"
                 />
               )}
             />
@@ -1699,7 +1699,7 @@ export function EmailTemplateForm({
                           {...field}
                           disabled={isPending}
                           placeholder="Welcome to {{appName}}"
-                          className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+                          className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                         />
                       </FormControl>
                     </div>
@@ -1797,7 +1797,7 @@ export function EmailTemplateForm({
                       value={field.value ?? ""}
                       disabled={isPending}
                       placeholder="Plain-text fallback sent alongside the HTML…"
-                      className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50 xl:min-h-full"
+                      className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground xl:min-h-full"
                     />
                   )}
                 />

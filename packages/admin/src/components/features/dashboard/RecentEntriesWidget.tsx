@@ -59,7 +59,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
         <div className="absolute inset-0 bg-gradient-to-r from-primary/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
         <div className="h-12 w-12 shrink-0 rounded-none bg-primary/5 flex items-center justify-center  border border-border group-hover:border-border group-hover-unified group-hover:rotate-3 transition-all duration-500 relative z-10">
-          <span className="text-sm font-black text-muted-foreground/60 group-hover-unified transition-colors">
+          <span className="text-sm font-black text-muted-foreground group-hover-unified transition-colors">
             {firstLetter}
           </span>
         </div>
@@ -69,11 +69,11 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
             {truncateTitle(entry.title)}
           </p>
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.15em]">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.15em]">
               {entry.collectionLabel}
             </span>
             <span className="h-0.5 w-0.5 rounded-none bg-border" />
-            <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.15em]">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.15em]">
               {formatRelativeTime(entry.updatedAt)}
             </span>
           </div>
@@ -84,7 +84,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
         </div>
 
         <div className="p-2 rounded-none  border border-border border-transparent group-hover:border-border group-hover:bg-card group-hover:shadow-sm transition-all duration-500 relative z-10">
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover-unified group-hover:translate-x-0.5 transition-all" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover-unified group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>
     </Link>
@@ -122,7 +122,7 @@ export const RecentEntriesWidget: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
+          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground">
             Recent Editorial Activity
           </CardTitle>
           <div className="h-1 w-8 bg-primary/20 rounded-none" />
@@ -147,7 +147,7 @@ export const RecentEntriesWidget: React.FC = () => {
         ) : !data?.entries.length ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
             <div className="p-6 rounded-none bg-primary/5  border border-border">
-              <FileText className="h-10 w-10 text-muted-foreground/20" />
+              <FileText className="h-10 w-10 text-muted-foreground" />
             </div>
             <div className="space-y-1">
               <p className="text-sm font-bold text-foreground tracking-tight">

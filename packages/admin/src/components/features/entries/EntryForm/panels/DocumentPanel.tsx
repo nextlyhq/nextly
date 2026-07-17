@@ -100,7 +100,7 @@ function Separator() {
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
   return (
     <Icon
-      className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0"
+      className="h-3.5 w-3.5 text-muted-foreground shrink-0"
       aria-hidden="true"
     />
   );

@@ -167,11 +167,11 @@ export function PageErrorFallback({
           {process.env.NODE_ENV === "development" && error && (
             <div className="mt-12 w-full text-left">
               <details className="group">
-                <summary className="cursor-pointer text-xs font-medium text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center justify-center gap-2 outline-none">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-muted-foreground transition-colors flex items-center justify-center gap-2 outline-none">
                   <span>View technical details</span>
                 </summary>
                 <div className="mt-4 p-4 rounded-none bg-accent/50  border border-border overflow-hidden">
-                  <pre className="text-[11px] font-mono text-muted-foreground/80 overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[200px] custom-scrollbar">
+                  <pre className="text-[11px] font-mono text-muted-foreground overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[200px] custom-scrollbar">
                     {error.message}
                     {error.stack && (
                       <span className="opacity-50 block mt-2 pt-2  border-t border-border">

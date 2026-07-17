@@ -145,7 +145,7 @@ function FieldCard({
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none text-muted-foreground/60 hover:text-foreground hover:bg-primary/5 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none text-muted-foreground hover:text-foreground hover:bg-primary/5 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label={`Reorder ${field.label || field.name}. Press Space to lift, arrow keys to move, Space to drop.`}
         >
           <Lucide.GripVertical className="h-4 w-4" aria-hidden="true" />
@@ -168,7 +168,7 @@ function FieldCard({
             </span>
             <span className="block truncate text-xs text-muted-foreground">
               {entry?.label ?? field.type}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               <span className="font-mono">{field.name}</span>
             </span>
           </span>

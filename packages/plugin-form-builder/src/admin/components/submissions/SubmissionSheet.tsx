@@ -409,7 +409,7 @@ export function SubmissionSheet({
           <div className="space-y-1 border-t border-border pt-4 text-xs text-muted-foreground">
             <p>
               IP: {submission.ipAddress || "—"}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               ID: <span className="font-mono">{submission.id}</span>
             </p>
             {submission.userAgent && (

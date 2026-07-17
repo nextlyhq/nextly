@@ -43,7 +43,7 @@ export function UserProfileDropdown({
                 alt={user?.name || "User"}
                 className="rounded-none"
               />
-              <AvatarFallback className="bg-transparent text-sidebar-foreground/50 text-xs font-bold rounded-none">
+              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold rounded-none">
                 {user?.name?.charAt(0)?.toUpperCase() || "U"}
               </AvatarFallback>
             </Avatar>

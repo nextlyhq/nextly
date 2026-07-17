@@ -99,7 +99,7 @@ export function GetStartedEmptyState() {
                   </div>
                   <ArrowRight
                     aria-hidden="true"
-                    className="shrink-0 h-4 w-4 text-muted-foreground/60 group-hover:text-primary group-hover:translate-x-0.5 transition-all"
+                    className="shrink-0 h-4 w-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all"
                   />
                 </CardContent>
               </Card>
