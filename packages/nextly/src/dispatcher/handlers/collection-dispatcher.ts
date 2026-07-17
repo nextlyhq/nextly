@@ -49,6 +49,7 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
@@ -586,9 +587,9 @@ const COLLECTIONS_METHODS: Record<
 
       if (!result.success) {
         if (result.error.code === "SCHEMA_VERSION_CONFLICT") {
-          throw new Error(
-            "Schema was modified by another session. Please refresh."
-          );
+          // Same conflict surface as the single/component apply paths so all
+          // three entity kinds report a stale schema save identically.
+          throw NextlyError.conflict({ reason: "version" });
         }
         throw new Error(result.error.message);
       }
