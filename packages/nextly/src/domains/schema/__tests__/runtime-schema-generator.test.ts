@@ -91,6 +91,23 @@ describe("generateRuntimeSchema", () => {
       expect(columns).toHaveProperty("price");
     });
 
+    it("maps a plain number field to an integer column (default)", () => {
+      const fields: FieldDefinition[] = [{ name: "count", type: "number" }];
+      const result = generateRuntimeSchema("dc_products", fields, "postgresql");
+      const col = getColumns(result.table).count as { getSQLType(): string };
+      expect(col.getSQLType()).toBe("integer");
+    });
+
+    it("maps a dbType:'decimal' number field to an exact numeric column", () => {
+      const fields: FieldDefinition[] = [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { name: "price", type: "number", dbType: "decimal", scale: 2 } as any,
+      ];
+      const result = generateRuntimeSchema("dc_products", fields, "postgresql");
+      const col = getColumns(result.table).price as { getSQLType(): string };
+      expect(col.getSQLType()).toBe("numeric(10, 2)");
+    });
+
     it("maps checkbox field to boolean column", () => {
       const fields: FieldDefinition[] = [
         { name: "isActive", type: "checkbox" },
