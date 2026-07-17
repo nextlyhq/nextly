@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { ComponentDataService } from "../../../services/components/component-data-service";
 
 import {
@@ -52,7 +53,6 @@ describe("ComponentDataService", () => {
     ctx.registry.registerComponent("hero", heroComponentMeta());
     ctx.registry.registerComponent("cta", ctaComponentMeta());
   });
-
 
   describe("saveComponentData (single component)", () => {
     it("inserts a new instance when none exists", async () => {
@@ -146,7 +146,6 @@ describe("ComponentDataService", () => {
       expect(ctx.adapter.insert).not.toHaveBeenCalled();
     });
   });
-
 
   describe("saveComponentData (repeatable component)", () => {
     it("inserts all new instances with ascending _order", async () => {
@@ -284,7 +283,6 @@ describe("ComponentDataService", () => {
     });
   });
 
-
   describe("saveComponentData (multi-component)", () => {
     it("inserts instances into the correct table based on _componentType", async () => {
       ctx.adapter.select.mockResolvedValue([]);
@@ -392,7 +390,6 @@ describe("ComponentDataService", () => {
     });
   });
 
-
   describe("saveComponentDataInTransaction", () => {
     it("uses the transaction context instead of the adapter", async () => {
       const tx = createMockTxContext({
@@ -415,7 +412,6 @@ describe("ComponentDataService", () => {
       expect(ctx.adapter.insert).not.toHaveBeenCalled();
     });
   });
-
 
   describe("deleteComponentData", () => {
     it("deletes all component instances for a parent across all component fields", async () => {
@@ -486,7 +482,6 @@ describe("ComponentDataService", () => {
       expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
   });
-
 
   describe("populateComponentData (single entry)", () => {
     it("populates a single (non-repeatable) component field as an object", async () => {
@@ -792,7 +787,6 @@ describe("ComponentDataService", () => {
     });
   });
 
-
   describe("populateComponentDataMany (batch)", () => {
     it("populates multiple entries with one query per component field (N+1 prevention)", async () => {
       ctx.adapter.select.mockResolvedValue([
@@ -908,6 +902,124 @@ describe("ComponentDataService", () => {
     });
   });
 
+  describe("component schema enforcement (validate, hash, redact)", () => {
+    const accountField = () => ({
+      name: "account",
+      type: "component",
+      component: "account",
+    });
+
+    it("hashes a password field inside a component instance before persisting", async () => {
+      ctx.registry.registerComponent("account", {
+        slug: "account",
+        tableName: "comp_account",
+        fields: [
+          { name: "email", type: "text" },
+          { name: "secret", type: "password" },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        fields: [accountField()],
+        data: { account: { email: "a@b.co", secret: "PlainText123" } },
+      });
+
+      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      const row = ctx.adapter.insert.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      // The plaintext must never reach the column; bcrypt hashes start "$2".
+      expect(row.secret).not.toBe("PlainText123");
+      expect(typeof row.secret).toBe("string");
+      expect((row.secret as string).startsWith("$2")).toBe(true);
+    });
+
+    it("rejects a component instance that violates its schema (required field)", async () => {
+      ctx.registry.registerComponent("account", {
+        slug: "account",
+        tableName: "comp_account",
+        fields: [{ name: "email", type: "text", required: true }],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await expect(
+        ctx.service.saveComponentData({
+          parentId: "e1",
+          parentTable: "dc_pages",
+          fields: [accountField()],
+          data: { account: {} },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
+
+    it("never returns a component password field on read", async () => {
+      ctx.registry.registerComponent("account", {
+        slug: "account",
+        tableName: "comp_account",
+        fields: [
+          { name: "email", type: "text" },
+          { name: "secret", type: "password" },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "a1",
+          _parent_id: "e1",
+          _order: 0,
+          email: "a@b.co",
+          secret: "$2b$12$storedhashstoredhashstored",
+        },
+      ]);
+
+      const result = await ctx.service.populateComponentData({
+        entry: { id: "e1" },
+        parentTable: "dc_pages",
+        fields: [accountField()],
+      });
+
+      expect(result.account).toMatchObject({ email: "a@b.co" });
+      expect(result.account).not.toHaveProperty("secret");
+    });
+
+    it("keeps a stored component password when an update sends it empty", async () => {
+      ctx.registry.registerComponent("account", {
+        slug: "account",
+        tableName: "comp_account",
+        fields: [{ name: "secret", type: "password", required: true }],
+      });
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "a1",
+          _parent_id: "e1",
+          _parent_table: "dc_pages",
+          _parent_field: "account",
+          _order: 0,
+          secret: "$2b$12$existinghashexistinghash",
+        },
+      ]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        fields: [accountField()],
+        data: { account: { secret: "" } },
+      });
+
+      // Update path: empty write-only password means "keep current", so no
+      // REQUIRED error and the column is not overwritten.
+      expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData).not.toHaveProperty("secret");
+    });
+  });
 
   describe("setRelationshipService", () => {
     it("allows late injection when not provided at construction", async () => {

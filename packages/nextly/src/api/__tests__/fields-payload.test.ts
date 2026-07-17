@@ -65,6 +65,49 @@ describe("assertValidFieldsPayload", () => {
     ).toThrow(NextlyError);
   });
 
+  it("accepts a component field referencing a component by slug (leaf ref, no fields[])", () => {
+    // A component field points at a separately defined component schema and
+    // carries no nested fields[]; the gate must not demand one.
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "seo", type: "component", component: "seo" },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "block", type: "component", components: ["hero", "cta"] },
+      ])
+    ).not.toThrow();
+  });
+
+  it("rejects a component field that names neither component nor components", () => {
+    try {
+      assertValidFieldsPayload([{ name: "seo", type: "component" }]);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      const errors = (
+        (error as NextlyError).publicData as {
+          errors: Array<{ path: string }>;
+        }
+      ).errors;
+      expect(errors.some(e => e.path.includes("component"))).toBe(true);
+    }
+  });
+
+  it("rejects a component field that sets both component and components", () => {
+    expect(() =>
+      assertValidFieldsPayload([
+        {
+          name: "seo",
+          type: "component",
+          component: "seo",
+          components: ["hero"],
+        },
+      ])
+    ).toThrow(NextlyError);
+  });
+
   it("rejects duplicate top-level field names (mirror parity with the manifest)", () => {
     try {
       assertValidFieldsPayload([

@@ -108,9 +108,10 @@ const fieldAdmin = z
   })
   .partial();
 
-// Recursive field shape: container types (repeater/group/component) carry
+// Recursive field shape: inline container types (repeater/group) carry
 // nested `fields`, so `field` references itself via z.lazy. The explicit
-// FieldNode type breaks the circular inference.
+// FieldNode type breaks the circular inference. (A component field is a
+// leaf reference by slug, not a container.)
 export type FieldNode = {
   name: string;
   // Canonical tokens, OR a plugin-contributed field type slug. Plugin types
@@ -212,7 +213,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       component: z.string().optional(),
       components: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
-      // Nested fields for container types (repeater/group/component).
+      // Nested fields for inline container types (repeater/group).
       fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
@@ -243,10 +244,13 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["relationTo"],
         });
       }
+      // repeater/group are inline containers whose columns live in a nested
+      // fields[] array. A component field is a LEAF reference to a separately
+      // defined component schema (component / components), so it carries no
+      // fields[] of its own; requiring one here rejects every real component
+      // field the builder and code-first APIs emit.
       if (
-        (f.type === "repeater" ||
-          f.type === "group" ||
-          f.type === "component") &&
+        (f.type === "repeater" || f.type === "group") &&
         (!f.fields || f.fields.length === 0)
       ) {
         ctx.addIssue({
@@ -254,6 +258,22 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           message: `${f.type} fields require a non-empty fields[] array`,
           path: ["fields"],
         });
+      }
+      // A component field references a component schema by slug: either a
+      // single `component`, or a `components[]` whitelist for a polymorphic
+      // slot. Exactly one must be present and non-empty.
+      if (f.type === "component") {
+        const hasSingle =
+          typeof f.component === "string" && f.component.length > 0;
+        const hasMulti = Array.isArray(f.components) && f.components.length > 0;
+        if (hasSingle === hasMulti) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "component fields require either a non-empty `component` slug or a non-empty `components[]` list, but not both",
+            path: [hasSingle ? "components" : "component"],
+          });
+        }
       }
       if (RESERVED_FIELD_NAMES.has(f.name)) {
         ctx.addIssue({

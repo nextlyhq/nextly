@@ -42,6 +42,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
+  applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
@@ -188,6 +189,30 @@ export class CollectionMutationService extends BaseService {
         finalData[field.name] = JSON.stringify(finalData[field.name]);
       }
     }
+  }
+
+  /**
+   * Redact a persisted entry before it is returned to the client. Drops
+   * write-only password hashes and any field the caller may write but not
+   * read (`access.read`). The query path already applies both, so every
+   * mutation response must run the same redaction or a create/update could
+   * echo back a value the reader is denied — the write and read rules are
+   * independent, so a field can be writable yet read-denied.
+   */
+  private async redactResponseFields(
+    entry: Record<string, unknown>,
+    fields: Parameters<typeof stripPasswordFieldValues>[1],
+    params: { user?: Record<string, unknown>; overrideAccess?: boolean },
+    slug: string
+  ): Promise<void> {
+    stripPasswordFieldValues(entry, fields);
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug,
+      entry,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+    });
   }
 
   /** Resolve the physical table for a collection, honoring `dbName` overrides. */
@@ -834,9 +859,14 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(responseEntry, fields);
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
+        responseEntry,
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -1464,11 +1494,13 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
         responseEntry as Record<string, unknown>,
-        fields
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
       );
 
       return {
@@ -1977,7 +2009,12 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2318,7 +2355,12 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2809,7 +2851,12 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -3205,7 +3252,12 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        { user: params.user, overrideAccess: params.overrideAccess },
+        params.collectionName
+      );
 
       return {
         success: true,

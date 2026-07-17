@@ -12,7 +12,19 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+
+/**
+ * System-entity columns that hold secrets and must never ride along a
+ * populated relationship. System entities have no schema field list, so
+ * they are stripped by column name (both snake_case as stored and the
+ * camelCase form some conversions produce).
+ */
+const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
 
 /**
  * Default depth for relationship population.
@@ -1032,6 +1044,9 @@ export class CollectionRelationshipService extends BaseService {
       );
     }
 
+    // Strip related-row secrets before the map is spread into responses.
+    await this.redactRelatedRows(targetCollection, [...resultMap.values()]);
+
     return resultMap;
   }
 
@@ -1170,6 +1185,12 @@ export class CollectionRelationshipService extends BaseService {
         resultMap.set(sourceId, []);
       }
     }
+
+    // Strip related-row secrets before the map is spread into responses.
+    await this.redactRelatedRows(
+      targetCollectionName,
+      [...resultMap.values()].flat()
+    );
 
     return resultMap;
   }
@@ -1544,6 +1565,37 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Strip secret values from related rows before they are merged into a
+   * response. Relationship expansion spreads the entire related row into the
+   * parent entry, so without this a related collection's password fields (or
+   * the users entity's password hash) would be returned to any caller that
+   * populates the relationship. Called once per fetch with the row set, so
+   * the target schema is loaded at most once per relation, not per row.
+   */
+  private async redactRelatedRows(
+    targetCollection: string,
+    rows: Record<string, unknown>[]
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    // System entities expose secret columns that are not schema fields, so
+    // strip them by name.
+    if (isSystemEntity(targetCollection)) {
+      for (const row of rows) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
+      }
+      return;
+    }
+    // Dynamic collections: drop password-type field values using the TARGET
+    // collection's schema — the source collection's fields never describe a
+    // related row.
+    const targetFields = await this.getCollectionFields(targetCollection);
+    if (!hasPasswordField(targetFields)) return;
+    for (const row of rows) {
+      stripPasswordFieldValues(row, targetFields);
+    }
+  }
+
+  /**
    * Fetch a single related entry from a collection or system entity.
    * Supports both dynamic collections and system entities (like "users").
    *
@@ -1569,7 +1621,10 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(targetSchema.id, entryId))
           .limit(1);
 
-        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
+        if (!entry) return null;
+        const normalized = convertTimestampsToCamelCase({ ...entry });
+        await this.redactRelatedRows(collectionName, [normalized]);
+        return normalized;
       } else {
         // Handle dynamic collections
         const schema = await this.fileManager.loadDynamicSchema(collectionName);
@@ -1579,7 +1634,10 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(schema.id, entryId))
           .limit(1);
 
-        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
+        if (!entry) return null;
+        const normalized = convertTimestampsToCamelCase({ ...entry });
+        await this.redactRelatedRows(collectionName, [normalized]);
+        return normalized;
       }
     } catch {
       return null;
@@ -1650,9 +1708,12 @@ export class CollectionRelationshipService extends BaseService {
         .from(targetSchema)
         .where(sql`${targetSchema.id} IN (${placeholders})`);
 
-      return (entries || []).map((entry: Record<string, unknown>) =>
+      const normalized = (entries || []).map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
+      // Strip related-row secrets before rows are spread into responses.
+      await this.redactRelatedRows(targetCollectionName, normalized);
+      return normalized;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];
