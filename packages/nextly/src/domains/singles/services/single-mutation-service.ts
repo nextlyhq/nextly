@@ -192,18 +192,12 @@ export class SingleMutationService extends BaseService {
         }
       }
 
-      // 6. Extract component field data (stored in separate comp_{slug} tables)
-      const componentFieldData: Record<string, unknown> = {};
       const fieldConfigs = singleMeta.fields;
-      fieldConfigs.forEach(field => {
-        if (isComponentField(field) && currentData[field.name] !== undefined) {
-          componentFieldData[field.name] = currentData[field.name];
-          delete currentData[field.name];
-        }
-      });
 
-      // 6.2. Field-level access + beforeValidate hooks (functions resolved
+      // 6.1. Field-level access + beforeValidate hooks (functions resolved
       // via the field-level registry; serialized field defs drop them).
+      // Runs BEFORE component extraction so component fields cannot bypass
+      // write access, hooks, or validation.
       await applyFieldWriteAccess({
         kind: "single",
         slug,
@@ -211,6 +205,7 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        id: existingDoc.id,
       });
       await runFieldHooks({
         kind: "single",
@@ -221,7 +216,7 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // 6.3. Enforce the schema's declared rules on the server — the same
+      // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
       {
@@ -238,7 +233,7 @@ export class SingleMutationService extends BaseService {
         }
       }
 
-      // 6.35. Field-level beforeChange hooks (after validation, before
+      // 6.3. Field-level beforeChange hooks (after validation, before
       // hashing/serialization).
       await runFieldHooks({
         kind: "single",
@@ -249,7 +244,18 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // 6.4. Password fields store bcrypt hashes, never the submitted
+      // 6.4. Extract component field data (stored in separate comp_{slug}
+      // tables) AFTER the access/hooks/validation pipeline above has seen
+      // the component fields.
+      const componentFieldData: Record<string, unknown> = {};
+      fieldConfigs.forEach(field => {
+        if (isComponentField(field) && currentData[field.name] !== undefined) {
+          componentFieldData[field.name] = currentData[field.name];
+          delete currentData[field.name];
+        }
+      });
+
+      // 6.5. Password fields store bcrypt hashes, never the submitted
       // value — same guarantee as the collection write paths.
       await hashPasswordFieldValues(currentData, fieldConfigs);
 
@@ -315,6 +321,18 @@ export class SingleMutationService extends BaseService {
         fieldConfigs
       );
 
+      // 10.1. Field-level afterChange hooks observe the PERSISTED values —
+      // run before response expansion so hooks see stored IDs, not the
+      // populated media/relationship objects the response returns.
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterChange",
+        data: updatedDoc,
+        operation: "update",
+        user: options.user,
+      });
+
       // 10.5. Expand upload fields with full media data
       updatedDoc = await this.queryService.expandUploadFields(
         updatedDoc,
@@ -347,17 +365,6 @@ export class SingleMutationService extends BaseService {
       }
 
       this.logger.info("Single document updated", { slug, id: updatedDoc.id });
-
-      // Field-level afterChange hooks observe the saved values (before the
-      // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "single",
-        slug,
-        phase: "afterChange",
-        data: updatedDoc,
-        operation: "update",
-        user: options.user,
-      });
 
       // Stored password hashes are write-only; the response never carries
       // them back to the client.

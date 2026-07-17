@@ -42,7 +42,10 @@ import {
   applyFieldReadAccess,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type {
   GetSingleOptions,
@@ -321,6 +324,14 @@ export class SingleQueryService extends BaseService {
         })) as SingleDocument;
       }
 
+      // Redact password hashes BEFORE any afterRead hook runs (a hook could
+      // copy the hash elsewhere); the final redaction below is defense in
+      // depth.
+      const singleHasPassword = hasPasswordField(singleMeta.fields);
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
+
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
         const afterContext = buildSingleHookContext({
@@ -359,9 +370,11 @@ export class SingleQueryService extends BaseService {
         overrideAccess: options.overrideAccess,
       });
 
-      // Stored password hashes are write-only: they never serialize into a
-      // read response.
-      stripPasswordFieldValues(doc, singleMeta.fields);
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
 
       return {
         success: true,

@@ -64,4 +64,22 @@ describe("assertValidFieldsPayload", () => {
       ])
     ).toThrow(NextlyError);
   });
+
+  it("rejects duplicate top-level field names (mirror parity with the manifest)", () => {
+    try {
+      assertValidFieldsPayload([
+        { name: "title", type: "text" },
+        { name: "title", type: "textarea" },
+      ]);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      const errors = (
+        (error as NextlyError).publicData as {
+          errors: Array<{ path: string }>;
+        }
+      ).errors;
+      expect(errors.some(e => e.path.includes("name"))).toBe(true);
+    }
+  });
 });

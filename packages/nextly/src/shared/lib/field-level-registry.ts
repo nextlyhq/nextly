@@ -205,9 +205,69 @@ function attachValidators(
 }
 
 /**
+ * The container rows a nested field set applies to: a `group` value is one
+ * object, a `repeater` value is its array of row objects. Non-object rows
+ * are skipped (they carry no nested fields to process).
+ */
+function nestedRows(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object" && !Array.isArray(row)
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
+/**
+ * Recursive worker for write access. Every rule at one level is evaluated
+ * against the SAME immutable snapshot of that level's data, so a rule that
+ * reads a sibling field's value can't flip from deny to allow purely
+ * because an earlier-registered field was already deleted (registration
+ * order must not change the outcome). Denied fields are removed only after
+ * all rules at the level have run. Nested containers recurse first.
+ */
+async function applyWriteAccessRec(
+  data: Record<string, unknown>,
+  fns: Record<string, FieldFunctions>,
+  operation: "create" | "update",
+  ctx: { user?: Record<string, unknown>; id?: string }
+): Promise<void> {
+  const snapshot = { ...data };
+  const denied: string[] = [];
+  for (const [name, entry] of Object.entries(fns)) {
+    if (!(name in data)) continue;
+    if (entry.fields) {
+      for (const row of nestedRows(data[name])) {
+        await applyWriteAccessRec(row, entry.fields, operation, ctx);
+      }
+    }
+    const fn = entry.access?.[operation];
+    if (!fn) continue;
+    let allowed = false;
+    try {
+      allowed = await fn({
+        req: { user: ctx.user },
+        id: ctx.id,
+        data: snapshot,
+      });
+    } catch {
+      // Fail-secure: an access rule that throws denies the field.
+      allowed = false;
+    }
+    if (!allowed) denied.push(name);
+  }
+  for (const name of denied) delete data[name];
+}
+
+/**
  * Enforce field-level write access: fields the caller may not create or
  * update are stripped from the payload (silent, Payload-parity), never an
- * error. `overrideAccess` (trusted server context) bypasses entirely.
+ * error. Applies at every depth (group/repeater nesting). `overrideAccess`
+ * (trusted server context) bypasses entirely.
  */
 export async function applyFieldWriteAccess(opts: {
   kind: EntityKind;
@@ -218,30 +278,55 @@ export async function applyFieldWriteAccess(opts: {
   overrideAccess?: boolean;
   id?: string;
 }): Promise<void> {
-  if (opts.overrideAccess) return;
+  // Bypass for trusted contexts, matching the collection access service's
+  // `overrideAccess || !user` rule: an explicit override or a system write
+  // with no user context is trusted, so per-field rules don't run and can't
+  // strip fields an internal writer intended to set. Authenticated writes
+  // (user present, no override) are enforced.
+  if (opts.overrideAccess || !opts.user) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  for (const [name, entry] of Object.entries(fns)) {
-    const fn = entry.access?.[opts.operation];
-    if (!fn || !(name in opts.data)) continue;
+  await applyWriteAccessRec(opts.data, fns, opts.operation, {
+    user: opts.user,
+    id: opts.id,
+  });
+}
+
+/** Recursive worker for read access — same snapshot + recurse contract. */
+async function applyReadAccessRec(
+  entry: Record<string, unknown>,
+  fns: Record<string, FieldFunctions>,
+  ctx: { user?: Record<string, unknown>; id?: string }
+): Promise<void> {
+  const snapshot = { ...entry };
+  const denied: string[] = [];
+  for (const [name, fieldFns] of Object.entries(fns)) {
+    if (!(name in entry)) continue;
+    if (fieldFns.fields) {
+      for (const row of nestedRows(entry[name])) {
+        await applyReadAccessRec(row, fieldFns.fields, ctx);
+      }
+    }
+    const fn = fieldFns.access?.read;
+    if (!fn) continue;
     let allowed = false;
     try {
       allowed = await fn({
-        req: { user: opts.user },
-        id: opts.id,
-        data: opts.data,
+        req: { user: ctx.user },
+        id: ctx.id,
+        data: snapshot,
       });
     } catch {
-      // Fail-secure: an access rule that throws denies the field.
       allowed = false;
     }
-    if (!allowed) delete opts.data[name];
+    if (!allowed) denied.push(name);
   }
+  for (const name of denied) delete entry[name];
 }
 
 /**
  * Enforce field-level read access on a serialized entry: fields whose
- * `access.read` denies are removed from the response.
+ * `access.read` denies are removed from the response, at every depth.
  */
 export async function applyFieldReadAccess(opts: {
   kind: EntityKind;
@@ -253,26 +338,52 @@ export async function applyFieldReadAccess(opts: {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
+  await applyReadAccessRec(opts.entry, fns, {
+    user: opts.user,
+    id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
+  });
+}
+
+/** Recursive worker for hooks. Transforms values in registration order. */
+async function runFieldHooksRec(
+  data: Record<string, unknown>,
+  fns: Record<string, FieldFunctions>,
+  phase: "beforeValidate" | "beforeChange" | "afterChange" | "afterRead",
+  ctx: {
+    slug: string;
+    operation: "create" | "read" | "update" | "delete";
+    user?: Record<string, unknown>;
+  }
+): Promise<void> {
   for (const [name, entry] of Object.entries(fns)) {
-    const fn = entry.access?.read;
-    if (!fn || !(name in opts.entry)) continue;
-    let allowed = false;
-    try {
-      allowed = await fn({
-        req: { user: opts.user },
-        id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
-        data: opts.entry,
-      });
-    } catch {
-      allowed = false;
+    if (!(name in data)) continue;
+    if (entry.fields) {
+      for (const row of nestedRows(data[name])) {
+        await runFieldHooksRec(row, entry.fields, phase, ctx);
+      }
     }
-    if (!allowed) delete opts.entry[name];
+    const handlers = entry.hooks?.[phase];
+    if (!handlers?.length) continue;
+    let value = data[name];
+    for (const handler of handlers) {
+      const result = await handler({
+        collection: ctx.slug,
+        operation: ctx.operation,
+        fieldName: name,
+        value,
+        data,
+        user: ctx.user,
+      });
+      if (result !== undefined) value = result;
+    }
+    data[name] = value;
   }
 }
 
 /**
- * Run one field-hook phase over the provided values. A hook's non-undefined
- * return replaces the field value; hooks run in registration order.
+ * Run one field-hook phase over the provided values, at every depth. A
+ * hook's non-undefined return replaces the field value; hooks run in
+ * registration order.
  */
 export async function runFieldHooks(opts: {
   kind: EntityKind;
@@ -284,21 +395,9 @@ export async function runFieldHooks(opts: {
 }): Promise<void> {
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  for (const [name, entry] of Object.entries(fns)) {
-    const handlers = entry.hooks?.[opts.phase];
-    if (!handlers?.length || !(name in opts.data)) continue;
-    let value = opts.data[name];
-    for (const handler of handlers) {
-      const result = await handler({
-        collection: opts.slug,
-        operation: opts.operation,
-        fieldName: name,
-        value,
-        data: opts.data,
-        user: opts.user,
-      });
-      if (result !== undefined) value = result;
-    }
-    opts.data[name] = value;
-  }
+  await runFieldHooksRec(opts.data, fns, opts.phase, {
+    slug: opts.slug,
+    operation: opts.operation,
+    user: opts.user,
+  });
 }

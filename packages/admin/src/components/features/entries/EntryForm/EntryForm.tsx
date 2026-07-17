@@ -268,6 +268,10 @@ export function EntryForm({
           <div className="space-y-6">
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
+            {/* Forward the form mode so write-only password fields render
+                their edit-mode affordance: on edit a blank password input
+                means "keep the current password" (the stored hash never
+                round-trips), so it is not treated as a required-field miss. */}
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
@@ -352,6 +356,10 @@ export function EntryForm({
 
               {mainFields.length > 0 && (
                 <div className="@4xl/content:p-8 pt-6">
+                  {/* Forward the form mode: in edit mode a blank password
+                      field means "keep the current password" rather than a
+                      required-field violation (see note on the layout form
+                      above). */}
                   <EntryFormContent
                     fields={mainFields}
                     disabled={isSubmitting}

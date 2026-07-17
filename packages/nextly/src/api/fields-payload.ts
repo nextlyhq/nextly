@@ -18,7 +18,27 @@ import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
 
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-const fieldsArraySchema = z.array(uiSchemaFieldSchema);
+// The ui-schema.json entity validator rejects duplicate field names, so the
+// shared payload validator must too — otherwise a payload could pass the
+// API/dispatcher checks and still fail the manifest write, exactly the
+// divergence this shared validator exists to prevent.
+const fieldsArraySchema = z
+  .array(uiSchemaFieldSchema)
+  .superRefine((fields, ctx) => {
+    const seen = new Set<string>();
+    fields.forEach((field, index) => {
+      const name = (field as { name?: unknown }).name;
+      if (typeof name !== "string") return;
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate field name '${name}'`,
+          path: [index, "name"],
+        });
+      }
+      seen.add(name);
+    });
+  });
 
 /**
  * Throw `NextlyError.validation` (with per-field paths) unless `fields`

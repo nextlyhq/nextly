@@ -1,3 +1,9 @@
+/**
+ * Guards the shared server-side entry validator: every collection and
+ * single write runs these rules (required, length, range, pattern,
+ * options, cardinality, nested rows) regardless of the writer, so a
+ * regression here would let invalid data reach the database.
+ */
 import { describe, expect, it } from "vitest";
 
 import { validateEntryData, type ValidatableField } from "../entry-validation";
@@ -161,5 +167,63 @@ describe("validateEntryData", () => {
         mode: "create",
       })
     ).toEqual([]);
+  });
+
+  it("enforces hasMany cardinality for text and number fields", async () => {
+    const fields: ValidatableField[] = [
+      { name: "tags", type: "text", hasMany: true },
+      { name: "scores", type: "number", hasMany: true },
+    ];
+    // Scalars for hasMany fields are rejected.
+    expect(
+      await validateEntryData({ tags: "solo", scores: 3 }, fields, {
+        mode: "create",
+      })
+    ).toEqual([
+      { path: "tags", code: "INVALID_TYPE", message: "tags must be a list." },
+      {
+        path: "scores",
+        code: "INVALID_TYPE",
+        message: "scores must be a list.",
+      },
+    ]);
+    // Arrays pass and each element is validated.
+    expect(
+      await validateEntryData({ tags: ["a", "b"], scores: [1, 2] }, fields, {
+        mode: "create",
+      })
+    ).toEqual([]);
+  });
+
+  it("rejects malformed repeater rows instead of skipping them", async () => {
+    const fields: ValidatableField[] = [
+      {
+        name: "sections",
+        type: "repeater",
+        fields: [{ name: "heading", type: "text", required: true }],
+      },
+    ];
+    const issues = await validateEntryData(
+      { sections: [{ heading: "ok" }, "bad", null, ["x"]] },
+      fields,
+      { mode: "create" }
+    );
+    expect(issues).toEqual([
+      {
+        path: "sections[1]",
+        code: "INVALID_TYPE",
+        message: "sections rows must be objects.",
+      },
+      {
+        path: "sections[2]",
+        code: "INVALID_TYPE",
+        message: "sections rows must be objects.",
+      },
+      {
+        path: "sections[3]",
+        code: "INVALID_TYPE",
+        message: "sections rows must be objects.",
+      },
+    ]);
   });
 });

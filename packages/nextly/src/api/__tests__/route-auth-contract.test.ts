@@ -72,32 +72,42 @@ describe("api route auth contract", () => {
 
   it("every exported HTTP handler authenticates or is allowlisted public", () => {
     const verbs = ["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD"] as const;
+    // Match an actual authorization CALL (not the identifier appearing in a
+    // comment or string): a `requireRoute*(` or `requireAuthentication(`
+    // call expression. Comments and string literals are stripped first so a
+    // mention like `// no requireRoute needed` cannot satisfy the contract.
+    const AUTH_CALL = /\b(requireRoute\w*|requireAuthentication)\s*\(/;
     const offenders: string[] = [];
 
     for (const file of apiSubpathFiles()) {
       if (SELF_AUTHENTICATING.has(file)) continue;
-      const src = readFileSync(join(SRC_DIR, file), "utf8");
+      const src = stripCommentsAndStrings(
+        readFileSync(join(SRC_DIR, file), "utf8")
+      );
 
       for (const verb of verbs) {
-        const marker = `export const ${verb} = withErrorHandler(`;
-        const start = src.indexOf(marker);
-        if (start === -1) continue;
+        // Handler may be `export const GET = withErrorHandler(` or any other
+        // exported form (`export const GET = async`, `export function GET`).
+        const markers = [
+          `export const ${verb} =`,
+          `export async function ${verb}(`,
+          `export function ${verb}(`,
+        ];
+        const start = markers
+          .map(m => src.indexOf(m))
+          .filter(i => i !== -1)
+          .sort((a, b) => a - b)[0];
+        if (start === undefined) continue;
 
-        // The handler body runs until the next exported handler (or EOF).
-        const nextExport = src.indexOf(
-          "\nexport const ",
-          start + marker.length
-        );
+        // The handler body runs until the next exported symbol (or EOF).
+        const nextExport = src.indexOf("\nexport ", start + 1);
         const body = src.slice(
           start,
           nextExport === -1 ? undefined : nextExport
         );
 
         const key = `${file}:${verb}`;
-        const authenticates =
-          body.includes("requireRoute") ||
-          body.includes("requireAuthentication(");
-        if (!authenticates && !PUBLIC_ALLOWLIST.has(key)) {
+        if (!AUTH_CALL.test(body) && !PUBLIC_ALLOWLIST.has(key)) {
           offenders.push(key);
         }
       }
@@ -109,3 +119,18 @@ describe("api route auth contract", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Remove line comments, block comments, and string/template literals so the
+ * handler scan can't be fooled by an auth identifier that only appears in
+ * prose or a string. Deliberately simple (regex, not a real parser): it is a
+ * contract guard, and over-stripping only ever makes the check stricter.
+ */
+function stripCommentsAndStrings(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/`(?:\\[\s\S]|[^`\\])*`/g, "``")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+}

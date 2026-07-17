@@ -654,6 +654,17 @@ export class CollectionQueryService extends BaseService {
       // Use geo-filtered entries for the rest of the pipeline
       expandedEntries = geoFilteredEntries;
 
+      // Redact password hashes BEFORE any afterRead hook (collection,
+      // stored, or field-level) runs: a hook receiving the hash could copy
+      // it into another allowed property that the later redaction would not
+      // catch. The final redaction below stays as defense in depth.
+      const collectionHasPassword = hasPasswordField(fields);
+      if (collectionHasPassword) {
+        for (const entry of expandedEntries) {
+          stripPasswordFieldValues(entry, fields);
+        }
+      }
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -703,9 +714,9 @@ export class CollectionQueryService extends BaseService {
         convertTimestampsToCamelCase(entry)
       );
 
-      // Stored password hashes are write-only: they never serialize into a
-      // list response, and `select` cannot opt them back in.
-      if (hasPasswordField(fields)) {
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (collectionHasPassword) {
         for (const entry of finalData as Record<string, unknown>[]) {
           stripPasswordFieldValues(entry, fields);
         }
@@ -1241,6 +1252,14 @@ export class CollectionQueryService extends BaseService {
         });
       }
 
+      // Redact password hashes BEFORE any afterRead hook runs (a hook could
+      // copy the hash elsewhere); the final redaction below is defense in
+      // depth.
+      const detailHasPassword = hasPasswordField(fields);
+      if (detailHasPassword) {
+        stripPasswordFieldValues(expandedEntry, fields);
+      }
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -1286,9 +1305,11 @@ export class CollectionQueryService extends BaseService {
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = convertTimestampsToCamelCase(finalData);
 
-      // Stored password hashes are write-only: they never serialize into a
-      // detail response, and `select` cannot opt them back in.
-      stripPasswordFieldValues(finalData, fields);
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (detailHasPassword) {
+        stripPasswordFieldValues(finalData, fields);
+      }
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {

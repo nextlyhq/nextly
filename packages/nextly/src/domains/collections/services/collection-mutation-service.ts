@@ -803,6 +803,18 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-level afterChange hooks observe the PERSISTED values — run
+      // before response expansion so hooks see stored IDs, not the
+      // populated relationship objects the response returns.
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: entry,
+        operation: "create",
+        user: params.user,
+      });
+
       // Expand relationships in response if depth is specified
       let responseEntry = entry;
       if (depth !== undefined && depth > 0) {
@@ -824,17 +836,6 @@ export class CollectionMutationService extends BaseService {
 
       // Stored password hashes are write-only; the response never carries
       // them back to the client.
-      // Field-level afterChange hooks observe the saved values (before the
-      // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: responseEntry,
-        operation: "create",
-        user: params.user,
-      });
-
       stripPasswordFieldValues(responseEntry, fields);
 
       return {
@@ -1004,7 +1005,8 @@ export class CollectionMutationService extends BaseService {
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
       // Field-level access: fields the caller may not update are stripped
-      // silently (Payload parity); overrideAccess bypasses.
+      // silently (Payload parity); overrideAccess bypasses. The document id
+      // is passed so owner/record-aware access rules can evaluate.
       await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
@@ -1012,6 +1014,7 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
         overrideAccess: params.overrideAccess,
+        id: params.entryId,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
@@ -1430,6 +1433,18 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-level afterChange hooks observe the PERSISTED values — run
+      // before response expansion so hooks see stored IDs, not the
+      // populated relationship objects the response returns.
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: updated as Record<string, unknown>,
+        operation: "update",
+        user: params.user,
+      });
+
       // Expand relationships in response if depth is specified
       let responseEntry = updated;
       if (depth !== undefined && depth > 0) {
@@ -1451,18 +1466,10 @@ export class CollectionMutationService extends BaseService {
 
       // Stored password hashes are write-only; the response never carries
       // them back to the client.
-      // Field-level afterChange hooks observe the saved values (before the
-      // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: responseEntry as Record<string, unknown>,
-        operation: "update",
-        user: params.user,
-      });
-
-      stripPasswordFieldValues(responseEntry, fields);
+      stripPasswordFieldValues(
+        responseEntry as Record<string, unknown>,
+        fields
+      );
 
       return {
         success: true,
@@ -1698,7 +1705,11 @@ export class CollectionMutationService extends BaseService {
    */
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
@@ -1795,6 +1806,18 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+      // Field-level write access: fields the caller may not create are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "create",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+      });
+
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
       await runFieldHooks({
@@ -1983,7 +2006,12 @@ export class CollectionMutationService extends BaseService {
    */
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; entryId: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
@@ -2100,6 +2128,19 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+      // Field-level write access: fields the caller may not update are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        id: params.entryId,
+      });
+
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
       await runFieldHooks({
@@ -2484,7 +2525,11 @@ export class CollectionMutationService extends BaseService {
    */
   async createSingleEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2581,16 +2626,30 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
-      // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
+      // Field-level write access: fields the caller may not create are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
-        phase: "beforeValidate",
         data: finalData,
         operation: "create",
         user: params.user,
+        overrideAccess: params.overrideAccess,
       });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeValidate",
+          data: finalData,
+          operation: "create",
+          user: params.user,
+        });
+      }
 
       {
         const validationIssues = await validateEntryData(
@@ -2608,14 +2667,16 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "create",
-        user: params.user,
-      });
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeChange",
+          data: finalData,
+          operation: "create",
+          user: params.user,
+        });
+      }
 
       await hashPasswordFieldValues(finalData, fields);
 
@@ -2737,14 +2798,16 @@ export class CollectionMutationService extends BaseService {
       // them back to the client.
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: entry as Record<string, unknown>,
-        operation: "create",
-        user: params.user,
-      });
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: entry as Record<string, unknown>,
+          operation: "create",
+          user: params.user,
+        });
+      }
 
       stripPasswordFieldValues(entry as Record<string, unknown>, fields);
 
@@ -2781,7 +2844,11 @@ export class CollectionMutationService extends BaseService {
    */
   async updateSingleEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     entryId: string,
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -2934,16 +3001,31 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
-      // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
+      // Field-level write access: fields the caller may not update are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
-        phase: "beforeValidate",
         data: finalData,
         operation: "update",
         user: params.user,
+        overrideAccess: params.overrideAccess,
+        id: entryId,
       });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeValidate",
+          data: finalData,
+          operation: "update",
+          user: params.user,
+        });
+      }
 
       {
         const validationIssues = await validateEntryData(
@@ -2961,14 +3043,16 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "update",
-        user: params.user,
-      });
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeChange",
+          data: finalData,
+          operation: "update",
+          user: params.user,
+        });
+      }
 
       await hashPasswordFieldValues(finalData, fields);
 
@@ -3110,14 +3194,16 @@ export class CollectionMutationService extends BaseService {
       // them back to the client.
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: updated as Record<string, unknown>,
-        operation: "update",
-        user: params.user,
-      });
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: updated as Record<string, unknown>,
+          operation: "update",
+          user: params.user,
+        });
+      }
 
       stripPasswordFieldValues(updated as Record<string, unknown>, fields);
 

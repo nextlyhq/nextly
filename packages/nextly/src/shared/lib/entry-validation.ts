@@ -46,6 +46,9 @@ export type CustomFieldValidator = (
  */
 export interface ValidatableField {
   name?: string;
+  // `string`, not the strict field-type union: this shape is satisfied by
+  // both code-first FieldConfig[] and runtime FieldDefinition[], whose
+  // `type` unions differ, so `string` is their only common supertype.
   type: string;
   label?: unknown;
   required?: boolean;
@@ -162,8 +165,17 @@ async function validateFieldValue(
     case "email":
     case "password":
     case "code": {
-      // hasMany text stores an array of strings.
-      const values = field.hasMany && Array.isArray(value) ? value : undefined;
+      // hasMany text stores an array of strings; a scalar for a hasMany
+      // field (or an array for a single field) contradicts the schema.
+      if (field.hasMany && !Array.isArray(value)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be a list.`,
+        });
+        break;
+      }
+      const values = field.hasMany ? (value as unknown[]) : undefined;
       const singles = values ?? [value];
       for (let i = 0; i < singles.length; i++) {
         const v = singles[i];
@@ -232,7 +244,16 @@ async function validateFieldValue(
     }
 
     case "number": {
-      const values = field.hasMany && Array.isArray(value) ? value : undefined;
+      // A hasMany number stores an array; a scalar contradicts the schema.
+      if (field.hasMany && !Array.isArray(value)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be a list.`,
+        });
+        break;
+      }
+      const values = field.hasMany ? (value as unknown[]) : undefined;
       const singles = values ?? [value];
       for (let i = 0; i < singles.length; i++) {
         const v = singles[i];
@@ -363,7 +384,17 @@ async function validateFieldValue(
       if (field.fields) {
         for (let i = 0; i < value.length; i++) {
           const row = value[i];
-          if (row === null || typeof row !== "object") continue;
+          // A malformed row (null, primitive, or nested array) is a schema
+          // violation and must be reported, not silently skipped past the
+          // nested validation on its way to persistence.
+          if (row === null || typeof row !== "object" || Array.isArray(row)) {
+            issues.push({
+              path: `${path}[${i}]`,
+              code: "INVALID_TYPE",
+              message: `${label} rows must be objects.`,
+            });
+            continue;
+          }
           await validateFields(
             field.fields,
             row as Record<string, unknown>,

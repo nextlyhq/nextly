@@ -1,3 +1,9 @@
+/**
+ * Guards the field-level function registry: code-first `validate` /
+ * `access` / `hooks` are dropped when field definitions are serialized to
+ * the database, so this registry restores them by capturing the live
+ * config. A regression would silently disable field access rules and hooks.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 
 import { validateEntryData } from "../entry-validation";
@@ -140,5 +146,93 @@ describe("field-level registry", () => {
     expect(issues).toEqual([
       { path: "code", code: "CUSTOM", message: "Must start with X." },
     ]);
+  });
+
+  it("evaluates each access rule against a snapshot, so order does not matter", async () => {
+    // Rule on `b` reads `a`; rule on `a` denies. Whether `a` is deleted
+    // first must not change `b`'s outcome.
+    registerFieldFunctions("collection", "posts", [
+      { name: "a", type: "text", access: { update: () => false } },
+      {
+        name: "b",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) =>
+            data.a === "present",
+        },
+      },
+    ]);
+    const data: Record<string, unknown> = { a: "present", b: "keep" };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+    // `a` denied and removed; `b` allowed because the snapshot still had `a`.
+    expect(data).toEqual({ b: "keep" });
+  });
+
+  it("enforces access rules for fields nested in groups and repeaters", async () => {
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "meta",
+        type: "group",
+        fields: [
+          { name: "secret", type: "text", access: { update: () => false } },
+          { name: "public", type: "text" },
+        ],
+      },
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [
+          { name: "hidden", type: "text", access: { update: () => false } },
+        ],
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      meta: { secret: "x", public: "ok" },
+      rows: [{ hidden: "a" }, { hidden: "b" }],
+    };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+    expect(data.meta).toEqual({ public: "ok" });
+    expect(data.rows).toEqual([{}, {}]);
+  });
+
+  it("runs hooks for fields nested in groups and repeaters", async () => {
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "meta",
+        type: "group",
+        fields: [
+          {
+            name: "slug",
+            type: "text",
+            hooks: {
+              beforeChange: [
+                ({ value }: { value: unknown }) => String(value).toUpperCase(),
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    const data: Record<string, unknown> = { meta: { slug: "hi" } };
+    await runFieldHooks({
+      kind: "collection",
+      slug: "posts",
+      phase: "beforeChange",
+      data,
+      operation: "update",
+    });
+    expect(data.meta).toEqual({ slug: "HI" });
   });
 });

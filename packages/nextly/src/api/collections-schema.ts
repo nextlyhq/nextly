@@ -116,7 +116,6 @@ const createCollectionSchema = z.object({
  */
 export const GET = withErrorHandler(async (request: Request) => {
   const auth = await requireRouteAuthentication(request);
-  const user = { id: auth.userId };
 
   const registry = await getCollectionRegistry();
   const { searchParams } = new URL(request.url);
@@ -141,28 +140,42 @@ export const GET = withErrorHandler(async (request: Request) => {
     offset,
   });
 
-  // Super-admins get all collections; other users only get collections
-  // they have explicit read-{slug} permission for.
-  const isAdmin = await isSuperAdmin(user.id);
+  // Filter to the collections the caller may read. The authorization
+  // MUST honor the authentication method: an API key carries its own
+  // pre-resolved, possibly-narrowed permission set, so authorizing it via
+  // the owner's session RBAC (`hasPermission`/`isSuperAdmin` by user id)
+  // would let a restricted key list collections outside its scope. This
+  // mirrors how `requirePermission` branches on `authMethod`.
   let filteredCollections = result.data;
 
-  if (!isAdmin) {
-    const permittedCollections = [];
-
-    for (const collection of result.data) {
-      const collectionSlug = collection.slug;
-      const canRead = await hasPermission(user.id, "read", collectionSlug);
-
-      if (canRead) {
-        permittedCollections.push(collection);
+  if (auth.authMethod === "api-key") {
+    // The key's resolved permission set is the source of truth (no
+    // super-admin bypass — that is already reflected in the resolved set).
+    filteredCollections = result.data.filter(collection =>
+      auth.permissions.includes(`read-${collection.slug}`)
+    );
+  } else {
+    // Session auth: super-admins see everything; others need explicit
+    // read-{slug} permission via their RBAC roles.
+    const isAdmin = await isSuperAdmin(auth.userId);
+    if (!isAdmin) {
+      const permittedCollections = [];
+      for (const collection of result.data) {
+        const canRead = await hasPermission(
+          auth.userId,
+          "read",
+          collection.slug
+        );
+        if (canRead) {
+          permittedCollections.push(collection);
+        }
       }
+      filteredCollections = permittedCollections;
     }
-
-    filteredCollections = permittedCollections;
   }
 
   // D63 seam: let plugins transform the admin nav collection list.
-  const navItems = await applyAdminNavFilter(filteredCollections, user.id);
+  const navItems = await applyAdminNavFilter(filteredCollections, auth.userId);
 
   // Translate offset-based pagination to the canonical page/limit meta. The
   // total reflects the post-permission-filter count so non-admins see a
