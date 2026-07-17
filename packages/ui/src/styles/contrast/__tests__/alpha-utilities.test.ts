@@ -14,7 +14,7 @@
  * color utilities, evaluated on the base surface.
  */
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,6 +78,13 @@ const SCANNED_DIRS = [
  */
 function scanCombos(): Map<string, number> {
   const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
+  // Fail loudly if a scanned dir is missing (a moved or misspelled entry must
+  // not silently scan nothing); grep's exit 1 on zero matches is not an error.
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      throw new Error(`scanned dir does not exist: ${dir}`);
+    }
+  }
   const pattern =
     "\\b(text|border|ring)-(primary|foreground|destructive|success|warning|muted|accent|secondary|ring|border|input)(-[0-9]+)?/(\\[[0-9.]+\\]|[0-9]+)";
   const out = execSync(`grep -rohE '${pattern}' ${dirs.join(" ")} || true`, {

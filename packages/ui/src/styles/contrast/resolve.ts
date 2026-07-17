@@ -39,13 +39,6 @@ function splitTopLevel(input: string): string[] {
   return parts;
 }
 
-/** Named keywords color-mix uses in this theme, plus a fallback to the parser. */
-function keywordRgb(name: string): Rgb {
-  if (name === "white") return { r: 1, g: 1, b: 1, alpha: 1 };
-  if (name === "black") return { r: 0, g: 0, b: 0, alpha: 1 };
-  return toClampedRgb(name);
-}
-
 /**
  * A `color-mix()` component: a color and its optional explicit percentage. Per
  * CSS Color 5, when only one side states a percentage the other is its
@@ -122,8 +115,11 @@ export function resolveColor(
     else if (bPct !== null) bWeight = bPct / 100;
     else if (aPct !== null) bWeight = 1 - aPct / 100;
     else bWeight = 0.5;
+    // Both operands go through resolveColor so either side may be a keyword
+    // (culori parses `white`/`black`), a literal, or a `var()` reference; the
+    // theme keeps the keyword second today, but neither position is assumed.
     const colorA = resolveColor(a.color, ctx, new Set(seen));
-    const colorB = keywordRgb(b.color);
+    const colorB = resolveColor(b.color, ctx, new Set(seen));
     return mixSrgb(colorA, colorB, bWeight);
   }
 
