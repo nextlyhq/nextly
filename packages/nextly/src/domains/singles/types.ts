@@ -84,6 +84,13 @@ export interface UpdateSingleOptions {
    */
   overrideAccess?: boolean;
 
+  /**
+   * Set by the REST dispatcher: route-level auth already ran, so `overrideAccess`
+   * is used to skip the RBAC re-check — but this is NOT a trusted-server read,
+   * so the response is still redacted to what the user may read.
+   */
+  routeAuthorized?: boolean;
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
 }

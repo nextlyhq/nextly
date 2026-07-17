@@ -140,6 +140,21 @@ async function validateFieldValue(
 ): Promise<void> {
   const label = typeof field.label === "string" ? field.label : field.name;
 
+  // A password field is write-only: the admin edit form seeds it with `""`
+  // to mean "keep the stored hash", and hashPasswordFieldValues drops empty
+  // password keys before the write. On update an empty password is therefore
+  // a no-op, not a cleared required field, so it must not raise REQUIRED.
+  // (An explicit `null` still falls through to the empty-value handling below
+  // because null is an intentional clear.) Create keeps requiring it: a
+  // required password genuinely must be set the first time.
+  if (
+    field.type === "password" &&
+    options.mode === "update" &&
+    (value === undefined || (typeof value === "string" && value.trim() === ""))
+  ) {
+    return;
+  }
+
   // Empty values only ever violate required-ness; type/range rules apply
   // to actual values. Exception: a PROVIDED empty array on a list-shaped
   // field still runs its row/chip bounds (an explicit `[]` with minRows 1
@@ -148,7 +163,14 @@ async function validateFieldValue(
     Array.isArray(value) &&
     value.length === 0 &&
     (field.type === "chips" || field.type === "repeater");
-  if (isEmpty(value) && !isProvidedEmptyList) {
+  // A non-hasMany select/radio holds a scalar; an array (including `[]`) is a
+  // shape error, not an absent value, so don't let the empty-value early
+  // return swallow it — the select/radio branch below rejects the shape.
+  const isScalarChoiceArray =
+    Array.isArray(value) &&
+    !field.hasMany &&
+    (field.type === "select" || field.type === "radio");
+  if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
     if (isRequired(field)) {
       issues.push({
         path,
@@ -311,6 +333,23 @@ async function validateFieldValue(
     case "select":
     case "radio": {
       const allowed = selectOptionValues(field);
+      // A scalar select/radio holds exactly one option; only `hasMany` stores
+      // a list. Without this guard an array on a scalar field (e.g.
+      // `["draft","published"]`) would pass element-by-element and then reach
+      // a non-JSON column, so reject the shape rather than validate its items.
+      // Mirrors the text/number branches, which also gate array vs scalar on
+      // `hasMany`. Shape validity is independent of option membership, so this
+      // must run even when no options are configured.
+      if (Array.isArray(value) !== Boolean(field.hasMany)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: field.hasMany
+            ? `${label} must be a list.`
+            : `${label} must be a single option.`,
+        });
+        break;
+      }
       // Option membership only enforceable when options are declared.
       if (allowed.length === 0) break;
       const values = Array.isArray(value) ? value : [value];

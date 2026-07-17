@@ -351,6 +351,11 @@ export class CollectionBulkService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Route-level auth already ran (REST dispatcher). Forwarded to updateEntry
+     * so per-row success records are still redacted to what the user may read.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
@@ -368,6 +373,7 @@ export class CollectionBulkService extends BaseService {
                 entryId,
                 user: params.user,
                 overrideAccess: params.overrideAccess,
+                routeAuthorized: params.routeAuthorized,
                 context: params.context,
               },
               params.data

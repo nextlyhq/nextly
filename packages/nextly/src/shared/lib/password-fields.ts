@@ -49,6 +49,33 @@ function containerRows(
 }
 
 /**
+ * Resolve a container field value to its descendable rows. On SQLite a
+ * `group` / `repeater` is stored as a JSON string, so the raw value must be
+ * parsed before its nested passwords are reachable. `serialize()` writes the
+ * (mutated) container back in the original shape — a string when the input
+ * was a string, so the column type is preserved. Returns null when a string
+ * value is not valid JSON (nothing to descend into).
+ */
+function openContainer(
+  value: unknown,
+  type: string
+): { rows: Record<string, unknown>[]; serialize: () => unknown } | null {
+  const wasString = typeof value === "string";
+  let container: unknown = value;
+  if (wasString) {
+    try {
+      container = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return {
+    rows: containerRows(container, type),
+    serialize: () => (wasString ? JSON.stringify(container) : container),
+  };
+}
+
+/**
  * Hash every provided password-field value in `data` in place, descending
  * into `group` / `repeater` containers.
  *
@@ -69,8 +96,12 @@ export async function hashPasswordFieldValues(
     if (!field.name || !(field.name in data)) continue;
 
     if (field.fields && (field.type === "group" || field.type === "repeater")) {
-      for (const row of containerRows(data[field.name], field.type)) {
-        await hashPasswordFieldValues(row, field.fields);
+      const opened = openContainer(data[field.name], field.type);
+      if (opened) {
+        for (const row of opened.rows) {
+          await hashPasswordFieldValues(row, field.fields);
+        }
+        data[field.name] = opened.serialize();
       }
       continue;
     }
@@ -103,8 +134,12 @@ export function stripPasswordFieldValues(
     if (!field.name || !(field.name in entry)) continue;
 
     if (field.fields && (field.type === "group" || field.type === "repeater")) {
-      for (const row of containerRows(entry[field.name], field.type)) {
-        stripPasswordFieldValues(row, field.fields);
+      const opened = openContainer(entry[field.name], field.type);
+      if (opened) {
+        for (const row of opened.rows) {
+          stripPasswordFieldValues(row, field.fields);
+        }
+        entry[field.name] = opened.serialize();
       }
       continue;
     }

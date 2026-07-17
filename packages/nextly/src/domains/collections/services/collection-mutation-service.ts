@@ -42,6 +42,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
+  applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
@@ -190,6 +191,60 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /**
+   * Redact a persisted entry before it is returned to the client. Drops
+   * write-only password hashes and any field the caller may write but not
+   * read (`access.read`). The query path already applies both, so every
+   * mutation response must run the same redaction or a create/update could
+   * echo back a value the reader is denied — the write and read rules are
+   * independent, so a field can be writable yet read-denied.
+   *
+   * `overrideAccess` normally skips read redaction (a trusted server-context
+   * caller asked for the full document). The REST dispatcher, however, sets
+   * `overrideAccess` only to skip the collection-level re-check after route
+   * auth — it is NOT a trusted read context, so `routeAuthorized` forces the
+   * response to still be redacted to what the authenticated user may read,
+   * matching the query path for the same caller.
+   */
+  private async redactResponseFields(
+    entry: Record<string, unknown>,
+    fields: FieldDefinition[],
+    params: {
+      user?: Record<string, unknown>;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+    },
+    slug: string
+  ): Promise<void> {
+    // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
+    // before redaction so the read-access walker descends into them — SQLite
+    // returns these as JSON strings, and a read-denied field nested in a
+    // still-serialized container would otherwise be echoed. The single
+    // create/update paths already deserialize upstream; this makes the
+    // transaction/bulk variants safe too (a second pass is a no-op).
+    for (const field of fields) {
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof entry[field.name] === "string" &&
+        entry[field.name]
+      ) {
+        try {
+          entry[field.name] = JSON.parse(entry[field.name] as string);
+        } catch {
+          // If parsing fails, keep the raw string.
+        }
+      }
+    }
+    stripPasswordFieldValues(entry, fields);
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug,
+      entry,
+      user: params.user,
+      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+    });
+  }
+
   /** Resolve the physical table for a collection, honoring `dbName` overrides. */
   private resolveTableName(collection: unknown, slug: string): string {
     return (
@@ -325,6 +380,10 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -834,9 +893,18 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(responseEntry, fields);
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
+        responseEntry,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -876,6 +944,10 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -1464,11 +1536,17 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
         responseEntry as Record<string, unknown>,
-        fields
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
       );
 
       return {
@@ -1709,6 +1787,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -1977,7 +2057,16 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2011,6 +2100,8 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2318,7 +2409,16 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2529,6 +2629,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -2809,7 +2911,16 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2848,6 +2959,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     entryId: string,
     body: Record<string, unknown>,
@@ -3205,7 +3318,16 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,

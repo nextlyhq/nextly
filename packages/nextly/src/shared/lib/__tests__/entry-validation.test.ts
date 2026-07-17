@@ -226,4 +226,177 @@ describe("validateEntryData", () => {
       },
     ]);
   });
+
+  describe("required password on update", () => {
+    const fields: ValidatableField[] = [
+      { name: "email", type: "email", required: true },
+      { name: "password", type: "password", required: true },
+    ];
+
+    it("keeps requiring a password on create when left empty", async () => {
+      const issues = await validateEntryData(
+        { email: "a@b.co", password: "" },
+        fields,
+        { mode: "create" }
+      );
+      expect(issues).toEqual([
+        {
+          path: "password",
+          code: "REQUIRED",
+          message: "password is required.",
+        },
+      ]);
+    });
+
+    it("treats an empty password on update as 'keep current' (no REQUIRED)", async () => {
+      // The admin edit form seeds a write-only password with "" to mean
+      // "leave the stored hash"; hashPasswordFieldValues drops it later.
+      for (const password of ["", "   ", undefined]) {
+        const issues = await validateEntryData(
+          { email: "a@b.co", password },
+          fields,
+          { mode: "update" }
+        );
+        expect(issues).toEqual([]);
+      }
+    });
+
+    it("still validates a non-empty password on update", async () => {
+      const constrained: ValidatableField[] = [
+        {
+          name: "password",
+          type: "password",
+          required: true,
+          minLength: 8,
+        },
+      ];
+      const issues = await validateEntryData(
+        { password: "short" },
+        constrained,
+        { mode: "update" }
+      );
+      expect(issues).toEqual([
+        {
+          path: "password",
+          code: "TOO_SHORT",
+          message: "password must be at least 8 characters.",
+        },
+      ]);
+    });
+  });
+
+  describe("scalar vs list select/radio", () => {
+    const scalar: ValidatableField[] = [
+      {
+        name: "status",
+        type: "select",
+        options: [{ value: "draft" }, { value: "published" }],
+      },
+    ];
+    const multi: ValidatableField[] = [
+      {
+        name: "status",
+        type: "select",
+        hasMany: true,
+        options: [{ value: "draft" }, { value: "published" }],
+      },
+    ];
+
+    it("rejects an array for a scalar select even when every element is valid", async () => {
+      const issues = await validateEntryData(
+        { status: ["draft", "published"] },
+        scalar,
+        { mode: "create" }
+      );
+      expect(issues).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a single option.",
+        },
+      ]);
+    });
+
+    it("accepts a single valid option for a scalar select", async () => {
+      const issues = await validateEntryData({ status: "draft" }, scalar, {
+        mode: "create",
+      });
+      expect(issues).toEqual([]);
+    });
+
+    it("rejects an empty array for a scalar select (not treated as absent)", async () => {
+      // `[]` is empty, but for a scalar choice it is a wrong-shaped value, not
+      // an absent one — it must not slip past as an empty/optional value.
+      const issues = await validateEntryData({ status: [] }, scalar, {
+        mode: "create",
+      });
+      expect(issues).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a single option.",
+        },
+      ]);
+    });
+
+    it("still treats an empty array as absent for a hasMany select (optional)", async () => {
+      const issues = await validateEntryData({ status: [] }, multi, {
+        mode: "create",
+      });
+      expect(issues).toEqual([]);
+    });
+
+    it("rejects an array for a scalar select even when no options are configured", async () => {
+      // Shape validity is independent of option membership, so the array
+      // guard must run even when the field declares no options.
+      const noOptions: ValidatableField[] = [
+        { name: "status", type: "select" },
+      ];
+      const issues = await validateEntryData(
+        { status: ["a", "b"] },
+        noOptions,
+        { mode: "create" }
+      );
+      expect(issues).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a single option.",
+        },
+      ]);
+    });
+
+    it("requires an array for a hasMany select and validates each element", async () => {
+      const scalarInput = await validateEntryData({ status: "draft" }, multi, {
+        mode: "create",
+      });
+      expect(scalarInput).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a list.",
+        },
+      ]);
+      const ok = await validateEntryData(
+        { status: ["draft", "published"] },
+        multi,
+        { mode: "create" }
+      );
+      expect(ok).toEqual([]);
+      const bad = await validateEntryData(
+        { status: ["draft", "nope"] },
+        multi,
+        {
+          mode: "create",
+        }
+      );
+      expect(bad).toEqual([
+        {
+          path: "status[1]",
+          code: "INVALID_OPTION",
+          message: "status must be one of the configured options.",
+        },
+      ]);
+    });
+  });
 });
