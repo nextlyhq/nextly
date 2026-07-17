@@ -169,7 +169,7 @@ export function DynamicCustomGroupNav({
         <React.Fragment key={group.slug}>
           {/* Sub-group label within the parent Collections section */}
           {!isCollapsed && (
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50 px-4 mt-3 mb-1 block">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground px-4 mt-3 mb-1 block">
               {group.name}
             </span>
           )}

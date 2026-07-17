@@ -28,10 +28,11 @@ import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
+import { checkUserFieldType } from "../users/config/validate-user-config";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -58,24 +59,22 @@ const createFieldSchema = z
         "Name must start with a letter and contain only alphanumeric characters"
       ),
     label: z.string().min(1, "Label is required").max(255),
-    type: z.enum(
-      [
-        "text",
-        "textarea",
-        "number",
-        "email",
-        "url",
-        "phone",
-        "select",
-        "radio",
-        "checkbox",
-        "date",
-      ],
-      {
-        message:
-          "Type must be one of: text, textarea, number, email, url, phone, select, radio, checkbox, date",
-      }
-    ),
+    // Delegates to the single source of truth (checkUserFieldType) instead of a
+    // hardcoded enum, so a plugin field type that opted into the users surface
+    // is accepted here as well as a built-in scalar. A missing/non-string value
+    // reports the canonical "type required" message rather than a raw zod type
+    // error, matching what the definition service would raise.
+    type: z
+      .string({ message: "Field type is required" })
+      .superRefine((value, ctx) => {
+        const rejection = checkUserFieldType(value);
+        if (rejection) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: rejection.message,
+          });
+        }
+      }),
     required: z.boolean().optional(),
     defaultValue: z.string().optional().nullable(),
     options: z.array(optionSchema).optional().nullable(),
@@ -140,7 +139,10 @@ const createFieldSchema = z
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const service = await getUserFieldDefinitionService();
     const fields = await service.listFields();
@@ -176,9 +178,17 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const body = await readJsonBody(request);
+
+    // Boot before parsing: the schema's `type` check consults the plugin
+    // field-type registry, which is populated during first-request init. Parsing
+    // first would reject a valid plugin field type on a cold start.
+    const service = await getUserFieldDefinitionService();
 
     let validated: z.infer<typeof createFieldSchema>;
     try {
@@ -187,8 +197,6 @@ export const POST = withErrorHandler(
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
     }
-
-    const service = await getUserFieldDefinitionService();
     // Force source to 'ui'; code-sourced fields are managed via defineConfig().
     const field = await service.createField({
       ...validated,

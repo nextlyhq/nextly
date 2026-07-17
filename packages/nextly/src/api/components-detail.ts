@@ -26,8 +26,9 @@ import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
-import { requireAuthHeader } from "./auth-header-only";
+import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -46,11 +47,15 @@ async function getComponentRegistry(): Promise<ComponentRegistryService> {
 /**
  * GET handler for retrieving a single component by slug.
  *
- * Requires authentication.
+ * Requires read-settings (or manage-settings), matching the dispatcher's
+ * components authorization.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const { slug } = await context.params;
     const registry = await getComponentRegistry();
@@ -63,7 +68,8 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a component.
  *
- * Requires authentication. The registry returns 403 (mapped to LOCKED in
+ * Requires update-settings (or manage-settings), matching the dispatcher's
+ * components authorization. The registry returns 403 (mapped to LOCKED in
  * `logContext`) if the component is locked (code-first components cannot be
  * modified via API).
  */
@@ -72,7 +78,10 @@ export const PATCH = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("update-component");
 
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "update", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const { slug } = await context.params;
     const registry = await getComponentRegistry();
@@ -105,6 +114,8 @@ export const PATCH = withErrorHandler(
     }
 
     if (body.fields !== undefined) {
+      // Same rules as the ui-schema.json mirror (see api/fields-payload).
+      assertValidFieldsPayload(body.fields);
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -129,7 +140,8 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a component.
  *
- * Requires authentication. The registry returns 403 if the component is
+ * Requires delete-settings (or manage-settings), matching the dispatcher's
+ * components authorization. The registry returns 403 if the component is
  * locked, or 409 if it is referenced by other entities.
  */
 export const DELETE = withErrorHandler(
@@ -137,7 +149,10 @@ export const DELETE = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("delete-component");
 
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "delete", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const { slug } = await context.params;
     const registry = await getComponentRegistry();

@@ -24,7 +24,8 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
   return (
     <Link
       href={href}
-      className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/30"
+      // Full-strength hover border, more visible than the resting border, not a fainter alpha.
+      className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
     >
       <Card
         variant="interactive"
@@ -40,7 +41,7 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
                 {label}
               </h5>
             </div>
-            <div className="text-muted-foreground/60 group-hover:text-primary transition-colors pt-1">
+            <div className="text-muted-foreground group-hover:text-primary transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
             </div>
           </div>
@@ -83,7 +84,8 @@ export const TeamSummary: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : error ? (
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive/20 rounded-none">
+        // Full-strength destructive border so the boundary is perceivable at the 3:1 UI minimum.
+        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-none">
           <AlertCircle className="h-4 w-4" />
           <span>Couldn&apos;t load team summary.</span>
         </div>

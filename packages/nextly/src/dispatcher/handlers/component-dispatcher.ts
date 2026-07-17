@@ -13,6 +13,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { assertValidFieldsPayload } from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -367,6 +368,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentFields = (component.fields ??
         []) as unknown as FieldDefinition[];
@@ -451,6 +456,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentVersion = component.schemaVersion ?? 1;
       const tableName = component.tableName;

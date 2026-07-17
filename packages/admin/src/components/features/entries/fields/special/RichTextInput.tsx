@@ -140,8 +140,7 @@ const editorTheme = {
   },
 
   // Blockquote
-  quote:
-    "border-l-4 border-border-foreground/30 pl-4 italic text-muted-foreground mb-2",
+  quote: "border-l-4 border-border pl-4 italic text-muted-foreground mb-2",
 
   // Links
   link: "text-primary underline hover-unified cursor-pointer",

@@ -9,7 +9,7 @@
  * @since 0.1.0
  */
 
-import type { SubmissionDocument, FormDocument, FormField } from "../types";
+import type { SubmissionDocument, FormDocument, AnyFormField } from "../types";
 
 // ============================================================================
 // Types
@@ -129,7 +129,10 @@ function safeString(value: unknown): string {
  * formatExportValue(new Date(), { type: 'date' }); // "2024-01-15"
  * ```
  */
-export function formatExportValue(value: unknown, field?: FormField): string {
+export function formatExportValue(
+  value: unknown,
+  field?: AnyFormField
+): string {
   // Handle null/undefined
   if (value === null || value === undefined) {
     return "";

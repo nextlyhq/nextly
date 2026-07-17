@@ -67,18 +67,6 @@
       "types": "./dist/api/health.d.ts",
       "import": "./dist/api/health.mjs"
     },
-    "./api/media": {
-      "types": "./dist/api/media.d.ts",
-      "import": "./dist/api/media.mjs"
-    },
-    "./api/media-bulk": {
-      "types": "./dist/api/media-bulk.d.ts",
-      "import": "./dist/api/media-bulk.mjs"
-    },
-    "./api/media-folders": {
-      "types": "./dist/api/media-folders.d.ts",
-      "import": "./dist/api/media-folders.mjs"
-    },
     "./api/media-handlers": {
       "types": "./dist/api/media-handlers.d.ts",
       "import": "./dist/api/media-handlers.mjs"
@@ -138,10 +126,6 @@
     "./api/email-send-template": {
       "types": "./dist/api/email-send-template.d.ts",
       "import": "./dist/api/email-send-template.mjs"
-    },
-    "./api/uploads": {
-      "types": "./dist/api/uploads.d.ts",
-      "import": "./dist/api/uploads.mjs"
     },
     "./api/singles": {
       "types": "./dist/api/singles.d.ts",

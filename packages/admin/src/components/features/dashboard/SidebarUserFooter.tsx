@@ -120,7 +120,7 @@ export function SidebarUserFooter({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-none hover-unified transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-none hover-unified transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent">
           {/* Avatar */}
           <Avatar size="md" className="bg-primary/5 text-primary">
             <AvatarFallback>

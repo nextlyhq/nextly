@@ -34,6 +34,7 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
+import { toast } from "@admin/components/ui";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle } from "@admin/types/entities";
@@ -331,8 +332,13 @@ export function useDeleteSingle() {
       // D-series: keep ui-schema.json in sync (best-effort, dev-only API).
       try {
         await schemaFileApi.deleteSingle(slug);
-      } catch {
-        // Non-fatal: DB delete succeeded; manifest cleanup can be re-run.
+      } catch (mirrorError) {
+        // The DB delete succeeded; a stale manifest entry silently diverges
+        // the committed schema from the database, so the failure must be
+        // visible even though it is non-fatal.
+        toast.warning(
+          `Single deleted from the database, but ui-schema.json could not be updated: ${mirrorError instanceof Error ? mirrorError.message : String(mirrorError)}`
+        );
       }
       return result;
     },

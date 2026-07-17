@@ -66,6 +66,15 @@ export interface GenerateSchemaOptions {
    * @default false
    */
   includeCustomValidators?: boolean;
+
+  /**
+   * Form mode the schema validates for. Password fields are write-only on
+   * the server (stored hashes never round-trip), so an edit form seeds
+   * them blank and blank means "keep the current password" — `required`
+   * may only be enforced on create.
+   * @default "create"
+   */
+  mode?: "create" | "edit";
 }
 
 /**
@@ -286,7 +295,7 @@ function fieldToZodSchema(
   } else if (isEmailField(field)) {
     schema = convertEmailFieldToZod(field);
   } else if (isPasswordField(field)) {
-    schema = convertPasswordFieldToZod(field);
+    schema = convertPasswordFieldToZod(field, options);
   } else if (isCodeField(field)) {
     schema = convertCodeFieldToZod(field);
   } else if (isRichTextField(field)) {
@@ -323,8 +332,16 @@ function fieldToZodSchema(
   const validation = fieldRecord.validation as
     | Record<string, unknown>
     | undefined;
-  const isRequired =
+  let isRequired =
     Boolean(fieldRecord.required) || Boolean(validation?.required);
+
+  // Password values never round-trip from the server, so edit forms seed
+  // them blank and blank means "keep the current password". Demanding a
+  // value on edit would block every save of an entry with a required
+  // password field.
+  if (isPasswordField(field) && options.mode === "edit") {
+    isRequired = false;
+  }
 
   if (!isRequired) {
     schema = schema.optional().nullable();
@@ -562,7 +579,10 @@ function convertEmailFieldToZod(field: EmailFieldConfig): z.ZodTypeAny {
   return schema;
 }
 
-function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
+function convertPasswordFieldToZod(
+  field: PasswordFieldConfig,
+  options: GenerateSchemaOptions = {}
+): z.ZodTypeAny {
   // Get validation values from both flat and nested formats
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
@@ -590,6 +610,12 @@ function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
       patternMsg,
       isFieldRequired(field)
     );
+  }
+
+  // On edit, blank means "keep the current password" (the server strips
+  // empty values), so strength rules must only apply to a typed value.
+  if (options.mode === "edit") {
+    schema = z.union([z.literal(""), schema]);
   }
 
   return schema;

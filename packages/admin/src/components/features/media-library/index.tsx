@@ -497,7 +497,8 @@ export function MediaLibrary({
             <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Media Library
             </h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            <p className="text-sm font-normal text-muted-foreground mt-1">
+              {/* Muted foreground so this secondary file count meets contrast; a faint primary alpha did not. */}
               {total} {total === 1 ? "file" : "files"}
               {activeFolderId && " in this folder"}
             </p>
@@ -662,7 +663,7 @@ export function MediaLibrary({
                 align="end"
                 className="w-48 shadow-none border-border"
               >
-                <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 px-2 py-1.5">
+                <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground px-2 py-1.5">
                   Toggle Columns
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-border/50" />
@@ -855,10 +856,11 @@ export function MediaLibrary({
               <AlertDialogCancel disabled={isBulkDeleting}>
                 Cancel
               </AlertDialogCancel>
+              {/* Solid emphasis fill so white on-color text stays AA in dark mode. */}
               <AlertDialogAction
                 onClick={handleConfirmBulkDelete}
                 disabled={isBulkDeleting}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
               >
                 {isBulkDeleting ? "Deleting..." : "Delete"}
               </AlertDialogAction>

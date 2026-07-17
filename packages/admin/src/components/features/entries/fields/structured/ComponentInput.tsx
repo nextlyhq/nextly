@@ -297,7 +297,7 @@ function SingleComponentNonRepeatable({
           onClick={() => setIsOpen(v => !v)}
           className={cn(
             "w-full flex items-center justify-between bg-primary/5 px-8 py-4 transition-all duration-200 cursor-pointer",
-            "border-y border-border hover:border-primary/50 relative z-10"
+            "border-y border-border hover:border-primary relative z-10"
           )}
         >
           <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-primary">

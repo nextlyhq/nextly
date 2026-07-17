@@ -62,6 +62,7 @@ import {
   Mail,
   MoreHorizontal,
   Plus,
+  Puzzle,
   RefreshCw,
   Trash2,
   Type,
@@ -113,6 +114,28 @@ const FIELD_TYPE_CONFIG: Record<
   checkbox: { label: "Checkbox", variant: "default", icon: CheckSquare },
   date: { label: "Date", variant: "default", icon: Calendar },
 };
+
+/** Presentation for a plugin-contributed type the built-in map does not cover. */
+const PLUGIN_FIELD_TYPE_CONFIG = {
+  label: "Custom",
+  variant: "default" as const,
+  icon: Puzzle,
+};
+
+/**
+ * The badge/icon config for a field type, falling back to a generic "Custom"
+ * presentation for plugin-contributed types outside the built-in scalar set.
+ */
+function fieldTypeConfig(type: string) {
+  return (
+    (
+      FIELD_TYPE_CONFIG as Record<
+        string,
+        (typeof FIELD_TYPE_CONFIG)[UserFieldType]
+      >
+    )[type] ?? PLUGIN_FIELD_TYPE_CONFIG
+  );
+}
 
 // ============================================================
 // Static User Fields (built-in, read-only)
@@ -224,7 +247,7 @@ function FieldDeleteDialog({
 // ============================================================
 
 function StaticFieldRow({ field }: { field: StaticField }) {
-  const typeConfig = FIELD_TYPE_CONFIG[field.type];
+  const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
 
   return (
@@ -318,7 +341,7 @@ function SortableFieldRow({
     transition,
   };
 
-  const typeConfig = FIELD_TYPE_CONFIG[field.type];
+  const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
   const isCode = field.source === "code";
 

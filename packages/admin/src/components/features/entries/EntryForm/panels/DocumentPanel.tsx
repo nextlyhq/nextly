@@ -100,7 +100,7 @@ function Separator() {
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
   return (
     <Icon
-      className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0"
+      className="h-3.5 w-3.5 text-muted-foreground shrink-0"
       aria-hidden="true"
     />
   );
@@ -113,7 +113,7 @@ function StatusRow({ state }: { state: PillState }) {
   // text on a transparent bg (dark) — distinct from Draft (neutral) and
   // Published (foreground/background). Avoids saturated AI-style hues.
   const PILL_CLASS: Record<PillState, string> = {
-    draft: "bg-muted text-muted-foreground border border-primary/10",
+    draft: "bg-muted text-muted-foreground border border-border",
     modified:
       "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
     published: "bg-foreground text-background",

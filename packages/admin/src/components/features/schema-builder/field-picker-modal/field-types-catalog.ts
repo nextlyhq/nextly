@@ -12,12 +12,15 @@ import type {
 } from "nextly/field-catalog";
 import { FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 
-import type { FieldPrimitiveType } from "@admin/types/collection";
+import type { FieldTypeId } from "@admin/types/collection";
 
 export type { FieldTypeCategory };
 
+// `type` is the open `FieldTypeId` so a plugin-contributed row (merged into the
+// picker from the plugin field-type catalog) shares this entry shape with the
+// built-ins instead of needing a parallel one.
 export interface FieldTypeEntry extends Omit<FieldTypeCatalogEntry, "type"> {
-  type: FieldPrimitiveType;
+  type: FieldTypeId;
 }
 
 /**

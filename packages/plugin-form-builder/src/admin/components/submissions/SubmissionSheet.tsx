@@ -282,7 +282,8 @@ export function SubmissionSheet({
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Spam banner */}
           {submission.status === "spam" && (
-            <div className="flex items-center gap-2 border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            // Full-strength destructive border so the spam banner boundary is perceivable over its tinted fill.
+            <div className="flex items-center gap-2 border border-destructive bg-destructive/5 p-3 text-sm text-destructive">
               <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
               Flagged as spam
               {submission.spamReason ? ` (${submission.spamReason})` : ""}. Set
@@ -408,7 +409,7 @@ export function SubmissionSheet({
           <div className="space-y-1 border-t border-border pt-4 text-xs text-muted-foreground">
             <p>
               IP: {submission.ipAddress || "—"}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               ID: <span className="font-mono">{submission.id}</span>
             </p>
             {submission.userAgent && (

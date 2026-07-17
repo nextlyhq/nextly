@@ -108,9 +108,10 @@ const fieldAdmin = z
   })
   .partial();
 
-// Recursive field shape: container types (repeater/group/component) carry
+// Recursive field shape: inline container types (repeater/group) carry
 // nested `fields`, so `field` references itself via z.lazy. The explicit
-// FieldNode type breaks the circular inference.
+// FieldNode type breaks the circular inference. (A component field is a
+// leaf reference by slug, not a container.)
 export type FieldNode = {
   name: string;
   // Canonical tokens, OR a plugin-contributed field type slug. Plugin types
@@ -164,7 +165,13 @@ export type FieldNode = {
   fields?: FieldNode[];
 };
 
-const field: z.ZodType<FieldNode> = z.lazy(() =>
+/**
+ * The single-field schema, exported so the schema-apply endpoints validate
+ * incoming field payloads with EXACTLY the rules the ui-schema.json mirror
+ * enforces. One validator for both writers is what keeps the DB and the
+ * committed manifest from ever disagreeing about what a legal field is.
+ */
+export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
   z
     .object({
       name: z
@@ -206,8 +213,8 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
       component: z.string().optional(),
       components: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
-      // Nested fields for container types (repeater/group/component).
-      fields: z.array(field).optional(),
+      // Nested fields for inline container types (repeater/group).
+      fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
       if (
@@ -220,8 +227,13 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["options"],
         });
       }
+      // Only relationship requires relationTo: the runtime consumes it to
+      // resolve the target collection. Upload fields always target the
+      // media library and the builder's upload editor deliberately does
+      // not collect relationTo, so requiring it here would reject every
+      // builder-authored upload field the DB path accepts.
       if (
-        (f.type === "relationship" || f.type === "upload") &&
+        f.type === "relationship" &&
         (f.relationTo === undefined ||
           (typeof f.relationTo === "string" && f.relationTo.length === 0) ||
           (Array.isArray(f.relationTo) && f.relationTo.length === 0))
@@ -232,10 +244,13 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["relationTo"],
         });
       }
+      // repeater/group are inline containers whose columns live in a nested
+      // fields[] array. A component field is a LEAF reference to a separately
+      // defined component schema (component / components), so it carries no
+      // fields[] of its own; requiring one here rejects every real component
+      // field the builder and code-first APIs emit.
       if (
-        (f.type === "repeater" ||
-          f.type === "group" ||
-          f.type === "component") &&
+        (f.type === "repeater" || f.type === "group") &&
         (!f.fields || f.fields.length === 0)
       ) {
         ctx.addIssue({
@@ -243,6 +258,42 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
           message: `${f.type} fields require a non-empty fields[] array`,
           path: ["fields"],
         });
+      }
+      // A component field references a component schema by slug: either a
+      // single `component`, or a `components[]` whitelist for a polymorphic
+      // slot. Exactly one form must be present, and every referenced slug
+      // must be a real slug — a blank or malformed reference points at no
+      // loadable component, so runtime writes to it would be silently dropped.
+      if (f.type === "component") {
+        const hasSingle = f.component !== undefined;
+        const hasMulti = f.components !== undefined;
+        if (hasSingle === hasMulti) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "component fields require either a `component` slug or a `components[]` list, but not both",
+            path: [hasSingle ? "components" : "component"],
+          });
+        } else if (hasSingle) {
+          if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "component must be a valid component slug",
+              path: ["component"],
+            });
+          }
+        } else if (
+          !Array.isArray(f.components) ||
+          f.components.length === 0 ||
+          !f.components.every(s => typeof s === "string" && SLUG_RE.test(s))
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "components must be a non-empty list of valid component slugs",
+            path: ["components"],
+          });
+        }
       }
       if (RESERVED_FIELD_NAMES.has(f.name)) {
         ctx.addIssue({
@@ -292,7 +343,7 @@ function entity() {
       labels: z.object({ singular: z.string(), plural: z.string() }).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
-      fields: z.array(field),
+      fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
       // Duplicate field names.
