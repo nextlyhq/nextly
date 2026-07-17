@@ -58,6 +58,8 @@ import {
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { assertSchemaVersionMatch } from "./schema-version-guard";
+
 interface ComponentsServices {
   registry: ComponentRegistryService;
 }
@@ -462,6 +464,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       assertValidFieldsPayload(fields);
 
       const currentVersion = component.schemaVersion ?? 1;
+      // Reject a stale UI save before any DDL runs so two admins editing the
+      // same component cannot silently overwrite each other (last-write-wins).
+      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
       const tableName = component.tableName;
 
       const legacyBundle = resolutions
@@ -556,8 +561,6 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by
       // 1 locally — matches the collection fallback pattern.
       const newSchemaVersion = currentVersion + 1;
-
-      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
 
       return respondAction(`Schema applied for component '${slug}'`, {
         newSchemaVersion,

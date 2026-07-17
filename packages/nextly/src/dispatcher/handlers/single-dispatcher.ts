@@ -81,6 +81,8 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { assertSchemaVersionMatch } from "./schema-version-guard";
+
 // ============================================================
 // Default field helpers
 // ============================================================
@@ -897,6 +899,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       assertValidFieldsPayload(fields);
 
       const currentVersion = single.schemaVersion ?? 1;
+      // Reject a stale UI save before any DDL runs so two admins editing the
+      // same single cannot silently overwrite each other (last-write-wins).
+      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
       const tableName = single.tableName;
 
       const legacyBundle = resolutions
@@ -992,7 +997,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       }
 
       const newSchemaVersion = currentVersion + 1;
-      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
 
       return respondAction(`Schema applied for single '${slug}'`, {
         newSchemaVersion,
