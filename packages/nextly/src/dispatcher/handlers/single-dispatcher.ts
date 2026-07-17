@@ -962,7 +962,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      // Post-apply: update dynamic_singles fields JSON + schema_hash.
+      const newSchemaVersion = currentVersion + 1;
+
+      // Post-apply: update dynamic_singles fields JSON + schema_hash, and
+      // advance schema_version so the optimistic-lock check above sees a new
+      // value on the next save. Without this bump the stored version never
+      // changes and a second stale save would pass the guard.
       try {
         await adapter.update(
           "dynamic_singles",
@@ -970,6 +975,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
@@ -995,8 +1001,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
         );
       }
-
-      const newSchemaVersion = currentVersion + 1;
 
       return respondAction(`Schema applied for single '${slug}'`, {
         newSchemaVersion,

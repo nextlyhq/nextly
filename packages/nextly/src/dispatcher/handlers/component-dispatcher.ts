@@ -524,8 +524,13 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         );
       }
 
+      const newSchemaVersion = currentVersion + 1;
+
       // Post-apply: update dynamic_components fields JSON + schema_hash directly
-      // to avoid the registry's auto-bump of schemaVersion / migrationStatus.
+      // (not via the registry helper, whose auto-bump would also reset
+      // migration_status). Advance schema_version here so the optimistic-lock
+      // check above sees a new value on the next save; without the bump the
+      // stored version never changes and a second stale save would pass.
       try {
         await adapter.update(
           "dynamic_components",
@@ -533,6 +538,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
@@ -556,11 +562,6 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         tableName,
         fields as FieldConfig[]
       );
-
-      // Pipeline (PipelineResult) does not carry per-slug schema versions;
-      // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by
-      // 1 locally — matches the collection fallback pattern.
-      const newSchemaVersion = currentVersion + 1;
 
       return respondAction(`Schema applied for component '${slug}'`, {
         newSchemaVersion,
