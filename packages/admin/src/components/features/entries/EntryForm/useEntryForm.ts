@@ -458,16 +458,18 @@ export function useEntryForm({
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
 
-  // Generate Zod schema from collection fields
+  // Generate Zod schema from collection fields. Mode matters: password
+  // fields are write-only server-side, so edit forms treat blank as "keep
+  // the current password" instead of a required-field failure.
   const schema = useMemo(() => {
     try {
-      return generateClientSchema(fields);
+      return generateClientSchema(fields, { mode });
     } catch (error) {
       console.error("Failed to generate schema:", error);
       // Fallback to permissive schema
       return z.record(z.string(), z.unknown());
     }
-  }, [fields]);
+  }, [fields, mode]);
 
   // Generate default values
   const defaultValues = useMemo(() => {

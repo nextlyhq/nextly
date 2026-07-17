@@ -19,6 +19,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { assertValidFieldsPayload } from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -632,6 +633,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       let migrationStatus = existing.migrationStatus;
 
       if (b.fields !== undefined) {
+        // Same rules as the ui-schema.json mirror (see api/fields-payload).
+        assertValidFieldsPayload(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
 
@@ -796,6 +799,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentFields = (single.fields ??
         []) as unknown as FieldDefinition[];
@@ -881,6 +888,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentVersion = single.schemaVersion ?? 1;
       const tableName = single.tableName;

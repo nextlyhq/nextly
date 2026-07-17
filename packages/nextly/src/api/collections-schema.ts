@@ -19,19 +19,21 @@
 
 import { z } from "zod";
 
-import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { NextlyError } from "../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
-import { env } from "../lib/env";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
+import { assertValidFieldsPayload } from "./fields-payload";
 import { respondList, respondMutation } from "./response-shapes";
+import {
+  requireRouteAuthentication,
+  requireRoutePermission,
+} from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -67,7 +69,9 @@ const createCollectionSchema = z.object({
     plural: z.string().trim().min(1, "Plural label is required").optional(),
   }),
   description: z.string().optional(),
-  fields: z.array(z.any()), // Field validation is complex, handled by service
+  // Validated against the shared manifest field rules after parse (see
+  // api/fields-payload); kept unknown here so passthrough keys survive.
+  fields: z.array(z.unknown()),
   timestamps: z.boolean().default(true),
   // Draft/Published opt-in. Default false keeps the existing public API
   // contract — collections without the flag continue to ship a single
@@ -86,17 +90,6 @@ const createCollectionSchema = z.object({
     .optional(),
   hooks: z.array(z.any()).optional(),
 });
-
-async function requireUser(request: Request): Promise<{ id: string }> {
-  // getSession returns GetSessionResult; extract user or throw the unified
-  // auth-required error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET || "");
-  const user = result.authenticated ? result.user : null;
-  if (!user) {
-    throw NextlyError.authRequired();
-  }
-  return { id: user.id };
-}
 
 /**
  * GET handler for listing collections with pagination and filters.
@@ -122,7 +115,8 @@ async function requireUser(request: Request): Promise<{ id: string }> {
  * ```
  */
 export const GET = withErrorHandler(async (request: Request) => {
-  const user = await requireUser(request);
+  const auth = await requireRouteAuthentication(request);
+  const user = { id: auth.userId };
 
   const registry = await getCollectionRegistry();
   const { searchParams } = new URL(request.url);
@@ -206,28 +200,12 @@ export const POST = withErrorHandler(async (request: Request) => {
   // reads the same to every caller, super-admin or not.
   requireBuilderEnabled("create-collection");
 
-  const user = await requireUser(request);
-
   // Initialize services (required for permission check via RBAC tables).
   const registry = await getCollectionRegistry();
 
   // Authorise: only super-admins or users with manage-settings permission
-  // may create new collections (matches the frontend route guard). The
-  // legacy public message included context; per spec §13.8 the canonical
-  // forbidden message is generic and the operator detail goes to logs.
-  const isAdmin = await isSuperAdmin(user.id);
-  if (!isAdmin) {
-    const canManage = await hasPermission(user.id, "manage", "settings");
-    if (!canManage) {
-      throw NextlyError.forbidden({
-        logContext: {
-          userId: user.id,
-          required: "manage-settings",
-          operation: "create-collection",
-        },
-      });
-    }
-  }
+  // may create new collections (matches the frontend route guard).
+  await requireRoutePermission(request, "manage", "settings");
 
   const body = await request.json();
 
@@ -237,13 +215,22 @@ export const POST = withErrorHandler(async (request: Request) => {
   }
   const validated = parseResult.data;
 
+  // Same rules as the ui-schema.json mirror (see api/fields-payload).
+  assertValidFieldsPayload(validated.fields);
+
   const tableName = validated.slug
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+  // Validated by assertValidFieldsPayload above; cast through `unknown`
+  // to the registry's config type while keeping the payload unstripped.
+  const fields = validated.fields as unknown as Parameters<
+    typeof registry.registerCollection
+  >[0]["fields"];
+
   // Calculate schema hash for change detection.
-  const schemaHash = calculateSchemaHash(validated.fields);
+  const schemaHash = calculateSchemaHash(fields);
 
   const normalizedLabels = {
     singular: validated.labels.singular.trim(),
@@ -257,7 +244,7 @@ export const POST = withErrorHandler(async (request: Request) => {
     labels: normalizedLabels,
     tableName,
     description: validated.description,
-    fields: validated.fields,
+    fields,
     timestamps: validated.timestamps,
     admin: validated.admin,
     source: "ui",

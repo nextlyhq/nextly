@@ -23,11 +23,22 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  applyFieldWriteAccess,
+  attachFieldValidators,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import {
+  hashPasswordFieldValues,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type {
   SingleDocument,
@@ -191,6 +202,57 @@ export class SingleMutationService extends BaseService {
         }
       });
 
+      // 6.2. Field-level access + beforeValidate hooks (functions resolved
+      // via the field-level registry; serialized field defs drop them).
+      await applyFieldWriteAccess({
+        kind: "single",
+        slug,
+        data: currentData,
+        operation: "update",
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "beforeValidate",
+        data: currentData,
+        operation: "update",
+        user: options.user,
+      });
+
+      // 6.3. Enforce the schema's declared rules on the server — the same
+      // gate the collection write paths run. Singles updates are PATCH
+      // semantics: absent keys stay untouched, provided keys must hold.
+      {
+        const validationIssues = await validateEntryData(
+          currentData,
+          attachFieldValidators("single", slug, fieldConfigs),
+          {
+            mode: "update",
+            req: options.user ? { user: options.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // 6.35. Field-level beforeChange hooks (after validation, before
+      // hashing/serialization).
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "beforeChange",
+        data: currentData,
+        operation: "update",
+        user: options.user,
+      });
+
+      // 6.4. Password fields store bcrypt hashes, never the submitted
+      // value — same guarantee as the collection write paths.
+      await hashPasswordFieldValues(currentData, fieldConfigs);
+
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
       normalizeUploadFields(currentData, fieldConfigs);
 
@@ -285,6 +347,21 @@ export class SingleMutationService extends BaseService {
       }
 
       this.logger.info("Single document updated", { slug, id: updatedDoc.id });
+
+      // Field-level afterChange hooks observe the saved values (before the
+      // password strip so they can see the full stored row).
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterChange",
+        data: updatedDoc,
+        operation: "update",
+        user: options.user,
+      });
+
+      // Stored password hashes are write-only; the response never carries
+      // them back to the client.
+      stripPasswordFieldValues(updatedDoc, fieldConfigs);
 
       return {
         success: true,

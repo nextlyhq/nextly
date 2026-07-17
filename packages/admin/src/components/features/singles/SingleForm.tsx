@@ -307,7 +307,11 @@ export function SingleForm({
   // error when they aren't user-entered.
   const zodSchema = useMemo(() => {
     try {
-      return generateClientSchema(relaxIdentityRequired(schema.fields));
+      // Singles are always an update of the one existing document, so the
+      // schema runs in edit mode (blank password = keep current).
+      return generateClientSchema(relaxIdentityRequired(schema.fields), {
+        mode: "edit",
+      });
     } catch (error) {
       console.error("Failed to generate schema:", error);
       return z.record(z.string(), z.unknown());

@@ -21,13 +21,9 @@ import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
-import {
-  respondAction,
-  respondDoc,
-  respondMutation,
-} from "./response-shapes";
+import { respondAction, respondDoc, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -54,7 +50,10 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();
@@ -84,7 +83,10 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "update", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const { id } = await context.params;
     const body = await readJsonBody<Record<string, unknown>>(request);
@@ -127,7 +129,10 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "delete", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();

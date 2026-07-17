@@ -271,6 +271,7 @@ export function EntryForm({
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
+              mode={mode}
             />
             <EntryFormActions
               mode={mode}
@@ -355,6 +356,7 @@ export function EntryForm({
                     fields={mainFields}
                     disabled={isSubmitting}
                     withCard
+                    mode={mode}
                   />
                 </div>
               )}

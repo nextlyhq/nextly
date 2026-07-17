@@ -23,6 +23,7 @@ import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
 import { respondList } from "./response-shapes";
+import { requireRoutePermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getSingleRegistry(): Promise<SingleRegistryService> {
@@ -32,6 +33,10 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
 
 /**
  * GET handler for listing Singles with pagination and filters.
+ *
+ * Requires manage-settings, matching the dispatcher's `listSingles`
+ * authorization — this lists Single definitions (builder surface), not
+ * their published content.
  *
  * Query Parameters:
  * - source: Filter by source type ("code" | "ui" | "built-in")
@@ -47,6 +52,8 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
+    await requireRoutePermission(request, "manage", "settings");
+
     const registry = await getSingleRegistry();
     const { searchParams } = new URL(request.url);
 

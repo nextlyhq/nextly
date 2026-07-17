@@ -524,10 +524,29 @@ export function buildSingleErrorResult(
   // NextlyError — the canonical error class. Use publicMessage so the wire
   // never sees logMessage / cause / stack.
   if (NextlyError.is(error)) {
+    // Per-field validation issues ride the result so the wire envelope can
+    // carry field paths (the SingleResult errors shape predates the
+    // canonical one; map path → field for its consumers).
+    const validationErrors =
+      error.code === "VALIDATION_ERROR"
+        ? (
+            error.publicData as
+              | { errors?: Array<{ path: string; message: string }> }
+              | undefined
+          )?.errors
+        : undefined;
     return {
       success: false,
       statusCode: error.statusCode,
       message: error.publicMessage,
+      ...(validationErrors
+        ? {
+            errors: validationErrors.map(e => ({
+              field: e.path,
+              message: e.message,
+            })),
+          }
+        : {}),
     };
   }
 

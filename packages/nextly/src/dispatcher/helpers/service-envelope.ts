@@ -150,6 +150,14 @@ export function unwrapServiceResult<T>(
     statusCode?: number;
     message?: string;
     data?: unknown;
+    // Canonical {path, code} from collection results; legacy {field} from
+    // SingleResult. Both normalize below.
+    errors?: Array<{
+      path?: string;
+      field?: string;
+      code?: string;
+      message: string;
+    }>;
   },
   logContext?: Record<string, unknown>
 ): T {
@@ -162,14 +170,23 @@ export function unwrapServiceResult<T>(
   if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
   if (status === 409) throw NextlyError.conflict({ logContext: ctx });
   if (status === 400) {
+    // Per-field issues from the service survive into the wire envelope so
+    // the admin can map them onto form fields; the generic single-issue
+    // shape is only the fallback for detail-less 400s.
     throw NextlyError.validation({
-      errors: [
-        {
-          path: "request",
-          code: "INVALID",
-          message: "The submitted data is invalid.",
-        },
-      ],
+      errors: result.errors?.length
+        ? result.errors.map(e => ({
+            path: e.path ?? e.field ?? "",
+            code: e.code ?? "INVALID",
+            message: e.message,
+          }))
+        : [
+            {
+              path: "request",
+              code: "INVALID",
+              message: "The submitted data is invalid.",
+            },
+          ],
       logContext: ctx,
     });
   }

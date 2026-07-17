@@ -38,6 +38,11 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
+import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type {
   GetSingleOptions,
@@ -335,6 +340,28 @@ export class SingleQueryService extends BaseService {
       }
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
+
+      // Field-level afterRead hooks + read access (functions resolved via
+      // the field-level registry).
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterRead",
+        data: doc,
+        operation: "read",
+        user: options.user,
+      });
+      await applyFieldReadAccess({
+        kind: "single",
+        slug,
+        entry: doc,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
+
+      // Stored password hashes are write-only: they never serialize into a
+      // read response.
+      stripPasswordFieldValues(doc, singleMeta.fields);
 
       return {
         success: true,

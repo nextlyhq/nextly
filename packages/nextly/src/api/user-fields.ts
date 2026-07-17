@@ -29,9 +29,9 @@ import type { NextlyServiceConfig } from "../di/register";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -140,7 +140,10 @@ const createFieldSchema = z
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const service = await getUserFieldDefinitionService();
     const fields = await service.listFields();
@@ -176,7 +179,10 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const body = await readJsonBody(request);
 
