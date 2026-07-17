@@ -65,7 +65,9 @@ Work through these in order; each layer has tests nearby to extend.
 
 - Unit tests at each touched layer (factory, guard, descriptor, zod, type
   generator) plus an integration test that creates a collection using the
-  type against at least sqlite.
+  type. Because this workflow changes per-dialect column mappings and DDL,
+  cover Postgres plus at least one of MySQL/SQLite (the CI matrix runs all
+  three).
 - `pnpm generate:types` output in the playground includes the new type
   correctly; the field renders in the playground admin (both light and dark).
 - Run the schema-hash and export tests; a new type that changes hashing
