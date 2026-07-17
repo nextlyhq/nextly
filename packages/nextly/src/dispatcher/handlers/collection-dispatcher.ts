@@ -64,6 +64,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -795,6 +796,7 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         body as Record<string, unknown>
       );
@@ -855,6 +857,7 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         body as Record<string, unknown>
       );
@@ -883,6 +886,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -917,6 +921,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -959,6 +964,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const message =
         result.failures.length === 0
@@ -992,11 +998,25 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.data || typeof b.data !== "object") {
         throw new Error("data must be an object with update values");
       }
+      // Forward the authenticated identity so per-entry updates run as this
+      // user (hooks get a user) and the response is redacted to what they may
+      // read. Without it the query-based bulk update ran anonymously, unlike
+      // the id-based bulkUpdateEntries path which already resolves the user.
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
           where: b.where as WhereFilter,
           data: b.data,
+          userId: p._authenticatedUserId
+            ? String(p._authenticatedUserId)
+            : undefined,
+          userName: p._authenticatedUserName
+            ? String(p._authenticatedUserName)
+            : undefined,
+          userEmail: p._authenticatedUserEmail
+            ? String(p._authenticatedUserEmail)
+            : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         { limit: b.limit }
       );
@@ -1032,6 +1052,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

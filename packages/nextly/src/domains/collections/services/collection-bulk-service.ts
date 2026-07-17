@@ -449,6 +449,8 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Route auth already ran; response is still redacted for this user */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -555,13 +557,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // 5. Use existing bulkUpdateEntries for per-entry updates with hooks
+    // 5. Use existing bulkUpdateEntries for per-entry updates with hooks.
+    // Forward routeAuthorized so per-entry response redaction matches the
+    // id-based path (route auth ran, but reads are still redacted per user).
     return this.bulkUpdateEntries({
       collectionName: params.collectionName,
       ids,
       data: params.data,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
     });
   }

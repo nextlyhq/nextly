@@ -24,6 +24,7 @@ import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import { transformRichTextFields } from "../lib/field-transform";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
@@ -187,7 +188,12 @@ export const GET = withErrorHandler(
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     const { slug } = await context.params;
-    await requireRouteCollectionAccess(request, "update", slug);
+    // Capture the authorized identity so the update runs as this user. Route
+    // auth has already gated the operation, so `overrideAccess` skips the RBAC
+    // re-check; `routeAuthorized` keeps the response redacted to what this user
+    // may read. Without forwarding the user, the standalone route ran the
+    // update anonymously and diverged from the dispatcher's updateSingleDocument.
+    const auth = await requireRouteCollectionAccess(request, "update", slug);
 
     const service = await getSingleEntryService();
 
@@ -196,7 +202,23 @@ export const PATCH = withErrorHandler(
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;
 
-    const result = await service.update(slug, body, { locale });
+    // Include resolved role slugs so field-level `access.read` (which redacts
+    // the response under `routeAuthorized`) evaluates against the caller's
+    // roles, matching the collection route path. Session auth carries role IDs,
+    // so they are resolved; API-key auth already carries slugs.
+    const user = {
+      id: auth.userId,
+      name: auth.userName,
+      email: auth.userEmail,
+      roles: await resolveRoleSlugs(auth),
+    };
+
+    const result = await service.update(slug, body, {
+      locale,
+      user,
+      overrideAccess: true,
+      routeAuthorized: true,
+    });
 
     if (!result.success) {
       throwFromSingleResult(result, slug);
