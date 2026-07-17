@@ -52,7 +52,7 @@ import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useMemo, useState } from "react";
 
 import type { FormField } from "../../../types";
-import { findFieldReferences } from "../../../utils/field-references";
+import { buildFieldReferenceMap } from "../../../utils/field-references";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
 import { AddFieldDialog } from "./AddFieldDialog";
@@ -279,10 +279,12 @@ function FieldCard({
 export interface FieldCardsProps {
   /**
    * Form-surface types the host has NOT excluded (the plugin's field
-   * enable/disable option). Types outside this set stay renderable on
-   * existing fields but cannot be added.
+   * enable/disable option). `null` while the host configuration is still
+   * loading — the Add dialog waits rather than flashing the unfiltered set.
+   * Types outside this set stay renderable on existing fields but cannot be
+   * added.
    */
-  enabledTypes: readonly FormFieldCatalogType[];
+  enabledTypes: readonly FormFieldCatalogType[] | null;
   /** Creates a field of the given type and returns it (context helper). */
   onAddField: (type: FormFieldCatalogType) => void;
 }
@@ -307,9 +309,17 @@ export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
   );
 
   const entries = useMemo(() => {
+    if (enabledTypes === null) return null;
     const allowed = new Set<string>(enabledTypes);
     return FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
   }, [enabledTypes]);
+
+  // One O(N^2) pass per fields/notifications change; each card then looks
+  // its blockers up in O(1) instead of re-walking everything per render.
+  const referenceMap = useMemo(
+    () => buildFieldReferenceMap(fields, notifications),
+    [fields, notifications]
+  );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -364,11 +374,9 @@ export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
                         )
                       }
                       allFields={fields}
-                      deleteBlockers={findFieldReferences(
-                        field.name,
-                        fields,
-                        notifications
-                      ).map(ref => ref.label)}
+                      deleteBlockers={(referenceMap.get(field.name) ?? []).map(
+                        ref => ref.label
+                      )}
                       onUpdate={updates => updateField(field.name, updates)}
                       onDuplicate={() => duplicateField(field.name)}
                       onDelete={() => deleteField(field.name)}

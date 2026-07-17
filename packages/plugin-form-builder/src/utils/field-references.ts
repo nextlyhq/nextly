@@ -34,7 +34,10 @@ export function findFieldReferences(
 
   for (const field of fields) {
     if (field.name === fieldName) continue;
-    const conditions = field.conditionalLogic?.conditions ?? [];
+    // Disabled conditional logic has no runtime effect, so it must not block
+    // deletion; the dormant condition just goes stale.
+    if (!field.conditionalLogic?.enabled) continue;
+    const conditions = field.conditionalLogic.conditions ?? [];
     if (conditions.some(condition => condition.field === fieldName)) {
       references.push({ kind: "condition", label: field.label || field.name });
     }
@@ -58,4 +61,20 @@ export function findFieldReferences(
   }
 
   return references;
+}
+
+/**
+ * Reference lists for every field in one pass, keyed by field name, so a
+ * per-card lookup is O(1) instead of re-walking fields and notifications for
+ * each card on every render.
+ */
+export function buildFieldReferenceMap(
+  fields: readonly FormField[],
+  notifications: readonly FormNotificationItem[]
+): Map<string, FieldReference[]> {
+  const map = new Map<string, FieldReference[]>();
+  for (const field of fields) {
+    map.set(field.name, findFieldReferences(field.name, fields, notifications));
+  }
+  return map;
 }

@@ -122,30 +122,34 @@ function FormBuilderViewInner({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // The host's resolved field enable/disable map. Every type stays enabled
-  // until the config arrives (or if it fails): the picker must not flash a
-  // reduced set on a slow response, and existing fields render regardless.
-  const [enabledTypes, setEnabledTypes] = useState<FormFieldCatalogType[]>(() =>
-    FORM_FIELD_TYPE_CATALOG.map(entry => entry.type)
-  );
+  // The host's resolved field enable/disable map. `null` until the config
+  // request settles, so the Add dialog never flashes the unfiltered set. If
+  // the request errors, every type is offered: the exclude list is an
+  // authoring preference (the server accepts any field type in the form's
+  // JSON regardless), so hiding all types on a transient failure would cost
+  // more than a temporarily unfiltered picker.
+  const [enabledTypes, setEnabledTypes] = useState<
+    FormFieldCatalogType[] | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
+    const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
     void fetch(
       "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config",
       { credentials: "include" }
     )
       .then(response => (response.ok ? response.json() : null))
       .then((config: { fields?: Record<string, boolean> } | null) => {
-        if (cancelled || !config?.fields) return;
+        if (cancelled) return;
         setEnabledTypes(
-          FORM_FIELD_TYPE_CATALOG.map(entry => entry.type).filter(
-            type => config.fields?.[type] !== false
-          )
+          config?.fields
+            ? allTypes.filter(type => config.fields?.[type] !== false)
+            : allTypes
         );
       })
       .catch(() => {
-        // Config endpoint unavailable: keep every type enabled.
+        if (!cancelled) setEnabledTypes(allTypes);
       });
     return () => {
       cancelled = true;

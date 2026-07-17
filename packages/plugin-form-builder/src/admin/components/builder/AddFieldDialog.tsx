@@ -29,8 +29,11 @@ import { useState } from "react";
 export interface AddFieldDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The form surface's catalog, already filtered by the host's excludes. */
-  entries: readonly FieldTypeCatalogEntry<FormFieldCatalogType>[];
+  /**
+   * The form surface's catalog, already filtered by the host's excludes;
+   * `null` while the host configuration is still loading.
+   */
+  entries: readonly FieldTypeCatalogEntry<FormFieldCatalogType>[] | null;
   /** Called with the chosen type; the parent creates and selects the field. */
   onAdd: (type: FormFieldCatalogType) => void;
 }
@@ -43,9 +46,9 @@ export function AddFieldDialog({
 }: AddFieldDialogProps) {
   const [selected, setSelected] = useState<FormFieldCatalogType>("text");
 
-  const selectable = entries.some(entry => entry.type === selected)
+  const selectable = entries?.some(entry => entry.type === selected)
     ? selected
-    : entries[0]?.type;
+    : entries?.[0]?.type;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -57,7 +60,11 @@ export function AddFieldDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {entries.length === 0 ? (
+        {entries === null ? (
+          <p className="text-sm text-muted-foreground" role="status">
+            Loading the available field types…
+          </p>
+        ) : entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             All field types are disabled by this site&apos;s form-builder
             configuration.

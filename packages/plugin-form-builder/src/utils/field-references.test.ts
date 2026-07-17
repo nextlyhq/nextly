@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { FormField, FormNotificationItem } from "../types";
 
-import { findFieldReferences } from "./field-references";
+import {
+  buildFieldReferenceMap,
+  findFieldReferences,
+} from "./field-references";
 
 function textField(name: string, label = name): FormField {
   return { type: "text", name, label, required: false };
@@ -39,6 +42,23 @@ describe("findFieldReferences", () => {
 
     const refs = findFieldReferences("plan", fields, []);
     expect(refs).toEqual([{ kind: "condition", label: "Company name" }]);
+  });
+
+  it("ignores conditions whose conditional logic is disabled", () => {
+    const fields: FormField[] = [
+      textField("plan"),
+      {
+        ...textField("company"),
+        conditionalLogic: {
+          enabled: false,
+          action: "show",
+          operator: "AND",
+          conditions: [{ field: "plan", comparison: "equals", value: "pro" }],
+        },
+      },
+    ];
+
+    expect(findFieldReferences("plan", fields, [])).toEqual([]);
   });
 
   it("does not count a field's own conditions as a reference to itself", () => {
@@ -87,6 +107,25 @@ describe("findFieldReferences", () => {
     ];
 
     expect(findFieldReferences("email", [], notifications)).toEqual([]);
+  });
+
+  it("builds the whole reference map in one pass", () => {
+    const fields: FormField[] = [
+      textField("plan"),
+      {
+        ...textField("company", "Company"),
+        conditionalLogic: {
+          enabled: true,
+          action: "show",
+          operator: "AND",
+          conditions: [{ field: "plan", comparison: "equals", value: "pro" }],
+        },
+      },
+    ];
+
+    const map = buildFieldReferenceMap(fields, []);
+    expect(map.get("plan")).toEqual([{ kind: "condition", label: "Company" }]);
+    expect(map.get("company")).toEqual([]);
   });
 
   it("returns empty for an unreferenced field", () => {

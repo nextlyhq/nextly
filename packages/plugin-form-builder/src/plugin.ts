@@ -238,7 +238,9 @@ export function formBuilder(
           // admin client has to them.
           method: "GET",
           path: "/builder-config",
-          requiredPermission: "read-forms",
+          // Derived from the forms slug like the menu entry: with an
+          // overridden slug, users hold read-<slug>, not read-forms.
+          requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
           handler: () =>
             Promise.resolve(Response.json({ fields: resolvedConfig.fields })),
         },

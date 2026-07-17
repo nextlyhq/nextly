@@ -398,17 +398,18 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
-  const duplicateField = useCallback((fieldName: string) => {
-    let newFieldName: string | null = null;
+  const duplicateField = useCallback(
+    (fieldName: string) => {
+      // Computed from the current fields (not inside the state updater):
+      // updaters must stay pure, and the selection below needs the new name
+      // deterministically.
+      const fieldIndex = fields.findIndex(f => f.name === fieldName);
+      if (fieldIndex === -1) return;
 
-    setFieldsState(prev => {
-      const fieldIndex = prev.findIndex(f => f.name === fieldName);
-      if (fieldIndex === -1) return prev;
-
-      const field = prev[fieldIndex];
-      newFieldName = generateFieldName(
+      const field = fields[fieldIndex];
+      const newFieldName = generateFieldName(
         field.type,
-        prev.map(f => f.name)
+        fields.map(f => f.name)
       );
       const newField: FormField = {
         ...field,
@@ -416,17 +417,16 @@ export function FormBuilderProvider({
         label: `${field.label} (Copy)`,
       };
 
-      const newFields = [...prev];
+      const newFields = [...fields];
       newFields.splice(fieldIndex + 1, 0, newField);
-      return newFields;
-    });
+      setFieldsState(newFields);
 
-    // Select the duplicated field so it appears in the editor panel
-    if (newFieldName) {
+      // Select the duplicated field so its card expands
       setSelectedFieldId(newFieldName);
-    }
-    setIsDirty(true);
-  }, []);
+      setIsDirty(true);
+    },
+    [fields]
+  );
 
   const selectField = useCallback((fieldName: string | null) => {
     setSelectedFieldId(fieldName);
