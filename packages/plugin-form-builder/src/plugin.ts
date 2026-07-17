@@ -26,6 +26,7 @@ import type {
   ResolvedFormBuilderConfig,
 } from "./types";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
+import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -221,15 +222,89 @@ export function formBuilder(
           method: "GET",
           path: "/submissions/export",
           requiredPermission: "export-submissions",
-          handler: async (_req, ctx) => {
+          handler: async (req, ctx) => {
             const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
             const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
-            const result = await ctx.services.collections.listEntries(
-              slug,
-              {},
-              { as: "user", user: ctx.user ?? undefined }
+            const url = new URL(req.url);
+            const format = url.searchParams.get("format") ?? "json";
+            const formId = url.searchParams.get("form");
+            const status = url.searchParams.get("status");
+
+            // Spam stays out of exports unless it is explicitly requested —
+            // an export is "what people submitted", not "what bots sent".
+            const where: Record<string, unknown> = {};
+            if (formId) where.form = { equals: formId };
+            if (status) where.status = { equals: status };
+            else where.status = { not_equals: "spam" };
+
+            const opts = { as: "user", user: ctx.user ?? undefined } as const;
+
+            // Page through everything: exports must be complete, and the
+            // list service always paginates.
+            const items: unknown[] = [];
+            const pageSize = 200;
+            for (let page = 1; ; page += 1) {
+              const result = await ctx.services.collections.listEntries(
+                slug,
+                { where, pagination: { limit: pageSize, page } },
+                opts
+              );
+              items.push(...result.data);
+              if (result.data.length < pageSize) break;
+            }
+
+            if (format !== "csv") {
+              return Response.json({ items });
+            }
+
+            // CSV columns come from one form's fields, so the form filter is
+            // required for CSV (per-field columns are undefined across forms).
+            if (!formId) {
+              return Response.json(
+                {
+                  error: {
+                    code: "VALIDATION_ERROR",
+                    message: "CSV export requires a form parameter.",
+                  },
+                },
+                { status: 400 }
+              );
+            }
+
+            const formsSlugDeclared = resolvedConfig.formOverrides.slug;
+            const formsSlug =
+              ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
+            const formResult = await ctx.services.collections.listEntries(
+              formsSlug,
+              { where: { id: { equals: formId } } },
+              opts
             );
-            return Response.json({ items: result.data });
+            const form = formResult.data[0];
+            if (!form) {
+              return Response.json(
+                {
+                  error: { code: "NOT_FOUND", message: "Form not found." },
+                },
+                { status: 404 }
+              );
+            }
+
+            // The service returns parsed entries; the export helpers declare
+            // the document shapes — the boundary cast is through unknown.
+            const csv = exportToCSV(
+              items as unknown as SubmissionDocument[],
+              form as unknown as FormDocument
+            );
+            const filename = generateExportFilename(
+              (form as { slug?: string }).slug ?? "form",
+              "csv"
+            );
+            return new Response(csv, {
+              headers: {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": `attachment; filename="${filename}"`,
+              },
+            });
           },
         },
         {
@@ -252,6 +327,13 @@ export function formBuilder(
                 notifications: {
                   defaultFrom: resolvedConfig.notifications.defaultFrom,
                   defaultToEmail: resolvedConfig.notifications.defaultToEmail,
+                },
+                // Resolved collection slugs, so admin components never
+                // hardcode "forms"/"form-submissions" and keep working under
+                // slug overrides.
+                slugs: {
+                  forms: resolvedConfig.formOverrides.slug,
+                  submissions: resolvedConfig.formSubmissionOverrides.slug,
                 },
               })
             ),
@@ -345,6 +427,39 @@ export function formBuilder(
           await handleSubmissionCreated(context, resolvedConfig, nextly);
         }
       );
+
+      // Inject a real submissionCount into form reads (spam excluded — the
+      // number answers "how many people submitted", not "how many bots").
+      const declaredFormsSlug = resolvedConfig.formOverrides.slug;
+      const formsSlug =
+        nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
+      nextly.hooks.on("afterRead", formsSlug, async (context: unknown) => {
+        const data = (context as { data?: unknown }).data;
+        // afterRead fires for single reads (one record) and list reads
+        // (array); count each form either way.
+        const records = Array.isArray(data) ? data : data ? [data] : [];
+        for (const record of records) {
+          const form = record as Record<string, unknown>;
+          if (typeof form.id !== "string") continue;
+          try {
+            // Count as system: whoever may read the form may see its
+            // submission volume without holding submission read rights.
+            form.submissionCount = await nextly.services.collections.count(
+              submissionSlug,
+              {
+                where: {
+                  form: { equals: form.id },
+                  status: { not_equals: "spam" },
+                },
+              },
+              { as: "system" }
+            );
+          } catch {
+            // A failed count must never break reading the form itself.
+            form.submissionCount = 0;
+          }
+        }
+      });
     },
   });
 
@@ -584,6 +699,10 @@ async function handleSubmissionCreated(
 
   const submission = (context as { data?: Record<string, unknown> }).data;
   if (!submission) return;
+
+  // Spam is stored for review, but nobody gets emailed about it — otherwise
+  // every bot hit would trigger the form's notification rules.
+  if (submission.status === "spam") return;
 
   const rawFormId = submission.form;
   let formId: string | null = null;

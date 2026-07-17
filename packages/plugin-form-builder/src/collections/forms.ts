@@ -382,17 +382,6 @@ export function formsCollection(
           return data;
         },
       ],
-
-      // Add virtual submission count field
-      afterRead: [
-        (context: HookContext) => {
-          const { data } = context;
-          if (data) {
-            (data as Record<string, unknown>).submissionCount = 0;
-          }
-          return data;
-        },
-      ],
     },
 
     // Spread any additional overrides (excluding already used properties)

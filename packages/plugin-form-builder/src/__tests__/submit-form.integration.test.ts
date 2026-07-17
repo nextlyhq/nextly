@@ -62,4 +62,67 @@ describe("submitForm end-to-end", () => {
       await services.collections.count("form-submissions", {}, { as: "system" })
     ).toBe(1);
   });
+
+  it("stores honeypot hits flagged as spam instead of dropping them", async () => {
+    const fb = formBuilder({
+      spamProtection: { honeypot: true, recaptcha: { enabled: false } },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let services: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let logger: any;
+    const probe = definePlugin({
+      name: "@test/fb-spam",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init: c => {
+        services = c.services;
+        logger = c.logger;
+      },
+    });
+    current = await createTestNextly({ plugins: [fb.plugin, probe] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+      },
+    });
+
+    const result = await submitForm(
+      {
+        formSlug: "contact",
+        // A filled honeypot field marks the submission as bot traffic.
+        data: { message: "buy things", _hp: "gotcha" },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { pluginContext: { services, logger } as any, pluginConfig: fb.config }
+    );
+
+    // The bot still sees success and gets no stored-row reference.
+    expect(result.success).toBe(true);
+    expect(result.submission).toBeUndefined();
+
+    // The submission is stored, flagged, and carries the detection reason.
+    const stored = await current.nextly.find({
+      collection: "form-submissions",
+      where: { status: { equals: "spam" } },
+    });
+    expect(stored.items).toHaveLength(1);
+    expect((stored.items[0] as { spamReason?: string }).spamReason).toBe(
+      "honeypot"
+    );
+
+    // Flagged rows never count toward the form's submissionCount.
+    const form = await current.nextly.find({
+      collection: "forms",
+      where: { slug: { equals: "contact" } },
+    });
+    expect(
+      (form.items[0] as { submissionCount?: number }).submissionCount
+    ).toBe(0);
+  });
 });

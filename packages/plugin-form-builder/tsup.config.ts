@@ -4,7 +4,7 @@ import { join } from "path";
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/admin/index.ts", "src/components/index.ts"],
+  entry: ["src/index.ts", "src/admin/index.ts"],
   format: ["esm"],
   dts: true,
   clean: true,

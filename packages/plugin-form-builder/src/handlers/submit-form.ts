@@ -180,8 +180,17 @@ export async function submitForm(
     sanitizeSubmissionData(validationResult.data, form.fields);
 
     // 4. Spam detection
+    // Honeypot fields are by definition NOT declared form fields, so the
+    // probe is the raw payload minus the declared schema: the transform
+    // above would strip them, and a declared field (e.g. a real "website"
+    // input) must never trip the trap.
+    const declaredFieldNames = new Set(form.fields.map(field => field.name));
+    const undeclaredData = Object.fromEntries(
+      Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
+    );
+
     const spamResult = await checkSpam({
-      data: transformedData,
+      data: undeclaredData,
       ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
@@ -191,25 +200,35 @@ export async function submitForm(
       },
     });
 
-    if (spamResult.isSpam) {
-      // Silently reject spam - return fake success to avoid tipping off bots
-      logger.info?.("Spam submission detected and rejected", {
+    // Rate-limit hits are pure volume — storing them would turn the limiter
+    // into a database DoS, so they are rejected without a trace (still with
+    // fake success so the client learns nothing).
+    if (spamResult.isSpam && spamResult.reason === "rate_limit") {
+      logger.info?.("Spam submission rejected (rate limit)", {
+        formSlug,
+        ipAddress: metadata?.ipAddress,
+      });
+      return { success: true };
+    }
+
+    // Content spam (honeypot/recaptcha) is stored and FLAGGED, never silently
+    // dropped: a false positive stays reviewable in the Spam view and
+    // recoverable via "Not spam". The bot still sees a fake success.
+    const isContentSpam = spamResult.isSpam;
+    if (isContentSpam) {
+      logger.info?.("Spam submission detected — storing flagged", {
         formSlug,
         reason: spamResult.reason,
         ipAddress: metadata?.ipAddress,
       });
-
-      // Return fake success (don't tell spammers their submission was rejected)
-      return {
-        success: true,
-      };
     }
 
     // 5. Create submission record
     const submissionData = {
       form: form.id,
       data: validationResult.data,
-      status: "new" as const,
+      status: isContentSpam ? ("spam" as const) : ("new" as const),
+      spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
       submittedAt: new Date(),
@@ -226,13 +245,20 @@ export async function submitForm(
     logger.info?.("Form submission created successfully", {
       formSlug,
       submissionId: submission.id,
+      flaggedAsSpam: isContentSpam,
     });
 
     // Email notifications are sent via the afterCreate hook registered in
     // plugin.ts init(), so they fire for all submission paths (HTTP + direct).
+    // The hook itself skips spam-flagged rows.
 
-    // 6. Determine redirect URL
+    // 6. Determine redirect URL. Spam gets the same success shape as a real
+    // submission (minus the stored row reference) so bots can't diff the two.
     const redirect = determineRedirectUrl(form);
+
+    if (isContentSpam) {
+      return { success: true, redirect };
+    }
 
     return {
       success: true,
