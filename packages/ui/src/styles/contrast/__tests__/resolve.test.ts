@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { toHex } from "../color";
 import { type TokenMap } from "../parse-theme";
-import { resolveColor, withAlpha, type ResolveContext } from "../resolve";
+import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const tokens: TokenMap = new Map([
   ["--nx-red", "oklch(0.5778 0.2078 25.33)"],
@@ -84,15 +84,23 @@ describe("color-mix(in srgb, ...)", () => {
   });
 });
 
-describe("withAlpha", () => {
-  it("replaces only the alpha channel", () => {
+describe("applyOpacity", () => {
+  it("keeps the color channels and scales an opaque base to the factor", () => {
     const c = resolveColor("var(--nx-red)", ctx);
-    const faded = withAlpha(c, 0.5);
+    const faded = applyOpacity(c, 0.5);
     expect(faded.alpha).toBe(0.5);
     expect({ r: faded.r, g: faded.g, b: faded.b }).toEqual({
       r: c.r,
       g: c.g,
       b: c.b,
     });
+  });
+
+  it("multiplies an already-translucent base rather than overwriting it", () => {
+    // Matches Tailwind's `color-mix(... NN%, transparent)`: a token that is
+    // already 0.4 alpha under `/50` renders at 0.2, not 0.5. `0.4 * 0.5` is
+    // exactly 0.2 in IEEE 754, so this is an exact equality, not approximate.
+    const faded = applyOpacity({ r: 0, g: 0, b: 0, alpha: 0.4 }, 0.5);
+    expect(faded.alpha).toBe(0.2);
   });
 });

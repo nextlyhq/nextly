@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
-import { resolveColor, withAlpha, type ResolveContext } from "../resolve";
+import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../../..");
@@ -47,6 +47,7 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "ring-primary/20",
   "ring-primary/40",
   "ring-border/10",
+  "ring-border/50", // neutral activity-badge outline (~1.7:1 once the token's own alpha compounds); same decorative role as the colored ring siblings
   "ring-foreground/40",
   "ring-muted/5",
   "ring-success-500/20",
@@ -62,6 +63,15 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // Supplementary hover outline; the hover state is conveyed by bg-accent and
   // its text, so the thin border is decorative.
   "border-accent-foreground/20",
+  // Hardcoded white/black palette utilities. The scan cannot know their local
+  // surface (they render on dark scrims or over media, not the page), so each
+  // is listed here with the surface that makes it readable, rather than left to
+  // silently bypass the check.
+  "text-white/60", // schema-restart overlay text on a bg-black/75 scrim (~4.9:1)
+  "text-white/70", // caption over a media thumbnail with a dark gradient scrim
+  "text-white/80", // gallery-node label over a media thumbnail scrim
+  "border-black/5", // decorative hairline separator
+  "border-white/5", // decorative hairline separator in dark mode
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);
@@ -79,17 +89,32 @@ const SCANNED_DIRS = [
 // Match any color utility with an opacity; the name is captured broadly so
 // multi-segment tokens (`muted-foreground`) are caught, then validated against
 // real theme colors below, which drops non-color matches (`text-sm/50`).
+// The bracket form covers both a fraction (`[0.08]`) and a percentage
+// (`[60%]`); both are valid Tailwind arbitrary opacities and normalized below.
 const UTILITY_PATTERN =
-  "\\b(text|border|ring)-([a-z][a-z0-9-]*)/(\\[[0-9.]+\\]|[0-9]+)";
+  "\\b(text|border|ring)-([a-z][a-z0-9-]*)/(\\[[0-9.]+%?\\]|[0-9]+)";
 
 // Every name a `--color-*` utility can carry, from the theme's @theme block.
 const COLOR_NAMES = new Set(
   [...scale.keys()].map(k => k.replace("--color-", ""))
 );
 
+// Names the scan resolves to a real color: theme tokens plus Tailwind's built-in
+// `white`/`black`, which are not in the @theme block but still render (and so
+// could otherwise slip a faint `text-white/60` past the check). Everything else
+// (`text-sm/50`) is dropped.
+const isScannableColor = (name: string): boolean =>
+  COLOR_NAMES.has(name) || name === "white" || name === "black";
+
 const nameOf = (combo: string): string | null =>
-  /^(?:text|border|ring)-(.+)\/(?:\[[0-9.]+\]|[0-9]+)$/.exec(combo)?.[1] ??
+  /^(?:text|border|ring)-(.+)\/(?:\[[0-9.]+%?\]|[0-9]+)$/.exec(combo)?.[1] ??
   null;
+
+// Normalize a bracket opacity (`[0.08]` or `[60%]`) to a 0..1 fraction.
+const parseBracketAlpha = (bracket: string): number => {
+  const inner = bracket.slice(1, -1);
+  return inner.endsWith("%") ? Number(inner.slice(0, -1)) / 100 : Number(inner);
+};
 
 /**
  * The surface a token renders on, so contrast is measured where it is painted
@@ -97,6 +122,14 @@ const nameOf = (combo: string): string | null =>
  * sits on its fill, a surface foreground on that surface, everything else on the
  * page. This keeps `text-primary-foreground/80` (light text on a dark button)
  * from reading as a page failure.
+ *
+ * Limitation: an on-fill foreground is measured on its SOLID fill. A foreground
+ * painted over an alpha-tinted fill (`text-primary-foreground` on `bg-primary/20`)
+ * would be measured too optimistically, because the guard scans utilities
+ * individually and cannot see the element's paired background. On-fill foreground
+ * tokens therefore belong only on their solid fill; a tinted fill should carry a
+ * surface-readable text token instead. Enforcing that automatically would require
+ * element-level className pairing, which this call-site scan does not do.
  */
 const ON_FILL_FOREGROUND =
   /^(primary|secondary|accent|destructive|success|warning|highlight|sidebar-primary|sidebar-accent)-foreground$/;
@@ -137,7 +170,7 @@ function scanCombos(): Map<string, number> {
     const t = line.trim();
     if (!t) continue;
     const name = nameOf(t);
-    if (name && COLOR_NAMES.has(name)) {
+    if (name && isScannableColor(name)) {
       combos.set(t, (combos.get(t) ?? 0) + 1);
     }
   }
@@ -152,15 +185,15 @@ function scanCombos(): Map<string, number> {
  * a real `--color-*`, so a throw here means the theme dropped a used token.
  */
 function worstRatio(combo: string): { ratio: number; need: number } {
-  const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+\]|\d+)$/.exec(combo);
+  const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+%?\]|\d+)$/.exec(combo);
   if (!m) {
     throw new Error(`unparseable alpha utility: ${combo}`);
   }
   const [, kind, name, alphaStr] = m;
-  // A bracket value like `[0.08]` is already a fraction; a bare number is a
-  // percentage (`/20` -> 0.2).
+  // A bare number is a percentage (`/20` -> 0.2). A bracket value is a fraction
+  // (`[0.08]`) unless it carries a `%` (`[60%]` -> 0.6).
   const alpha = alphaStr.startsWith("[")
-    ? Number(alphaStr.slice(1, -1))
+    ? parseBracketAlpha(alphaStr)
     : Number(alphaStr) / 100;
   // Text needs 4.5:1; borders and focus rings are UI boundaries at 3:1.
   const need = kind === "text" ? 4.5 : 3;
@@ -170,10 +203,15 @@ function worstRatio(combo: string): { ratio: number; need: number } {
     const ctx: ResolveContext = { tokens, scale };
     let base: Rgb;
     try {
-      base = resolveColor(`var(--color-${name})`, ctx);
+      // `white`/`black` are Tailwind built-ins with no `--color-*` token; resolve
+      // them as the keyword. Everything else is a theme token.
+      base =
+        name === "white" || name === "black"
+          ? resolveColor(name, ctx)
+          : resolveColor(`var(--color-${name})`, ctx);
     } catch (error) {
       throw new Error(
-        `${combo}: could not resolve --color-${name} (${(error as Error).message})`
+        `${combo}: could not resolve ${name} (${(error as Error).message})`
       );
     }
     const bg = opaque(resolveColor(`var(${surface})`, ctx), {
@@ -182,7 +220,9 @@ function worstRatio(combo: string): { ratio: number; need: number } {
       b: 1,
       alpha: 1,
     });
-    const ratio = contrastRatio(opaque(withAlpha(base, alpha), bg), bg);
+    // Scale the token's own alpha by the utility opacity (Tailwind multiplies),
+    // composite over the surface, then measure the painted pixel's contrast.
+    const ratio = contrastRatio(opaque(applyOpacity(base, alpha), bg), bg);
     worst = Math.min(worst, ratio);
   }
   return { ratio: worst, need };
@@ -209,7 +249,7 @@ describe("alpha-opacity color utilities", () => {
       const sep = line.indexOf(":");
       if (sep === -1) continue;
       const name = nameOf(line.slice(sep + 1).trim());
-      if (!name || !COLOR_NAMES.has(name)) continue;
+      if (!name || !isScannableColor(name)) continue;
       const pkg = /\/packages\/([^/]+)\/src\//.exec(line.slice(0, sep))?.[1];
       if (pkg) used.add(pkg);
     }

@@ -126,7 +126,14 @@ export function resolveColor(
   return toClampedRgb(value);
 }
 
-/** Return a copy of an sRGB color with its alpha replaced (for `token/NN`). */
-export function withAlpha(rgb: Rgb, alpha: number): Rgb {
-  return { r: rgb.r, g: rgb.g, b: rgb.b, alpha };
+/**
+ * Apply a Tailwind opacity utility (`token/NN`) to a color. Tailwind v4 emits
+ * `color-mix(in oklab, <color> NN%, transparent)`, which scales the color's
+ * existing alpha rather than overwriting it, so a translucent token like
+ * `--nx-border` (0.445 alpha) under `/50` renders at ~0.22, not 0.50. Multiply
+ * so the check models the pixels the browser actually paints; an opaque base
+ * (alpha 1) is unaffected.
+ */
+export function applyOpacity(rgb: Rgb, factor: number): Rgb {
+  return { r: rgb.r, g: rgb.g, b: rgb.b, alpha: rgb.alpha * factor };
 }
