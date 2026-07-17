@@ -233,19 +233,27 @@ function formatDate(
  * @returns Properly escaped CSV value
  */
 function escapeCSVValue(value: string, delimiter: string = ","): string {
+  // CSV injection: spreadsheets execute cells starting with a formula
+  // trigger character, and syntax quoting does NOT stop that. A leading
+  // apostrophe forces text interpretation (the OWASP mitigation). Plain
+  // negative numbers are exempt — they are data, not formulas.
+  const isFormulaLike =
+    /^[=+\-@\t\r]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value);
+  const escapedFormula = isFormulaLike ? `'${value}` : value;
+
   // Check if quoting is needed
   const needsQuoting =
-    value.includes(delimiter) ||
-    value.includes('"') ||
-    value.includes("\n") ||
-    value.includes("\r");
+    escapedFormula.includes(delimiter) ||
+    escapedFormula.includes('"') ||
+    escapedFormula.includes("\n") ||
+    escapedFormula.includes("\r");
 
   if (!needsQuoting) {
-    return value;
+    return escapedFormula;
   }
 
   // Escape double quotes by doubling them
-  const escaped = value.replace(/"/g, '""');
+  const escaped = escapedFormula.replace(/"/g, '""');
   return `"${escaped}"`;
 }
 
@@ -524,8 +532,12 @@ export function generateExportFilename(
   formSlug: string,
   format: "csv" | "json"
 ): string {
+  // The name ends up inside a Content-Disposition header — restrict it to
+  // characters that can never break the header value or the filesystem.
+  const safeSlug =
+    formSlug.toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "form";
   const date = new Date().toISOString().split("T")[0];
-  return `${formSlug}-submissions-${date}.${format}`;
+  return `${safeSlug}-submissions-${date}.${format}`;
 }
 
 // ============================================================================

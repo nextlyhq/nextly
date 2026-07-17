@@ -93,7 +93,7 @@ See the [Field types reference](https://nextlyhq.com/docs/plugins/form-builder#f
 - Server helpers: `submitForm`, `validateSubmission`, `getFormSubmissionStats`, `createFormConfig`, `validateFormConfig`, `assertValidFormConfig`
 - Export utilities: `exportToCSV`, `exportToJSON`, `exportAndDownload`, `downloadFile`, `generateExportFilename`
 - Collections: `formsCollection`, `submissionsCollection`
-- Type exports: `FormDocument`, `SubmissionDocument`, `FormSubmission`, `EmailConfig`, `WebhookConfig`, `WebhookEvent`, `FormFieldOption`, `SubmissionListProps`, `SubmissionDetailProps`
+- Type exports: `FormDocument`, `SubmissionDocument`, `FormSubmission`, `FormNotification`, `EmailConfig`, `WebhookConfig`, `WebhookEvent`, `FormFieldOption`
 
 ## Compatibility
 
