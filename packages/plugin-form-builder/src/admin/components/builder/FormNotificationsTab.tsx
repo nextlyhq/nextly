@@ -156,6 +156,16 @@ function buildEmailFieldOptions(
   return emailFields;
 }
 
+/**
+ * Deliberately loose email shape check (something@something.tld): the goal
+ * is catching typos before they fail at delivery, not RFC 5322 conformance.
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmail(value: string): boolean {
+  return EMAIL_PATTERN.test(value.trim());
+}
+
 // ============================================================================
 // Condition labels
 // ============================================================================
@@ -199,8 +209,16 @@ function describeRecipient(
     const ref = parseFieldRef(notification.to);
     if (!ref) return { text: "No recipient field selected", missing: true };
     const field = fields.find(f => f.name === ref);
+    if (!field) {
+      // The referenced field was deleted (allowed while the rule was
+      // disabled) — say so instead of presenting the dead name as valid.
+      return {
+        text: `Recipient field "${ref}" no longer exists`,
+        missing: true,
+      };
+    }
     return {
-      text: `To the visitor (${field?.label ?? ref})`,
+      text: `To the visitor (${field.label})`,
       missing: false,
     };
   }
@@ -222,7 +240,24 @@ function NotificationCard({
   const recipient = describeRecipient(notification, fields);
   const ccCount =
     (notification.cc?.length ?? 0) + (notification.bcc?.length ?? 0);
-  const missingTemplate = !notification.templateSlug;
+
+  // Deleting a referenced field is only blocked for enabled rules, so a
+  // disabled rule can legitimately hold references to fields that no longer
+  // exist — surface that on the card instead of sending broken email later.
+  const fieldNames = new Set(fields.map(f => f.name));
+  const replyToRef = parseFieldRef(notification.replyTo);
+  const hasStaleReference =
+    (replyToRef !== null && !fieldNames.has(replyToRef)) ||
+    (notification.condition !== undefined &&
+      !fieldNames.has(notification.condition.field));
+
+  const warnings: string[] = [];
+  if (!notification.templateSlug) {
+    warnings.push("No template — will not send");
+  }
+  if (hasStaleReference) {
+    warnings.push("References a deleted field — edit to repair");
+  }
 
   return (
     <div
@@ -268,10 +303,17 @@ function NotificationCard({
               {providerName}
             </span>
           </span>
-          {missingTemplate && (
-            <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-destructive">
-              <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
-              No template — will not send
+          {warnings.length > 0 && (
+            <span className="flex shrink-0 flex-col items-end gap-0.5">
+              {warnings.map(warning => (
+                <span
+                  key={warning}
+                  className="flex items-center gap-1 text-xs font-medium text-destructive"
+                >
+                  <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  {warning}
+                </span>
+              ))}
             </span>
           )}
         </button>
@@ -344,12 +386,21 @@ function AddressChipList({
   onChange,
 }: AddressChipListProps) {
   const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const add = useCallback(() => {
     const email = draft.trim();
     if (!email) return;
+    // Nothing here goes through form submission, so constraint validation
+    // never runs — reject malformed addresses before they can be persisted
+    // and fail at delivery.
+    if (!isValidEmail(email)) {
+      setError("Enter a valid email address.");
+      return;
+    }
     onChange([...addresses, email]);
     setDraft("");
+    setError(null);
   }, [draft, addresses, onChange]);
 
   return (
@@ -383,7 +434,10 @@ function AddressChipList({
           id={id}
           type="email"
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e => {
+            setDraft(e.target.value);
+            setError(null);
+          }}
           onKeyDown={e => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -391,6 +445,8 @@ function AddressChipList({
             }
           }}
           placeholder={placeholder}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
         />
         <Button
           type="button"
@@ -401,6 +457,11 @@ function AddressChipList({
           Add
         </Button>
       </div>
+      {error && (
+        <p id={`${id}-error`} className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -441,13 +502,44 @@ function NotificationSheet({
   const [replyToMode, setReplyToMode] = useState<ReplyToMode>(
     initialReplyToMode(initial.replyTo)
   );
+  // Save-time address errors, keyed by field. Nothing here goes through
+  // form submission (every control is a type="button" callback), so
+  // constraint validation never runs — this is its replacement.
+  const [addressErrors, setAddressErrors] = useState<
+    Partial<Record<"senderEmail" | "to" | "replyTo", string>>
+  >({});
 
   const update = useCallback(
     <K extends keyof FormNotification>(key: K, value: FormNotification[K]) => {
       setForm(prev => ({ ...prev, [key]: value }));
+      setAddressErrors(prev =>
+        key in prev ? { ...prev, [key]: undefined } : prev
+      );
     },
     []
   );
+
+  const handleSave = useCallback(() => {
+    const errors: typeof addressErrors = {};
+    const invalid = (value: string | undefined) =>
+      Boolean(value?.trim()) && !isValidEmail(value as string);
+    if (invalid(form.senderEmail)) {
+      errors.senderEmail = "Enter a valid email address.";
+    }
+    if (form.recipientType === "static" && invalid(form.to)) {
+      errors.to = "Enter a valid email address.";
+    }
+    // Only literal reply-to addresses are validated; {{field}} references
+    // resolve against each submission at send time.
+    if (!parseFieldRef(form.replyTo) && invalid(form.replyTo)) {
+      errors.replyTo = "Enter a valid email address.";
+    }
+    if (Object.values(errors).some(Boolean)) {
+      setAddressErrors(errors);
+      return;
+    }
+    onSave(form);
+  }, [form, onSave]);
 
   const defaultProvider = providers.find(p => p.isDefault);
   const defaultProviderLabel = defaultProvider
@@ -578,8 +670,15 @@ function NotificationSheet({
               value={form.senderEmail ?? ""}
               onChange={e => update("senderEmail", e.target.value || undefined)}
               placeholder={senderPlaceholder}
+              aria-invalid={addressErrors.senderEmail ? true : undefined}
             />
-            <p className="text-xs text-muted-foreground">{senderHelp}</p>
+            {addressErrors.senderEmail ? (
+              <p className="text-xs text-destructive">
+                {addressErrors.senderEmail}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">{senderHelp}</p>
+            )}
           </div>
 
           {/* Recipients */}
@@ -652,7 +751,11 @@ function NotificationSheet({
                     placeholder={
                       defaults?.defaultToEmail || "admin@example.com"
                     }
+                    aria-invalid={addressErrors.to ? true : undefined}
                   />
+                )}
+                {addressErrors.to && (
+                  <p className="text-xs text-destructive">{addressErrors.to}</p>
                 )}
                 {form.recipientType === "field" &&
                   toFieldOptions.length === 0 && (
@@ -672,10 +775,11 @@ function NotificationSheet({
                   onValueChange={value => {
                     const mode = value as ReplyToMode;
                     setReplyToMode(mode);
-                    // The stored value only survives a mode change when the
-                    // new mode can represent it.
-                    if (mode === "none") update("replyTo", undefined);
-                    else update("replyTo", "");
+                    // A mode change always clears the stored value (the old
+                    // shape can't be represented in the new mode); it stays
+                    // absent — not an empty string — until the user picks a
+                    // field or types an address.
+                    update("replyTo", undefined);
                   }}
                 >
                   <SelectTrigger
@@ -704,7 +808,7 @@ function NotificationSheet({
                     onValueChange={value =>
                       update(
                         "replyTo",
-                        value === "__none" ? "" : toFieldRef(value)
+                        value === "__none" ? undefined : toFieldRef(value)
                       )
                     }
                   >
@@ -732,9 +836,17 @@ function NotificationSheet({
                     id="notification-replyto"
                     type="email"
                     value={form.replyTo ?? ""}
-                    onChange={e => update("replyTo", e.target.value)}
+                    onChange={e =>
+                      update("replyTo", e.target.value || undefined)
+                    }
                     placeholder="replies@example.com"
+                    aria-invalid={addressErrors.replyTo ? true : undefined}
                   />
+                  {addressErrors.replyTo && (
+                    <p className="text-xs text-destructive">
+                      {addressErrors.replyTo}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -912,7 +1024,7 @@ function NotificationSheet({
           </Button>
           <Button
             type="button"
-            onClick={() => onSave(form)}
+            onClick={handleSave}
             disabled={!form.name.trim()}
           >
             {isEditing ? "Save changes" : "Add notification"}

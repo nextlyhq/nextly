@@ -156,6 +156,11 @@ export class EmailService extends BaseService {
       attachments?: EmailAttachmentInput[];
     }
   ): Promise<{ success: boolean; messageId?: string }> {
+    // Whitespace-only overrides must not shadow the template/provider
+    // defaults or reach a provider as malformed headers.
+    const fromOverride = options?.from?.trim() || undefined;
+    const replyToOverride = options?.replyTo?.trim() || undefined;
+
     // 1. Try DB template first
     let dbTemplate: EmailTemplateRecord | null = null;
     try {
@@ -226,8 +231,8 @@ export class EmailService extends BaseService {
         subject,
         html,
         plainText,
-        from: options?.from ?? dbTemplate.fromOverride ?? undefined,
-        replyTo: options?.replyTo ?? dbTemplate.replyTo ?? undefined,
+        from: fromOverride ?? dbTemplate.fromOverride ?? undefined,
+        replyTo: replyToOverride ?? dbTemplate.replyTo ?? undefined,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
@@ -269,8 +274,8 @@ export class EmailService extends BaseService {
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
-        from: options?.from,
-        replyTo: options?.replyTo,
+        from: fromOverride,
+        replyTo: replyToOverride,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:

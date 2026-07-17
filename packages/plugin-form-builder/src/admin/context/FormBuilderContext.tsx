@@ -436,28 +436,29 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
-  const duplicateNotification = useCallback(
-    (id: string) => {
-      // Computed from the current list (not inside the state updater):
-      // updaters must stay pure.
-      const index = notifications.findIndex(n => n.id === id);
-      if (index === -1) return;
-      const source = notifications[index];
+  const duplicateNotification = useCallback((id: string) => {
+    // The non-deterministic id is generated outside the updater (updaters
+    // must stay pure and may re-run); the copy itself derives from `prev`
+    // so rapid duplications never work from a stale snapshot.
+    const copyId = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    setNotifications(prev => {
+      const index = prev.findIndex(n => n.id === id);
+      if (index === -1) return prev;
+      const source = prev[index];
       const copy: FormNotification = {
         ...source,
-        id: `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
+        id: copyId,
         name: `${source.name} (Copy)`,
         // Copies start disabled so duplicating never doubles the emails a
         // live rule sends until the copy is deliberately turned on.
         enabled: false,
       };
-      const next = [...notifications];
+      const next = [...prev];
       next.splice(index + 1, 0, copy);
-      setNotifications(next);
-      setIsDirty(true);
-    },
-    [notifications]
-  );
+      return next;
+    });
+    setIsDirty(true);
+  }, []);
 
   const seedNotifications = useCallback((rules: FormNotification[]) => {
     // Only fills an empty list, and does not mark the form dirty: the seed

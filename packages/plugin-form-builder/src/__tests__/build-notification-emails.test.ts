@@ -131,6 +131,50 @@ describe("buildNotificationEmails", () => {
     expect(emails[0].bcc).toBeUndefined();
   });
 
+  it("keeps distinct id-less rules that share a recipient and template", () => {
+    const base = rule({ id: "" });
+    const { emails } = build(
+      [
+        { ...base, name: "always" },
+        {
+          ...base,
+          name: "conditional",
+          condition: { field: "budget", comparison: "equals", value: "high" },
+        },
+        // A true structural duplicate is still dropped.
+        { ...base, name: "always" },
+      ],
+      { budget: "high" }
+    );
+
+    expect(emails).toHaveLength(2);
+  });
+
+  it("trims addresses and treats whitespace-only values as empty", () => {
+    const { emails, skipped } = build(
+      [
+        rule({
+          id: "padded",
+          to: "  team@example.com  ",
+          cc: ["  cc@example.com ", "   "],
+          bcc: ["   "],
+          replyTo: "  literal@example.com ",
+        }),
+        rule({ id: "blank-to", to: "   " }),
+      ],
+      {}
+    );
+
+    expect(emails).toHaveLength(1);
+    expect(emails[0].to).toBe("team@example.com");
+    expect(emails[0].cc).toEqual(["cc@example.com"]);
+    expect(emails[0].bcc).toBeUndefined();
+    expect(emails[0].replyTo).toBe("literal@example.com");
+    expect(skipped).toEqual([
+      { notificationId: "blank-to", reason: "empty-recipient" },
+    ]);
+  });
+
   it("carries the form metadata into the template variables", () => {
     const { emails } = build([rule({ id: "vars" })], { email: "a@b.co" });
     expect(emails[0].variables).toMatchObject({

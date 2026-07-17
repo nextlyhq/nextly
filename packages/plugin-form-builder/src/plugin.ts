@@ -449,6 +449,17 @@ export function parseJsonColumn(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** Trim an address list and drop blanks; undefined when nothing remains. */
+function normalizeAddressList(
+  addresses: readonly string[] | undefined
+): string[] | undefined {
+  if (!Array.isArray(addresses)) return undefined;
+  const cleaned = addresses
+    .map(address => (typeof address === "string" ? address.trim() : ""))
+    .filter(Boolean);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
 /** Why a notification rule produced no email for a given submission. */
 export interface SkippedNotification {
   notificationId: string;
@@ -487,9 +498,11 @@ export function buildNotificationEmails(input: {
       continue;
     }
 
-    // Deduplicate (UI can append duplicates on repeated saves)
-    const key =
-      notification.id || `${notification.to}::${notification.templateSlug}`;
+    // Deduplicate (UI can append duplicates on repeated saves). For id-less
+    // rules (API-authored), only an exact structural duplicate counts — a
+    // to+template key would silently drop distinct rules that share a
+    // recipient and template but differ elsewhere (e.g. their condition).
+    const key = notification.id || JSON.stringify(notification);
     if (seen.has(key)) continue;
     seen.add(key);
 
@@ -506,10 +519,13 @@ export function buildNotificationEmails(input: {
       continue;
     }
 
-    const to =
+    // Trim every address on the way out: whitespace-only values must count
+    // as empty, and stray spaces must not reach the provider as headers.
+    const to = (
       notification.recipientType === "field"
         ? resolveFieldRef(notification.to, submittedData)
-        : notification.to;
+        : notification.to
+    ).trim();
 
     if (!to) {
       skipped.push({
@@ -519,14 +535,8 @@ export function buildNotificationEmails(input: {
       continue;
     }
 
-    const cc =
-      Array.isArray(notification.cc) && notification.cc.length
-        ? notification.cc
-        : undefined;
-    const bcc =
-      Array.isArray(notification.bcc) && notification.bcc.length
-        ? notification.bcc
-        : undefined;
+    const cc = normalizeAddressList(notification.cc);
+    const bcc = normalizeAddressList(notification.bcc);
 
     // Sender resolution: the rule's own address wins, then the plugin's
     // configured default; undefined defers to the template/provider chain.
@@ -537,7 +547,7 @@ export function buildNotificationEmails(input: {
     // field the visitor left empty degrades to "no Reply-To header" rather
     // than an invalid address.
     const replyTo = notification.replyTo
-      ? resolveFieldRef(notification.replyTo, submittedData) || undefined
+      ? resolveFieldRef(notification.replyTo, submittedData).trim() || undefined
       : undefined;
 
     emails.push({
