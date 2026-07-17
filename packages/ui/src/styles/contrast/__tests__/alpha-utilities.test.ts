@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
-import { resolveColor, withAlpha, type ResolveContext } from "../resolve";
+import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../../..");
@@ -47,6 +47,7 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "ring-primary/20",
   "ring-primary/40",
   "ring-border/10",
+  "ring-border/50", // neutral activity-badge outline (~1.7:1 once the token's own alpha compounds); same decorative role as the colored ring siblings
   "ring-foreground/40",
   "ring-muted/5",
   "ring-success-500/20",
@@ -62,6 +63,15 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // Supplementary hover outline; the hover state is conveyed by bg-accent and
   // its text, so the thin border is decorative.
   "border-accent-foreground/20",
+  // Hardcoded white/black palette utilities. The scan cannot know their local
+  // surface (they render on dark scrims or over media, not the page), so each
+  // is listed here with the surface that makes it readable, rather than left to
+  // silently bypass the check.
+  "text-white/60", // schema-restart overlay text on a bg-black/75 scrim (~4.9:1)
+  "text-white/70", // caption over a media thumbnail with a dark gradient scrim
+  "text-white/80", // gallery-node label over a media thumbnail scrim
+  "border-black/5", // decorative hairline separator
+  "border-white/5", // decorative hairline separator in dark mode
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);
@@ -87,6 +97,13 @@ const COLOR_NAMES = new Set(
   [...scale.keys()].map(k => k.replace("--color-", ""))
 );
 
+// Names the scan resolves to a real color: theme tokens plus Tailwind's built-in
+// `white`/`black`, which are not in the @theme block but still render (and so
+// could otherwise slip a faint `text-white/60` past the check). Everything else
+// (`text-sm/50`) is dropped.
+const isScannableColor = (name: string): boolean =>
+  COLOR_NAMES.has(name) || name === "white" || name === "black";
+
 const nameOf = (combo: string): string | null =>
   /^(?:text|border|ring)-(.+)\/(?:\[[0-9.]+\]|[0-9]+)$/.exec(combo)?.[1] ??
   null;
@@ -97,6 +114,12 @@ const nameOf = (combo: string): string | null =>
  * sits on its fill, a surface foreground on that surface, everything else on the
  * page. This keeps `text-primary-foreground/80` (light text on a dark button)
  * from reading as a page failure.
+ *
+ * Assumption: an on-fill foreground sits on its SOLID fill, the common case. A
+ * foreground token painted over an alpha-tinted fill (`text-primary-foreground`
+ * on `bg-primary/20`) is not modeled and would be measured too optimistically;
+ * no such pairing exists in the scanned source today. Reintroducing one means
+ * modeling the real tinted surface here.
  */
 const ON_FILL_FOREGROUND =
   /^(primary|secondary|accent|destructive|success|warning|highlight|sidebar-primary|sidebar-accent)-foreground$/;
@@ -137,7 +160,7 @@ function scanCombos(): Map<string, number> {
     const t = line.trim();
     if (!t) continue;
     const name = nameOf(t);
-    if (name && COLOR_NAMES.has(name)) {
+    if (name && isScannableColor(name)) {
       combos.set(t, (combos.get(t) ?? 0) + 1);
     }
   }
@@ -170,10 +193,15 @@ function worstRatio(combo: string): { ratio: number; need: number } {
     const ctx: ResolveContext = { tokens, scale };
     let base: Rgb;
     try {
-      base = resolveColor(`var(--color-${name})`, ctx);
+      // `white`/`black` are Tailwind built-ins with no `--color-*` token; resolve
+      // them as the keyword. Everything else is a theme token.
+      base =
+        name === "white" || name === "black"
+          ? resolveColor(name, ctx)
+          : resolveColor(`var(--color-${name})`, ctx);
     } catch (error) {
       throw new Error(
-        `${combo}: could not resolve --color-${name} (${(error as Error).message})`
+        `${combo}: could not resolve ${name} (${(error as Error).message})`
       );
     }
     const bg = opaque(resolveColor(`var(${surface})`, ctx), {
@@ -182,7 +210,7 @@ function worstRatio(combo: string): { ratio: number; need: number } {
       b: 1,
       alpha: 1,
     });
-    const ratio = contrastRatio(opaque(withAlpha(base, alpha), bg), bg);
+    const ratio = contrastRatio(opaque(applyOpacity(base, alpha), bg), bg);
     worst = Math.min(worst, ratio);
   }
   return { ratio: worst, need };
@@ -209,7 +237,7 @@ describe("alpha-opacity color utilities", () => {
       const sep = line.indexOf(":");
       if (sep === -1) continue;
       const name = nameOf(line.slice(sep + 1).trim());
-      if (!name || !COLOR_NAMES.has(name)) continue;
+      if (!name || !isScannableColor(name)) continue;
       const pkg = /\/packages\/([^/]+)\/src\//.exec(line.slice(0, sep))?.[1];
       if (pkg) used.add(pkg);
     }
