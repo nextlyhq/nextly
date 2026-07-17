@@ -60,12 +60,22 @@ describe("normalizeFormSettings", () => {
   });
 
   it("preserves relationship-based redirects verbatim", () => {
+    // Relationship references may be plain IDs or structured values — both
+    // must survive normalization byte-for-byte, never coerced.
+    const structuredRef = { relationTo: "pages", value: "page_123" };
     const settings = normalizeFormSettings({
       confirmationType: "relationship",
-      redirectPage: "page_123",
+      redirectPage: structuredRef,
     });
     expect(settings.confirmationType).toBe("relationship");
-    expect(settings.redirectPage).toBe("page_123");
+    expect(settings.redirectPage).toBe(structuredRef);
+
+    expect(
+      normalizeFormSettings({
+        confirmationType: "relationship",
+        redirectPage: "page_123",
+      }).redirectPage
+    ).toBe("page_123");
   });
 
   it("keeps redirect configuration intact", () => {
