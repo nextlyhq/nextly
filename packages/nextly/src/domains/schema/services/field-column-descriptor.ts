@@ -182,6 +182,10 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       return "longText";
 
     case "number": {
+      // A hasMany number is written as a JSON array (the mutation path
+      // stringifies it), so it must be stored as JSON, not a scalar numeric
+      // column, regardless of dbType.
+      if (field.hasMany) return "json";
       // Code-first fields opt into exact fractional storage via
       // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
       if (field.dbType === "decimal") return "decimal";

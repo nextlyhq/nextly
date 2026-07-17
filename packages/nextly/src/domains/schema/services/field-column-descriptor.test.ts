@@ -109,4 +109,20 @@ describe("getColumnDescriptor: number storage", () => {
     expect(normalizeType("numeric")).toBe("numeric");
     expect(normalizeType("decimal(10,2)")).toBe("numeric");
   });
+
+  it("stores a hasMany number as JSON, not a scalar numeric column", () => {
+    // The write path stringifies a hasMany number to a JSON array, so a scalar
+    // integer/decimal column would reject it. hasMany wins over dbType.
+    for (const dialect of DIALECTS) {
+      expect(
+        getColumnDescriptor(numberField({ hasMany: true }), dialect)?.kind
+      ).toBe("json");
+      expect(
+        getColumnDescriptor(
+          numberField({ hasMany: true, dbType: "decimal" }),
+          dialect
+        )?.kind
+      ).toBe("json");
+    }
+  });
 });
