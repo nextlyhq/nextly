@@ -573,13 +573,17 @@ export function EntryList({ collectionSlug }: EntryListProps) {
             <Code className="h-4 w-4" />
             API
           </Button>
-          <Button
-            onClick={handleCreateClick}
-            className="flex-1 sm:flex-initial hover-unified"
-          >
-            <Plus className="h-4 w-4" />
-            New {labels.singular}
-          </Button>
+          {/* Machine-created collections (disableCreate) never offer "New" —
+              a hand-typed entry there would be fiction, not data. */}
+          {!collection?.admin?.disableCreate && (
+            <Button
+              onClick={handleCreateClick}
+              className="flex-1 sm:flex-initial hover-unified"
+            >
+              <Plus className="h-4 w-4" />
+              New {labels.singular}
+            </Button>
+          )}
         </div>
       </div>
 

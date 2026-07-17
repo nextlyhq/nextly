@@ -377,18 +377,6 @@ export function formBuilder(
         settings: {
           component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
         },
-        pages: [
-          {
-            path: "submissions",
-            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-            requiredPermission: "export-submissions",
-          },
-        ],
-        views: {
-          [resolvedConfig.formSubmissionOverrides.slug]: {
-            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-          },
-        },
       },
     },
 

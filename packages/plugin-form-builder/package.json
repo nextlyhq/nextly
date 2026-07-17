@@ -17,8 +17,7 @@
       "types": "./dist/admin/index.d.ts",
       "import": "./dist/admin/index.js",
       "default": "./dist/admin/index.js"
-    },
-    "./styles/submissions-filter.css": "./dist/styles/submissions-filter.css"
+    }
   },
   "files": [
     "dist",

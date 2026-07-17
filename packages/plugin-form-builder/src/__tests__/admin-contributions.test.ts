@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { submissionsCollection } from "../collections/submissions";
 import { formBuilder } from "../plugin";
 
 describe("form-builder contributes.admin (P5 dogfood)", () => {
@@ -18,29 +19,19 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
     expect(admin?.settings?.component).toContain("#FormBuilderView");
   });
 
-  it("declares a custom page gated by export-submissions", () => {
+  it("registers no custom pages or beforeList injections", () => {
+    // The submissions experience lives in the List-view override; the old
+    // filter-widget-as-page and beforeList registrations must stay gone.
     const admin = formBuilder().plugin.contributes?.admin;
-    expect(admin?.pages?.[0]).toMatchObject({
-      path: "submissions",
-      requiredPermission: "export-submissions",
-    });
+    expect(admin?.pages ?? []).toHaveLength(0);
+    expect(admin?.views ?? {}).toEqual({});
   });
 
-  it("declares a submissions beforeList view override", () => {
-    const { plugin, config } = formBuilder();
-    const slug = config.formSubmissionOverrides.slug;
-    expect(plugin.contributes?.admin?.views?.[slug]?.beforeList).toContain(
-      "#SubmissionsFilter"
+  it("overrides the submissions List view and disables admin creation", () => {
+    const collection = submissionsCollection(formBuilder().config);
+    expect(collection.admin?.components?.views?.List?.Component).toContain(
+      "#SubmissionsView"
     );
-  });
-
-  it("respects a renamed submissions slug for the view key", () => {
-    const { plugin, config } = formBuilder({
-      formSubmissionOverrides: { slug: "leads" },
-    });
-    expect(config.formSubmissionOverrides.slug).toBe("leads");
-    expect(plugin.contributes?.admin?.views?.leads?.beforeList).toContain(
-      "#SubmissionsFilter"
-    );
+    expect(collection.admin?.disableCreate).toBe(true);
   });
 });

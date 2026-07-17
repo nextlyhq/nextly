@@ -207,12 +207,18 @@ export function submissionsCollection(
       order: 51,
       useAsTitle: "id",
       description: "View and manage form submissions",
+      // Submissions are created by visitors submitting forms — a hand-typed
+      // "New Submission" would be fiction, so the admin never offers one.
+      disableCreate: true,
 
-      // Custom components for submissions list
       components: {
-        // Filter dropdown to filter submissions by form
-        BeforeListTable:
-          "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+        // The full submissions experience (per-form columns, status tabs,
+        // drawer detail, export) replaces the generic list.
+        views: {
+          List: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+        },
       },
 
       ...overrides.admin,
