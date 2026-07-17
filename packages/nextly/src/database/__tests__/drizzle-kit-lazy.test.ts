@@ -24,9 +24,6 @@ import {
 // DIALECT (payload/postgres, payload/mysql, payload/sqlite) instead of the
 // removed pre-v1 single-module kit API.
 type DrizzleKitCacheSlots = {
-  __nextly_drizzleKitPgMod?: unknown;
-  __nextly_drizzleKitMySqlMod?: unknown;
-  __nextly_drizzleKitSqliteMod?: unknown;
   __nextly_drizzleKitPg?: unknown;
   __nextly_drizzleKitMySQL?: unknown;
   __nextly_drizzleKitSQLite?: unknown;
@@ -38,9 +35,6 @@ describe("drizzle-kit-lazy", () => {
     // first test loads the modules and subsequent tests cannot verify
     // load-once behavior.
     const g = globalThis as DrizzleKitCacheSlots;
-    g.__nextly_drizzleKitPgMod = undefined;
-    g.__nextly_drizzleKitMySqlMod = undefined;
-    g.__nextly_drizzleKitSqliteMod = undefined;
     g.__nextly_drizzleKitPg = undefined;
     g.__nextly_drizzleKitMySQL = undefined;
     g.__nextly_drizzleKitSQLite = undefined;
@@ -151,16 +145,19 @@ describe("drizzle-kit-lazy", () => {
       // Why: v1 splits the kit per dialect; a consumer app has ONE dialect,
       // so accessing PG must not load the mysql/sqlite modules (they pull
       // dialect-specific dep trees).
+      // The wrapper slot is the ONLY cache level (the raw-module slots were
+      // removed as redundant state) — its presence proves the module loaded,
+      // its absence proves on-demand laziness.
       const g = globalThis as DrizzleKitCacheSlots;
       await getPgDrizzleKit();
-      expect(g.__nextly_drizzleKitPgMod).toBeDefined();
-      expect(g.__nextly_drizzleKitMySqlMod).toBeUndefined();
-      expect(g.__nextly_drizzleKitSqliteMod).toBeUndefined();
+      expect(g.__nextly_drizzleKitPg).toBeDefined();
+      expect(g.__nextly_drizzleKitMySQL).toBeUndefined();
+      expect(g.__nextly_drizzleKitSQLite).toBeUndefined();
 
       await getMySQLDrizzleKit();
       await getSQLiteDrizzleKit();
-      expect(g.__nextly_drizzleKitMySqlMod).toBeDefined();
-      expect(g.__nextly_drizzleKitSqliteMod).toBeDefined();
+      expect(g.__nextly_drizzleKitMySQL).toBeDefined();
+      expect(g.__nextly_drizzleKitSQLite).toBeDefined();
     });
 
     it("populates the per-dialect cache slot on first access", async () => {

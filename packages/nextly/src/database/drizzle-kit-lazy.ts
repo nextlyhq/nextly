@@ -40,6 +40,8 @@
 
 import { createRequire } from "node:module";
 
+import { NextlyError } from "../errors/nextly-error";
+
 // A single non-fatal hint attached to a generated statement.
 export interface KitHint {
   hint: string;
@@ -162,10 +164,26 @@ interface SqliteKitClient {
 // when available; a promise client passes through. `.query` resolves to
 // [rows, fields].
 function mysqlKitClient(drizzleInstance: unknown): MySqlKitClient {
-  const raw = (drizzleInstance as { $client: unknown }).$client as {
-    promise?: () => unknown;
-    query: unknown;
-  };
+  const raw = (drizzleInstance as { $client: unknown }).$client as
+    | {
+        promise?: () => unknown;
+        query: unknown;
+      }
+    | undefined;
+  if (!raw) {
+    // Transactions (MySql2Transaction) have no $client — only the top-level
+    // drizzle instance does. Fail with a diagnosis instead of a bare
+    // "Cannot read properties of undefined" deep inside the kit.
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "mysqlKitClient: the drizzle instance has no $client. Pass the " +
+          "TOP-LEVEL drizzle db to pushSchema on MySQL, never a transaction " +
+          "object (MySQL DDL auto-commits, so tx-scoped introspection is " +
+          "unnecessary anyway).",
+      },
+    });
+  }
   const pool = (typeof raw.promise === "function" ? raw.promise() : raw) as {
     query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]>;
   };
@@ -218,9 +236,6 @@ function sqliteKitClient(drizzleInstance: unknown): SqliteKitClient {
 // Process-wide caches live on globalThis so they survive Turbopack HMR
 // module re-execution (matches Nextly's init.ts pattern).
 type DrizzleKitCache = {
-  __nextly_drizzleKitPgMod?: PayloadPgModule;
-  __nextly_drizzleKitMySqlMod?: PayloadMySqlModule;
-  __nextly_drizzleKitSqliteMod?: PayloadSqliteModule;
   __nextly_drizzleKitPg?: PgDrizzleKit;
   __nextly_drizzleKitMySQL?: MySQLDrizzleKit;
   __nextly_drizzleKitSQLite?: SQLiteDrizzleKit;
@@ -245,7 +260,9 @@ const requireSqliteKit = (): unknown =>
 
 export function getPgDrizzleKit(): Promise<PgDrizzleKit> {
   if (g.__nextly_drizzleKitPg) return Promise.resolve(g.__nextly_drizzleKitPg);
-  const m = (g.__nextly_drizzleKitPgMod ??= requirePgKit() as PayloadPgModule);
+  // One cache level is enough: the wrapper below is only built once per
+  // process, so the raw module never needs its own slot.
+  const m = requirePgKit() as PayloadPgModule;
   g.__nextly_drizzleKitPg = {
     pushSchema: (imports, db, entitiesConfig) =>
       m.pushSchema(imports, db, entitiesConfig),
@@ -258,8 +275,7 @@ export function getPgDrizzleKit(): Promise<PgDrizzleKit> {
 export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
   if (g.__nextly_drizzleKitMySQL)
     return Promise.resolve(g.__nextly_drizzleKitMySQL);
-  const m = (g.__nextly_drizzleKitMySqlMod ??=
-    requireMySqlKit() as PayloadMySqlModule);
+  const m = requireMySqlKit() as PayloadMySqlModule;
   g.__nextly_drizzleKitMySQL = {
     pushSchema: (imports, db, databaseName) =>
       m.pushSchema(imports, mysqlKitClient(db), databaseName),
@@ -272,8 +288,7 @@ export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
 export function getSQLiteDrizzleKit(): Promise<SQLiteDrizzleKit> {
   if (g.__nextly_drizzleKitSQLite)
     return Promise.resolve(g.__nextly_drizzleKitSQLite);
-  const m = (g.__nextly_drizzleKitSqliteMod ??=
-    requireSqliteKit() as PayloadSqliteModule);
+  const m = requireSqliteKit() as PayloadSqliteModule;
   g.__nextly_drizzleKitSQLite = {
     pushSchema: (imports, db) => m.pushSchema(imports, sqliteKitClient(db)),
     generateDrizzleJson: m.generateDrizzleJson,

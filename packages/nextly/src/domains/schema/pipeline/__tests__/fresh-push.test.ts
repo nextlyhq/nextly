@@ -104,7 +104,7 @@ describe("freshPushSchema", () => {
         await fakeUsersSchema()
       );
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       expect(result.statementsExecuted).toEqual([
         'CREATE TABLE "users" ("id" text)',
       ]);
@@ -257,7 +257,7 @@ describe("freshPushSchema", () => {
 
       const result = await freshPushSchema("sqlite", fakeDb, {});
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       expect(result.statementsExecuted).toEqual([]);
       expect(fakeDb.run).not.toHaveBeenCalled();
     });
@@ -276,7 +276,7 @@ describe("freshPushSchema", () => {
 
       const result = await freshPushSchema("sqlite", fakeDb, {});
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       // v1 emits the FK-pragma choreography inside the statement stream;
       // dropping it would run rebuilds with FK enforcement in an unknown
       // state (#5782 territory), so PRAGMAs must pass the piece filter.
@@ -298,7 +298,7 @@ describe("freshPushSchema", () => {
 
       const result = await freshPushSchema("sqlite", fakeDb, {});
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       expect(result.statementsExecuted).toEqual([]);
     });
 
@@ -317,7 +317,7 @@ describe("freshPushSchema", () => {
       };
 
       const result = await freshPushSchema("sqlite", fakeDb, {});
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
     });
 
     it("re-throws non-idempotent errors", async () => {
@@ -366,7 +366,7 @@ describe("freshPushSchema", () => {
 
       const result = await freshPushSchema("mysql", db, {});
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       expect(pushSchemaSpy).toHaveBeenCalledWith(
         expect.anything(),
         db,
@@ -379,9 +379,16 @@ describe("freshPushSchema", () => {
       const db = {
         execute: vi.fn().mockResolvedValue([[{ db: null }], []]),
       };
-      await expect(freshPushSchema("mysql", db, {})).rejects.toThrow(
-        "could not determine the current MySQL database"
-      );
+      // NextlyError keeps the public message generic; the diagnosis lives
+      // in logContext.reason.
+      await expect(freshPushSchema("mysql", db, {})).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+        logContext: {
+          reason: expect.stringContaining(
+            "could not determine the current MySQL database"
+          ),
+        },
+      });
     });
 
     it("swallows 'Duplicate' errors and continues", async () => {
@@ -404,7 +411,7 @@ describe("freshPushSchema", () => {
 
       const result = await freshPushSchema("mysql", db, {});
 
-      expect(result.applied).toBe(true);
+      expect(result.statementsExecuted).toBeDefined();
       expect(result.statementsExecuted).toEqual([]);
     });
   });
@@ -413,7 +420,12 @@ describe("freshPushSchema", () => {
     it("rejects unknown dialects at the entry-point guard", async () => {
       await expect(
         freshPushSchema("oracle" as unknown as "postgresql", {}, {})
-      ).rejects.toThrow("Unsupported dialect: oracle");
+      ).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+        logContext: {
+          reason: expect.stringContaining("Unsupported dialect: oracle"),
+        },
+      });
     });
   });
 });

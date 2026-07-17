@@ -1,8 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getDialectTables } from "../database/index";
-import type { SchemaRegistry } from "../database/schema-registry";
-import { getStaticRelations } from "../database/static-relations";
+import { resolveRelations } from "../database/resolve-relations";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
 import { AuthService } from "../domains/auth/services/auth-service";
@@ -164,20 +163,23 @@ export class ServiceContainer {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly tables: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly db: any;
-
   constructor(private readonly adapter: DrizzleAdapter) {
     const dialect = adapter.getCapabilities().dialect;
     this.tables = getDialectTables(dialect);
-    // v1: db.query is powered by the relations config (defineRelations).
-    // Prefer the schema registry's assembly (static + dynamic-entity
-    // edges); fall back to the static bundle relations during early boot
-    // before the registry singleton is registered.
-    const relations = container.has("schemaRegistry")
-      ? container.get<SchemaRegistry>("schemaRegistry").getRelations()
-      : getStaticRelations(dialect);
-    this.db = adapter.getDrizzle(relations);
+  }
+
+  // v1: db.query is powered by the relations config (defineRelations).
+  // Resolved lazily and on EVERY access via resolveRelations — never
+  // captured at construction — so (a) containers built for a single
+  // transaction or upload never pay drizzle construction they don't use,
+  // and (b) a SchemaRegistry invalidation propagates instead of freezing
+  // whichever snapshot existed when the container was built. The adapter
+  // memoizes per relations object, so this is two map lookups when
+  // nothing changed.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private get db(): any {
+    const dialect = this.adapter.getCapabilities().dialect;
+    return this.adapter.getDrizzle(resolveRelations(dialect));
   }
 
   private getLogger(): Logger {

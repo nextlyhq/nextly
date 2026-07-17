@@ -758,6 +758,17 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           fromType: "text",
           toType: "text",
         },
+        // The scanner only trusts a rebuild block when OUR diff approved a
+        // rebuild-justifying change for that table (an unapproved rebuild is
+        // the kit encoding a column drop) — model the approved type change
+        // that makes this dc_posts rebuild legitimate.
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "title",
+          fromType: "text",
+          toType: "integer",
+        },
       ],
     });
 

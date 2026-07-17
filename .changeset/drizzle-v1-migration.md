@@ -4,6 +4,15 @@
 "@nextlyhq/adapter-postgres": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"create-nextly-app": patch
 ---
 
 Migrate to Drizzle V1 (`drizzle-orm` + `drizzle-kit` pinned exactly to `1.0.0-rc.4`).

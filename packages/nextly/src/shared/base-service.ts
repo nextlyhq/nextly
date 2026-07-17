@@ -7,9 +7,7 @@ import type {
 import { sql } from "drizzle-orm";
 
 import { getDialectTables } from "../database/index";
-import type { SchemaRegistry } from "../database/schema-registry";
-import { getStaticRelations } from "../database/static-relations";
-import { container } from "../di/container";
+import { resolveRelations } from "../database/resolve-relations";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
 import type { Logger } from "./types";
@@ -157,7 +155,6 @@ const sqliteRollback = sql.raw("ROLLBACK");
 export abstract class BaseService<
   TAdapter extends DatabaseAdapter = DatabaseAdapter,
 > {
-  private _db: TAdapter["db"] | null = null;
   private _tables: TAdapter["tables"] | null = null;
 
   constructor(
@@ -172,19 +169,16 @@ export abstract class BaseService<
    *
    * The v1 relational query API (db.query.users.findFirst with object
    * filters) is powered by a relations config (defineRelations output),
-   * not a table map. Prefer the schema registry's assembly (static bundle
-   * edges + dynamic-entity edges); fall back to the static bundle
-   * relations when the registry singleton isn't registered yet.
-   * Cached after first access.
+   * not a table map. Resolution goes through resolveRelations on EVERY
+   * access — never cached here — so a SchemaRegistry invalidation (table
+   * re-registered by a Builder save) propagates immediately instead of
+   * stranding this service on relations that close over dropped table
+   * objects. The adapter memoizes the drizzle instance per relations
+   * object, so an unchanged schema costs two map lookups.
    */
   protected get db(): TAdapter["db"] {
-    if (!this._db) {
-      const relations = container.has("schemaRegistry")
-        ? container.get<SchemaRegistry>("schemaRegistry").getRelations()
-        : getStaticRelations(this.adapter.getCapabilities().dialect);
-      this._db = this.adapter.getDrizzle<TAdapter["db"]>(relations);
-    }
-    return this._db;
+    const relations = resolveRelations(this.adapter.getCapabilities().dialect);
+    return this.adapter.getDrizzle<TAdapter["db"]>(relations);
   }
 
   /**

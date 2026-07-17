@@ -74,3 +74,39 @@ describe("findUnexpectedDestructiveStatements", () => {
     ).toEqual([]);
   });
 });
+
+describe("findUnexpectedDestructiveStatements — v1 hardening", () => {
+  it("parses schema-qualified and quoted DROP/RENAME identifiers", () => {
+    const stmts = [
+      'CREATE TABLE "main"."__new_dc_posts" (id text)',
+      'INSERT INTO "main"."__new_dc_posts" SELECT id FROM "main"."dc_posts"',
+      'DROP TABLE "main"."dc_posts"',
+      'ALTER TABLE "main"."__new_dc_posts" RENAME TO "dc_posts"',
+    ];
+    // Qualified rebuild block still recognized as a rebuild (no offenders
+    // without an ops allowlist).
+    expect(findUnexpectedDestructiveStatements(stmts)).toEqual([]);
+    // And the qualified plain DROP is still flagged.
+    expect(
+      findUnexpectedDestructiveStatements(['DROP TABLE "main"."orphan_tbl"'])
+    ).toEqual(['DROP TABLE "main"."orphan_tbl"']);
+  });
+
+  it("only trusts rebuild blocks for tables with an approved rebuild op", () => {
+    const rebuild = [
+      "CREATE TABLE `__new_g1` (id text, num integer)",
+      "INSERT INTO `__new_g1`(`id`, `num`) SELECT `id`, `num` FROM `g1`",
+      "DROP TABLE `g1`",
+      "ALTER TABLE `__new_g1` RENAME TO `g1`",
+    ];
+    // Approved type change on g1 → the rebuild is legitimate.
+    expect(
+      findUnexpectedDestructiveStatements(rebuild, new Set(["g1"]))
+    ).toEqual([]);
+    // No approved op for g1 → the kit is encoding a change our differ never
+    // saw (e.g. a column drop expressed as a rebuild) — flag the DROP.
+    expect(findUnexpectedDestructiveStatements(rebuild, new Set())).toEqual([
+      "DROP TABLE `g1`",
+    ]);
+  });
+});

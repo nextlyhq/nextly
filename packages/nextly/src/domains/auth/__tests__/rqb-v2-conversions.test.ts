@@ -13,26 +13,35 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
+import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
+import { getDialectTables } from "../../../database/index";
+import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import { relations as sqliteRelations } from "../../../schemas/_dialect-bundles/sqlite.relations";
 
-function seed(sqlite: Database.Database) {
+// The schema comes from the PRODUCTION sqlite table definitions, turned
+// into DDL by drizzle-kit's generateMigration (never hand-copied CREATE
+// TABLE — it drifts; see .claude/rules/integration-tests.md). Rows are
+// inserted with explicit column lists because the production tables carry
+// more columns than the fixtures use.
+async function seed(sqlite: Database.Database) {
+  const kit = await getSQLiteDrizzleKit();
+  const statements = await kit.generateMigration(
+    await kit.generateDrizzleJson({}),
+    await kit.generateDrizzleJson(getDialectTables("sqlite"))
+  );
+  for (const raw of statements) {
+    for (const stmt of splitStatements([raw])) sqlite.exec(stmt);
+  }
   sqlite.exec(`
-    CREATE TABLE users (id text PRIMARY KEY NOT NULL, email text NOT NULL, name text);
-    CREATE TABLE roles (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL);
-    CREATE TABLE permissions (id text PRIMARY KEY NOT NULL, action text NOT NULL, resource text NOT NULL);
-    CREATE TABLE role_permissions (id text PRIMARY KEY NOT NULL, role_id text NOT NULL, permission_id text NOT NULL, created_at integer);
-    CREATE TABLE user_roles (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, role_id text NOT NULL, created_at integer, expires_at integer);
-    CREATE TABLE role_inherits (id text PRIMARY KEY NOT NULL, parent_role_id text NOT NULL, child_role_id text NOT NULL);
-    CREATE TABLE password_reset_tokens (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, identifier text NOT NULL, expires integer NOT NULL, used_at integer, created_at integer);
-
-    INSERT INTO users VALUES ('u1', 'ada@example.com', 'Ada');
-    INSERT INTO roles VALUES ('r1', 'Editor', 'editor'), ('r2', 'Admin', 'admin');
-    INSERT INTO permissions VALUES ('p1', 'read', 'posts'), ('p2', 'write', 'posts');
-    INSERT INTO role_permissions VALUES ('rp1', 'r1', 'p1', NULL), ('rp2', 'r1', 'p2', NULL);
-    INSERT INTO user_roles VALUES ('ur1', 'u1', 'r1', NULL, NULL);
-    INSERT INTO role_inherits VALUES ('ri1', 'r2', 'r1');
-    INSERT INTO password_reset_tokens VALUES ('t1', 'hash1', 'ada@example.com', 9999999999, NULL, NULL);
-    INSERT INTO password_reset_tokens VALUES ('t2', 'hash2', 'ada@example.com', 9999999999, 12345, NULL);
+    INSERT INTO users (id, email, name, is_active, created_at, updated_at)
+      VALUES ('u1', 'ada@example.com', 'Ada', 1, 1700000000, 1700000000);
+    INSERT INTO roles (id, name, slug, level, created_at, updated_at) VALUES ('r1', 'Editor', 'editor', 10, 1700000000, 1700000000), ('r2', 'Admin', 'admin', 90, 1700000000, 1700000000);
+    INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('p1', 'Read posts', 'read-posts', 'read', 'posts', 1700000000, 1700000000), ('p2', 'Write posts', 'write-posts', 'write', 'posts', 1700000000, 1700000000);
+    INSERT INTO role_permissions (id, role_id, permission_id, created_at) VALUES ('rp1', 'r1', 'p1', 1700000000), ('rp2', 'r1', 'p2', 1700000000);
+    INSERT INTO user_roles (id, user_id, role_id, created_at) VALUES ('ur1', 'u1', 'r1', 1700000000);
+    INSERT INTO role_inherits (id, parent_role_id, child_role_id) VALUES ('ri1', 'r2', 'r1');
+    INSERT INTO password_reset_tokens (id, token_hash, identifier, expires, created_at) VALUES (1, 'hash1', 'ada@example.com', 9999999999, 1700000000);
+    INSERT INTO password_reset_tokens (id, token_hash, identifier, expires, used_at, created_at) VALUES (2, 'hash2', 'ada@example.com', 9999999999, 12345, 1700000000);
   `);
 }
 
@@ -44,9 +53,9 @@ describe("RQB v2 conversion patterns (real sqlite + real bundle relations)", () 
     return drizzle({ client, relations: sqliteRelations });
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     sqlite = new Database(":memory:");
-    seed(sqlite);
+    await seed(sqlite);
     db = makeDb(sqlite);
   });
 
@@ -73,7 +82,7 @@ describe("RQB v2 conversion patterns (real sqlite + real bundle relations)", () 
       where: { tokenHash: "hash1", usedAt: { isNull: true } },
       columns: { id: true, identifier: true },
     });
-    expect(token?.id).toBe("t1");
+    expect(token?.id).toBe(1);
     const used = await db.query.passwordResetTokens.findFirst({
       where: { tokenHash: "hash2", usedAt: { isNull: true } },
     });

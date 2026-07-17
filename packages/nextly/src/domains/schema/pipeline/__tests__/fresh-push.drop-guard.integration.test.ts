@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDialectTables } from "../../../../database/index";
 
 import { freshPushSchema } from "../fresh-push";
+import { getMigrateLockDdl } from "../locks";
 
 let sqlite: Database.Database;
 let db: ReturnType<typeof drizzle>;
@@ -88,15 +89,17 @@ describe.skipIf(!PG_URL)(
       url.pathname = "/nextly_freshpush_scope";
       const pool = new Pool({ connectionString: url.toString() });
       try {
-        // The orphan exists BEFORE the reconcile — the migrate-lock shape.
-        await pool.query(
-          'CREATE TABLE "nextly_migrate_lock" ("id" text PRIMARY KEY, "acquired_at" timestamptz)'
-        );
+        // The orphan exists BEFORE the reconcile — the REAL migrate-lock
+        // table via the production DDL helper (hand-copied DDL drifts; see
+        // .claude/rules/integration-tests.md).
+        for (const stmt of getMigrateLockDdl("postgresql")) {
+          await pool.query(stmt);
+        }
         const pgDb = drizzlePg({ client: pool });
         const core = getDialectTables("postgresql");
 
         const result = await freshPushSchema("postgresql", pgDb, core);
-        expect(result.applied).toBe(true);
+        expect(result.statementsExecuted).toBeDefined();
 
         // Orphan untouched; core tables created alongside it.
         const t = await pool.query(
@@ -113,3 +116,56 @@ describe.skipIf(!PG_URL)(
     });
   }
 );
+
+// The same orphan-pairing crash on SQLite (which has NO kit tables filter):
+// an upgrade that adds a new core table while ANY non-core table exists made
+// v1's differ pair them and throw its resolver error (probe-verified).
+// fresh-push now degrades to the additive-only generateMigration baseline —
+// the reconcile completes, the orphan and its data survive, and a hint
+// records the degradation.
+describe("freshPushSchema orphan + added core table (real SQLite)", () => {
+  it("falls back to the additive baseline instead of crashing", async () => {
+    const localSqlite = new Database(":memory:");
+    try {
+      const localDb = drizzle({ client: localSqlite });
+      // Live: one core table + one orphan user table with data.
+      localSqlite.exec('CREATE TABLE "users" ("id" text PRIMARY KEY NOT NULL)');
+      localSqlite.exec(
+        'CREATE TABLE "dc_articles" ("id" text PRIMARY KEY, "title" text)'
+      );
+      localSqlite.exec(`INSERT INTO "dc_articles" VALUES ('a1', 'keep')`);
+
+      // Desired: the existing core table plus a NEW core table — the
+      // upgrade shape that crashed v1's rename resolver.
+      const { sqliteTable, text } = await import("drizzle-orm/sqlite-core");
+      const desired = {
+        users: sqliteTable("users", { id: text("id").primaryKey() }),
+        newCore: sqliteTable("nextly_new_core", {
+          id: text("id").primaryKey(),
+        }),
+      };
+
+      const result = await freshPushSchema("sqlite", localDb, desired);
+
+      // The new core table was created, the orphan survived with its row,
+      // and the degradation is visible in hints.
+      const tables = localSqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        )
+        .all()
+        .map(r => (r as { name: string }).name);
+      expect(tables).toContain("nextly_new_core");
+      expect(tables).toContain("dc_articles");
+      const row = localSqlite
+        .prepare('SELECT title FROM "dc_articles" WHERE id = ?')
+        .get("a1") as { title: string } | undefined;
+      expect(row?.title).toBe("keep");
+      expect(
+        result.hints.some(h => h.hint.includes("additive-only baseline"))
+      ).toBe(true);
+    } finally {
+      localSqlite.close();
+    }
+  });
+});

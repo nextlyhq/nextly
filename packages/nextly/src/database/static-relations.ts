@@ -7,14 +7,32 @@
 
 import type { AnyRelations } from "drizzle-orm";
 
+import { NextlyError } from "../errors/nextly-error";
 import { relations as relationsMy } from "../schemas/_dialect-bundles/mysql.relations";
 import { relations as relationsPg } from "../schemas/_dialect-bundles/postgres.relations";
 import { relations as relationsSl } from "../schemas/_dialect-bundles/sqlite.relations";
 
 export function getStaticRelations(dialect?: string): AnyRelations {
-  if (dialect === "postgresql" || dialect === "postgres") {
-    return relationsPg;
+  switch (dialect) {
+    case "postgresql":
+    case "postgres":
+      return relationsPg;
+    case "mysql":
+      return relationsMy;
+    case "sqlite":
+      return relationsSl;
+    default:
+      // No silent fallback: serving another dialect's relations (whose
+      // edges close over that dialect's table objects) fails far from the
+      // cause with confusing query errors. An unknown/undefined dialect
+      // here means the adapter isn't connected or reports a spelling this
+      // union doesn't know — fail at the source.
+      throw NextlyError.internal({
+        logContext: {
+          reason:
+            `getStaticRelations: unsupported dialect "${String(dialect)}" ` +
+            `(expected postgresql | mysql | sqlite)`,
+        },
+      });
   }
-  if (dialect === "mysql") return relationsMy;
-  return relationsSl;
 }

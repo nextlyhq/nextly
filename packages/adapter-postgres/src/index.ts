@@ -276,6 +276,15 @@ function applyHappyEyeballsTimeoutOnce(): void {
  * @public
  */
 export class PostgresAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'postgresql' for this adapter.
    */
@@ -452,6 +461,10 @@ export class PostgresAdapter extends DrizzleAdapter {
    * It waits for all checked-out clients to be returned before shutting down.
    */
   async disconnect(): Promise<void> {
+    // Drop memoized drizzle instances — they wrap the connection being
+    // closed and must not survive a reconnect.
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
     if (!this.pool) {
       return;
     }
@@ -761,11 +774,16 @@ export class PostgresAdapter extends DrizzleAdapter {
     // `relations` (defineRelations output, assembled by Nextly's schema
     // registry) is what powers db.query in v1; a bare instance serves the
     // select-builder CRUD paths.
-    return (
-      relations
-        ? drizzle({ client: pool, relations })
-        : drizzle({ client: pool })
-    ) as T;
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client: pool });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client: pool, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**

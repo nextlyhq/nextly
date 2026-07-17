@@ -127,6 +127,25 @@ const scenarios: GoldenScenario[] = [
     expectFilterBlocks: ["orphan_tbl"],
   },
   {
+    // Pins the W3-deletion safety claim: when one push both ADDs a column
+    // and forces a rebuild (type change), v1's rebuild INSERT..SELECT must
+    // list only PRE-EXISTING columns (0.31 referenced the new column and
+    // needed the deleted NULL-rewrite workaround). If this fixture ever
+    // shows the added column inside INSERT INTO __new_..., W3 is back.
+    name: "add-column-plus-type-change",
+    seed: ["CREATE TABLE g1 (id text PRIMARY KEY NOT NULL, num text);"],
+    desired: () => ({
+      g1: sqliteTable("g1", {
+        id: text("id").primaryKey(),
+        num: integer("num"),
+        added: text("added"),
+      }),
+    }),
+    desiredTableNames: ["g1"],
+    expectDestructiveOffenders: "none",
+    expectFilterBlocks: [],
+  },
+  {
     name: "rename-shape-crash",
     seed: ["CREATE TABLE g1 (id text PRIMARY KEY NOT NULL, title text);"],
     desired: () => ({

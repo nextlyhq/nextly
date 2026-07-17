@@ -752,14 +752,21 @@ export class PushSchemaPipeline {
 
         // Phase D: pushSchema for purely-additive remainder.
         // After pre-resolution, the live DB has had its renames + drops
-        // applied INSIDE this transaction. We pass `tx` (not the outer
-        // `db`) so drizzle-kit's introspection runs within the same
-        // transaction and SEES the uncommitted pre-resolution changes.
+        // applied INSIDE this transaction. On PostgreSQL we pass `tx` (not
+        // the outer `db`) so drizzle-kit's introspection runs within the
+        // same transaction and SEES the uncommitted pre-resolution changes.
         // Without this, drizzle-kit's introspection would still see the
         // old DROP+ADD ambiguity and fire its TTY prompt.
         //
         // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
         // SQLite (it's the same handle).
+        //
+        // MySQL must receive the OUTER db: the v1 kit derives its raw
+        // client from `db.$client`, which only exists on the top-level
+        // drizzle instance — MySql2Transaction objects have no $client, so
+        // passing `tx` crashes the shim. That is semantically safe because
+        // MySQL DDL auto-commits: the pre-resolution statements are already
+        // visible to any connection by the time Phase D introspects.
         //
         // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
         // as `tablesFilter` so its introspection is scoped to just our
@@ -795,7 +802,11 @@ export class PushSchemaPipeline {
             // instead of the pre-v1 unanswerable TTY prompt.
             pushResult = await withCapturedStdout(
               () =>
-                kit.pushSchema(effectiveDrizzleSchema, tx, desiredTableNames),
+                kit.pushSchema(
+                  effectiveDrizzleSchema,
+                  dialect === "mysql" ? db : tx,
+                  desiredTableNames
+                ),
               // eslint-disable-next-line turbo/no-undeclared-env-vars
               process.env.DEBUG_SCHEMA === "1"
                 ? { debug: (msg: string) => console.debug(msg) }
@@ -824,8 +835,24 @@ export class PushSchemaPipeline {
           // in the pre-resolution phase, so anything destructive the kit
           // emits here means its differ disagrees with ours — never
           // execute it; fail the apply so the journal records failure.
-          const unexpectedDestructive =
-            findUnexpectedDestructiveStatements(safe);
+          // Rebuild blocks are only trusted for tables where OUR diff
+          // approved a rebuild-justifying change — a rebuild on any other
+          // table is the kit encoding a column drop we never approved
+          // (rc.4 emits exactly that shape; probe-verified).
+          const allowedRebuildTables = new Set(
+            resolvedOps
+              .filter(
+                op =>
+                  op.type === "change_column_type" ||
+                  op.type === "change_column_nullable" ||
+                  op.type === "change_column_default"
+              )
+              .map(op => op.tableName.toLowerCase())
+          );
+          const unexpectedDestructive = findUnexpectedDestructiveStatements(
+            safe,
+            allowedRebuildTables
+          );
           if (unexpectedDestructive.length > 0) {
             throw new PushSchemaError(
               `drizzle-kit emitted ${unexpectedDestructive.length} ` +

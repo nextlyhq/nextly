@@ -42,28 +42,29 @@ import {
   getPgDrizzleKit,
   getSQLiteDrizzleKit,
 } from "../../../database/drizzle-kit-lazy";
+import { NextlyError } from "../../../errors/nextly-error";
 
 import {
   drizzleTableNames,
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
+import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
+
+// Re-exported so existing importers (v1-golden suite) keep working; the
+// implementation lives in sql-statement-utils.ts.
+export { splitStatements };
 
 export type FreshPushDialect = "postgresql" | "mysql" | "sqlite";
 
-// Result shape returned to callers. `applied` is always true when no
-// error is thrown — the helper is "fire and forget" by design. `hints`
-// carries drizzle-kit's own hints (empty in every observed rc.4
-// scenario) plus one entry per destructive statement the boot-safety
-// policy stripped.
+// Result shape returned to callers. Success is signalled by returning at
+// all (errors throw). `hints` carries drizzle-kit's own hints (empty in
+// every observed rc.4 scenario) plus one entry per destructive statement
+// the boot-safety policy stripped.
 export interface FreshPushResult {
   hints: KitHint[];
   statementsExecuted: string[];
-  applied: true;
 }
-
-// Options reserved for future per-call tweaks.
-export type FreshPushOptions = Record<string, never>;
 
 /**
  * Push a static / fresh schema directly via drizzle-kit v1, bypassing the
@@ -82,14 +83,15 @@ export type FreshPushOptions = Record<string, never>;
 export async function freshPushSchema(
   dialect: FreshPushDialect,
   db: unknown,
-  schema: Record<string, unknown>,
-  _options: FreshPushOptions = {}
+  schema: Record<string, unknown>
 ): Promise<FreshPushResult> {
   // Entry-point dialect guard. TS already narrows callers to the union,
   // but a runtime check makes the failure mode obvious for callers that
   // bypass the type system (e.g. plugin authors with `as any` somewhere).
   if (dialect !== "postgresql" && dialect !== "mysql" && dialect !== "sqlite") {
-    throw new Error(`Unsupported dialect: ${String(dialect)}`);
+    throw NextlyError.internal({
+      logContext: { reason: `Unsupported dialect: ${String(dialect)}` },
+    });
   }
 
   const result = await pushForDialect(dialect, db, schema);
@@ -110,6 +112,16 @@ export async function freshPushSchema(
       statement,
     })),
   ];
+  // v1 hints were EMPTY in every observed rc.4 scenario; if the kit ever
+  // starts attaching them (some carry a `statement` its own apply() would
+  // run first), that is an uninterpreted signal — surface it loudly so a
+  // boot log never silently swallows a data-loss precondition.
+  for (const h of result.hints) {
+    console.warn(
+      `[Nextly schema] fresh-push received a drizzle-kit hint it does not ` +
+        `interpret: ${h.hint}${h.statement ? ` [${h.statement}]` : ""}`
+    );
+  }
   for (const statement of offenders) {
     console.warn(
       `[Nextly schema] fresh-push blocked a destructive statement emitted ` +
@@ -120,7 +132,7 @@ export async function freshPushSchema(
 
   const executed = await executeStatements(dialect, db, runnable);
 
-  return { hints, statementsExecuted: executed, applied: true };
+  return { hints, statementsExecuted: executed };
 }
 
 // Per-dialect pushSchema invocation. MySQL's v1 entrypoint requires the
@@ -152,12 +164,61 @@ async function pushForDialect(
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
       const databaseName = await currentMysqlDatabase(db);
-      return kit.pushSchema(schema, db, databaseName);
+      return withResolverCrashFallback(
+        () => kit.pushSchema(schema, db, databaseName),
+        async () =>
+          kit.generateMigration(
+            await kit.generateDrizzleJson({}),
+            await kit.generateDrizzleJson(schema)
+          )
+      );
     }
     case "sqlite": {
       const kit = await getSQLiteDrizzleKit();
-      return kit.pushSchema(schema, db);
+      return withResolverCrashFallback(
+        () => kit.pushSchema(schema, db),
+        async () =>
+          kit.generateMigration(
+            await kit.generateDrizzleJson({}),
+            await kit.generateDrizzleJson(schema)
+          )
+      );
     }
+  }
+}
+
+// The SQLite/MySQL payload entrypoints accept no tables filter, so their
+// introspection sees the WHOLE live database. When an upgrade adds a new
+// core table while any non-core table exists (user dc_* content, the
+// migrate lock), v1's differ pairs the "dropped" orphan against the added
+// table and its rename resolver throws `Internal error: resolver(table) was
+// called without a HintsHandler` BEFORE emitting anything (probe-verified).
+// PG avoids this via the entities filter above; here the recovery is the
+// pre-v1 applyViaGenerate shape: generate the pure-CREATE baseline from an
+// empty snapshot. That set contains no drops by construction, and the
+// downstream idempotency-tolerant executor skips tables that already exist,
+// so the reconcile degrades to additive-only instead of crashing the boot.
+async function withResolverCrashFallback(
+  push: () => Promise<{ sqlStatements: string[]; hints: KitHint[] }>,
+  generateBaseline: () => Promise<string[]>
+): Promise<{ sqlStatements: string[]; hints: KitHint[] }> {
+  try {
+    return await push();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/HintsHandler/.test(message)) throw err;
+    const sqlStatements = await generateBaseline();
+    return {
+      sqlStatements,
+      hints: [
+        {
+          hint:
+            "pushSchema hit v1's rename-resolver crash (live tables outside " +
+            "the desired schema); fell back to the additive-only baseline — " +
+            "no drops were considered this pass",
+        },
+      ],
+    };
   }
 }
 
@@ -173,39 +234,16 @@ async function currentMysqlDatabase(db: unknown): Promise<string> {
     ? (rows[0] as { db?: string } | undefined)?.db
     : undefined;
   if (!name) {
-    throw new Error(
-      "freshPushSchema: could not determine the current MySQL database " +
-        "(SELECT DATABASE() returned no name). Connect with a database " +
-        "selected in the connection URL."
-    );
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "freshPushSchema: could not determine the current MySQL database " +
+          "(SELECT DATABASE() returned no name). Connect with a database " +
+          "selected in the connection URL.",
+      },
+    });
   }
   return name;
-}
-
-// v1 emits one statement per array entry in every observed case, but a
-// defensive split keeps multi-statement strings executable. PRAGMA is in
-// the allow-list because v1's SQLite recreate flow emits its
-// `PRAGMA foreign_keys=OFF/ON` choreography inside the statement stream —
-// dropping those would run rebuilds with FK enforcement in an unknown
-// state (#5782 territory).
-// Exported for the v1-golden fixture suite (Phase 7), which asserts every
-// captured kit statement survives the split executable.
-export function splitStatements(sqlStatements: string[]): string[] {
-  const out: string[] = [];
-  for (const raw of sqlStatements) {
-    for (const piece of raw
-      .split(";")
-      .map(s => s.trim())
-      .filter(
-        s =>
-          s.length > 0 &&
-          !s.startsWith("--") &&
-          /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|PRAGMA)\b/i.test(s)
-      )) {
-      out.push(piece);
-    }
-  }
-  return out;
 }
 
 // Executes statements per dialect, swallowing idempotency errors
@@ -228,20 +266,6 @@ async function executeStatements(
     transaction: (
       fn: (tx: { execute: (q: unknown) => Promise<unknown> }) => Promise<void>
     ) => Promise<void>;
-  };
-
-  const isIdempotencyError = (err: unknown): boolean => {
-    const msg = err instanceof Error ? err.message : String(err);
-    const causeMsg =
-      err instanceof Error && err.cause instanceof Error
-        ? err.cause.message
-        : "";
-    return [msg, causeMsg].some(
-      m =>
-        m.includes("already exists") ||
-        m.includes("duplicate column name") ||
-        m.includes("Duplicate")
-    );
   };
 
   if (dialect === "postgresql") {

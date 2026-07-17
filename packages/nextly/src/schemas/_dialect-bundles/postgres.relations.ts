@@ -1,3 +1,10 @@
+// KEPT DELIBERATELY IN TRIPLICATE with mysql/postgres/sqlite siblings:
+// the edge map is structurally identical across dialects, but each copy
+// is typed against ITS dialect's table set (RelationsBuilder<Tables>),
+// which is what catches a column/table mismatch at compile time instead
+// of at runtime on one dialect only. A shared generic builder erases
+// that check. When adding an edge, add it to all three files — the
+// relations round-trip tests fail per dialect if a copy is missed.
 /**
  * Drizzle v2 relations for the PostgreSQL dialect bundle.
  *

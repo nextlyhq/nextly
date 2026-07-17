@@ -198,23 +198,41 @@ export function filterUnsafeStatements(
  * `__new_<table>` RENAME in the same statement set.
  */
 export function findUnexpectedDestructiveStatements(
-  statements: string[]
+  statements: string[],
+  // When provided (the pipeline's Phase D, which KNOWS the approved
+  // operations), a rebuild block is only exempt if Nextly's own diff
+  // approved a rebuild-justifying change for that table. This closes the
+  // hole where the kit encodes a column DROP as a "rebuild" (CREATE __new_
+  // without the column + INSERT of survivors + DROP + RENAME — verified
+  // rc.4 emission): text-level the block looks data-preserving, but if
+  // Nextly approved no change to that table, the kit's differ disagrees
+  // with ours and the block must fail the apply. The boot-time fresh-push
+  // path passes nothing here (it has no op context) and keeps the
+  // exemption — its reconcile legitimately rebuilds drifted core tables.
+  allowedRebuildTables?: Set<string>
 ): string[] {
   const rebuildTargets = new Set<string>();
   for (const s of statements) {
     const m = s.match(
-      /ALTER\s+TABLE\s+[`"]?__new_([^`"\s]+)[`"]?\s+RENAME\s+TO/i
+      // Optionally schema-qualified and/or quoted: `__new_x`, "__new_x",
+      // "main"."__new_x", main.__new_x.
+      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO/i
     );
     if (m) rebuildTargets.add((m[1] ?? "").toLowerCase());
   }
   const offenders: string[] = [];
   for (const s of statements) {
     const dropTable = s.match(
-      /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"]?([^`"\s;]+)[`"]?/i
+      // Skip an optional schema qualifier so `DROP TABLE "main"."posts"`
+      // captures `posts`, not `main`.
+      /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
     );
     if (dropTable) {
       const target = (dropTable[1] ?? "").toLowerCase();
-      if (!rebuildTargets.has(target)) offenders.push(s);
+      const isRebuild = rebuildTargets.has(target);
+      const rebuildApproved =
+        allowedRebuildTables === undefined || allowedRebuildTables.has(target);
+      if (!isRebuild || !rebuildApproved) offenders.push(s);
       continue;
     }
     if (/\bDROP\s+COLUMN\b/i.test(s)) offenders.push(s);

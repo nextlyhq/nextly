@@ -14,7 +14,7 @@
 //   PostgreSQL — v1 proposes NOTHING. Strict zero (spike 1.4,
 //     institutionalized).
 //   MySQL — ONE reconcile: 0.31-era schema defs baked module-load-time
-//     literal datetime defaults (`.default(new Date())`, latent main bug the
+//     literal datetime defaults (a Date-object default, latent main bug the
 //     broken 0.31 MySQL differ never surfaced). The v1-branch defs normalize
 //     to DEFAULT CURRENT_TIMESTAMP (D4), so the first pass emits only
 //     metadata `MODIFY COLUMN … DEFAULT CURRENT_TIMESTAMP` statements; after
@@ -37,6 +37,10 @@ import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool } from "mysql2";
 import { Pool } from "pg";
+import { is } from "drizzle-orm";
+import { MySqlTable } from "drizzle-orm/mysql-core";
+import { PgTable } from "drizzle-orm/pg-core";
+import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -67,10 +71,12 @@ function loadFixture(dialect: string): Fixture {
 
 // The bundles are pure table modules since Phase 4, but keep the guard so a
 // future re-export of something non-table doesn't silently join the diff.
+// Symbol-based (drizzle's is()) rather than name-based: a helper export
+// whose name doesn't say "relations" must still be excluded.
 function onlyTables(bundle: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(bundle)) {
-    if (!k.toLowerCase().includes("relations")) out[k] = v;
+    if (is(v, PgTable) || is(v, MySqlTable) || is(v, SQLiteTable)) out[k] = v;
   }
   return out;
 }

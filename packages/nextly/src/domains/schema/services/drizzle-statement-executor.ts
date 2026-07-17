@@ -20,6 +20,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { DrizzleStatementExecutor as DrizzleStatementExecutorInterface } from "../pipeline/pushschema-pipeline-interfaces";
+import {
+  isIdempotencyError,
+  splitStatements,
+} from "../pipeline/sql-statement-utils";
 
 // Minimal duck-typed shapes for the per-dialect db / tx clients.
 // Avoids `as any` casts at every call site by narrowing to what we
@@ -105,43 +109,15 @@ export class DrizzleStatementExecutor
     // pragma works inside a transaction. If it surfaces violations,
     // the throw propagates up, the transaction rolls back, and the
     // pipeline restores foreign_keys = ON in its finally block.
-    for (const rawStmt of statements) {
-      const pieces = rawStmt
-        .split("\n")
-        .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
-        .join("\n")
-        .split(";")
-        .map((s: string) => s.trim())
-        .filter(
-          (s: string) =>
-            s.length > 0 &&
-            !s.startsWith("--") &&
-            /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|PRAGMA)\b/i.test(s)
-        );
-      for (const stmt of pieces) {
-        try {
-          dbTyped.run(sqlTag.raw(stmt));
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // drizzle-orm's SQLite session wraps better-sqlite3 errors in a
-          // DrizzleError whose .message is "Failed to run the query '...'".
-          // The original SQLite error ("already exists", etc.) lives in
-          // err.cause. Check both so the guard fires correctly for both
-          // the raw driver error and the drizzle-orm wrapper.
-          const causeMsg =
-            err instanceof Error && err.cause instanceof Error
-              ? err.cause.message
-              : "";
-          if (
-            msg.includes("already exists") ||
-            msg.includes("duplicate column name") ||
-            causeMsg.includes("already exists") ||
-            causeMsg.includes("duplicate column name")
-          ) {
-            continue;
-          }
-          throw err;
-        }
+    // Splitting and idempotency tolerance are single-sourced in
+    // sql-statement-utils.ts — this executor and fresh-push previously
+    // carried drifting private copies of both.
+    for (const stmt of splitStatements(statements)) {
+      try {
+        dbTyped.run(sqlTag.raw(stmt));
+      } catch (err) {
+        if (isIdempotencyError(err)) continue;
+        throw err;
       }
     }
 

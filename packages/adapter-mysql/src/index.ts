@@ -235,6 +235,15 @@ function delay(ms: number): Promise<void> {
  * ```
  */
 export class MySqlAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'mysql' for this adapter.
    */
@@ -330,6 +339,10 @@ export class MySqlAdapter extends DrizzleAdapter {
    * It waits for all connections to be released before shutting down.
    */
   async disconnect(): Promise<void> {
+    // Drop memoized drizzle instances — they wrap the connection being
+    // closed and must not survive a reconnect.
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
     if (!this.pool) {
       return;
     }
@@ -612,9 +625,16 @@ export class MySqlAdapter extends DrizzleAdapter {
     // (setting 'supportBigNumbers')"), so unwrap to the underlying pool.
     // The pre-v1 `mode` option no longer exists.
     const client = (pool as unknown as { pool: CallbackPool }).pool;
-    return (
-      relations ? drizzle({ client, relations }) : drizzle({ client })
-    ) as T;
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**

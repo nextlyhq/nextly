@@ -184,6 +184,15 @@ function sanitizeSqliteValue(v: unknown): unknown {
  * ```
  */
 export class SqliteAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'sqlite' for this adapter.
    */
@@ -341,6 +350,10 @@ export class SqliteAdapter extends DrizzleAdapter {
   // better-sqlite3 is synchronous; method is async to satisfy the DatabaseAdapter contract.
   // eslint-disable-next-line @typescript-eslint/require-await
   async disconnect(): Promise<void> {
+    // Drop memoized drizzle instances — they wrap the connection being
+    // closed and must not survive a reconnect.
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
     if (!this.db) {
       return;
     }
@@ -657,9 +670,16 @@ export class SqliteAdapter extends DrizzleAdapter {
     const db = this.ensureDb();
     // drizzle v1 removed the positional (client, config) form — positional
     // calls silently open a NEW :memory: database. Object form only.
-    return (
-      relations ? drizzle({ client: db, relations }) : drizzle({ client: db })
-    ) as T;
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client: db });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client: db, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**

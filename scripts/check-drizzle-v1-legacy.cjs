@@ -26,16 +26,29 @@ function grep(label, pattern, opts = {}) {
     paths = SRC_GLOBS,
     extraFilters = [],
     allowMatches = [],
+    lineTest = null,
   } = opts;
   const args = [
     "-rEn",
     pattern,
     ...paths,
     ...include.map(i => `--include=${i}`),
+    // Exclude at the grep level: scanning node_modules/.next can overflow
+    // execFileSync's buffer and crash the gate with ENOBUFS instead of a
+    // verdict (the JS-side filters below stay as a second line of defense).
+    "--exclude-dir=node_modules",
+    "--exclude-dir=dist",
+    "--exclude-dir=.next",
+    "--exclude-dir=.turbo",
+    "--exclude-dir=build",
   ];
   let out = "";
   try {
-    out = execFileSync("grep", args, { cwd: ROOT, encoding: "utf8" });
+    out = execFileSync("grep", args, {
+      cwd: ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
   } catch (e) {
     // grep exits 1 on "no matches" — that's the pass case.
     if (e.status !== 1) throw e;
@@ -46,7 +59,8 @@ function grep(label, pattern, opts = {}) {
     .filter(l => !l.includes("node_modules"))
     .filter(l => !/\/(dist|\.next|\.turbo)\//.test(l))
     .filter(l => extraFilters.every(f => !f.test(l)))
-    .filter(l => !allowMatches.some(a => a.test(l)));
+    .filter(l => !allowMatches.some(a => a.test(l)))
+    .filter(l => (lineTest ? lineTest(l) : true));
   if (lines.length > 0) {
     failures++;
     console.error(`✗ ${label} (${lines.length} hit(s)):`);
@@ -75,11 +89,20 @@ grep("no getTableColumns", "\\bgetTableColumns\\b");
 // 4. The v1-removed relations() API. defineRelations is the v1 surface;
 // type-only helpers (AnyRelations, RelationsBuilder, ExtractTablesFromSchema)
 // are fine.
+// A same-line `import { relations, defineRelations }` must still be caught,
+// so parse the import clause instead of allowlisting whole lines.
 grep(
   "no relations() imports from drizzle-orm",
-  "import \\{[^}]*\\brelations\\b[^}]*\\} from \"drizzle-orm\"",
+  "import [^;]*\\{[^}]*relations[^}]*\\} from \"drizzle-orm\"",
   {
-    allowMatches: [/defineRelations|AnyRelations|RelationsBuilder/],
+    lineTest: l => {
+      const m = l.match(/import[^;]*\{([^}]*)\}/);
+      if (!m) return true;
+      return m[1]
+        .split(",")
+        .map(n => n.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0])
+        .includes("relations");
+    },
   }
 );
 
@@ -138,13 +161,33 @@ grep(
 
 // 10. No positional drizzle() constructors — v1 removed BOTH positional
 // forms; the single-arg form silently connects to the WRONG database.
-grep(
-  "no positional drizzle() constructors",
-  "drizzle(Pg|Mysql|Sqlite)?\\((pool|sqlite|client|connection|db)[,)]",
-  {
-    extraFilters: [/\/\//],
-  }
-);
+// v1 removed BOTH positional client forms; only `drizzle({ ... })` (or the
+// documented connection-string form) is legal. Grep broadly, then JS-filter:
+// flag identifier arguments (a client variable) while allowing object form,
+// string literals, and url/connection-string variable names. Pure comment
+// lines are skipped by content, never by "contains //" (which used to hide
+// real hits carrying trailing comments or :// inside strings).
+grep("no positional drizzle() constructors", "\\bdrizzle(Pg|Mysql|Sqlite)?\\(", {
+  lineTest: l => {
+    const code = l.replace(/^[^:]+:\d+:/, "");
+    if (/^\s*(\/\/|\*|\/\*)/.test(code)) return false; // comment line
+    const call = code.match(/\bdrizzle(?:Pg|Mysql|Sqlite)?\(\s*([A-Za-z_$][\w$]*|[{"'`)])/);
+    if (!call) return false;
+    const arg = call[1];
+    if (arg === "{" || arg === '"' || arg === "'" || arg === "`" || arg === ")")
+      return false; // object form / string literal / no-arg
+    if (/url|connectionstring|dsn/i.test(arg)) return false; // string config var
+    return true; // positional client variable
+  },
+});
+
+// 11. No literal-Date DDL defaults — `.default(new Date())` bakes a
+// boot-time timestamp into the schema, and v1's working differ then emits
+// default-drift MODIFYs on every boot (the exact bug normalized to
+// CURRENT_TIMESTAMP in this migration).
+grep("no .default(new Date()) DDL defaults", "\\.default\\(new Date\\(\\)\\)", {
+  paths: ["packages"],
+});
 
 if (failures > 0) {
   console.error(`\ndrizzle v1 legacy gate: ${failures} check(s) FAILED`);
