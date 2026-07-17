@@ -132,7 +132,7 @@ function FieldCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={
         isDragging
-          ? "border border-primary/40 bg-card opacity-80 relative z-10"
+          ? "border border-primary bg-card opacity-80 relative z-10"
           : "border border-border bg-card"
       }
     >

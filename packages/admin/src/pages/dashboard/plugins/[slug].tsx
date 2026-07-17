@@ -157,7 +157,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
               )}
             </div>
             {plugin.description && (
-              <p className="text-sm font-normal text-primary/50">
+              <p className="text-sm font-normal text-muted-foreground">
                 {plugin.description}
               </p>
             )}

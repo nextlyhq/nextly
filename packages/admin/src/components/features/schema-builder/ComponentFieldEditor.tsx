@@ -235,7 +235,7 @@ export function ComponentFieldEditor({
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-foreground text-muted-foreground"
               }
             `}
           >
@@ -259,7 +259,7 @@ export function ComponentFieldEditor({
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-foreground text-muted-foreground"
               }
             `}
           >

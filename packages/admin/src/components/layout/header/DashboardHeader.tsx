@@ -48,7 +48,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
             title="GitHub Repository"
           >
-            <Github className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+            <Github className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
             <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
           </a>
         )}
@@ -60,7 +60,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
             title="Discord Community"
           >
-            <Discord className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+            <Discord className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </a>
         )}
 
@@ -72,7 +72,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
             title="Documentation"
           >
-            <HelpCircle className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+            <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </a>
         )}
 

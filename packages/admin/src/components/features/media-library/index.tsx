@@ -497,7 +497,7 @@ export function MediaLibrary({
             <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Media Library
             </h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               {total} {total === 1 ? "file" : "files"}
               {activeFolderId && " in this folder"}
             </p>
@@ -858,7 +858,7 @@ export function MediaLibrary({
               <AlertDialogAction
                 onClick={handleConfirmBulkDelete}
                 disabled={isBulkDeleting}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-solid/90"
               >
                 {isBulkDeleting ? "Deleting..." : "Delete"}
               </AlertDialogAction>

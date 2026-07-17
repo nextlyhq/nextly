@@ -79,9 +79,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">
               <span>Log out</span>
-              <span className="text-xs text-destructive-400/80">
-                End your session
-              </span>
+              <span className="text-xs text-destructive">End your session</span>
             </div>
           </button>
         </div>

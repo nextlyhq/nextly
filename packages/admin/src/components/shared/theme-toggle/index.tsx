@@ -40,7 +40,7 @@ export function ThemeToggle(): React.ReactElement {
           aria-label="Choose theme"
           title="Choose theme"
         >
-          <TriggerIcon className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+          <TriggerIcon className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">

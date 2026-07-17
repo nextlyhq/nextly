@@ -115,9 +115,9 @@ function StatusBadge({ status }: { status: string }) {
       variant="outline"
       className={`rounded-none px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wider ${
         status === "spam"
-          ? "border-destructive/40 text-destructive"
+          ? "border-destructive text-destructive"
           : status === "new"
-            ? "border-primary/40 text-primary"
+            ? "border-primary text-primary"
             : "border-border text-muted-foreground"
       }`}
     >

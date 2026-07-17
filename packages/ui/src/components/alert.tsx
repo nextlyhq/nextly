@@ -76,7 +76,7 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
-        info: "border-border bg-primary/5 text-primary dark:border-primary/30 dark:bg-primary/5 dark:text-primary-foreground/90",
+        info: "border-border bg-primary/5 text-primary dark:border-border dark:bg-primary/5 dark:text-primary-foreground/90",
         success:
           "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:bg-success-950 dark:text-success-100",
         warning:

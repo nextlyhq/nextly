@@ -371,7 +371,7 @@ export function SchemaChangeDialog({
             disabled={isApplying || !canApply}
             className={
               hasDestructiveChanges
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-solid/90"
                 : ""
             }
           >

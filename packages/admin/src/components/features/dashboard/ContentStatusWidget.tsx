@@ -44,7 +44,7 @@ function StatusItem({
         <span className="text-[13px] font-black tabular-nums text-foreground/80">
           {count}
         </span>
-        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none  border border-border min-w-[36px] text-center">
+        <span className="text-[10px] font-black text-muted-foreground bg-primary/5 px-2 py-0.5 rounded-none  border border-border min-w-[36px] text-center">
           {percentage}%
         </span>
       </div>
@@ -96,7 +96,7 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-none">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>

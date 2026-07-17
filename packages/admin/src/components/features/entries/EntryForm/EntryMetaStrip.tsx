@@ -142,7 +142,7 @@ function SlugInlineEditor({
                 cancel();
               }
             }}
-            className="text-xs font-mono text-foreground bg-background border border-primary/20 rounded px-1.5 py-0 w-full focus:border-primary/40 focus:outline-none transition-colors"
+            className="text-xs font-mono text-foreground bg-background border border-input rounded px-1.5 py-0 w-full focus:border-primary focus:outline-none transition-colors"
             aria-label="Slug"
             aria-invalid={!!errorMsg}
           />

@@ -352,7 +352,7 @@ function FormBuilderViewInner({
         {/* Action buttons — same variant/size as Collection Builder */}
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
-            <span className="text-xs font-medium text-warning bg-warning/10 border border-warning/20 px-2.5 py-1 rounded-none whitespace-nowrap">
+            <span className="text-xs font-medium text-warning bg-warning/10 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
           )}
@@ -551,7 +551,7 @@ function FormBuilderViewInner({
 
             {/* Save error */}
             {saveError && (
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-none">
+              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
                 {saveError}
               </div>
             )}

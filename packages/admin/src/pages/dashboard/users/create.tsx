@@ -316,7 +316,7 @@ export default function CreateUserPage(): ReactElement {
             <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Create New User
             </h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               Add a new user to the system with appropriate role and
               permissions.
             </p>

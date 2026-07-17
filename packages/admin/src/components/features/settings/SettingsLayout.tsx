@@ -152,7 +152,7 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
           <h1 className="text-xl font-semibold tracking-tight">
             {pageInfo.title}
           </h1>
-          <p className="text-sm font-normal text-primary/50 mt-1">
+          <p className="text-sm font-normal text-muted-foreground mt-1">
             {pageInfo.description}
           </p>
         </div>

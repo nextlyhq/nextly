@@ -566,7 +566,7 @@ function VariableChip({
       type="button"
       onClick={() => onInsert(name)}
       title={`Insert {{${name}}}`}
-      className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground/40 hover:bg-muted"
+      className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground hover:bg-muted"
     >
       <Plus className="h-3 w-3 text-muted-foreground" />
       {`{{${name}}}`}
@@ -770,7 +770,7 @@ function DataRail({
           Variable check
         </h4>
         {unknownVariables.length > 0 ? (
-          <div className="rounded-none border border-warning/30 bg-warning/10 p-3">
+          <div className="rounded-none border border-warning bg-warning/10 p-3">
             <p className="text-xs text-foreground">
               Used but not declared or sampled (renders blank):
             </p>

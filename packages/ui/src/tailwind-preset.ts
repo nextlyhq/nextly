@@ -32,10 +32,13 @@ const uiPreset = {
         },
         destructive: {
           DEFAULT: "var(--nx-destructive)",
+          // Saturated fill for solid buttons, distinct from the text-tuned base.
+          solid: "var(--nx-destructive-solid)",
           foreground: "var(--nx-destructive-foreground)",
         },
         success: {
           DEFAULT: "var(--nx-success)",
+          solid: "var(--nx-success-solid)",
           foreground: "var(--nx-success-foreground)",
         },
         warning: {

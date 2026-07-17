@@ -163,9 +163,7 @@ function FieldCard({
       style={{ flex: `0 0 ${flexBasis}` }}
       className={
         "border border-border rounded-md p-3 bg-background flex items-center gap-2 group " +
-        (fieldReadOnly
-          ? "opacity-90"
-          : "hover:border-primary/30 cursor-pointer")
+        (fieldReadOnly ? "opacity-90" : "hover:border-primary cursor-pointer")
       }
     >
       {!fieldReadOnly && dragHandleProps && (
@@ -206,7 +204,7 @@ function FieldCard({
         {widthPct}%
       </span>
       {field.validation?.required && (
-        <span className="text-[10px] text-destructive border border-destructive/40 rounded-sm px-1">
+        <span className="text-[10px] text-destructive border border-destructive rounded-sm px-1">
           Required
         </span>
       )}

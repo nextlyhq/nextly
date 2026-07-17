@@ -226,7 +226,7 @@ function FolderTreeItem({
               className={cn(
                 "flex h-8 w-6 items-center justify-center transition-colors rounded-none cursor-pointer",
                 isActive
-                  ? "text-primary/40 group-hover:text-primary"
+                  ? "text-primary group-hover:text-primary"
                   : "text-muted-foreground/40 group-hover:text-foreground"
               )}
             >

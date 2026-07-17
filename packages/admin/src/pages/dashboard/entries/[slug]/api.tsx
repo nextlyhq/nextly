@@ -118,7 +118,7 @@ export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
           API Playground
         </h1>
-        <p className="text-sm font-normal text-primary/50 mt-1">
+        <p className="text-sm font-normal text-muted-foreground mt-1">
           Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
           collection. Build requests, execute them, and view responses.
         </p>

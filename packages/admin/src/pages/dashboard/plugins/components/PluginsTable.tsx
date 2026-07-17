@@ -63,7 +63,7 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
       variant="outline"
       className={
         enabled
-          ? "text-xs font-normal border-success/40 text-success"
+          ? "text-xs font-normal border-success text-success"
           : "text-xs font-normal text-muted-foreground"
       }
     >

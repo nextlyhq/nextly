@@ -31,12 +31,14 @@ const buttonVariants = cva(
           "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
         primary:
           "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
+        // Solid fill uses the emphasis token so white on-color text stays AA in
+        // dark mode (the base token is the readable text color, too light here).
         destructive:
-          "bg-destructive text-destructive-foreground border border-transparent hover:opacity-90",
+          "bg-destructive-solid text-destructive-foreground border border-transparent hover:opacity-90",
         outline:
-          "border border-primary/10 text-foreground hover-unified bg-background",
+          "border border-border text-foreground hover-unified bg-background",
         secondary:
-          "bg-background border border-primary/10 text-foreground hover:bg-primary/5",
+          "bg-background border border-border text-foreground hover:bg-primary/5",
         ghost: "text-foreground border border-transparent hover-unified",
         link: "text-primary border border-transparent underline-offset-4 hover:underline",
       },

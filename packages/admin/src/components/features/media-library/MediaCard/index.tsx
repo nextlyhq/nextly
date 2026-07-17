@@ -18,10 +18,10 @@
  * ## Design Specifications
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
- * - **Border**: Default `border border-border`, Selected `border-primary/30`
+ * - **Border**: Default `border border-border`, Selected `border-primary`
  * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
- * - **Hover State**: `hover:border-primary/30` on the card, image scales (`group-hover:scale-105`); no shadow
- * - **Selected State**: `border-primary/30`, no ring, no scale
+ * - **Hover State**: `hover:border-primary` on the card, image scales (`group-hover:scale-105`); no shadow
+ * - **Selected State**: `border-primary`, no ring, no scale
  * - **Transition**: `transition-all duration-300`
  * - **Bottom Bar**: token surface (`bg-primary/5`, `border-t border-border`)
  * - **Filename**: `text-sm font-medium truncate`
@@ -164,8 +164,8 @@ export function MediaCard({
       className={cn(
         "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
         isSelected
-          ? "border-primary/30 cursor-pointer"
-          : "hover:border-primary/30 cursor-pointer",
+          ? "border-primary cursor-pointer"
+          : "hover:border-primary cursor-pointer",
         className
       )}
     >

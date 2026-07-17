@@ -36,7 +36,7 @@ const CollectionsPage: React.FC = () => {
             <h1 className="text-xl font-semibold tracking-tight">
               Collections
             </h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               Manage collections and their configuration
             </p>
           </div>

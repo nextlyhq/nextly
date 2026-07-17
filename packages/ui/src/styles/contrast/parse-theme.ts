@@ -56,6 +56,26 @@ export function parseThemeTokens(css: string): ThemeTokens {
   return { light, dark };
 }
 
+/**
+ * Parse the `--color-*` definitions from the `@theme inline` at-rule. These are
+ * the Tailwind utility colors: some are bare `var(--nx-*)` aliases, others are
+ * `color-mix(...)` shades (e.g. `--color-warning-700`). They are mode-agnostic
+ * text, but the `var(--nx-*)` they reference resolves per mode, so a shade like
+ * `--color-warning-700` yields a different color in light vs dark. Keeping the
+ * raw expression here lets {@link resolveColor} evaluate it against either mode.
+ */
+export function parseThemeScale(css: string): TokenMap {
+  const root = postcss.parse(css);
+  const scale: TokenMap = new Map();
+  root.walkAtRules("theme", atRule => {
+    atRule.walkDecls(decl => {
+      if (!decl.prop.startsWith("--color-")) return;
+      scale.set(decl.prop, decl.value.replace(/\s+/g, " ").trim());
+    });
+  });
+  return scale;
+}
+
 const VAR_REF = /^var\(\s*(--[a-z0-9-]+)\s*\)$/i;
 
 /**

@@ -33,7 +33,7 @@ export function ProgressList() {
             opacity: 0,
           }}
         >
-          <span aria-hidden="true" className="mr-2 text-foreground/60">
+          <span aria-hidden="true" className="mr-2 text-muted-foreground">
             ▸
           </span>
           {phase}

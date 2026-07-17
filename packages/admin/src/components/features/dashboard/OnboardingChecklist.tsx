@@ -15,8 +15,8 @@ function StepRow({ step }: { step: OnboardingStep }) {
           className={cn(
             "h-6 w-6 rounded-none flex items-center justify-center transition-all duration-500",
             step.isComplete
-              ? "bg-success-500/10  border border-border border-success-500/30 scale-110 shadow-glow-success"
-              : "bg-primary/5  border border-border group-hover:border-primary/30 group-hover:scale-105"
+              ? "bg-success-500/10  border border-border border-success scale-110 shadow-glow-success"
+              : "bg-primary/5  border border-border group-hover:border-primary group-hover:scale-105"
           )}
         >
           {step.isComplete ? (
@@ -58,7 +58,7 @@ export const OnboardingChecklist: React.FC = () => {
   const completionPct = (progress.completedCount / progress.totalCount) * 100;
 
   return (
-    <Card className="border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none transition-all duration-700 hover:border-primary/40 group/card relative">
+    <Card className="border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none transition-all duration-700 hover:border-primary group/card relative">
       <div className="absolute top-0 left-0 w-full h-1 bg-primary/5">
         <div
           className="h-full bg-primary shadow-glow-primary transition-all duration-1000 ease-out"

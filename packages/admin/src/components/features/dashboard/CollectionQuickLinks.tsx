@@ -89,7 +89,7 @@ function CollectionCard({
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-none overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/30"
+      className="block group h-full rounded-none overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
     >
       <Card
         variant="interactive"
@@ -166,7 +166,7 @@ export const CollectionQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none  border border-border border-destructive/10">
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-none  border border-border border-destructive">
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>

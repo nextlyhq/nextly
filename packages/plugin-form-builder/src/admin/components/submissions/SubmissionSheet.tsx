@@ -282,7 +282,7 @@ export function SubmissionSheet({
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Spam banner */}
           {submission.status === "spam" && (
-            <div className="flex items-center gap-2 border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="flex items-center gap-2 border border-destructive bg-destructive/5 p-3 text-sm text-destructive">
               <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
               Flagged as spam
               {submission.spamReason ? ` (${submission.spamReason})` : ""}. Set
