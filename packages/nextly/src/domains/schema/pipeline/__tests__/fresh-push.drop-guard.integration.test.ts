@@ -166,7 +166,7 @@ describe("freshPushSchema orphan + added core table (real SQLite)", () => {
         .get("a1") as { title: string } | undefined;
       expect(row?.title).toBe("keep");
       expect(
-        result.hints.some(h => h.hint.includes("additive-only baseline"))
+        result.hints.some(h => h.hint.includes("additive-TABLES-only baseline"))
       ).toBe(true);
     } finally {
       localSqlite.close();

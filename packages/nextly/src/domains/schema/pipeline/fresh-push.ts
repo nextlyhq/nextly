@@ -200,7 +200,20 @@ async function pushForDialect(
 // pre-v1 applyViaGenerate shape: generate the pure-CREATE baseline from an
 // empty snapshot. That set contains no drops by construction, and the
 // downstream idempotency-tolerant executor skips tables that already exist,
-// so the reconcile degrades to additive-only instead of crashing the boot.
+// so the reconcile degrades to additive-TABLES-only instead of crashing the
+// boot.
+//
+// Deliberate scope (review): because the baseline is diffed from an EMPTY
+// snapshot it emits only CREATE TABLE — never ALTER TABLE ADD COLUMN. A core
+// table that already exists but is missing a newly-added COLUMN is therefore
+// NOT reconciled in this degraded pass (its CREATE is skipped as
+// already-existing). That is acceptable here: Nextly's own core-schema
+// evolution ships through the migration journal, not through this boot-time
+// ensure, and the crash that triggered this fallback is transient — it
+// clears once the orphan tables are gone, so the next clean reconcile diffs
+// live→desired normally and adds any missing column. Recovering columns here
+// would require a scoped live diff, which is exactly the operation that
+// crashed; parsing DDL by hand in a recovery path is not worth the fragility.
 async function withResolverCrashFallback(
   push: () => Promise<{ sqlStatements: string[]; hints: KitHint[] }>,
   generateBaseline: () => Promise<string[]>
@@ -222,7 +235,8 @@ async function withResolverCrashFallback(
           hint:
             "[nextly] pushSchema hit v1's rename-resolver crash (live " +
             "tables outside the desired schema); fell back to the " +
-            "additive-only baseline — no drops were considered this pass",
+            "additive-TABLES-only baseline — no drops, and no column adds " +
+            "to pre-existing tables, were applied this pass",
         },
       ],
     };
