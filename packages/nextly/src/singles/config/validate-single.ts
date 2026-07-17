@@ -29,6 +29,7 @@ import {
   validateComponentFieldRefShared,
   validateFieldNameShared,
   validateFieldTypeShared,
+  validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -219,6 +220,10 @@ function validateField(
 
     case "component":
       validateComponentFieldRefShared(f, path, errsBase);
+      break;
+
+    case "number":
+      validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
   }
 }
