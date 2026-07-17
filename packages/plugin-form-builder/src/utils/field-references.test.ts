@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { FormField, FormNotificationItem } from "../types";
+import type { FormField, FormNotification } from "../types";
 
 import {
   buildFieldReferenceMap,
@@ -12,8 +12,8 @@ function textField(name: string, label = name): FormField {
 }
 
 function notification(
-  overrides: Partial<FormNotificationItem> & { name: string }
-): FormNotificationItem {
+  overrides: Partial<FormNotification> & { name: string }
+): FormNotification {
   return {
     id: overrides.name,
     enabled: true,
@@ -107,6 +107,60 @@ describe("findFieldReferences", () => {
     ];
 
     expect(findFieldReferences("email", [], notifications)).toEqual([]);
+  });
+
+  it("finds a field used as a notification reply-to", () => {
+    const notifications = [
+      notification({ name: "Admin notification", replyTo: "{{email}}" }),
+    ];
+
+    expect(findFieldReferences("email", [], notifications)).toEqual([
+      { kind: "notification", label: "Admin notification" },
+    ]);
+  });
+
+  it("finds a field named by a notification's send condition", () => {
+    const notifications = [
+      notification({
+        name: "Sales alert",
+        condition: { field: "budget", comparison: "equals", value: "high" },
+      }),
+    ];
+
+    expect(findFieldReferences("budget", [], notifications)).toEqual([
+      { kind: "notification", label: "Sales alert" },
+    ]);
+  });
+
+  it("ignores references held by disabled notifications", () => {
+    const notifications = [
+      notification({
+        name: "Paused rule",
+        enabled: false,
+        recipientType: "field",
+        to: "{{email}}",
+        replyTo: "{{email}}",
+        condition: { field: "email", comparison: "isNotEmpty" },
+      }),
+    ];
+
+    expect(findFieldReferences("email", [], notifications)).toEqual([]);
+  });
+
+  it("reports one reference per notification even when it references the field several ways", () => {
+    const notifications = [
+      notification({
+        name: "Autoresponder",
+        recipientType: "field",
+        to: "{{email}}",
+        replyTo: "{{email}}",
+        condition: { field: "email", comparison: "isNotEmpty" },
+      }),
+    ];
+
+    expect(findFieldReferences("email", [], notifications)).toEqual([
+      { kind: "notification", label: "Autoresponder" },
+    ]);
   });
 
   it("builds the whole reference map in one pass", () => {

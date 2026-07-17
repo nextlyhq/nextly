@@ -258,11 +258,11 @@ export function formsCollection(
     // ============================================================
     json({
       name: "notifications",
-      label: "Email Integrations",
+      label: "Notifications",
       defaultValue: [],
       admin: {
         description:
-          "Email notification integrations. Managed by the Form Builder UI.",
+          "Email notification rules. Managed by the Form Builder UI.",
       },
     }),
 

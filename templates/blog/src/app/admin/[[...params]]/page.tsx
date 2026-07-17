@@ -7,7 +7,6 @@
 // falls back to plain JSON/text inputs.
 import "@nextlyhq/admin/style.css";
 import "@nextlyhq/plugin-form-builder/admin";
-import "@nextlyhq/plugin-form-builder/styles/builder.css";
 import "@nextlyhq/plugin-form-builder/styles/submissions-filter.css";
 import { RootLayout, QueryProvider, ErrorBoundary } from "@nextlyhq/admin";
 

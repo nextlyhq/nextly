@@ -48,12 +48,11 @@ export default defineConfig({
 
 ## Admin styling
 
-The plugin's admin UI requires three imports in your admin route page so the builder and submissions filter render correctly:
+The plugin's admin UI requires two imports in your admin route page so the builder and submissions filter render correctly:
 
 ```tsx
 // app/admin/[[...params]]/page.tsx
 import "@nextlyhq/plugin-form-builder/admin";
-import "@nextlyhq/plugin-form-builder/styles/builder.css";
 import "@nextlyhq/plugin-form-builder/styles/submissions-filter.css";
 ```
 

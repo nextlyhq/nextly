@@ -12,8 +12,6 @@
 
 "use client";
 
-import "../styles/form-builder.css";
-
 import {
   Button,
   Input,
@@ -30,18 +28,22 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { FormField } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
-import { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
+import {
+  FormNotificationsTab,
+  type NotificationDefaults,
+} from "./components/builder/FormNotificationsTab";
 import { FormPreview } from "./components/builder/FormPreview";
 import { FormSettingsTab } from "./components/builder/FormSettingsTab";
 import {
   FormBuilderProvider,
   useFormBuilder,
   createFieldFromType,
+  createNotification,
   type FormNotification,
 } from "./context/FormBuilderContext";
 
@@ -113,6 +115,7 @@ function FormBuilderViewInner({
     setActiveTab,
     addField,
     selectField,
+    seedNotifications,
     updateFormData,
     markAsSaved,
   } = useFormBuilder();
@@ -132,6 +135,12 @@ function FormBuilderViewInner({
     FormFieldCatalogType[] | null
   >(null);
 
+  // The host's notification defaults (plugin options). `null` until the
+  // config request settles; `{}` when the request failed or nothing is
+  // configured, so consumers can distinguish "loading" from "no defaults".
+  const [notificationDefaults, setNotificationDefaults] =
+    useState<NotificationDefaults | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
@@ -140,21 +149,49 @@ function FormBuilderViewInner({
       { credentials: "include" }
     )
       .then(response => (response.ok ? response.json() : null))
-      .then((config: { fields?: Record<string, boolean> } | null) => {
-        if (cancelled) return;
-        setEnabledTypes(
-          config?.fields
-            ? allTypes.filter(type => config.fields?.[type] !== false)
-            : allTypes
-        );
-      })
+      .then(
+        (
+          config: {
+            fields?: Record<string, boolean>;
+            notifications?: NotificationDefaults;
+          } | null
+        ) => {
+          if (cancelled) return;
+          setEnabledTypes(
+            config?.fields
+              ? allTypes.filter(type => config.fields?.[type] !== false)
+              : allTypes
+          );
+          setNotificationDefaults(config?.notifications ?? {});
+        }
+      )
       .catch(() => {
-        if (!cancelled) setEnabledTypes(allTypes);
+        if (cancelled) return;
+        setEnabledTypes(allTypes);
+        setNotificationDefaults({});
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Seed a new form with the default admin-notification rule once the host
+  // defaults are known. Guarded by a ref so deleting the seeded rule is
+  // final — the effect must never re-seed a list the user emptied.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!isCreating || notificationDefaults === null || seededRef.current) {
+      return;
+    }
+    seededRef.current = true;
+    seedNotifications([
+      {
+        ...createNotification(),
+        name: "Admin notification",
+        to: notificationDefaults.defaultToEmail ?? "",
+      },
+    ]);
+  }, [isCreating, notificationDefaults, seedNotifications]);
 
   const handleAddField = useCallback(
     (type: FormFieldCatalogType) => {
@@ -498,7 +535,7 @@ function FormBuilderViewInner({
             {/* Notifications tab */}
             {activeTab === "notifications" && (
               <div className="w-full">
-                <FormNotificationsTab />
+                <FormNotificationsTab defaults={notificationDefaults} />
               </div>
             )}
 

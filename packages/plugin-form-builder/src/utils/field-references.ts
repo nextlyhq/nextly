@@ -4,7 +4,7 @@
  * recipient/reply-to interpolation points at must not be silently deletable.
  */
 
-import type { FormField, FormNotificationItem } from "../types";
+import type { FormField, FormNotification } from "../types";
 
 export interface FieldReference {
   /** What kind of thing holds the reference. */
@@ -28,7 +28,7 @@ function referencesInTemplate(template: string, fieldName: string): boolean {
 export function findFieldReferences(
   fieldName: string,
   fields: readonly FormField[],
-  notifications: readonly FormNotificationItem[]
+  notifications: readonly FormNotification[]
 ): FieldReference[] {
   const references: FieldReference[] = [];
 
@@ -44,15 +44,25 @@ export function findFieldReferences(
   }
 
   for (const notification of notifications) {
-    // Field-sourced recipients always carry the {{fieldName}} syntax (the
-    // send path's resolveFieldRef only matches that form), so one template
-    // check covers to/cc/bcc uniformly.
+    // A disabled rule has no runtime effect — like disabled conditional
+    // logic above, it must not block deletion; its stale reference just
+    // needs re-pointing if the rule is ever re-enabled.
+    if (!notification.enabled) continue;
+    // Field-sourced recipients and reply-to always carry the {{fieldName}}
+    // syntax (the send path's resolveFieldRef only matches that form), so
+    // one template check covers to/cc/bcc/replyTo uniformly.
     const templates = [
       notification.to,
       ...(notification.cc ?? []),
       ...(notification.bcc ?? []),
+      notification.replyTo,
     ].filter((value): value is string => typeof value === "string");
-    if (templates.some(template => referencesInTemplate(template, fieldName))) {
+    const referencedByTemplate = templates.some(template =>
+      referencesInTemplate(template, fieldName)
+    );
+    // Send-conditions name the field directly (no interpolation syntax).
+    const referencedByCondition = notification.condition?.field === fieldName;
+    if (referencedByTemplate || referencedByCondition) {
       references.push({
         kind: "notification",
         label: notification.name || "Notification",
@@ -70,7 +80,7 @@ export function findFieldReferences(
  */
 export function buildFieldReferenceMap(
   fields: readonly FormField[],
-  notifications: readonly FormNotificationItem[]
+  notifications: readonly FormNotification[]
 ): Map<string, FieldReference[]> {
   const map = new Map<string, FieldReference[]>();
   for (const field of fields) {
