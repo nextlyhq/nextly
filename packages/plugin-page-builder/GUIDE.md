@@ -147,12 +147,14 @@ ready-to-use **Pages** collection automatically once it's registered.
 The plugin adds a new **Pages** table. Apply that to your database with one command:
 
 ```bash
-npx nextly migrate
+npx nextly db:sync
 ```
 
-You should see it connect, sync the schema, and finish with something like
-`migrate completed`. (With SQLite this creates a local database file — nothing else
-to set up.)
+`db:sync` applies your current schema (including the plugin's new **Pages**
+table) directly. It is the command for first-time setup — `nextly migrate` only
+runs committed migration files, of which a fresh app has none yet. You should
+see it connect and finish successfully. (With SQLite this creates a local
+database file — nothing else to set up.)
 
 ---
 
@@ -164,7 +166,7 @@ npm run dev
 
 Wait for `Ready` in the terminal, then open the admin in your browser:
 
-```
+```text
 http://localhost:3000/admin
 ```
 
@@ -231,7 +233,7 @@ served automatically.
 
 Create this file in your app:
 
-```
+```text
 src/app/(site)/[...slug]/page.tsx
 ```
 
@@ -366,7 +368,7 @@ If it still misbehaves, delete the `.next` folder and restart.
 
 **No "Pages" collection appears in the admin**
 Make sure you completed Step 3 (registered `pageBuilder()` in `nextly.config.ts`)
-and Step 4 (`npx nextly migrate`), then restart the dev server.
+and Step 4 (`npx nextly db:sync`), then restart the dev server.
 
 **You see two "editor" controls (a toggle at the top _and_ an "Editor" dropdown in
 the form)**
@@ -396,7 +398,7 @@ npm install @nextlyhq/plugin-page-builder        # add --legacy-peer-deps for no
 # 3. nextly.config.ts -> plugins: [pageBuilder()]
 
 # 4. Sync DB
-npx nextly migrate
+npx nextly db:sync
 
 # 5. Run
 npm run dev
