@@ -231,6 +231,17 @@ export function formBuilder(
             return Response.json({ items: result.data });
           },
         },
+        {
+          // The builder UI reads the host's resolved field enable/disable map
+          // from here, so the plugin option actually gates the type picker.
+          // Options resolve server-side only; this is the one channel the
+          // admin client has to them.
+          method: "GET",
+          path: "/builder-config",
+          requiredPermission: "read-forms",
+          handler: () =>
+            Promise.resolve(Response.json({ fields: resolvedConfig.fields })),
+        },
       ],
       // Admin UI — the canonical contributes.admin example. Paths
       // are the components form-builder's `/admin` module self-registers (kept
