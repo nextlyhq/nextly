@@ -498,6 +498,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const stayOnPageMobile = isMobile && hasSubSidebarCategory(item.id);
             const renderAsLink = href !== "#" && !stayOnPageMobile;
 
+            // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected

@@ -227,6 +227,7 @@ export function ComponentFieldEditor({
           Field Mode
         </Label>
         <div className="grid grid-cols-2 gap-3">
+          {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
             onClick={() => handleModeChange("single")}
@@ -251,6 +252,7 @@ export function ComponentFieldEditor({
               </span>
             </div>
           </button>
+          {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
             onClick={() => handleModeChange("multi")}

@@ -49,6 +49,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
       >
         <CardContent className={isCompact ? "p-5" : "p-8"}>
           {isCompact ? (
+            // Muted foreground at rest so these stat labels meet contrast; they brighten to primary on hover.
             <div className="flex items-start justify-between gap-4 relative z-10">
               <div className="space-y-1">
                 <p className="text-2xl font-bold tracking-[-0.03em] text-muted-foreground leading-none group-hover:text-primary transition-colors">
@@ -65,6 +66,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
               )}
             </div>
           ) : (
+            // Muted foreground at rest so these stat labels meet contrast; they brighten to primary on hover.
             <div className="space-y-6 relative z-10">
               <div className="flex items-start justify-between">
                 <div className="space-y-2">

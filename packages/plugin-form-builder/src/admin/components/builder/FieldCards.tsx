@@ -131,6 +131,7 @@ function FieldCard({
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={
+        // Dragging uses full-strength border-primary so the lifted card stands out; the resting state uses border-border, keeping the two distinct.
         isDragging
           ? "border border-primary bg-card opacity-80 relative z-10"
           : "border border-border bg-card"

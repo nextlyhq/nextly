@@ -6,11 +6,11 @@
  * `border-<token>/NN` utility, composites it over the page surface, and fails
  * any that drop below WCAG unless the utility is in ALLOWED_DECORATIVE (below).
  *
- * Scope note: this reads sibling packages' source, so Turbo caches it against
- * this package's inputs; it runs fresh on the first CI run and re-runs whenever
- * @nextlyhq/ui changes. The token-contrast suite is the cache-correct core; this
- * is a supplementary call-site guard, deliberately narrow (text/border only,
- * evaluated on the base surface).
+ * Scope note: this reads sibling packages' source. Those trees are declared as
+ * inputs to this package's `test` task (see packages/ui/turbo.json), so a change
+ * in a scanned call-site package invalidates the cached result. It is a
+ * supplementary call-site guard, deliberately narrow: text/border color
+ * utilities only, evaluated on the base surface.
  */
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -67,12 +67,19 @@ function scanCombos(): Map<string, number> {
   return combos;
 }
 
-/** Worst-case contrast of a `token/NN` utility, painted on the page surface. */
-function worstRatio(combo: string): { ratio: number; need: number } | null {
+/**
+ * Worst-case contrast of a `token/NN` utility, painted on the page surface. A
+ * token that fails to resolve throws (naming the utility) rather than skipping,
+ * so a mistyped or removed token cannot silently bypass the assertion. The
+ * scanned token names are a fixed set that all map to `--color-*`, so a failure
+ * here means the theme lost a token the source still references.
+ */
+function worstRatio(combo: string): { ratio: number; need: number } {
   const m = /^(text|border)-(.+)\/(\d+)$/.exec(combo);
-  if (!m) return null;
+  if (!m) {
+    throw new Error(`unparseable alpha utility: ${combo}`);
+  }
   const [, kind, name, alphaStr] = m;
-  if (name === "white" || name === "black") return null;
   const alpha = Number(alphaStr) / 100;
   const need = kind === "text" ? 4.5 : 3;
   let worst = Infinity;
@@ -81,8 +88,10 @@ function worstRatio(combo: string): { ratio: number; need: number } | null {
     let base: Rgb;
     try {
       base = resolveColor(`var(--color-${name})`, ctx);
-    } catch {
-      return null;
+    } catch (error) {
+      throw new Error(
+        `${combo}: could not resolve --color-${name} (${(error as Error).message})`
+      );
     }
     const bg = opaque(resolveColor("var(--color-background)", ctx), {
       r: 1,
@@ -108,7 +117,7 @@ describe("alpha-opacity color utilities", () => {
     for (const combo of combos.keys()) {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
-      if (r && r.ratio < r.need) {
+      if (r.ratio < r.need) {
         offenders.push(
           `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1)`
         );
@@ -133,7 +142,7 @@ describe("alpha-opacity color utilities", () => {
       ).toBe(true);
       const r = worstRatio(combo);
       expect(
-        r && r.ratio < r.need,
+        r.ratio < r.need,
         `allowlisted ${combo} now passes; remove it`
       ).toBe(true);
     }

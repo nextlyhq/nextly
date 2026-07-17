@@ -640,20 +640,19 @@
    * used by buttons under white on-color text. One value cannot serve both in
    * dark mode (a fill dark enough for white text is too dark to read as text
    * on the page), so they diverge there. */
+  /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
   --nx-destructive: oklch(0.5778 0.2078 25.33);
-  /* red-500 (#ef4444) */
   --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
+  /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
   --nx-success: oklch(0.53 0.17 149.2);
-  /* green-600 (#16a34a) - AA compliant */
   --nx-success-solid: oklch(0.53 0.17 149.2);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
   --nx-warning: oklch(0.565 0.1646 70.11);
-  /* amber-500 (#f59e0b) */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
@@ -801,15 +800,15 @@
    * dark page at 4.5:1; `-solid` keeps the darker fill so white on-color text
    * on buttons still clears 4.5:1. Warning is already light enough to read on
    * dark, so its base is unchanged here. */
-  /* Lightened so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
+  /* Lightened red so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
   --nx-destructive: oklch(0.63 0.2078 25.33);
-  /* red-500 */
+  /* Darker red fill so white on-color button text clears 4.5:1. */
   --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
-  /* Lightened so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
+  /* Lightened green so it reads as text on the dark page at WCAG 4.5:1 (was 4.17:1). */
   --nx-success: oklch(0.58 0.1921 149.58);
-  /* green-500 - brighter for dark mode */
+  /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
   /* white */

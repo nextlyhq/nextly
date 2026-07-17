@@ -159,6 +159,7 @@ function NestedFieldRow({
             onEditField(field.id);
           }
         }}
+        // Full-strength hover border, more visible than the resting border, not a fainter alpha.
         className="border border-border rounded-md px-3 py-2 bg-background hover:border-primary cursor-pointer flex items-center gap-2 group"
       >
         {!readOnly && (

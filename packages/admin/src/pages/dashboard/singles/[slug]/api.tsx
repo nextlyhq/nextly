@@ -118,6 +118,7 @@ export default function SingleAPIPlaygroundPage({
           <h1 className="text-xl font-semibold tracking-tight text-foreground">
             API Playground
           </h1>
+          {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
           <p className="text-sm font-normal text-muted-foreground mt-1">
             Test API endpoints for the <strong>{singleLabel}</strong> single.
             Build requests, execute them, and view responses.

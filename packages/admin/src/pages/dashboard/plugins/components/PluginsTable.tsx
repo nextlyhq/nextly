@@ -62,6 +62,7 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
     <Badge
       variant="outline"
       className={
+        // Full-strength success border so the enabled pill's boundary is perceivable at the 3:1 UI minimum.
         enabled
           ? "text-xs font-normal border-success text-success"
           : "text-xs font-normal text-muted-foreground"

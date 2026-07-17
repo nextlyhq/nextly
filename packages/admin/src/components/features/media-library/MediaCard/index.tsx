@@ -163,6 +163,7 @@ export function MediaCard({
       aria-selected={isSelected}
       className={cn(
         "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
+        // Selected uses border-primary; unselected gets it on hover, keeping the states distinct and the active boundary perceivable.
         isSelected
           ? "border-primary cursor-pointer"
           : "hover:border-primary cursor-pointer",

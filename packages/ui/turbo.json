@@ -1,0 +1,24 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // The contrast alpha-utilities guard scans admin and plugin source, so
+      // those trees are real inputs to this package's tests. Declaring them here
+      // (in addition to the root test inputs) means a faint alpha utility added
+      // in a call-site package invalidates the cached pass instead of hiding
+      // behind it. The root task supplies dependsOn / outputs / cache.
+      "inputs": [
+        "src/**/*.{ts,tsx}",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.spec.{ts,tsx}",
+        "src/**/*.css",
+        "vitest.config.ts",
+        "tsconfig.json",
+        "$TURBO_ROOT$/packages/admin/src/**",
+        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+      ]
+    }
+  }
+}

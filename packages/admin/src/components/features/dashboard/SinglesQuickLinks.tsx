@@ -32,6 +32,7 @@ function SingleCard({ single }: { single: ApiSingle }) {
   return (
     <Link
       href={buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug })}
+      // Full-strength hover border, more visible than the resting border, not a fainter alpha.
       className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
     >
       <Card
@@ -110,6 +111,7 @@ export const SinglesQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : error ? (
+        // Full-strength destructive border so the boundary is perceivable at the 3:1 UI minimum.
         <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-none">
           <AlertCircle className="h-4 w-4" />
           <span>Couldn&apos;t load singles.</span>

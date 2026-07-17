@@ -192,6 +192,7 @@ export function ConditionalLogicEditor({
       </div>
 
       {logic.enabled && (
+        // Semantic border token so this top divider is visible at the 3:1 UI minimum.
         <div className="space-y-4 pt-4 border-t border-border">
           {/* Action and operator row */}
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -230,11 +231,13 @@ export function ConditionalLogicEditor({
           {/* Conditions list */}
           <div className="space-y-3 pt-4">
             {logic.conditions.length === 0 ? (
+              // Semantic border token so this empty-state boundary is visible at the 3:1 UI minimum.
               <div className="p-4 bg-muted rounded-none border border-dashed border-border text-center text-xs text-muted-foreground">
                 No conditions defined. Add a condition to get started.
               </div>
             ) : (
               logic.conditions.map((condition, index) => (
+                // Semantic border token so this condition card boundary is visible at the 3:1 UI minimum.
                 <div
                   key={index}
                   className="flex flex-col gap-2 p-3 rounded-none bg-muted border border-border relative group"
@@ -305,6 +308,7 @@ export function ConditionalLogicEditor({
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => handleRemoveCondition(index)}
+                    // Semantic border token so the remove button's boundary is visible at the 3:1 UI minimum.
                     className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border border-border opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Remove condition"
                   >
@@ -327,6 +331,7 @@ export function ConditionalLogicEditor({
               + Add Condition
             </Button>
           ) : (
+            // Full-strength warning border so this notice boundary is perceivable over its tinted fill.
             <p className="mt-4 text-center text-xs text-warning font-medium bg-warning/10 p-2 rounded-none border border-warning">
               Add more fields to the form to create conditions.
             </p>

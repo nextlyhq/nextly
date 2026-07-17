@@ -566,6 +566,7 @@ function VariableChip({
       type="button"
       onClick={() => onInsert(name)}
       title={`Insert {{${name}}}`}
+      // Full-strength foreground on hover so the border state change is perceivable.
       className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground hover:bg-muted"
     >
       <Plus className="h-3 w-3 text-muted-foreground" />
@@ -770,6 +771,7 @@ function DataRail({
           Variable check
         </h4>
         {unknownVariables.length > 0 ? (
+          // Full-strength status border so the boundary is perceivable.
           <div className="rounded-none border border-warning bg-warning/10 p-3">
             <p className="text-xs text-foreground">
               Used but not declared or sampled (renders blank):

@@ -56,6 +56,8 @@ const RadioGroupItem = forwardRef<
       className={cn(
         // Unchecked outline uses primary/40 (clearly visible) instead of primary/5
         // (~5% opacity, effectively invisible); hover strengthens above the resting state.
+        // Resting border uses border-input (a visible 3:1 boundary); the checked
+        // state switches to border-primary below, keeping the two states distinct.
         "peer h-4 w-4 shrink-0 rounded-none border border-input bg-background cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/70 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
         className
       )}

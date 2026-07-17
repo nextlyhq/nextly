@@ -225,6 +225,7 @@ export function FieldEditorSheet({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
+            {/* Solid emphasis fill so white on-color text stays AA in dark mode. */}
             <AlertDialogAction
               className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-solid/90"
               onClick={() => {

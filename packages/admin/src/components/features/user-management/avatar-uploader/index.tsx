@@ -71,6 +71,7 @@ export function AvatarUploader({
       </button>
 
       {value && (
+        // Solid emphasis fill so white on-color text stays AA in dark mode.
         <button
           type="button"
           onClick={() => onChange("")}

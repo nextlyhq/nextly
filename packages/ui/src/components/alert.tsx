@@ -76,6 +76,8 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
+        // dark:border-border keeps the info boundary at the 3:1 UI minimum; a
+        // faint primary alpha was near-invisible on the dark surface.
         info: "border-border bg-primary/5 text-primary dark:border-border dark:bg-primary/5 dark:text-primary-foreground/90",
         success:
           "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:bg-success-950 dark:text-success-100",

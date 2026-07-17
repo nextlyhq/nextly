@@ -336,6 +336,7 @@ function UserFieldInput({
 
       default:
         return (
+          // Full-strength destructive border so the boundary is perceivable.
           <div className="rounded-none  border border-destructive bg-destructive/10 p-3 text-center">
             <p className="text-sm text-destructive">
               Unsupported field type: {fieldType}

@@ -36,6 +36,7 @@ const CollectionsPage: React.FC = () => {
             <h1 className="text-xl font-semibold tracking-tight">
               Collections
             </h1>
+            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
             <p className="text-sm font-normal text-muted-foreground mt-1">
               Manage collections and their configuration
             </p>

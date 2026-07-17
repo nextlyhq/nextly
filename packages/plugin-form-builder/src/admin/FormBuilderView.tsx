@@ -352,6 +352,7 @@ function FormBuilderViewInner({
         {/* Action buttons — same variant/size as Collection Builder */}
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
+            // Full-strength warning border so the unsaved-changes badge boundary is perceivable over its tinted fill.
             <span className="text-xs font-medium text-warning bg-warning/10 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
@@ -551,6 +552,7 @@ function FormBuilderViewInner({
 
             {/* Save error */}
             {saveError && (
+              // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
               <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
                 {saveError}
               </div>

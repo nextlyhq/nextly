@@ -68,6 +68,7 @@ export function UserProfileDropdown({
               </p>
             )}
           </div>
+          {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={() => {
               if (!user?.id) return;
@@ -79,6 +80,7 @@ export function UserProfileDropdown({
             <span>My Account</span>
           </DropdownMenuItem>
 
+          {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={onLogout}
             className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"

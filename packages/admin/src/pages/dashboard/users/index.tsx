@@ -48,6 +48,7 @@ const UsersPage: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">Users</h1>
+              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
               <p className="text-sm font-normal text-muted-foreground mt-1">
                 Manage user accounts and permissions
               </p>

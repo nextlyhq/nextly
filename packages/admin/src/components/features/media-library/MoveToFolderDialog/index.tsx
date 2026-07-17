@@ -256,6 +256,7 @@ export function MoveToFolderDialog({
               onSubmit={handleSubmitCreate}
               className="space-y-2 rounded-none  border border-border border-dashed border-primary bg-primary/5 p-3"
             >
+              {/* Full-strength primary dashed border so the active create-folder boundary is perceivable. */}
               <Input
                 autoFocus
                 placeholder="Folder name"
@@ -319,6 +320,7 @@ export function MoveToFolderDialog({
               onClick={handleStartCreate}
               className="flex w-full items-center gap-2 rounded-none  border border-border border-dashed border-border px-4 py-2.5 text-left text-sm transition-colors hover:border-primary hover:bg-accent"
             >
+              {/* Full-strength hover border, more visible than the resting border, not a fainter alpha. */}
               <FolderPlus className="h-4 w-4" />
               <span>New folder</span>
             </button>

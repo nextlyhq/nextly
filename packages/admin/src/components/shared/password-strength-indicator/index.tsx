@@ -30,6 +30,7 @@ export function PasswordStrengthIndicator({
     <div className={cn("mt-2 space-y-2", className)}>
       <p className="text-xs text-muted-foreground text-left">{helpText}</p>
 
+      {/* Full-strength status borders across the strength tiers so the boundary is perceivable. */}
       <div
         className={cn(
           "p-3 rounded-none  border border-border transition-colors duration-100",

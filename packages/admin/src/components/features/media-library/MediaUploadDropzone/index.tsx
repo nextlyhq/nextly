@@ -573,6 +573,7 @@ export function MediaUploadDropzone({
 
   // Border styles — border-2 dashed, prominent, mode-aware
   const borderStyles = {
+    // default: full-strength hover border, more visible than the resting border, not a fainter alpha.
     default: "border-2 border-dashed border-border hover:border-primary",
     active: "border-2 border-dashed border-primary",
     reject: "border-2 border-dashed border-destructive",

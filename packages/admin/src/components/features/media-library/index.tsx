@@ -498,6 +498,7 @@ export function MediaLibrary({
               Media Library
             </h1>
             <p className="text-sm font-normal text-muted-foreground mt-1">
+              {/* Muted foreground so this secondary file count meets contrast; a faint primary alpha did not. */}
               {total} {total === 1 ? "file" : "files"}
               {activeFolderId && " in this folder"}
             </p>
@@ -855,6 +856,7 @@ export function MediaLibrary({
               <AlertDialogCancel disabled={isBulkDeleting}>
                 Cancel
               </AlertDialogCancel>
+              {/* Solid emphasis fill so white on-color text stays AA in dark mode. */}
               <AlertDialogAction
                 onClick={handleConfirmBulkDelete}
                 disabled={isBulkDeleting}

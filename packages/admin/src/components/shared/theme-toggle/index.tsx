@@ -40,6 +40,7 @@ export function ThemeToggle(): React.ReactElement {
           aria-label="Choose theme"
           title="Choose theme"
         >
+          {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
           <TriggerIcon className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
         </button>
       </DropdownMenuTrigger>

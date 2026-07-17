@@ -35,6 +35,8 @@ const buttonVariants = cva(
         // dark mode (the base token is the readable text color, too light here).
         destructive:
           "bg-destructive-solid text-destructive-foreground border border-transparent hover:opacity-90",
+        // border-border (not a faint primary alpha) so the outline is a visible
+        // boundary at the 3:1 UI minimum.
         outline:
           "border border-border text-foreground hover-unified bg-background",
         secondary:

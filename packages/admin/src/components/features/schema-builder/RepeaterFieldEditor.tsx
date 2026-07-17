@@ -156,6 +156,7 @@ export function RepeaterFieldEditor({
 
         {/* Live preview — substitutes the user's current values into the
             same surfaces the entry-form renderer will use. */}
+        {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
           <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview
@@ -166,6 +167,7 @@ export function RepeaterFieldEditor({
           <p className="text-xs text-muted-foreground">
             No {labels?.plural || "Items"} yet
           </p>
+          {/* Full-strength destructive so this text is readable. */}
           <p className="text-xs text-destructive">
             Minimum 1 {labels?.singular || "Item"} required
           </p>
@@ -212,6 +214,7 @@ export function RepeaterFieldEditor({
 
         {/* Live preview — three sample collapsed rows showing what the row
             label will look like with the current selection. */}
+        {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
           <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview when rows are collapsed
