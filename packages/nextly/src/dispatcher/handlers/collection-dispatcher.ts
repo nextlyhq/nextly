@@ -132,9 +132,16 @@ function readAuthenticatedRoles(p: Params): string[] | undefined {
   if (!raw) return undefined;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return undefined;
-    const roles = parsed.filter((r): r is string => typeof r === "string");
-    return roles.length > 0 ? roles : undefined;
+    // Require a non-empty array of only strings; a malformed or mixed-type
+    // value degrades to "no roles" rather than forwarding a partial set.
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((role): role is string => typeof role === "string")
+    ) {
+      return undefined;
+    }
+    return parsed;
   } catch {
     return undefined;
   }

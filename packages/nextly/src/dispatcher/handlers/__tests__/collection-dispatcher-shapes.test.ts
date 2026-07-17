@@ -509,31 +509,39 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     );
   });
 
-  it("createEntry degrades a malformed roles param to undefined", async () => {
-    const spy = vi.fn().mockResolvedValue({
-      success: true,
-      statusCode: 201,
-      message: "ok",
-      data: { id: "e1" },
-    });
-    const container = makeContainer({ createEntry: spy });
+  it.each([
+    ["non-JSON string", "not-json"],
+    ["a mixed-type array", JSON.stringify(["editor", 123])],
+    ["a non-array value", JSON.stringify({ role: "editor" })],
+    ["an empty array", JSON.stringify([])],
+  ])(
+    "createEntry degrades %s roles param to undefined",
+    async (_label, raw) => {
+      const spy = vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 201,
+        message: "ok",
+        data: { id: "e1" },
+      });
+      const container = makeContainer({ createEntry: spy });
 
-    await dispatchCollections(
-      container,
-      "createEntry",
-      {
-        collectionName: "posts",
-        _authenticatedUserId: "u1",
-        _authenticatedUserRoles: "not-json",
-      },
-      { title: "Hello" }
-    );
+      await dispatchCollections(
+        container,
+        "createEntry",
+        {
+          collectionName: "posts",
+          _authenticatedUserId: "u1",
+          _authenticatedUserRoles: raw,
+        },
+        { title: "Hello" }
+      );
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({ userRoles: undefined }),
-      expect.anything()
-    );
-  });
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ userRoles: undefined }),
+        expect.anything()
+      );
+    }
+  );
 
   it("updateEntry returns { message, item } body and 200 status", async () => {
     const fakeEntry = { id: "e1", title: "Hello (updated)" };

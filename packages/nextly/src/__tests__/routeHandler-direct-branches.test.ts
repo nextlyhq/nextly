@@ -64,6 +64,7 @@ vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn().mockResolvedValue(false),
   containsSuperAdminRole: vi.fn().mockResolvedValue(false),
   hasSuperAdminExcluding: vi.fn().mockResolvedValue(false),
+  listRoleSlugsForUser: vi.fn().mockResolvedValue([]),
 }));
 
 // Replace the ImageSizeService class with a vi.fn-backed constructor whose
@@ -106,7 +107,9 @@ const mockHandlerConfig: {
 
 vi.mock("../route-handler", async () => {
   const actual =
-    await vi.importActual<typeof import("../route-handler")>("../route-handler");
+    await vi.importActual<typeof import("../route-handler")>(
+      "../route-handler"
+    );
   return {
     ...actual,
     // Only the config getter is consulted by the admin-meta branch; the
@@ -128,7 +131,9 @@ import { container } from "../di/container";
 import {
   _handleAdminMetaRequestForTest,
   _handleAdminMetaSidebarGroupsForTest,
+  _setAuthenticatedRouteParamsForTest,
 } from "../routeHandler";
+import { listRoleSlugsForUser } from "../services/lib/permissions";
 import {
   createImageSize,
   deleteImageSize,
@@ -311,7 +316,10 @@ describe("createImageSize (POST /image-sizes)", () => {
     );
 
     expect(res.status).toBe(201);
-    const json = (await res.json()) as { message: string; item: { id: string } };
+    const json = (await res.json()) as {
+      message: string;
+      item: { id: string };
+    };
     expect(json).not.toHaveProperty("data");
     expect(json.message).toMatch(/created/i);
     expect(json.item.id).toBe("sz_2");
@@ -369,3 +377,74 @@ describe("deleteImageSize (DELETE /image-sizes/:id)", () => {
 // in any test branch (different SUTs reach them via the auth/middleware
 // barrel).
 void createJsonErrorResponse;
+
+describe("setAuthenticatedRouteParams", () => {
+  const listRoleSlugsMock = vi.mocked(listRoleSlugsForUser);
+
+  it("strips client-injected reserved params and forwards resolved session slugs", async () => {
+    listRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = {
+      collectionName: "posts",
+      // Attacker-supplied copies of server-authored identity params.
+      _authenticatedUserId: "attacker",
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, {
+      userId: "u1",
+      roles: ["role-id-1"],
+      permissions: [],
+      authMethod: "session",
+    });
+
+    expect(routeParams._authenticatedUserId).toBe("u1");
+    // Injected roles are clobbered by the resolved slugs, not trusted.
+    expect(routeParams._authenticatedUserRoles).toBe(
+      JSON.stringify(["editor"])
+    );
+  });
+
+  it("uses API-key slugs as-is without resolving", async () => {
+    const routeParams: Record<string, string> = { collectionName: "posts" };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, {
+      userId: "u1",
+      roles: ["editor", "author"],
+      permissions: [],
+      authMethod: "api-key",
+    });
+
+    expect(listRoleSlugsMock).not.toHaveBeenCalled();
+    expect(routeParams._authenticatedUserRoles).toBe(
+      JSON.stringify(["editor", "author"])
+    );
+  });
+
+  it("writes an empty roles array (clobbering injection) when the user has none", async () => {
+    listRoleSlugsMock.mockResolvedValue([]);
+    const routeParams: Record<string, string> = {
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, {
+      userId: "u1",
+      roles: [],
+      permissions: [],
+      authMethod: "session",
+    });
+
+    expect(routeParams._authenticatedUserRoles).toBe("[]");
+  });
+
+  it("strips reserved params when there is no authorized user", async () => {
+    const routeParams: Record<string, string> = {
+      _authenticatedUserId: "attacker",
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, undefined);
+
+    expect(routeParams._authenticatedUserId).toBeUndefined();
+    expect(routeParams._authenticatedUserRoles).toBeUndefined();
+  });
+});
