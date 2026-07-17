@@ -28,7 +28,8 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node >= 20, pnpm 9 (`packageManager` is pinned).
+- Requirements: Node >= 20, pnpm 9.0.0 (`packageManager` is pinned in
+  `package.json`; Corepack enforces the exact version).
 - Install: `pnpm install`.
 - Dev harness: `pnpm dev:app` starts the playground on :3000 (SQLite by
   default; `pnpm dev:postgres` / `pnpm dev:mysql` for other dialects, with
