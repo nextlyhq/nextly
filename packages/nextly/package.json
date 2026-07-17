@@ -51,6 +51,10 @@
       "types": "./dist/schemas/index.d.ts",
       "import": "./dist/schemas/index.mjs"
     },
+    "./singles/config": {
+      "types": "./dist/singles/config/types.d.ts",
+      "import": "./dist/singles/config/types.mjs"
+    },
     "./api": {
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.mjs"
