@@ -98,8 +98,9 @@ describe("applyOpacity", () => {
 
   it("multiplies an already-translucent base rather than overwriting it", () => {
     // Matches Tailwind's `color-mix(... NN%, transparent)`: a token that is
-    // already 0.4 alpha under `/50` renders at 0.2, not 0.5.
+    // already 0.4 alpha under `/50` renders at 0.2, not 0.5. `0.4 * 0.5` is
+    // exactly 0.2 in IEEE 754, so this is an exact equality, not approximate.
     const faded = applyOpacity({ r: 0, g: 0, b: 0, alpha: 0.4 }, 0.5);
-    expect(faded.alpha).toBeCloseTo(0.2, 10);
+    expect(faded.alpha).toBe(0.2);
   });
 });

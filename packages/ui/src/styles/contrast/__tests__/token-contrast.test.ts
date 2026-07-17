@@ -46,6 +46,8 @@ function surfaceOf(pairing: Pairing, ctx: ResolveContext): Rgb {
       `var(${pairing.bgOver ?? "--color-background"})`,
       ctx
     );
+    // Scale the tint's own alpha by the utility opacity (Tailwind multiplies,
+    // it does not overwrite) before compositing it over the underlying surface.
     return compositeOver(
       applyOpacity(raw, pairing.bgAlpha),
       opaque(over, OPAQUE_BASE)
@@ -61,6 +63,8 @@ function foregroundOf(
   surface: Rgb
 ): Rgb {
   let fg = resolveColor(`var(${pairing.fg})`, ctx);
+  // Multiply the foreground's own alpha by the utility opacity (Tailwind
+  // semantics) before compositing it onto its surface.
   if (pairing.fgAlpha !== undefined) fg = applyOpacity(fg, pairing.fgAlpha);
   return opaque(fg, surface);
 }
