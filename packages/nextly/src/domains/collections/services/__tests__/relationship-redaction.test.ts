@@ -161,6 +161,27 @@ describe("relationship expansion secret redaction", () => {
     expect(related).toEqual({ id: "m1" });
   });
 
+  it("drops a hash-shaped label on the fail-closed path", async () => {
+    const collectionService = {
+      getCollection: vi.fn().mockRejectedValue(NextlyError.notFound()),
+    };
+    const fileManager = {
+      loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }),
+    };
+    const service = new CollectionRelationshipService(
+      // A legacy row that carried a bcrypt hash in `label` before password
+      // fields were blocked from becoming labels.
+      adapterReturning({ id: "m1", label: "$2b$12$leakedhashleakedhash" }),
+      silentLogger(),
+      fileManager as never,
+      collectionService as never
+    );
+
+    const related = await service.fetchRelatedEntry("members", "m1");
+    expect(related).toEqual({ id: "m1" });
+    expect(related).not.toHaveProperty("label");
+  });
+
   it("returns null when the related row does not exist", async () => {
     const service = new CollectionRelationshipService(
       adapterReturning(null),

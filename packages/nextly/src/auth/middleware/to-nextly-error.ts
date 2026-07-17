@@ -49,6 +49,8 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
 
   if (legacy.statusCode === 401) {
     if (legacy.code === "TOKEN_EXPIRED") {
+      // Route through the factory so the expired-session code and its
+      // canonical §13.6 public message stay defined in exactly one place.
       return NextlyError.tokenExpired({ logContext });
     }
     return NextlyError.authRequired({ logContext });

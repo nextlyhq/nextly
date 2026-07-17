@@ -1612,6 +1612,13 @@ export class CollectionRelationshipService extends BaseService {
         for (const key of Object.keys(row)) {
           if (key !== "id" && key !== "label") delete row[key];
         }
+        // Defense in depth: the label is normally a display field (never a
+        // password — a password can't be configured as a label), but a row
+        // migrated from before that guard could carry a bcrypt hash here, so
+        // drop a hash-shaped label rather than surface it.
+        if (typeof row.label === "string" && row.label.startsWith("$2")) {
+          delete row.label;
+        }
       }
       return;
     }
