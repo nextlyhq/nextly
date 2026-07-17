@@ -239,10 +239,46 @@ export function formBuilder(
 
             const opts = { as: "user", user: ctx.user ?? undefined } as const;
 
-            // Page through everything: exports must be complete, and the
-            // list service always paginates.
+            // CSV needs its form BEFORE any submissions are read: the
+            // columns come from one form's fields, and a malformed request
+            // must fail fast instead of paginating the whole table first.
+            let form: Record<string, unknown> | undefined;
+            if (format === "csv") {
+              if (!formId) {
+                return Response.json(
+                  {
+                    error: {
+                      code: "VALIDATION_ERROR",
+                      message: "CSV export requires a form parameter.",
+                    },
+                  },
+                  { status: 400 }
+                );
+              }
+              const formsSlugDeclared = resolvedConfig.formOverrides.slug;
+              const formsSlug =
+                ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
+              const formResult = await ctx.services.collections.listEntries(
+                formsSlug,
+                { where: { id: { equals: formId } } },
+                opts
+              );
+              form = formResult.data[0];
+              if (!form) {
+                return Response.json(
+                  { error: { code: "NOT_FOUND", message: "Form not found." } },
+                  { status: 404 }
+                );
+              }
+            }
+
+            // Page through the export with a hard ceiling: an unbounded loop
+            // over a high-traffic form could hold the whole table in memory.
+            // Hitting the ceiling is reported in a header, never silent.
+            const MAX_EXPORT_ROWS = 50_000;
             const items: unknown[] = [];
             const pageSize = 200;
+            let truncated = false;
             for (let page = 1; ; page += 1) {
               const result = await ctx.services.collections.listEntries(
                 slug,
@@ -250,43 +286,20 @@ export function formBuilder(
                 opts
               );
               items.push(...result.data);
-              if (result.data.length < pageSize) break;
+              const pageWasFull = result.data.length === pageSize;
+              if (items.length >= MAX_EXPORT_ROWS) {
+                truncated = pageWasFull || items.length > MAX_EXPORT_ROWS;
+                items.length = MAX_EXPORT_ROWS;
+                break;
+              }
+              if (!pageWasFull) break;
             }
+            const truncationHeaders: Record<string, string> = truncated
+              ? { "X-Export-Truncated": "true" }
+              : {};
 
-            if (format !== "csv") {
-              return Response.json({ items });
-            }
-
-            // CSV columns come from one form's fields, so the form filter is
-            // required for CSV (per-field columns are undefined across forms).
-            if (!formId) {
-              return Response.json(
-                {
-                  error: {
-                    code: "VALIDATION_ERROR",
-                    message: "CSV export requires a form parameter.",
-                  },
-                },
-                { status: 400 }
-              );
-            }
-
-            const formsSlugDeclared = resolvedConfig.formOverrides.slug;
-            const formsSlug =
-              ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
-            const formResult = await ctx.services.collections.listEntries(
-              formsSlug,
-              { where: { id: { equals: formId } } },
-              opts
-            );
-            const form = formResult.data[0];
-            if (!form) {
-              return Response.json(
-                {
-                  error: { code: "NOT_FOUND", message: "Form not found." },
-                },
-                { status: 404 }
-              );
+            if (format !== "csv" || !form) {
+              return Response.json({ items }, { headers: truncationHeaders });
             }
 
             // The service returns parsed entries; the export helpers declare
@@ -296,13 +309,14 @@ export function formBuilder(
               form as unknown as FormDocument
             );
             const filename = generateExportFilename(
-              (form as { slug?: string }).slug ?? "form",
+              typeof form.slug === "string" ? form.slug : "form",
               "csv"
             );
             return new Response(csv, {
               headers: {
                 "Content-Type": "text/csv; charset=utf-8",
                 "Content-Disposition": `attachment; filename="${filename}"`,
+                ...truncationHeaders,
               },
             });
           },
@@ -317,7 +331,7 @@ export function formBuilder(
           // Derived from the forms slug like the menu entry: with an
           // overridden slug, users hold read-<slug>, not read-forms.
           requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
-          handler: () =>
+          handler: (_req, ctx) =>
             Promise.resolve(
               Response.json({
                 fields: resolvedConfig.fields,
@@ -328,12 +342,17 @@ export function formBuilder(
                   defaultFrom: resolvedConfig.notifications.defaultFrom,
                   defaultToEmail: resolvedConfig.notifications.defaultToEmail,
                 },
-                // Resolved collection slugs, so admin components never
-                // hardcode "forms"/"form-submissions" and keep working under
-                // slug overrides.
+                // Runtime-resolved collection slugs (through ctx.self, so a
+                // framework .rename() is honored too) — admin components
+                // never hardcode "forms"/"form-submissions".
                 slugs: {
-                  forms: resolvedConfig.formOverrides.slug,
-                  submissions: resolvedConfig.formSubmissionOverrides.slug,
+                  forms:
+                    ctx.self.collections[resolvedConfig.formOverrides.slug] ??
+                    resolvedConfig.formOverrides.slug,
+                  submissions:
+                    ctx.self.collections[
+                      resolvedConfig.formSubmissionOverrides.slug
+                    ] ?? resolvedConfig.formSubmissionOverrides.slug,
                 },
               })
             ),
@@ -436,29 +455,33 @@ export function formBuilder(
       nextly.hooks.on("afterRead", formsSlug, async (context: unknown) => {
         const data = (context as { data?: unknown }).data;
         // afterRead fires for single reads (one record) and list reads
-        // (array); count each form either way.
+        // (array); count each form either way. Counts run concurrently —
+        // form lists are paginated, so this is a bounded fan-out of small
+        // indexed queries, not a serial N+1 walk.
         const records = Array.isArray(data) ? data : data ? [data] : [];
-        for (const record of records) {
-          const form = record as Record<string, unknown>;
-          if (typeof form.id !== "string") continue;
-          try {
-            // Count as system: whoever may read the form may see its
-            // submission volume without holding submission read rights.
-            form.submissionCount = await nextly.services.collections.count(
-              submissionSlug,
-              {
-                where: {
-                  form: { equals: form.id },
-                  status: { not_equals: "spam" },
+        await Promise.all(
+          records.map(async record => {
+            const form = record as Record<string, unknown>;
+            if (typeof form.id !== "string") return;
+            try {
+              // Count as system: whoever may read the form may see its
+              // submission volume without holding submission read rights.
+              form.submissionCount = await nextly.services.collections.count(
+                submissionSlug,
+                {
+                  where: {
+                    form: { equals: form.id },
+                    status: { not_equals: "spam" },
+                  },
                 },
-              },
-              { as: "system" }
-            );
-          } catch {
-            // A failed count must never break reading the form itself.
-            form.submissionCount = 0;
-          }
-        }
+                { as: "system" }
+              );
+            } catch {
+              // A failed count must never break reading the form itself.
+              form.submissionCount = 0;
+            }
+          })
+        );
       });
     },
   });

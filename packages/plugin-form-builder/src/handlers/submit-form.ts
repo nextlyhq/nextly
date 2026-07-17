@@ -158,32 +158,12 @@ export async function submitForm(
       };
     }
 
-    // 3. Transform and validate submission data
-    const transformedData = transformFormData(data, form.fields);
-    const schema = generateZodSchema(form.fields);
-    const validationResult = schema.safeParse(transformedData);
-
-    if (!validationResult.success) {
-      const validationErrors = getValidationErrors(validationResult);
-      logger.debug?.("Form validation failed", {
-        formSlug,
-        errors: validationErrors,
-      });
-      return {
-        success: false,
-        error: "Validation failed",
-        validationErrors,
-      };
-    }
-
-    // 3b. Sanitize validated submission data (strip HTML from free-text fields)
-    sanitizeSubmissionData(validationResult.data, form.fields);
-
-    // 4. Spam detection
+    // 3. Spam detection — BEFORE validation, so a bot that trips the trap
+    // while also failing validation still receives the same fake success as
+    // any other bot instead of a distinguishable validation error.
     // Honeypot fields are by definition NOT declared form fields, so the
-    // probe is the raw payload minus the declared schema: the transform
-    // above would strip them, and a declared field (e.g. a real "website"
-    // input) must never trip the trap.
+    // probe is the raw payload minus the declared schema — a declared field
+    // (e.g. a real "website" input) must never trip the trap.
     const declaredFieldNames = new Set(form.fields.map(field => field.name));
     const undeclaredData = Object.fromEntries(
       Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
@@ -211,22 +191,50 @@ export async function submitForm(
       return { success: true };
     }
 
-    // Content spam (honeypot/recaptcha) is stored and FLAGGED, never silently
-    // dropped: a false positive stays reviewable in the Spam view and
-    // recoverable via "Not spam". The bot still sees a fake success.
     const isContentSpam = spamResult.isSpam;
+
+    // 4. Transform + validate. Content spam skips validation entirely — it
+    // is stored for review exactly as the bot shaped it (declared fields
+    // only, sanitized), and requiring validity would drop the evidence.
+    const transformedData = transformFormData(data, form.fields);
+    let storedData: Record<string, unknown>;
+
     if (isContentSpam) {
       logger.info?.("Spam submission detected — storing flagged", {
         formSlug,
         reason: spamResult.reason,
         ipAddress: metadata?.ipAddress,
       });
+      sanitizeSubmissionData(transformedData, form.fields);
+      storedData = transformedData;
+    } else {
+      const schema = generateZodSchema(form.fields);
+      const validationResult = schema.safeParse(transformedData);
+
+      if (!validationResult.success) {
+        const validationErrors = getValidationErrors(validationResult);
+        logger.debug?.("Form validation failed", {
+          formSlug,
+          errors: validationErrors,
+        });
+        return {
+          success: false,
+          error: "Validation failed",
+          validationErrors,
+        };
+      }
+
+      // Sanitize validated submission data (strip HTML from free-text fields)
+      sanitizeSubmissionData(validationResult.data, form.fields);
+      storedData = validationResult.data;
     }
 
-    // 5. Create submission record
+    // 5. Create submission record. Content spam (honeypot/recaptcha) is
+    // stored FLAGGED, never silently dropped: a false positive stays
+    // reviewable in the Spam view and recoverable via "Not spam".
     const submissionData = {
       form: form.id,
-      data: validationResult.data,
+      data: storedData,
       status: isContentSpam ? ("spam" as const) : ("new" as const),
       spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
