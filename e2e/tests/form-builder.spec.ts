@@ -167,4 +167,18 @@ test("the preview is an interactive simulation with real confirmation", async ({
   // Reset returns to a fresh form.
   await page.getByRole("button", { name: "Fill again" }).click();
   await expect(emailInput).toHaveValue("");
+
+  // The device toggle must genuinely resize the simulated pane. The pane
+  // widths come from utility classes in the compiled admin stylesheet, so a
+  // class the stylesheet fails to emit leaves both modes rendering at the
+  // same width — measure the pane (via its full-width input) instead of
+  // trusting the toggle state.
+  const desktopWidth = (await emailInput.boundingBox())?.width ?? 0;
+  expect(desktopWidth).toBeGreaterThan(0);
+  await page.getByRole("tab", { name: "Mobile" }).click();
+  await expect
+    .poll(async () => (await emailInput.boundingBox())?.width ?? 0, {
+      message: "mobile preview should be narrower than desktop",
+    })
+    .toBeLessThan(desktopWidth);
 });
