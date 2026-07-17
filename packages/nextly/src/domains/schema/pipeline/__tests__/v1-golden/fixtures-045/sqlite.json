@@ -16,7 +16,7 @@
     }
   ],
   "statements": [
-    "CREATE TABLE `users` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text,\n\t`email` text NOT NULL,\n\t`email_verified` integer,\n\t`password_updated_at` integer,\n\t`image` text,\n\t`password_hash` text,\n\t`is_active` integer DEFAULT false NOT NULL,\n\t`failed_login_attempts` integer DEFAULT 0 NOT NULL,\n\t`locked_until` integer,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n);\n",
+    "CREATE TABLE `users` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text,\n\t`email` text NOT NULL,\n\t`email_verified` integer,\n\t`password_updated_at` integer,\n\t`image` text,\n\t`password_hash` text,\n\t`is_active` integer DEFAULT false NOT NULL,\n\t`must_change_password` integer,\n\t`failed_login_attempts` integer DEFAULT 0 NOT NULL,\n\t`locked_until` integer,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n);\n",
     "CREATE UNIQUE INDEX `users_email_unique` ON `users` (`email`);",
     "CREATE INDEX `users_created_at_idx` ON `users` (`created_at`);",
     "CREATE TABLE `accounts` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`user_id` text NOT NULL,\n\t`type` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`provider_account_id` text NOT NULL,\n\t`refresh_token` text,\n\t`access_token` text,\n\t`expires_at` integer,\n\t`token_type` text,\n\t`scope` text,\n\t`id_token` text,\n\t`session_state` text\n);\n",
@@ -31,6 +31,10 @@
     "CREATE UNIQUE INDEX `prt_identifier_token_hash_unique` ON `password_reset_tokens` (`identifier`,`token_hash`);",
     "CREATE INDEX `prt_expires_idx` ON `password_reset_tokens` (`expires`);",
     "CREATE INDEX `prt_used_at_idx` ON `password_reset_tokens` (`used_at`);",
+    "CREATE TABLE `user_invite_tokens` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`user_id` text NOT NULL,\n\t`token_hash` text NOT NULL,\n\t`expires` integer NOT NULL,\n\t`used_at` integer,\n\t`created_at` integer NOT NULL,\n\tFOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade\n);\n",
+    "CREATE UNIQUE INDEX `uit_user_id_unique` ON `user_invite_tokens` (`user_id`);",
+    "CREATE INDEX `uit_token_hash_idx` ON `user_invite_tokens` (`token_hash`);",
+    "CREATE INDEX `uit_expires_idx` ON `user_invite_tokens` (`expires`);",
     "CREATE TABLE `refresh_tokens` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`user_id` text NOT NULL,\n\t`token_hash` text NOT NULL,\n\t`user_agent` text,\n\t`ip_address` text,\n\t`expires_at` integer NOT NULL,\n\t`created_at` integer NOT NULL,\n\tFOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade\n);\n",
     "CREATE INDEX `refresh_tokens_token_hash_idx` ON `refresh_tokens` (`token_hash`);",
     "CREATE INDEX `refresh_tokens_user_id_idx` ON `refresh_tokens` (`user_id`);",
@@ -112,7 +116,7 @@
     "CREATE INDEX `dynamic_components_created_at_idx` ON `dynamic_components` (`created_at`);",
     "CREATE INDEX `dynamic_components_updated_at_idx` ON `dynamic_components` (`updated_at`);",
     "CREATE TABLE `site_settings` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`application_name` text,\n\t`site_url` text,\n\t`admin_email` text,\n\t`timezone` text,\n\t`date_format` text,\n\t`time_format` text,\n\t`logo_url` text,\n\t`logo_url_dark` text,\n\t`custom_sidebar_groups` text,\n\t`plugin_placements` text,\n\t`updated_at` integer NOT NULL\n);\n",
-    "CREATE TABLE `user_field_definitions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`label` text NOT NULL,\n\t`type` text NOT NULL,\n\t`required` integer DEFAULT false NOT NULL,\n\t`default_value` text,\n\t`options` text,\n\t`placeholder` text,\n\t`description` text,\n\t`sort_order` integer DEFAULT 0 NOT NULL,\n\t`source` text DEFAULT 'ui' NOT NULL,\n\t`is_active` integer DEFAULT true NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n);\n",
+    "CREATE TABLE `user_field_definitions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`label` text NOT NULL,\n\t`type` text NOT NULL,\n\t`required` integer DEFAULT false NOT NULL,\n\t`default_value` text,\n\t`options` text,\n\t`has_many` integer,\n\t`min_length` integer,\n\t`max_length` integer,\n\t`min_value` real,\n\t`max_value` real,\n\t`placeholder` text,\n\t`description` text,\n\t`sort_order` integer DEFAULT 0 NOT NULL,\n\t`source` text DEFAULT 'ui' NOT NULL,\n\t`is_active` integer DEFAULT true NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n);\n",
     "CREATE UNIQUE INDEX `user_field_defs_name_unique_idx` ON `user_field_definitions` (`name`);",
     "CREATE INDEX `user_field_defs_source_idx` ON `user_field_definitions` (`source`);",
     "CREATE INDEX `user_field_defs_is_active_idx` ON `user_field_definitions` (`is_active`);",

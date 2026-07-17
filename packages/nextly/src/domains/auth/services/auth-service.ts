@@ -753,7 +753,8 @@ export class AuthService extends BaseService {
    */
   async generateInviteToken(userId: string): Promise<InviteTokenResult> {
     const user = await this.db.query.users.findFirst({
-      where: eq(this.tables.users.id, userId),
+      // rqb v2 object filter (drizzle v1)
+      where: { id: userId },
       columns: { id: true },
     });
     if (!user) {
@@ -944,7 +945,8 @@ export class AuthService extends BaseService {
     // leaving the password the admin knows (ASVS 6.4.1). Reject a match, and
     // reject an account that is not (or no longer) in the must-change state.
     const current = await this.db.query.users.findFirst({
-      where: eq(this.tables.users.id, userId),
+      // rqb v2 object filter (drizzle v1)
+      where: { id: userId },
       columns: { passwordHash: true, mustChangePassword: true },
     });
     if (!current || current.mustChangePassword !== true) {
