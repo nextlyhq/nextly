@@ -991,11 +991,24 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.data || typeof b.data !== "object") {
         throw new Error("data must be an object with update values");
       }
+      // Forward the authenticated identity so per-entry updates run as this
+      // user (hooks get a user) and the response is redacted to what they may
+      // read. Without it the query-based bulk update ran anonymously, unlike
+      // the id-based bulkUpdateEntries path which already resolves the user.
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
           where: b.where as WhereFilter,
           data: b.data,
+          userId: p._authenticatedUserId
+            ? String(p._authenticatedUserId)
+            : undefined,
+          userName: p._authenticatedUserName
+            ? String(p._authenticatedUserName)
+            : undefined,
+          userEmail: p._authenticatedUserEmail
+            ? String(p._authenticatedUserEmail)
+            : undefined,
         },
         { limit: b.limit }
       );

@@ -709,7 +709,10 @@ describe("dispatchCollections, bulk ops respondBulk envelope", () => {
   });
 
   it("bulkUpdateByQuery returns respondBulk envelope", async () => {
-    const fakeServiceResult: BulkOperationResult<{ id: string; status: string }> = {
+    const fakeServiceResult: BulkOperationResult<{
+      id: string;
+      status: string;
+    }> = {
       successes: [
         { id: "e1", status: "published" },
         { id: "e2", status: "published" },
@@ -737,6 +740,42 @@ describe("dispatchCollections, bulk ops respondBulk envelope", () => {
     expect(body.message).toBe("Updated 2 entries.");
     expect(body.items).toHaveLength(2);
     expect(body.errors).toEqual([]);
+  });
+
+  it("bulkUpdateByQuery forwards the authenticated user to the service", async () => {
+    // Regression guard: the query-based bulk update must run as the
+    // authenticated caller (not anonymously), so per-entry access control,
+    // hooks, and response redaction resolve against the real user.
+    const spy = vi.fn().mockResolvedValue({
+      successes: [{ id: "e1" }],
+      failures: [],
+      total: 1,
+      successCount: 1,
+      failedCount: 0,
+    });
+    const container = makeContainer({ bulkUpdateByQuery: spy });
+
+    await dispatchCollections(
+      container,
+      "bulkUpdateByQuery",
+      {
+        collectionName: "posts",
+        _authenticatedUserId: "user-1",
+        _authenticatedUserName: "Ada",
+        _authenticatedUserEmail: "ada@example.com",
+      },
+      { where: { status: { equals: "draft" } }, data: { status: "published" } }
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        userId: "user-1",
+        userName: "Ada",
+        userEmail: "ada@example.com",
+      }),
+      expect.anything()
+    );
   });
 });
 

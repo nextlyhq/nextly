@@ -561,16 +561,27 @@ export class CollectionsHandler {
       collectionName: string;
       where: WhereFilter;
       data: Record<string, unknown>;
+      userId?: string;
+      userName?: string;
+      userEmail?: string;
       /** User context for access control */
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Route auth already ran; response is still redacted for this user */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     options?: { limit?: number }
   ) {
-    return this.entryService.bulkUpdateByQuery(params, options);
+    // Resolve userId -> user and mark route-authorized, mirroring
+    // bulkUpdateEntries so the query-based bulk update honors access control
+    // and redaction instead of running as an anonymous caller.
+    return this.entryService.bulkUpdateByQuery(
+      this.resolveUserParam(params),
+      options
+    );
   }
 
   /**
