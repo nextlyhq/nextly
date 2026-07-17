@@ -137,7 +137,10 @@ export class EmailService extends BaseService {
    * @param templateSlug - Template slug (e.g., "password-reset", "welcome")
    * @param to - Recipient email address
    * @param variables - Key-value pairs for `{{variable}}` placeholder replacement
-   * @param options - Optional provider override
+   * @param options - Optional provider/address overrides. Per-send `from` and
+   *   `replyTo` take precedence over the template's own overrides: the caller
+   *   knows the concrete send context (e.g. a form rule's sender), while the
+   *   template override is a static default.
    * @returns Send result with success status and optional message ID
    */
   async sendWithTemplate(
@@ -146,11 +149,18 @@ export class EmailService extends BaseService {
     variables: Record<string, unknown>,
     options?: {
       providerId?: string;
+      from?: string;
+      replyTo?: string;
       cc?: string[];
       bcc?: string[];
       attachments?: EmailAttachmentInput[];
     }
   ): Promise<{ success: boolean; messageId?: string }> {
+    // Whitespace-only overrides must not shadow the template/provider
+    // defaults or reach a provider as malformed headers.
+    const fromOverride = options?.from?.trim() || undefined;
+    const replyToOverride = options?.replyTo?.trim() || undefined;
+
     // 1. Try DB template first
     let dbTemplate: EmailTemplateRecord | null = null;
     try {
@@ -221,8 +231,8 @@ export class EmailService extends BaseService {
         subject,
         html,
         plainText,
-        from: dbTemplate.fromOverride ?? undefined,
-        replyTo: dbTemplate.replyTo ?? undefined,
+        from: fromOverride ?? dbTemplate.fromOverride ?? undefined,
+        replyTo: replyToOverride ?? dbTemplate.replyTo ?? undefined,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
@@ -261,9 +271,11 @@ export class EmailService extends BaseService {
         subject: result.subject,
         html: result.html,
         providerId: options?.providerId,
-        // Forward cc/bcc here too — the DB-template path already does, and
-        // omitting them on this branch silently dropped them for code-first
-        // templates.
+        // Forward cc/bcc/from/replyTo here too — the DB-template path already
+        // does, and omitting them on this branch silently dropped them for
+        // code-first templates.
+        from: fromOverride,
+        replyTo: replyToOverride,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:

@@ -13,6 +13,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
+import { getSchemaEventsDdl } from "../../events/schema-events-ddl";
 import { readJournal } from "../read-journal";
 
 const ctx = makeTestContext("postgresql");
@@ -30,33 +31,11 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
     db = drizzle({ client: pool });
 
+    // Create the events table via the production DDL so this fixture can
+    // never drift from the real schema (a hand-copy previously dropped the
+    // `note` column and this suite failed against a real Postgres).
     await pool.query('DROP TABLE IF EXISTS "nextly_schema_events"');
-    await pool.query(`
-      CREATE TABLE "nextly_schema_events" (
-        "id" text PRIMARY KEY,
-        "event_type" text NOT NULL,
-        "status" text NOT NULL,
-        "source" text NOT NULL,
-        "filename" text,
-        "sha256" text,
-        "scope_kind" text,
-        "scope_slug" text,
-        "started_at" timestamptz NOT NULL,
-        "ended_at" timestamptz,
-        "duration_ms" integer,
-        "applied_by" text,
-        "note" text,
-        "statements_planned" integer,
-        "statements_executed" integer,
-        "renames_applied" integer,
-        "error_code" text,
-        "error_message" text,
-        "error_json" jsonb,
-        "superseded_event_ids" jsonb,
-        "superseded_at" timestamptz,
-        "superseded_by" text
-      )
-    `);
+    for (const stmt of getSchemaEventsDdl("postgresql")) await pool.query(stmt);
   });
 
   afterAll(async () => {
@@ -131,14 +110,6 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
       limit: 20,
       before: oldestOnPage1,
     });
-    if (page2.rows.length !== 5)
-      console.error(
-        "PAGE2_DEBUG",
-        JSON.stringify({
-          oldestOnPage1,
-          page2ids: page2.rows.map(r => [r.id, r.startedAt]),
-        })
-      );
     expect(page2.rows).toHaveLength(5);
     expect(page2.hasMore).toBe(false);
     expect(page2.rows.map(r => r.id)).toEqual(ids.slice(20));
@@ -150,11 +121,6 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
       baseTime: new Date("2026-04-29T18:00:00.000Z"),
     });
     const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
-    if (result.rows.length !== 5)
-      console.error(
-        "HASMORE_DEBUG",
-        JSON.stringify(result.rows.map(r => [r.id, r.startedAt]))
-      );
     expect(result.rows).toHaveLength(5);
     expect(result.hasMore).toBe(false);
   });

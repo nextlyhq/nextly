@@ -221,11 +221,14 @@ function compareValues(
 /**
  * Evaluates a single condition against the form data.
  *
+ * Exported for consumers that gate on one condition rather than a full
+ * conditional-logic block — notification send-conditions use exactly this.
+ *
  * @param condition - The condition to evaluate
  * @param formData - The current form data
  * @returns Whether the condition is met
  */
-function evaluateSingleCondition(
+export function evaluateSingleCondition(
   condition: ConditionalLogicCondition,
   formData: Record<string, unknown>
 ): boolean {

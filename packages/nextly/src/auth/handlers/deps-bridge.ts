@@ -343,6 +343,16 @@ export function buildAuthRouterDeps(
       return { email: result.email };
     },
 
+    acceptInvite: async (token, newPassword) => {
+      const authService = getService("authService");
+      return await authService.acceptInvite(token, newPassword);
+    },
+
+    setInitialPassword: async (userId, newPassword) => {
+      const authService = getService("authService");
+      return await authService.setInitialPassword(userId, newPassword);
+    },
+
     changePassword: async (userId, currentPassword, newPassword) => {
       const authService = getService("authService");
       try {
@@ -414,6 +424,7 @@ export function buildAuthRouterDeps(
         email: u.email,
         name: u.name,
         image: u.image,
+        mustChangePassword: u.mustChangePassword,
       };
     },
   });

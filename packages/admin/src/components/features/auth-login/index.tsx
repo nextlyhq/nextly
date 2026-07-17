@@ -39,6 +39,7 @@ import type { ActionResponse } from "@admin/lib/api/response-types";
 import { cn } from "@admin/lib/utils";
 
 import { AuthUiExtras, AuthChallenge, useAuthUi } from "./auth-ui-extras";
+import { SetInitialPassword } from "./set-initial-password";
 
 const formSchema = z.object({
   email: z
@@ -67,6 +68,11 @@ export function Login() {
   // Set when a login returns a multi-step challenge (D71); shows the challenge view.
   const [challenge, setChallenge] = useState<{
     challengeType: string;
+    pendingToken: string;
+  } | null>(null);
+  // Set when login returns password_change_required (ASVS 6.4.1): the account
+  // holds an admin-set password and must replace it before a session is issued.
+  const [mustChangePassword, setMustChangePassword] = useState<{
     pendingToken: string;
   } | null>(null);
 
@@ -114,6 +120,17 @@ export function Login() {
           challengeType: result.challengeType,
           pendingToken: result.pendingToken,
         });
+        setIsLoading(false);
+        return;
+      }
+
+      // Forced first-sign-in password change (ASVS 6.4.1): no session was
+      // issued. Show the set-password view; setting it issues the session.
+      if (
+        result?.status === "password_change_required" &&
+        result.pendingToken
+      ) {
+        setMustChangePassword({ pendingToken: result.pendingToken });
         setIsLoading(false);
         return;
       }
@@ -224,7 +241,14 @@ export function Login() {
         </CardHeader>
 
         <CardContent className="pb-10">
-          {challenge ? (
+          {mustChangePassword ? (
+            <SetInitialPassword
+              pendingToken={mustChangePassword.pendingToken}
+              onDone={() => {
+                window.location.href = ROUTES.DASHBOARD;
+              }}
+            />
+          ) : challenge ? (
             <AuthChallenge
               authUi={authUi}
               challengeType={challenge.challengeType}

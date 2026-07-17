@@ -34,6 +34,7 @@ import {
   text,
   boolean,
   integer,
+  doublePrecision,
   timestamp,
   jsonb,
   index,
@@ -127,6 +128,31 @@ export const userFieldDefinitionsPg = pgTable(
     options: jsonb("options").$type<
       { label: string; value: string }[] | null
     >(),
+
+    /**
+     * Whether a `select` field stores multiple values. Fixed at creation:
+     * it decides the backing column's type (json when multiple, varchar
+     * otherwise), and the reconciler only ever adds columns.
+     */
+    hasMany: boolean("has_many"),
+
+    // --------------------------------------------------------
+    // Validation bounds (nullable: unset means unconstrained, and a
+    // NOT NULL DEFAULT column added to a populated table is refused
+    // by the migration tooling as data-losing)
+    // --------------------------------------------------------
+
+    /** Minimum string length for text/textarea values. */
+    minLength: integer("min_length"),
+
+    /** Maximum string length for text/textarea values; also sizes new varchar columns. */
+    maxLength: integer("max_length"),
+
+    /** Minimum numeric value for number fields. */
+    minValue: doublePrecision("min_value"),
+
+    /** Maximum numeric value for number fields. */
+    maxValue: doublePrecision("max_value"),
 
     /**
      * Placeholder text shown in the input field.

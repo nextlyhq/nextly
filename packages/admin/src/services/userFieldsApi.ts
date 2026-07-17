@@ -31,6 +31,8 @@ export type UserFieldType =
   | "textarea"
   | "number"
   | "email"
+  | "url"
+  | "phone"
   | "select"
   | "radio"
   | "checkbox"
@@ -44,6 +46,11 @@ export interface UserFieldDefinitionRecord {
   required: boolean;
   defaultValue: string | null;
   options: { label: string; value: string }[] | null;
+  hasMany: boolean | null;
+  minLength: number | null;
+  maxLength: number | null;
+  minValue: number | null;
+  maxValue: number | null;
   placeholder: string | null;
   description: string | null;
   sortOrder: number;
@@ -60,6 +67,11 @@ export interface CreateUserFieldPayload {
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
+  hasMany?: boolean | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
   placeholder?: string | null;
   description?: string | null;
   isActive?: boolean;
@@ -72,6 +84,10 @@ export interface UpdateUserFieldPayload {
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
   placeholder?: string | null;
   description?: string | null;
   isActive?: boolean;

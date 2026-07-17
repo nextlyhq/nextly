@@ -138,6 +138,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "accounts",
   "sessions",
   "password_reset_tokens",
+  "user_invite_tokens",
   "email_verification_tokens",
   "refresh_tokens",
   "roles",
@@ -186,6 +187,7 @@ export { users, accounts, sessions } from "./users/postgres";
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "./auth-tokens/postgres";
 

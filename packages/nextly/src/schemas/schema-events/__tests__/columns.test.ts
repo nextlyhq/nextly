@@ -5,7 +5,26 @@
 import { getTableColumns, getTableName } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
+import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { nextlySchemaEventsPg } from "../postgres";
+
+/**
+ * Pull the column names out of a `CREATE TABLE ( ... )` statement: the first
+ * token on each line inside the parentheses. Good enough for our own DDL,
+ * whose column list is one-per-line.
+ */
+function ddlColumnNames(createTableStmt: string): string[] {
+  const body = createTableStmt.slice(
+    createTableStmt.indexOf("(") + 1,
+    createTableStmt.lastIndexOf(")")
+  );
+  return body
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.split(/[\s(]/)[0].replace(/["`]/g, ""))
+    .filter(tok => /^[a-z_][a-z0-9_]*$/.test(tok));
+}
 
 const EXPECTED_COLUMNS = [
   "id",
@@ -62,3 +81,18 @@ describe.each([
     expect(names).toEqual(EXPECTED_COLUMNS);
   });
 });
+
+// The raw DDL (getSchemaEventsDdl) is a second, hand-written copy of the
+// table used by `nextly upgrade` and by integration-test setup. It once
+// drifted from the model (a missing `note` column), so pin it to the same
+// canonical column set per dialect — any divergence now fails CI here, in a
+// unit test that needs no database.
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "getSchemaEventsDdl — %s stays in sync with the model",
+  dialect => {
+    it("creates exactly the canonical columns", () => {
+      const createTable = getSchemaEventsDdl(dialect)[0];
+      expect(ddlColumnNames(createTable).sort()).toEqual(EXPECTED_COLUMNS);
+    });
+  }
+);

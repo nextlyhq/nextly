@@ -27,8 +27,10 @@ apps/playground/src/db/schemas/**/*
 apps/playground/src/db/schemas/dynamic/*.ts
 !apps/playground/src/db/schemas/dynamic/index.ts
 
-# Claude Code local config
-.claude/
+# Claude Code: local config stays ignored, shared rules/skills are committed
+.claude/*
+!.claude/rules/
+!.claude/skills/
 
 # Testing
 coverage

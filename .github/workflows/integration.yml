@@ -1,0 +1,131 @@
+name: Integration
+
+# Real-database integration tests across every supported dialect. The unit
+# suites mock the drivers and the browser tests run on sqlite only, so
+# without this job a Postgres- or MySQL-specific regression in an adapter
+# ships silently. Runs as a sibling of `ci`, so it adds no wall-time to a
+# pull request.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+# Read-only: the job never writes through the GITHUB_TOKEN.
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Integration (${{ matrix.dialect }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      # One dialect failing must not cancel the others: seeing that a change
+      # breaks only MySQL (and not all three) is exactly the signal that
+      # locates the bug.
+      fail-fast: false
+      matrix:
+        dialect: [postgres, mysql, sqlite]
+
+    # Both databases boot for every leg: GitHub cannot attach a `services:`
+    # entry conditionally per matrix value, and an idle container costs
+    # nothing. Each leg only connects to the one its dialect needs; sqlite
+    # runs in-process against a throwaway file.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nextly
+          POSTGRES_PASSWORD: nextly
+          POSTGRES_DB: nextly_test
+        ports:
+          - 5432:5432
+        # Health-gate so test steps never race a database that is still
+        # starting up.
+        options: >-
+          --health-cmd "pg_isready -U nextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: nextly
+          MYSQL_DATABASE: nextly_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Cache Turbo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The adapter suites read TEST_POSTGRES_URL / TEST_MYSQL_URL and fail
+      # (rather than skip) when their database is unreachable, so each leg
+      # runs only the packages its dialect covers. `test:integration`
+      # declares `dependsOn: ^build`, so turbo builds prerequisites itself.
+      #
+      # The core `nextly` integration suite is NOT gated yet, same policy as
+      # the unit `Test` step in ci.yml: it carries a pre-existing failing
+      # baseline (suites that import the absent `pg` package or a moved
+      # admin util fail at collection, and stale fixtures miss newer user
+      # columns). It joins the sqlite leg — and its pg-targeting files join
+      # the postgres leg — once that baseline is repaired.
+      - name: Run integration tests (postgres)
+        if: matrix.dialect == 'postgres'
+        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-postgres
+        env:
+          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Run integration tests (mysql)
+        if: matrix.dialect == 'mysql'
+        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-mysql
+        env:
+          TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Run integration tests (sqlite)
+        if: matrix.dialect == 'sqlite'
+        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite
+        env:
+          TURBO_CACHE_DIR: .turbo

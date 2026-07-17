@@ -49,6 +49,28 @@ export type {
   BulkAction,
 } from "@nextlyhq/admin";
 
+/**
+ * The field-UI kit (@experimental): controlled, form-library-agnostic
+ * field-building components rendered from `nextly/field-catalog` — a
+ * catalog-driven type picker, an options editor with drag reorder and
+ * whole-batch duplicate reporting, and a type-aware default-value input.
+ * Compose them in plugin admin surfaces so field editing looks and behaves
+ * like the rest of the admin; your plugin owns storage and the allowed-type
+ * subset.
+ */
+export {
+  FieldTypePicker,
+  FieldDefaultValueInput,
+  FieldOptionsEditor,
+} from "@nextlyhq/admin";
+export type {
+  FieldTypePickerProps,
+  FieldDefaultValueInputProps,
+  FieldDefaultOption,
+  FieldOption,
+  FieldOptionsEditorProps,
+} from "@nextlyhq/admin";
+
 // The declarative `contributes.admin` contract types (the same ones exported
 // from the package root) for convenience when authoring admin components.
 export type {

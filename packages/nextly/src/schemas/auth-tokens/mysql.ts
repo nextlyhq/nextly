@@ -49,6 +49,37 @@ export const passwordResetTokens = mysqlTable(
   ]
 );
 
+// User invite tokens — the single-use set-password link an admin hands to a
+// new user. Mirrors passwordResetTokens (with a used_at consume marker), but
+// keyed on user_id rather than an email identifier: the invite belongs to one
+// account, survives an email change, and keeps the address out of the token
+// store. Only the SHA-256 hash of the token is kept, never the raw value.
+export const userInviteTokens = mysqlTable(
+  "user_invite_tokens",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: varchar("user_id", { length: 191 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 255 }).notNull(),
+    expires: datetime("expires").notNull(),
+    usedAt: datetime("used_at"),
+    // Database-side default: `new Date()` would bake one JS timestamp into the
+    // schema and reuse it for every insert.
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  t => [
+    // One invite row per account, enforced by the database: two concurrent
+    // re-invites cannot both leave a live link, and superseding an earlier
+    // invite holds without a read-modify-write race.
+    uniqueIndex("uit_user_id_unique").on(t.userId),
+    index("uit_token_hash_idx").on(t.tokenHash),
+    index("uit_expires_idx").on(t.expires),
+  ]
+);
+
 // Email verification tokens (custom, hashed)
 export const emailVerificationTokens = mysqlTable(
   "email_verification_tokens",

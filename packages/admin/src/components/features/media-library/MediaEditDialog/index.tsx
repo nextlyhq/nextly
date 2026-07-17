@@ -134,10 +134,14 @@ function CropPointPicker({
           className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
           style={{ left: `${focalX}%`, top: `${focalY}%` }}
         >
-          {/* Outer ring */}
-          <div className="absolute inset-0 rounded-full border-2 border-background shadow-md" />
+          {/* Outer ring. The token ring outlines the marker against image
+              areas that match the background color; shadows are not part of
+              the design system. The marker stays circular: it denotes a
+              point on the image, not a UI surface, so the radius-0 rule
+              does not apply. */}
+          <div className="absolute inset-0 rounded-full border-2 border-background ring-1 ring-foreground/40" />
           {/* Inner dot */}
-          <div className="absolute inset-[7px] rounded-full bg-background shadow-sm" />
+          <div className="absolute inset-1.75 rounded-full bg-background" />
           {/* Crosshair lines */}
           <div className="absolute top-1/2 left-0 w-full h-px bg-background/70 -translate-y-px" />
           <div className="absolute left-1/2 top-0 h-full w-px bg-background/70 -translate-x-px" />
@@ -230,7 +234,7 @@ function ImageSizesDisplay({
               title={`Copy ${name} URL`}
             >
               {copiedUrl === name ? (
-                <Check className="h-3.5 w-3.5 text-success-500" />
+                <Check className="h-3.5 w-3.5 text-success" />
               ) : (
                 <Copy className="h-3.5 w-3.5 text-muted-foreground" />
               )}

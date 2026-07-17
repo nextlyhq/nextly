@@ -14,6 +14,7 @@ import {
   fetchUsers,
   getUserById,
   updateUser,
+  type CreatedUser,
 } from "@admin/services/userApi";
 import type {
   User,
@@ -228,7 +229,7 @@ export function useUser(userId?: string) {
 export function useCreateUser() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ id: string }, Error, CreateUserPayload>({
+  return useMutation<CreatedUser, Error, CreateUserPayload>({
     mutationFn: async (userData: CreateUserPayload) => {
       return await createUser(userData);
     },

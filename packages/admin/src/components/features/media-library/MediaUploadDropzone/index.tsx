@@ -3,70 +3,52 @@
 /**
  * MediaUploadDropzone Component
  *
- * Drag-and-drop file upload area with react-dropzone for media library.
- * Supports multi-file upload with progress tracking, file validation, and error handling.
+ * Drag-and-drop upload area for the media library and the media picker.
  *
- * ## Design Specifications
+ * Upload feedback is a single per-file queue: every file in a drop gets a row
+ * with its own progress, status, and (for failures) a persistent human-readable
+ * reason. Files the client rejects (too large, wrong type, over the batch cap)
+ * appear as rows in the same queue rather than a separate alert, so a batch
+ * with one bad file still reads as "9 uploaded, 1 failed" instead of an
+ * all-red error state.
  *
- * **Desktop Size**:
- * - Height: 256px (h-64) expanded, 64px (h-16) collapsed
- * - Width: Full width (w-full)
+ * Batch cap: drops larger than {@link MAX_FILES} upload the first
+ * {@link MAX_FILES} files and mark the rest as skipped. The cap is enforced in
+ * `onDrop` instead of react-dropzone's `maxFiles`, because `maxFiles` rejects
+ * the ENTIRE batch with `too-many-files` when exceeded - valid files included.
  *
- * **Mobile Size**:
- * - Height: 176px (h-44) expanded, 64px (h-16) collapsed
- * - Width: Full width (w-full)
+ * The queue outlives the drop target: when `isCollapsed` is true only the drop
+ * target hides, so a parent can collapse the zone the moment an upload starts
+ * (via `onUploadStart`) while progress stays visible.
  *
- * **Visual States**:
- * - Default: Dashed  border border-border (border-2 border-dashed border-border)
- * - Hover: Primary  border border-border (border-primary-300 bg-accent/50)
- * - Active (dragging): Primary  border border-border (border-primary-500 bg-primary-50)
- * - Uploading: Progress bars for each file
- * - Error: Red  border border-border (border-destructive bg-destructive/10)
- * - Collapsed: Compact 64px height with small icon
+ * ## Visual states (drop target)
  *
- * **Supported File Types**:
- * - Images: PNG, JPG, JPEG, GIF, WebP
- * - Videos: MP4, MOV, AVI
- * - Documents: PDF
+ * - Default: dashed `border-border`
+ * - Drag active: `border-primary`
+ * - Drag reject: `border-destructive` (live feedback while dragging only)
+ * - Uploading: spinner + count (shown where the target stays open, e.g. the picker)
  *
- * **File Size Limit**: 5MB per file
- * **Max Files**: 10 files per upload
+ * **Supported file types** (default): PNG, JPG, JPEG, GIF, WebP, MP4, MOV, AVI, PDF
+ * **File size limit**: 10MB per file by default (server default; overridable via `maxFileSize`)
+ * **Batch cap**: 10 files per drop
  *
  * ## Accessibility
  *
- * - WCAG 2.2 AA compliant
- * - Keyboard navigation (Tab, Enter, Space)
- * - Screen reader support (ARIA labels, live regions)
- * - Focus indicators (ring-2 ring-primary-500)
- * - Touch targets: 44×44px minimum on mobile
- *
- * ## Usage Examples
- *
- * ### Basic usage
- * ```tsx
- * <MediaUploadDropzone
- *   onUploadComplete={(media) => {
- *     console.log('Uploaded:', media);
- *   }}
- * />
- * ```
- *
- * ### Controlled collapsed state
- * ```tsx
- * const [isCollapsed, setIsCollapsed] = useState(false);
- *
- * <MediaUploadDropzone
- *   isCollapsed={isCollapsed}
- *   onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
- * />
- * ```
- *
+ * - Keyboard: Tab to the target, Enter/Space to browse
+ * - The browse hint is plain text inside the single `role="button"` target
+ *   (no nested interactive elements)
+ * - ARIA live region announces progress and results
  */
 
-import { Alert, AlertDescription, Progress, Button } from "@nextlyhq/ui";
+import { Progress, Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { useDropzone, type Accept } from "react-dropzone";
+import {
+  useDropzone,
+  type Accept,
+  type FileRejection,
+  type FileError,
+} from "react-dropzone";
 
 import {
   Upload,
@@ -74,6 +56,7 @@ import {
   AlertTriangle,
   X,
   Check,
+  RefreshCw,
 } from "@admin/components/icons";
 import { useUploadMedia } from "@admin/hooks/queries/useMedia";
 import { formatFileSize } from "@admin/lib/media-utils";
@@ -88,52 +71,40 @@ export interface MediaUploadDropzoneProps {
    * Callback when upload completes successfully
    *
    * @param media - Array of uploaded Media objects
-   *
-   * @example
-   * ```tsx
-   * <MediaUploadDropzone
-   *   onUploadComplete={(media) => {
-   *     console.log(`Uploaded ${media.length} files`);
-   *     toast.success(`${media.length} files uploaded`);
-   *   }}
-   * />
-   * ```
    */
   onUploadComplete?: (media: Media[]) => void;
 
   /**
-   * Controlled collapsed state
+   * Callback fired when at least one accepted file begins uploading.
+   * Parents use this to auto-collapse the drop target; the queue stays
+   * visible independently of `isCollapsed`.
+   */
+  onUploadStart?: () => void;
+
+  /**
+   * Controlled collapsed state. Hides the drop target only; an in-flight or
+   * settled upload queue keeps rendering so results are never lost.
    *
-   * @default undefined (uncontrolled)
+   * @default undefined (uncontrolled, target visible)
    */
   isCollapsed?: boolean;
 
   /**
-   * Callback when collapse button is clicked
-   *
-   * @example
-   * ```tsx
-   * const [isCollapsed, setIsCollapsed] = useState(false);
-   *
-   * <MediaUploadDropzone
-   *   isCollapsed={isCollapsed}
-   *   onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
-   * />
-   * ```
+   * Callback when the close button is clicked
    */
   onToggleCollapse?: () => void;
 
   /**
    * MIME type filter pattern for allowed uploads (e.g., "image/*", "image/png,image/jpeg")
    *
-   * @default undefined (accepts all file types defined in ACCEPTED_FILE_TYPES)
+   * @default undefined (accepts all file types defined in DEFAULT_ACCEPTED_FILE_TYPES)
    */
   accept?: string;
 
   /**
    * Maximum file size in bytes
    *
-   * @default 5242880 (5MB)
+   * @default 10485760 (10MB, matching the server's default `limits.fileSize`)
    */
   maxFileSize?: number;
 
@@ -167,9 +138,24 @@ const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
 };
 
 /**
- * Default maximum file size (5MB)
+ * Default maximum file size. Matches the server's default `limits.fileSize`
+ * (10MB) so the client pre-check and the server agree; the server stays
+ * authoritative and its per-file errors render on the queue rows either way.
  */
-const DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+
+/**
+ * Maximum number of files per drop. Enforced by slicing in `onDrop` (first
+ * MAX_FILES upload, the rest are marked skipped) - see the header comment for
+ * why react-dropzone's `maxFiles` is not used.
+ */
+const MAX_FILES = 10;
+
+/**
+ * How long an all-success queue stays visible before auto-dismissing.
+ * Queues containing any failure persist until explicitly dismissed.
+ */
+const UPLOAD_SUCCESS_DISPLAY_DURATION_MS = 4000;
 
 /**
  * Convert MIME type string to react-dropzone Accept format
@@ -215,10 +201,11 @@ function parseAcceptString(acceptString?: string): Accept | undefined {
 /**
  * Get human-readable file type description from accept string
  */
-function getAcceptDescription(acceptString?: string, maxSize?: number): string {
-  const sizeLimit = maxSize
-    ? ` up to ${formatFileSize(maxSize)}`
-    : " up to 5MB";
+function getAcceptDescription(
+  acceptString: string | undefined,
+  maxSize: number
+): string {
+  const sizeLimit = ` up to ${formatFileSize(maxSize)}`;
 
   if (!acceptString) {
     return `PNG, JPG, GIF, WebP, MP4, MOV, PDF${sizeLimit}`;
@@ -248,25 +235,107 @@ function getAcceptDescription(acceptString?: string, maxSize?: number): string {
 }
 
 /**
- * Maximum number of files per upload
+ * Map react-dropzone rejection codes to human-readable copy. Raw library
+ * defaults leak byte counts ("File is larger than 5242880 bytes"), so every
+ * known code gets explicit wording; unknown codes fall through to the
+ * library's message rather than hiding it.
  */
-const MAX_FILES = 10;
+export function describeFileError(error: FileError, maxSize: number): string {
+  switch (error.code) {
+    case "file-too-large":
+      return `File is too large (max ${formatFileSize(maxSize)})`;
+    case "file-invalid-type":
+      return "File type is not supported";
+    case "file-too-small":
+      return "File is too small";
+    case "too-many-files":
+      return `Only ${MAX_FILES} files can be uploaded at once`;
+    default:
+      return error.message;
+  }
+}
+
+/** Row reason for files beyond the batch cap. */
+const BATCH_SKIP_MESSAGE = `Skipped: only ${MAX_FILES} files can be uploaded at once`;
 
 /**
- * Duration to display upload success/error state before clearing queue (milliseconds)
+ * A queue row: upload progress plus a stable identity for updates/retry and
+ * the folder the file was dropped into. The folder is snapshotted at drop
+ * time so a retry lands in the folder the user originally targeted, even if
+ * they navigated elsewhere while the failure sat in the queue.
  */
-const UPLOAD_SUCCESS_DISPLAY_DURATION_MS = 2000;
+type UploadQueueItem = UploadProgress & {
+  id: string;
+  folderId: string | null;
+};
+
+// Stable row ids for React keys and targeted state updates; a module counter
+// avoids collisions across drops without needing crypto APIs.
+let queueItemSeq = 0;
+function nextQueueItemId(): string {
+  queueItemSeq += 1;
+  return `upload-${queueItemSeq}`;
+}
+
+/**
+ * Split a drop into uploadable rows and pre-failed rows (client rejections
+ * and over-cap skips). Pure so the batch semantics are unit-testable.
+ */
+export function buildQueueFromDrop(
+  acceptedFiles: File[],
+  fileRejections: Pick<FileRejection, "file" | "errors">[],
+  maxSize: number,
+  folderId: string | null
+): { toUpload: UploadQueueItem[]; failed: UploadQueueItem[] } {
+  // The cap applies to VALID files: a batch with rejections still uploads up
+  // to MAX_FILES valid files (rejected files never consume cap slots).
+  const withinCap = acceptedFiles.slice(0, MAX_FILES);
+  const overCap = acceptedFiles.slice(MAX_FILES);
+
+  const toUpload: UploadQueueItem[] = withinCap.map(file => ({
+    id: nextQueueItemId(),
+    file,
+    filename: file.name,
+    status: "pending",
+    progress: 0,
+    folderId,
+  }));
+
+  const failed: UploadQueueItem[] = [
+    ...fileRejections.map(({ file, errors }) => ({
+      id: nextQueueItemId(),
+      file,
+      filename: file.name,
+      status: "rejected" as const,
+      error: errors.map(e => describeFileError(e, maxSize)).join(", "),
+      folderId,
+    })),
+    ...overCap.map(file => ({
+      id: nextQueueItemId(),
+      file,
+      filename: file.name,
+      status: "rejected" as const,
+      skipped: true,
+      error: BATCH_SKIP_MESSAGE,
+      folderId,
+    })),
+  ];
+
+  return { toUpload, failed };
+}
 
 /**
  * MediaUploadDropzone component
  *
- * Drag-and-drop upload area with file validation, progress tracking, and error handling.
+ * Drag-and-drop upload area with per-file validation, progress, retry, and
+ * partial-success reporting.
  *
  * @param props - MediaUploadDropzone props
  * @returns MediaUploadDropzone component
  */
 export function MediaUploadDropzone({
   onUploadComplete,
+  onUploadStart,
   isCollapsed: controlledIsCollapsed,
   onToggleCollapse,
   accept,
@@ -290,12 +359,12 @@ export function MediaUploadDropzone({
 
   // Get human-readable description
   const fileTypeDescription = React.useMemo(
-    () => getAcceptDescription(accept, maxFileSize),
-    [accept, maxFileSize]
+    () => getAcceptDescription(accept, maxSize),
+    [accept, maxSize]
   );
 
-  // Upload queue state
-  const [uploadQueue, setUploadQueue] = React.useState<UploadProgress[]>([]);
+  // Upload queue state (uploadable rows and pre-failed rows together)
+  const [uploadQueue, setUploadQueue] = React.useState<UploadQueueItem[]>([]);
 
   // Upload mutation (disable auto-invalidate for batch uploads)
   const { mutateAsync: uploadMediaAsync } = useUploadMedia({
@@ -305,68 +374,74 @@ export function MediaUploadDropzone({
   // Query client for manual cache invalidation after batch upload
   const queryClient = useQueryClient();
 
-  // Handle file drop
-  const handleDrop = React.useCallback(
-    async (acceptedFiles: File[]) => {
-      // Initialize upload queue
-      const initialQueue: UploadProgress[] = acceptedFiles.map(file => ({
-        file,
-        filename: file.name,
-        status: "pending",
-        progress: 0,
-      }));
-
-      setUploadQueue(initialQueue);
-
-      // Upload files in parallel
-      const uploadPromises = acceptedFiles.map((file, index) => {
-        return uploadMediaAsync({
-          file,
-          folderId: activeFolderId,
-          onProgress: progress => {
-            // Update progress for this file
-            setUploadQueue(prevQueue =>
-              prevQueue.map((item, i) =>
-                i === index ? { ...item, status: "uploading", progress } : item
-              )
-            );
-          },
+  // Upload a single queue row, updating only that row by id. Shared by the
+  // initial batch and per-row retry; the destination is the row's own
+  // drop-time folder, never the folder currently open in the UI.
+  const uploadQueueItem = React.useCallback(
+    (item: UploadQueueItem): Promise<Media | null> => {
+      return uploadMediaAsync({
+        file: item.file,
+        folderId: item.folderId,
+        onProgress: progress => {
+          setUploadQueue(prevQueue =>
+            prevQueue.map(row =>
+              row.id === item.id
+                ? { ...row, status: "uploading", progress }
+                : row
+            )
+          );
+        },
+      })
+        .then(media => {
+          setUploadQueue(prevQueue =>
+            prevQueue.map(row =>
+              row.id === item.id
+                ? {
+                    ...row,
+                    status: "success",
+                    progress: 100,
+                    mediaId: media.id,
+                  }
+                : row
+            )
+          );
+          return media;
         })
-          .then(media => {
-            // Mark as success
-            setUploadQueue(prevQueue =>
-              prevQueue.map((item, i) =>
-                i === index
-                  ? {
-                      ...item,
-                      status: "success",
-                      progress: 100,
-                      mediaId: media.id,
-                    }
-                  : item
-              )
-            );
-            return media;
-          })
-          .catch(error => {
-            // Mark as error
-            setUploadQueue(prevQueue =>
-              prevQueue.map((item, i) =>
-                i === index
-                  ? {
-                      ...item,
-                      status: "error",
-                      error: error.message,
-                    }
-                  : item
-              )
-            );
-            return null; // Return null for failed uploads
-          });
-      });
+        .catch((error: Error) => {
+          setUploadQueue(prevQueue =>
+            prevQueue.map(row =>
+              row.id === item.id
+                ? { ...row, status: "error", error: error.message }
+                : row
+            )
+          );
+          return null; // Return null for failed uploads
+        });
+    },
+    [uploadMediaAsync]
+  );
 
-      // Wait for all uploads to complete
-      const results = await Promise.all(uploadPromises);
+  // Handle file drop: build the queue (including pre-failed rows), then
+  // upload the valid files in parallel.
+  const handleDrop = React.useCallback(
+    async (acceptedFiles: File[], fileRejections: FileRejection[]) => {
+      const { toUpload, failed } = buildQueueFromDrop(
+        acceptedFiles,
+        fileRejections,
+        maxSize,
+        activeFolderId ?? null
+      );
+
+      // Starting a new drop replaces the previous batch's results
+      setUploadQueue([...toUpload, ...failed]);
+
+      if (toUpload.length === 0) return;
+
+      // Collapse-on-start only fires when something actually uploads; an
+      // all-rejected drop keeps the target open next to the failure rows.
+      onUploadStart?.();
+
+      const results = await Promise.all(toUpload.map(uploadQueueItem));
       const successfulUploads = results.filter(
         (media): media is Media => media !== null
       );
@@ -379,10 +454,36 @@ export function MediaUploadDropzone({
         // Call onUploadComplete callback after cache invalidation
         onUploadComplete?.(successfulUploads);
       }
-
-      // Note: Queue will be cleared by useEffect after display duration
     },
-    [uploadMediaAsync, queryClient, onUploadComplete, activeFolderId]
+    [
+      maxSize,
+      activeFolderId,
+      onUploadStart,
+      uploadQueueItem,
+      queryClient,
+      onUploadComplete,
+    ]
+  );
+
+  // Retry a server-failed row in place. Client-rejected rows never retry
+  // (the file would just fail validation again).
+  const handleRetry = React.useCallback(
+    async (item: UploadQueueItem) => {
+      setUploadQueue(prevQueue =>
+        prevQueue.map(row =>
+          row.id === item.id
+            ? { ...row, status: "pending", progress: 0, error: undefined }
+            : row
+        )
+      );
+
+      const media = await uploadQueueItem(item);
+      if (media) {
+        await queryClient.invalidateQueries({ queryKey: ["media"] });
+        onUploadComplete?.([media]);
+      }
+    },
+    [uploadQueueItem, queryClient, onUploadComplete]
   );
 
   // react-dropzone hook
@@ -394,32 +495,28 @@ export function MediaUploadDropzone({
   // "onDragOver" | "onDragLeave"> & {...}` and against the React 19
   // ambient types those four arrive as required. The hook still works
   // without user-side handlers — drag events are handled internally — so
-  // we set `multiple` to the semantically correct value (MAX_FILES > 1)
-  // and pass through `undefined` for the drag callbacks. Casting via
-  // `as DropzoneOptions` would hide the type contract; explicit values
-  // keep the intent visible.
-  const {
-    getRootProps,
-    getInputProps,
-    isDragActive,
-    isDragReject,
-    fileRejections,
-    open,
-  } = useDropzone({
-    accept: acceptedFileTypes,
-    maxSize: maxSize,
-    maxFiles: MAX_FILES,
-    multiple: MAX_FILES > 1,
-    disabled: uploadQueue.some(item => item.status === "uploading"),
-    onDrop: acceptedFiles => {
-      void handleDrop(acceptedFiles);
-    },
-    onDragEnter: undefined,
-    onDragOver: undefined,
-    onDragLeave: undefined,
-    noClick: true,
-    noKeyboard: true,
-  });
+  // we set `multiple: true` and pass through `undefined` for the drag
+  // callbacks. Casting via `as DropzoneOptions` would hide the type
+  // contract; explicit values keep the intent visible.
+  //
+  // No `maxFiles` here on purpose: the batch cap is handled in onDrop.
+  const { getRootProps, getInputProps, isDragActive, isDragReject, open } =
+    useDropzone({
+      accept: acceptedFileTypes,
+      maxSize: maxSize,
+      multiple: true,
+      disabled: uploadQueue.some(
+        item => item.status === "uploading" || item.status === "pending"
+      ),
+      onDrop: (acceptedFiles, fileRejections) => {
+        void handleDrop(acceptedFiles, fileRejections);
+      },
+      onDragEnter: undefined,
+      onDragOver: undefined,
+      onDragLeave: undefined,
+      noClick: true,
+      noKeyboard: true,
+    });
 
   // Count items by status
   const pendingCount = uploadQueue.filter(
@@ -431,7 +528,13 @@ export function MediaUploadDropzone({
   const successCount = uploadQueue.filter(
     item => item.status === "success"
   ).length;
-  const errorCount = uploadQueue.filter(item => item.status === "error").length;
+  const skippedCount = uploadQueue.filter(
+    item => item.status === "rejected" && item.skipped
+  ).length;
+  const failureCount =
+    uploadQueue.filter(
+      item => item.status === "error" || item.status === "rejected"
+    ).length - skippedCount;
 
   // Check if currently uploading (any pending or actively uploading)
   const isUploading = pendingCount > 0 || uploadingCount > 0;
@@ -439,13 +542,14 @@ export function MediaUploadDropzone({
   // Count of files still in progress (pending + uploading)
   const inProgressCount = pendingCount + uploadingCount;
 
-  // Clear upload queue after success/error display duration
-  // This effect prevents memory leaks by cleaning up the timeout on unmount
+  // A settled all-success queue dismisses itself; any failure or skip keeps
+  // the queue on screen until the user dismisses it, so errors are never lost.
   React.useEffect(() => {
     if (
       uploadQueue.length > 0 &&
       !isUploading &&
-      (successCount > 0 || errorCount > 0)
+      failureCount === 0 &&
+      skippedCount === 0
     ) {
       const timeoutId = setTimeout(() => {
         setUploadQueue([]);
@@ -453,15 +557,15 @@ export function MediaUploadDropzone({
 
       return () => clearTimeout(timeoutId);
     }
-  }, [uploadQueue.length, isUploading, successCount, errorCount]);
+  }, [uploadQueue.length, isUploading, failureCount, skippedCount]);
 
-  // Determine visual state
+  // Drop-target visual state. Result states (success/error) live on the
+  // queue rows, not the target, so partial success never paints the whole
+  // zone red; `reject` is live drag feedback only.
   const getVisualState = () => {
     if (isDragReject) return "reject";
     if (isDragActive) return "active";
     if (isUploading) return "uploading";
-    if (errorCount > 0) return "error";
-    if (successCount > 0) return "success";
     return "default";
   };
 
@@ -469,25 +573,18 @@ export function MediaUploadDropzone({
 
   // Border styles — border-2 dashed, prominent, mode-aware
   const borderStyles = {
-    default:
-      "border-2 border-dashed border-border hover:border-primary/50 dark:border-border-foreground/40 dark:hover:border-primary/60",
+    default: "border-2 border-dashed border-border hover:border-primary/50",
     active: "border-2 border-dashed border-primary",
     reject: "border-2 border-dashed border-destructive",
     uploading: "border-2 border-dashed border-primary/80",
-    error: "border-2 border-dashed border-destructive",
-    success:
-      "border-2 border-dashed border-success-500 dark:border-success-400",
   };
 
   // Background styles — use CSS variables (bg-card) so both light and dark modes resolve correctly.
-  // Avoid bg-card: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
   const backgroundStyles = {
     default: "bg-card",
     active: "bg-primary/5 dark:bg-primary/5",
     reject: "bg-destructive/5 dark:bg-destructive/10",
     uploading: "bg-card",
-    error: "bg-destructive/5 dark:bg-destructive/10",
-    success: "bg-success-500/5 dark:bg-success-500/10",
   };
 
   // Icon component based on state
@@ -496,8 +593,6 @@ export function MediaUploadDropzone({
     active: Upload,
     reject: AlertTriangle,
     uploading: Loader2,
-    error: AlertTriangle,
-    success: Check,
   }[visualState];
 
   // Icon color based on state — default always uses primary for the circle contrast
@@ -506,216 +601,256 @@ export function MediaUploadDropzone({
     active: "text-primary",
     reject: "text-destructive",
     uploading: "text-primary",
-    error: "text-destructive",
-    success: "text-success-500 dark:text-success-400",
   };
 
-  if (isCollapsed) return null;
+  // Queue summary copy: live count while uploading, outcome once settled.
+  // Failures (validation/server errors) and batch-cap skips are reported
+  // separately so a skipped file is never announced as a failed one.
+  const settledSummary = [
+    `${successCount} uploaded`,
+    failureCount > 0 ? `${failureCount} failed` : null,
+    skippedCount > 0 ? `${skippedCount} skipped` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  // The live denominator counts only rows that will actually upload;
+  // pre-rejected rows sit in the same queue but were never attempted. The
+  // numerator counts finished rows so the label climbs (0 -> N) instead of
+  // counting down the remaining work.
+  const uploadableCount = uploadQueue.filter(
+    item => item.status !== "rejected"
+  ).length;
+  const finishedCount = uploadableCount - inProgressCount;
+  const queueSummary = isUploading
+    ? `Uploading files: ${finishedCount} of ${uploadableCount} done`
+    : settledSummary;
 
   return (
     <div className={cn("w-full relative group/dropzone", className)}>
-      {/* Close Button */}
-      {onToggleCollapse && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={e => {
-            e.stopPropagation();
-            onToggleCollapse();
-          }}
-          className="absolute right-2 top-2 z-10 rounded-none bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
-          aria-label="Close upload zone"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+      {!isCollapsed && (
+        <>
+          {/* Close Button */}
+          {onToggleCollapse && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={e => {
+                e.stopPropagation();
+                onToggleCollapse();
+              }}
+              className="absolute right-2 top-2 z-10 rounded-none bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
+              aria-label="Close upload zone"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+
+          {/* Dropzone */}
+          <div
+            {...getRootProps()}
+            onClick={isUploading ? undefined : open}
+            onKeyDown={e => {
+              if (!isUploading && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                open();
+              }
+            }}
+            className={cn(
+              "relative flex flex-col items-center justify-center rounded-none transition-all duration-200 group",
+              borderStyles[visualState],
+              backgroundStyles[visualState],
+              "min-h-48 md:min-h-56 py-16 px-8",
+              !isUploading &&
+                "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2",
+              isUploading && "cursor-not-allowed"
+            )}
+            role="button"
+            aria-label="Upload files. Drag and drop files here, or press Enter to browse."
+            aria-describedby="upload-instructions"
+            tabIndex={isUploading ? -1 : 0}
+          >
+            <input {...getInputProps()} aria-hidden="true" tabIndex={-1} />
+
+            {/* Icon circle — solid filled, primary light color background */}
+            <div
+              className={cn(
+                "flex items-center justify-center rounded-none mb-5 transition-all duration-200",
+                "w-16 h-16",
+                // Solid filled square — no ring/outline, just a clean bg fill
+                visualState === "default" &&
+                  "bg-primary/20 dark:bg-primary/30 group-hover:bg-primary/30 dark:group-hover:bg-primary/40",
+                visualState === "active" && "bg-primary/20 dark:bg-primary/25",
+                visualState === "uploading" &&
+                  "bg-primary/15 dark:bg-primary/20",
+                visualState === "reject" &&
+                  "bg-destructive/15 dark:bg-destructive/20"
+              )}
+            >
+              <IconComponent
+                className={cn(
+                  iconColorStyles[visualState],
+                  "h-7 w-7 transition-colors duration-200",
+                  isUploading && "animate-spin"
+                )}
+              />
+            </div>
+
+            {/* Text content */}
+            <div className="flex flex-col items-center gap-0.5 text-center">
+              {/* Folder indicator */}
+              {activeFolderId && activeFolderName && (
+                <p className="mb-1 text-xs text-muted-foreground">
+                  Uploading to:{" "}
+                  <span className="font-medium">{activeFolderName}</span>
+                </p>
+              )}
+              {/* Primary message. The browse hint is plain text: the whole
+                  target is the interactive element, and a nested <button>
+                  inside role="button" is invalid markup. */}
+              {visualState === "default" && (
+                <>
+                  <p className="text-sm font-semibold text-foreground">
+                    Drag &amp; drop files here
+                  </p>
+                  <span className="mt-1 text-sm font-medium text-primary underline underline-offset-2">
+                    or click to browse
+                  </span>
+                </>
+              )}
+              {visualState !== "default" && (
+                <p className="text-sm font-semibold text-foreground">
+                  {visualState === "active" && "Drop files here..."}
+                  {visualState === "reject" &&
+                    "Some of these files can't be uploaded here"}
+                  {visualState === "uploading" &&
+                    `Uploading ${inProgressCount} file(s)...`}
+                </p>
+              )}
+
+              {/* File type hint */}
+              <p
+                id="upload-instructions"
+                className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground/80"
+              >
+                {fileTypeDescription}
+              </p>
+            </div>
+
+            {/* Screen reader-only instructions */}
+            <span className="sr-only">
+              {fileTypeDescription}. Maximum files: {MAX_FILES} files per
+              upload.
+            </span>
+          </div>
+        </>
       )}
 
-      {/* Dropzone */}
+      {/* The single ARIA live region for upload status. Always mounted so
+          screen readers announce the first status too; the visible summary
+          below is deliberately NOT a live region, so each state change is
+          announced exactly once. */}
       <div
-        {...getRootProps()}
-        onClick={isUploading ? undefined : open}
-        onKeyDown={e => {
-          if (!isUploading && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            open();
-          }
-        }}
-        className={cn(
-          "relative flex flex-col items-center justify-center rounded-none transition-all duration-200 group",
-          borderStyles[visualState],
-          backgroundStyles[visualState],
-          "min-h-48 md:min-h-56 py-16 px-8",
-          !isUploading &&
-            "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2",
-          isUploading && "cursor-not-allowed"
-        )}
-        role="button"
-        aria-label="Upload files. Drag and drop files here, or press Enter to browse."
-        aria-describedby="upload-instructions"
-        tabIndex={isUploading ? -1 : 0}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
       >
-        <input {...getInputProps()} aria-hidden="true" />
+        {uploadQueue.length > 0 &&
+          (isUploading ? queueSummary : `Upload finished. ${settledSummary}.`)}
+      </div>
 
-        {/* Icon circle — solid filled, primary light color background */}
+      {/* Upload queue: renders regardless of isCollapsed so progress and
+          failures stay visible after the drop target auto-collapses. */}
+      {uploadQueue.length > 0 && (
         <div
           className={cn(
-            "flex items-center justify-center rounded-none mb-5 transition-all duration-200",
-            "w-16 h-16",
-            // Solid filled circle — no ring/outline, just a clean bg fill
-            visualState === "default" &&
-              "bg-primary/20 dark:bg-primary/30 group-hover:bg-primary/30 dark:group-hover:bg-primary/40",
-            visualState === "active" && "bg-primary/20 dark:bg-primary/25",
-            visualState === "uploading" && "bg-primary/15 dark:bg-primary/20",
-            (visualState === "reject" || visualState === "error") &&
-              "bg-destructive/15 dark:bg-destructive/20",
-            visualState === "success" &&
-              "bg-success-500/15 dark:bg-success-500/20"
+            "border border-border bg-card",
+            isCollapsed ? "mt-0" : "mt-4"
           )}
         >
-          <IconComponent
-            className={cn(
-              iconColorStyles[visualState],
-              "h-7 w-7 transition-colors duration-200",
-              isUploading && "animate-spin"
-            )}
-          />
-        </div>
-
-        {/* Text content */}
-        <div className="flex flex-col items-center gap-0.5 text-center">
-          {/* Folder indicator */}
-          {activeFolderId && activeFolderName && (
-            <p className="mb-1 text-xs text-muted-foreground">
-              Uploading to:{" "}
-              <span className="font-medium">{activeFolderName}</span>
+          <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <p className="text-sm font-medium text-foreground">
+              {queueSummary}
             </p>
-          )}
-          {/* Primary message */}
-          {visualState === "default" && (
-            <>
-              <p className="text-sm font-semibold text-foreground">
-                Drag &amp; drop files here
-              </p>
-              <button
-                type="button"
-                onClick={e => {
-                  e.stopPropagation();
-                  open();
-                }}
-                className="mt-1 text-sm font-medium text-primary hover-unified underline underline-offset-2"
+            {!isUploading && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setUploadQueue([])}
+                className="rounded-none"
               >
-                or click to browse
-              </button>
-            </>
-          )}
-          {visualState !== "default" && (
-            <p className="text-sm font-semibold text-foreground">
-              {visualState === "active" && "Drop files here..."}
-              {visualState === "uploading" &&
-                `Uploading ${inProgressCount} file(s)...`}
-              {visualState === "success" &&
-                `${successCount} file(s) uploaded successfully`}
-              {(visualState === "error" || visualState === "reject") &&
-                (errorCount > 0
-                  ? `${errorCount} file(s) failed`
-                  : "Invalid file type or size")}
-            </p>
-          )}
+                Dismiss
+              </Button>
+            )}
+          </div>
 
-          {/* File type hint */}
-          <p
-            id="upload-instructions"
-            className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground/80"
-          >
-            {fileTypeDescription}
-          </p>
-        </div>
-
-        {/* Screen reader-only instructions */}
-        <span className="sr-only">
-          {fileTypeDescription}. Maximum files: {MAX_FILES} files per upload.
-        </span>
-      </div>
-
-      {/* ARIA live region for upload status */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {isUploading && `Uploading ${inProgressCount} files...`}
-        {successCount > 0 &&
-          !isUploading &&
-          `Upload complete. ${successCount} files uploaded successfully.`}
-        {errorCount > 0 &&
-          !isUploading &&
-          `Upload failed. ${errorCount} files failed to upload.`}
-      </div>
-
-      {/* Upload progress */}
-      {uploadQueue.length > 0 && !isCollapsed && (
-        <div className="mt-4 space-y-3">
-          {uploadQueue.map((item, index) => (
-            <div key={index} className="flex items-center gap-3">
-              {/* Status icon */}
-              <div className="flex-shrink-0">
-                {item.status === "uploading" && (
-                  <Loader2 className="h-4 w-4 animate-spin text-primary-500" />
-                )}
-                {item.status === "success" && (
-                  <Check className="h-4 w-4 text-success-500" />
-                )}
-                {item.status === "error" && (
-                  <X className="h-4 w-4 text-destructive" />
-                )}
-                {item.status === "pending" && (
-                  <div className="h-4 w-4 rounded-none border-2 border-border-foreground" />
-                )}
-              </div>
-
-              {/* File info and progress */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-medium text-foreground">
-                    {item.filename}
-                  </p>
-                  <span className="flex-shrink-0 text-xs text-muted-foreground">
-                    {formatFileSize(item.file.size)}
-                  </span>
+          <div className="space-y-3 px-4 py-3">
+            {uploadQueue.map(item => (
+              <div key={item.id} className="flex items-center gap-3">
+                {/* Status icon */}
+                <div className="shrink-0">
+                  {item.status === "uploading" && (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  )}
+                  {item.status === "success" && (
+                    <Check className="h-4 w-4 text-success" />
+                  )}
+                  {(item.status === "error" || item.status === "rejected") && (
+                    <X className="h-4 w-4 text-destructive" />
+                  )}
+                  {item.status === "pending" && (
+                    <div className="h-4 w-4 rounded-none border-2 border-border" />
+                  )}
                 </div>
 
-                {/* Progress bar */}
-                {(item.status === "uploading" || item.status === "pending") && (
-                  <Progress
-                    value={item.progress || 0}
-                    variant="default"
-                    className="mt-1"
-                    aria-label={`Uploading ${item.filename}: ${item.progress || 0}%`}
-                  />
-                )}
+                {/* File info and progress */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {item.filename}
+                    </p>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatFileSize(item.file.size)}
+                    </span>
+                  </div>
 
-                {/* Error message */}
-                {item.status === "error" && item.error && (
-                  <p className="mt-1 text-xs text-destructive">{item.error}</p>
+                  {/* Progress bar */}
+                  {(item.status === "uploading" ||
+                    item.status === "pending") && (
+                    <Progress
+                      value={item.progress || 0}
+                      variant="default"
+                      className="mt-1"
+                      aria-label={`Uploading ${item.filename}: ${item.progress || 0}%`}
+                    />
+                  )}
+
+                  {/* Failure reason */}
+                  {(item.status === "error" || item.status === "rejected") &&
+                    item.error && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {item.error}
+                      </p>
+                    )}
+                </div>
+
+                {/* Retry applies to server failures only; a client-rejected
+                    file would fail the same validation again. */}
+                {item.status === "error" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleRetry(item)}
+                    className="rounded-none shrink-0"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retry
+                  </Button>
                 )}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      )}
-
-      {/* File rejection errors */}
-      {fileRejections.length > 0 && (
-        <Alert variant="destructive" className="mt-4">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>
-            <p className="font-medium">Some files were rejected:</p>
-            <ul className="mt-2 list-inside list-disc space-y-1 text-sm">
-              {fileRejections.map(({ file, errors }) => (
-                <li key={file.name}>
-                  <span className="font-medium">{file.name}</span>:{" "}
-                  {errors.map(e => e.message).join(", ")}
-                </li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
       )}
     </div>
   );

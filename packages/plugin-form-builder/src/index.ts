@@ -101,6 +101,9 @@ export type {
 // Document types
 export type { FormDocument, SubmissionDocument, FormSubmission } from "./types";
 
+// Notification rule type (stored on the form; edited by the builder UI)
+export type { FormNotification, FormNotificationItem } from "./types";
+
 // Validation and conditional logic types
 export type {
   ValidationRules,

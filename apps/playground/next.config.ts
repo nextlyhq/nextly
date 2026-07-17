@@ -207,9 +207,6 @@ const nextConfig: NextConfig = {
       "@nextlyhq/admin/style.css": [
         "../../packages/admin/dist/styles/globals.css",
       ],
-      "@nextlyhq/plugin-form-builder/styles/builder.css": [
-        "../../packages/plugin-form-builder/dist/styles/form-builder.css",
-      ],
       "@nextlyhq/plugin-form-builder/styles/submissions-filter.css": [
         "../../packages/plugin-form-builder/dist/styles/submissions-filter.css",
       ],

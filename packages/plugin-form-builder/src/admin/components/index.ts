@@ -8,46 +8,17 @@
  */
 
 // ---------------------------------------------------------------------------
-// Form Field List
-// ---------------------------------------------------------------------------
-
-export { FormFieldList, type FormFieldListProps } from "./FormFieldList";
-
-// ---------------------------------------------------------------------------
-// Sortable Field Row
+// Builder Components (the live form builder)
 // ---------------------------------------------------------------------------
 
 export {
-  SortableFieldRow,
-  type SortableFieldRowProps,
-} from "./SortableFieldRow";
-
-// ---------------------------------------------------------------------------
-// Add Field Button
-// ---------------------------------------------------------------------------
-
-export { AddFieldButton, type AddFieldButtonProps } from "./AddFieldButton";
-
-// ---------------------------------------------------------------------------
-// Field Editor Panel
-// ---------------------------------------------------------------------------
-
-export {
-  FieldEditorPanel,
-  type FieldEditorPanelProps,
-} from "./FieldEditorPanel";
-
-// ---------------------------------------------------------------------------
-// Builder Components (Legacy - to be deprecated)
-// ---------------------------------------------------------------------------
-
-export {
-  FieldLibrary,
-  FormCanvas,
+  FieldCards,
+  AddFieldDialog,
   FieldEditor,
   FormPreview,
   ConditionalLogicEditor,
-  type FormCanvasProps,
+  type FieldCardsProps,
+  type AddFieldDialogProps,
   type FieldEditorProps,
   type FormPreviewProps,
   type ConditionalLogicEditorProps,

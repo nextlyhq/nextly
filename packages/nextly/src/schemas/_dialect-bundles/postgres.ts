@@ -31,6 +31,7 @@ export { users, accounts, sessions } from "../users/postgres";
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/postgres";
 

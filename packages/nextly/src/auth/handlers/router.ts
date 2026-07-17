@@ -6,6 +6,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
 
+import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
 import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
@@ -17,6 +18,7 @@ import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
+import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup } from "./setup";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
@@ -32,7 +34,13 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   "register",
   "forgot-password",
   "reset-password",
+  // Same bucket as reset-password: both consume a token, so both are
+  // grind-able by an attacker holding no token at all.
+  "accept-invite",
   "challenge/resolve",
+  // Consumes a single-purpose pending token and sets a password — same
+  // grind/replay surface as the other token-consuming paths.
+  "set-initial-password",
 ]);
 
 /**
@@ -117,6 +125,7 @@ export interface AuthRouterDeps {
     passwordHash: string;
     emailVerified: Date | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
     failedLoginAttempts: number;
     lockedUntil: Date | null;
   } | null>;
@@ -126,6 +135,7 @@ export interface AuthRouterDeps {
     name: string;
     image: string | null;
     isActive: boolean;
+    mustChangePassword: boolean | null;
   } | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;
@@ -178,6 +188,14 @@ export interface AuthRouterDeps {
     token: string,
     newPassword: string
   ) => Promise<{ email: string }>;
+  acceptInvite: (
+    token: string,
+    newPassword: string
+  ) => Promise<{ userId: string }>;
+  setInitialPassword: (
+    userId: string,
+    newPassword: string
+  ) => Promise<{ userId: string }>;
   changePassword: (
     userId: string,
     currentPassword: string,
@@ -255,6 +273,10 @@ async function dispatchAuthRequest(
           return handleForgotPassword(request, deps);
         case "reset-password":
           return handleResetPassword(request, deps);
+        case "accept-invite":
+          return handleAcceptInvite(request, deps);
+        case "set-initial-password":
+          return handleSetInitialPassword(request, deps);
         case "verify-email":
           return handleVerifyEmail(request, deps);
         case "verify-email/resend":

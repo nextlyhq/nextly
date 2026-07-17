@@ -3,6 +3,7 @@ import { lazy } from "react";
 import { ROUTES } from "../constants/routes";
 import type { PageProps } from "../lib/routing";
 
+import AcceptInvitePage from "./(auth)/accept-invite";
 import ForgotPasswordPage from "./(auth)/forgot-password";
 import LoginPage from "./(auth)/login";
 import RegisterPage from "./(auth)/register";
@@ -17,7 +18,8 @@ import CreateEntryPage from "./dashboard/entries/[slug]/create";
 import CollectionEntriesPage from "./dashboard/entries/[slug]/index";
 import DashboardPage from "./dashboard/index";
 import MediaLibraryPage from "./dashboard/media/index";
-import PluginSettingsPage from "./dashboard/plugins/[slug]";
+import PluginDetailPage from "./dashboard/plugins/[slug]";
+import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import ComponentsLandingRedirect from "./dashboard/redirects/ComponentsLandingRedirect";
@@ -92,6 +94,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.FORGOT_PASSWORD]: { component: ForgotPasswordPage, type: "public" },
   [ROUTES.RESET_PASSWORD]: { component: ResetPasswordPage, type: "public" },
   [ROUTES.VERIFY_EMAIL]: { component: VerifyEmailPage, type: "public" },
+  [ROUTES.ACCEPT_INVITE]: { component: AcceptInvitePage, type: "public" },
 
   // Dashboard route (homepage)
   [ROUTES.DASHBOARD]: { component: DashboardPage, type: "private" },
@@ -326,6 +329,11 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Plugin routes
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  [ROUTES.PLUGIN_DETAIL]: {
+    component: PluginDetailPage,
     type: "private",
     requiredPermission: "manage-settings",
   },

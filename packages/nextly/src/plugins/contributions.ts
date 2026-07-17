@@ -114,6 +114,14 @@ export interface PluginEmailTemplate {
  * the given admin `component`. Validation rides on the primitive + the field's
  * standard `validate` option. (Typed builders + Visual-Builder UI are full-M9.)
  */
+/**
+ * The admin surfaces a field type can appear on. Each surface narrows the
+ * visible type set independently: what a picker shows resolves as the
+ * surface's own capability set ∩ the type's declared surfaces ∩ the host's
+ * excludes — every level can only remove types, never force one in.
+ */
+export type FieldSurface = "entries" | "users" | "forms";
+
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
   type: string;
@@ -121,6 +129,14 @@ export interface PluginFieldType {
   storage: "text" | "longText" | "boolean" | "number" | "timestamp" | "json";
   /** Admin field-editor component path, resolved via the component registry. */
   component: ComponentPath;
+  /**
+   * Which admin surfaces may offer this type in their field pickers. Omitted
+   * means the entry/single editing surface only — a type never auto-appears
+   * on a surface its author did not opt into. Instances of a type that later
+   * stops being offered still render (read-only degradation), they are never
+   * dropped.
+   */
+  surfaces?: readonly FieldSurface[];
   /**
    * Layout hint for the entry/single form. `"takeover"`: when a visible field of
    * this type is present, the form body shows only that field plus the field that

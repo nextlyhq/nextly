@@ -38,6 +38,24 @@ export interface PluginMetadata {
   name: string;
   version?: string;
   description?: string;
+  /** Author shown in the plugins list; mirrors package.json by convention. */
+  author?: string;
+  /** Homepage URL linked from the plugin detail page. */
+  homepage?: string;
+  /** Source repository URL linked from the plugin detail page. */
+  repository?: string;
+  /** Documentation URL when distinct from the homepage. */
+  docsUrl?: string;
+  /** SPDX license identifier shown on the plugin detail page. */
+  license?: string;
+  /** Category the plugins list filters by (controlled vocabulary). */
+  category?: string;
+  /** Free-form descriptive tags shown on the plugin detail page. */
+  tags?: string[];
+  /** Whether the plugin's behavior is active. Absent on older servers. */
+  enabled?: boolean;
+  /** Required plugin dependencies → version range, for the detail page. */
+  dependsOn?: Record<string, string>;
   /** @deprecated Use `placement` instead. */
   group?: string;
   /** Immutable sidebar placement from plugin config. */
@@ -46,6 +64,20 @@ export interface PluginMetadata {
   /** Position anchor for standalone plugins (which built-in section to appear after). */
   after?: string;
   collections: string[];
+  /** Slugs of contributed singles, for the detail page's contributions view. */
+  singles?: string[];
+  /** Slugs of contributed components, for the detail page's contributions view. */
+  components?: string[];
+  /** Declared custom permissions (identity + display fields only; enabled plugins). */
+  permissions?: Array<{
+    action: string;
+    resource: string;
+    label?: string;
+    description?: string;
+    danger?: boolean;
+  }>;
+  /** Declared HTTP routes as method + path (enabled plugins only). */
+  routes?: Array<{ method: string; path: string }>;
   /** Sidebar appearance customization from plugin config. */
   appearance?: {
     icon?: string;

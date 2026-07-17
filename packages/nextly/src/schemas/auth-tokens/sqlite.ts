@@ -46,6 +46,35 @@ export const passwordResetTokens = sqliteTable(
   ]
 );
 
+// User invite tokens — the single-use set-password link an admin hands to a
+// new user. Mirrors passwordResetTokens (with a used_at consume marker), but
+// keyed on user_id rather than an email identifier: the invite belongs to one
+// account, survives an email change, and keeps the address out of the token
+// store. Only the SHA-256 hash of the token is kept, never the raw value.
+export const userInviteTokens = sqliteTable(
+  "user_invite_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expires: integer("expires", { mode: "timestamp" }).notNull(),
+    usedAt: integer("used_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  t => [
+    // One invite row per account, enforced by the database: two concurrent
+    // re-invites cannot both leave a live link, and superseding an earlier
+    // invite holds without a read-modify-write race.
+    uniqueIndex("uit_user_id_unique").on(t.userId),
+    index("uit_token_hash_idx").on(t.tokenHash),
+    index("uit_expires_idx").on(t.expires),
+  ]
+);
+
 // Email verification tokens (custom, hashed)
 export const emailVerificationTokens = sqliteTable(
   "email_verification_tokens",

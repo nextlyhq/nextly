@@ -117,6 +117,8 @@ export const ALLOWED_USER_FIELD_TYPES = [
   "textarea",
   "number",
   "email",
+  "url",
+  "phone",
   "select",
   "radio",
   "checkbox",

@@ -15,6 +15,7 @@ export { users, accounts, sessions } from "../users/sqlite";
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/sqlite";
 
