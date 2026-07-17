@@ -391,7 +391,7 @@ export async function findPendingFiles(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
-  const all = await discoverMigrations(migrationsDir, logger, "app");
+  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -421,19 +421,41 @@ async function loadTargetSnapshot(
   name: string
 ): Promise<NextlySchemaSnapshot | null> {
   const file = `${name}.snapshot.json`;
+  const filePath = resolve(metaDir, file);
+
+  // Check if file exists first
+  let content: string;
   try {
-    const content = await readFile(resolve(metaDir, file), "utf-8");
-    return parseSnapshotFile(content, file).snapshot;
+    content = await readFile(filePath, "utf-8");
   } catch (err) {
     // File not found - treat as no snapshot (apply SQL verbatim)
     if ((err as { code?: string }).code === "ENOENT") return null;
-    // Snapshot parse error - may be custom format (e.g., blog template metadata).
-    // Treat as no snapshot so migration runs verbatim instead of failing.
-    if (err instanceof Error && err.message.includes("migrationHash")) {
-      return null;
-    }
     throw err;
   }
+
+  // Detect snapshot format before parsing
+  // - Drift snapshots have { version, migrationHash, snapshot: { tables: [...] } }
+  // - Custom metadata snapshots (e.g., blog template) have { collections, singles }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Invalid JSON - let parseSnapshotFile handle the error reporting
+  }
+
+  // If it looks like a custom metadata format (has collections/singles, no migrationHash),
+  // treat as no snapshot so migration runs verbatim
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !("migrationHash" in parsed) &&
+    ("collections" in parsed || "singles" in parsed)
+  ) {
+    return null;
+  }
+
+  // Otherwise, parse as a drift snapshot
+  return parseSnapshotFile(content, file).snapshot;
 }
 
 /**
@@ -450,7 +472,7 @@ export async function runFileMigrations(args: {
   logger: CommandContext["logger"];
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
-  const all = await discoverMigrations(migrationsDir, logger, "app");
+  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   if (all.length === 0) {
     logger.debug("No user migration files found.");
     return 0;
@@ -552,6 +574,7 @@ export async function runFileMigrations(args: {
 async function discoverMigrations(
   migrationsDir: string,
   logger: CommandContext["logger"],
+  dialect?: SupportedDialect,
   source: MigrationSource = "app"
 ): Promise<ParsedMigration[]> {
   let files: string[];
@@ -566,11 +589,67 @@ async function discoverMigrations(
     .filter(f => f.endsWith(".sql"))
     .sort((a, b) => a.localeCompare(b));
 
-  const migrations: ParsedMigration[] = [];
+  // Group files by base migration name (without dialect suffix)
+  interface MigrationVariant {
+    file: string;
+    dialect: SupportedDialect | undefined;
+  }
+
+  const migrationGroups = new Map<string, MigrationVariant[]>();
 
   for (const file of sqlFiles) {
-    const filePath = resolve(migrationsDir, file);
-    const name = basename(file, ".sql");
+    // Check if file has a dialect suffix (e.g., .mysql.sql, .sqlite.sql)
+    const dialectMatch = file.match(/(.*)\.(mysql|sqlite|postgresql)\.sql$/);
+
+    if (dialectMatch) {
+      // This is a dialect-specific file
+      const baseName = dialectMatch[1];
+      const fileDialect = dialectMatch[2] as SupportedDialect;
+
+      if (!migrationGroups.has(baseName)) {
+        migrationGroups.set(baseName, []);
+      }
+      migrationGroups.get(baseName)!.push({ file, dialect: fileDialect });
+    } else if (file.endsWith(".sql")) {
+      // This is a base file (no dialect suffix)
+      const baseName = basename(file, ".sql");
+
+      if (!migrationGroups.has(baseName)) {
+        migrationGroups.set(baseName, []);
+      }
+      migrationGroups.get(baseName)!.push({ file, dialect: undefined });
+    }
+  }
+
+  const migrations: ParsedMigration[] = [];
+
+  for (const [baseName, variants] of migrationGroups.entries()) {
+    // Find the best variant for the current dialect
+    let selectedFile: string | undefined;
+
+    if (dialect) {
+      // Look for dialect-specific variant first
+      const dialectVariant = variants.find(v => v.dialect === dialect);
+      if (dialectVariant) {
+        selectedFile = dialectVariant.file;
+      } else {
+        // Fall back to base file (if exists)
+        const baseVariant = variants.find(v => v.dialect === undefined);
+        selectedFile = baseVariant?.file;
+      }
+    } else {
+      // No dialect specified, prefer base file
+      const baseVariant = variants.find(v => v.dialect === undefined);
+      selectedFile = baseVariant?.file || variants[0]?.file;
+    }
+
+    if (!selectedFile) {
+      logger.warn(`No suitable migration file found for ${baseName}`);
+      continue;
+    }
+
+    const filePath = resolve(migrationsDir, selectedFile);
+    const name = baseName; // Use base name for migration ID
 
     try {
       const content = await readFile(filePath, "utf-8");
@@ -578,10 +657,13 @@ async function discoverMigrations(
       migrations.push(parsed);
     } catch (error) {
       logger.warn(
-        `Failed to parse migration file ${file}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
+
+  // Sort migrations by name to ensure consistent ordering
+  migrations.sort((a, b) => a.name.localeCompare(b.name));
 
   return migrations;
 }

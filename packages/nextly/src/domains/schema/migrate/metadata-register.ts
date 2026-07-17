@@ -15,12 +15,25 @@
  * @module domains/schema/migrate/metadata-register
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { eq } from "drizzle-orm";
+
+import type { FieldConfig } from "@nextly/collections";
+import {
+  dynamicCollectionsMysql,
+  dynamicCollectionsSqlite,
+  dynamicCollectionsPg,
+} from "@nextly/schemas/dynamic-collections";
+import type { CollectionAdminConfig } from "@nextly/schemas/dynamic-collections/types";
+import { dynamicSinglesMysql } from "@nextly/schemas/dynamic-singles/mysql";
+import { dynamicSinglesPg } from "@nextly/schemas/dynamic-singles/postgres";
+import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
+import type { SingleAdminOptions } from "@nextly/singles/config/types";
 
 /**
  * Collection definition from migration snapshot
@@ -211,195 +224,138 @@ function normalizeSingle(single: SnapshotSingle): string {
 }
 
 /**
- * Get placeholder based on dialect and index
- */
-function getPlaceholder(dialect: SupportedDialect, index: number): string {
-  switch (dialect) {
-    case "postgresql":
-      return `$${index}`;
-    case "mysql":
-    case "sqlite":
-      return "?";
-    default:
-      return "?";
-  }
-}
-
-/**
- * Build placeholders array for a query
- */
-function buildPlaceholders(dialect: SupportedDialect, count: number): string[] {
-  return Array.from({ length: count }, (_, i) =>
-    getPlaceholder(dialect, i + 1)
-  );
-}
-
-/**
- * Generate a simple schema hash from the fields JSON
+ * Generate a schema hash from the fields JSON using SHA-256.
+ * This is stored in dynamic_collections.schema_hash and used to detect
+ * schema changes for migration purposes.
  */
 function generateSchemaHash(fields: unknown[]): string {
-  const str = JSON.stringify(fields);
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash; // Convert to 32bit integer
+  return createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+}
+
+/**
+ * Get the correct dynamic collections schema based on dialect
+ */
+function getDynamicCollectionsSchema(dialect: SupportedDialect) {
+  switch (dialect) {
+    case "mysql":
+      return dynamicCollectionsMysql;
+    case "sqlite":
+      return dynamicCollectionsSqlite;
+    case "postgresql":
+      return dynamicCollectionsPg;
   }
-  return Math.abs(hash).toString(16).padStart(16, "0");
+}
+
+/**
+ * Get the correct dynamic singles schema based on dialect
+ */
+function getDynamicSinglesSchema(dialect: SupportedDialect) {
+  switch (dialect) {
+    case "mysql":
+      return dynamicSinglesMysql;
+    case "sqlite":
+      return dynamicSinglesSqlite;
+    case "postgresql":
+      return dynamicSinglesPg;
+  }
 }
 
 /**
  * Insert collection metadata into dynamic_collections table
  *
- * Actual schema (PostgreSQL):
- * - id, slug, labels (JSONB), table_name, description, fields, timestamps, admin,
- *   source, locked, config_path, schema_hash, schema_version, migration_status,
- *   last_migration_id, created_by, created_at, updated_at
+ * Uses Drizzle ORM for type-safe inserts that are checked against the
+ * actual schema definition. This prevents silent drift if columns change.
  */
 async function registerCollection(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   collection: SnapshotCollection
 ): Promise<void> {
-  // Build the check query based on dialect
-  const placeholder = getPlaceholder(dialect, 1);
+  const schema = getDynamicCollectionsSchema(dialect);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = adapter.getDrizzle<any>({ dynamicCollections: schema });
 
-  // Check if collection already exists
-  const existingQuery = `SELECT id FROM dynamic_collections WHERE slug = ${placeholder}`;
-  const existing = await adapter.executeQuery<{ id: string }>(existingQuery, [
-    collection.slug,
-  ]);
+  // Check if collection already exists using Drizzle
+  const existing = await db
+    .select()
+    .from(schema)
+    .where(eq(schema.slug, collection.slug))
+    .limit(1);
 
-  if (existing && existing.length > 0) {
+  if (existing.length > 0) {
     // Collection already registered, skip
     return;
   }
 
   const { singular, plural } = normalizeCollection(collection);
-
-  // Build labels JSONB object
-  const labelsJson = JSON.stringify({
-    singular,
-    plural,
-  });
-
-  // Generate schema hash from fields
   const schemaHash = generateSchemaHash(collection.fields ?? []);
 
-  // Build the insert query placeholders based on dialect (14 columns)
-  // created_at and updated_at use DB defaults
-  const placeholders = buildPlaceholders(dialect, 14);
-
-  // Insert the collection metadata using adapter.executeQuery
-  const insertQuery = `
-      INSERT INTO dynamic_collections (
-        id,
-        slug,
-        labels,
-        table_name,
-        description,
-        fields,
-        timestamps,
-        admin,
-        source,
-        locked,
-        config_path,
-        schema_hash,
-        schema_version,
-        migration_status
-      ) VALUES (${placeholders.join(", ")})
-    `;
-
-  await adapter.executeQuery(insertQuery, [
-    randomUUID(), // id
-    collection.slug, // slug
-    labelsJson, // labels (JSONB)
-    collection.tableName, // table_name
-    collection.description ?? null, // description
-    JSON.stringify(collection.fields ?? []), // fields (JSONB)
-    collection.timestamps !== false ? true : false, // timestamps (boolean)
-    JSON.stringify(collection.admin ?? {}), // admin (JSONB)
-    "ui", // source (visual template collections are UI-editable)
-    false, // locked
-    null, // config_path
-    schemaHash, // schema_hash
-    1, // schema_version
-    "applied", // migration_status
-  ]);
+  // Insert using Drizzle - type-checked against the actual schema!
+  await db.insert(schema).values({
+    id: randomUUID(),
+    slug: collection.slug,
+    labels: { singular, plural },
+    tableName: collection.tableName,
+    description: collection.description ?? null,
+    fields: (collection.fields ?? []) as FieldConfig[],
+    timestamps: collection.timestamps !== false,
+    admin: (collection.admin ?? {}) as CollectionAdminConfig,
+    source: "ui",
+    locked: false,
+    configPath: null,
+    schemaHash,
+    schemaVersion: 1,
+    migrationStatus: "applied",
+  });
 }
 
 /**
  * Insert single metadata into dynamic_singles table
  *
- * Actual schema (PostgreSQL/SQLite):
- * - id, slug, label, table_name, description, fields, admin, access_rules,
- *   source, locked, config_path, schema_hash, schema_version, migration_status,
- *   last_migration_id, created_by, created_at, updated_at
+ * Uses Drizzle ORM for type-safe inserts that are checked against the
+ * actual schema definition. This prevents silent drift if columns change.
  */
 async function registerSingle(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   single: SnapshotSingle
 ): Promise<void> {
-  // Build the check query based on dialect
-  const placeholder = getPlaceholder(dialect, 1);
+  const schema = getDynamicSinglesSchema(dialect);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = adapter.getDrizzle<any>({ dynamicSingles: schema });
 
-  // Check if single already exists
-  const existingQuery = `SELECT id FROM dynamic_singles WHERE slug = ${placeholder}`;
-  const existing = await adapter.executeQuery<{ id: string }>(existingQuery, [
-    single.slug,
-  ]);
+  // Check if single already exists using Drizzle
+  const existing = await db
+    .select()
+    .from(schema)
+    .where(eq(schema.slug, single.slug))
+    .limit(1);
 
-  if (existing && existing.length > 0) {
+  if (existing.length > 0) {
     // Single already registered, skip
     return;
   }
 
   const label = normalizeSingle(single);
-
-  // Generate schema hash from fields
   const schemaHash = generateSchemaHash(single.fields ?? []);
 
-  // Build the insert query placeholders based on dialect (14 columns)
-  // created_at and updated_at use DB defaults
-  const placeholders = buildPlaceholders(dialect, 14);
-
-  // Insert the single metadata using adapter.executeQuery
-  const insertQuery = `
-      INSERT INTO dynamic_singles (
-        id,
-        slug,
-        label,
-        table_name,
-        description,
-        fields,
-        admin,
-        access_rules,
-        source,
-        locked,
-        config_path,
-        schema_hash,
-        schema_version,
-        migration_status
-      ) VALUES (${placeholders.join(", ")})
-    `;
-
-  await adapter.executeQuery(insertQuery, [
-    randomUUID(), // id
-    single.slug, // slug
-    label, // label
-    single.tableName, // table_name
-    single.description ?? null, // description
-    JSON.stringify(single.fields ?? []), // fields (JSON/TEXT)
-    JSON.stringify(single.admin ?? {}), // admin (JSON/TEXT)
-    null, // access_rules
-    "ui", // source (visual template singles are UI-editable)
-    false, // locked
-    null, // config_path
-    schemaHash, // schema_hash
-    1, // schema_version
-    "applied", // migration_status
-  ]);
+  // Insert using Drizzle - type-checked against the actual schema!
+  await db.insert(schema).values({
+    id: randomUUID(),
+    slug: single.slug,
+    label,
+    tableName: single.tableName,
+    description: single.description ?? null,
+    fields: (single.fields ?? []) as FieldConfig[],
+    admin: (single.admin ?? {}) as SingleAdminOptions,
+    accessRules: null,
+    source: "ui",
+    locked: false,
+    configPath: null,
+    schemaHash,
+    schemaVersion: 1,
+    migrationStatus: "applied",
+  });
 }
 
 /**

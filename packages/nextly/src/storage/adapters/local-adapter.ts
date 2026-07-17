@@ -156,8 +156,11 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
    * Returns baseUrl + relative path for Next.js static file serving.
    */
   getPublicUrl(filePath: string): string {
-    // Strip leading slash from filePath to avoid double slashes
-    const cleanPath = filePath.replace(/^\/+/, "");
+    // Strip leading slash and "uploads/" prefix if present to avoid duplication
+    // (e.g., "uploads/2026/07/..." should become just "2026/07/...")
+    const cleanPath = filePath
+      .replace(/^\/+/, "") // Remove leading slashes
+      .replace(/^uploads\//, ""); // Remove "uploads/" prefix if present
     return `${this.baseUrl}/${cleanPath}`;
   }
 

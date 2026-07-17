@@ -135,28 +135,14 @@ function isAbsoluteUrl(url: string): boolean {
 }
 
 /**
- * Check if a URL is a local storage path served by Next.js static file serving.
- * These URLs should not be absolutized since they are served relative to the app.
- */
-function isLocalStorageUrl(url: string): boolean {
-  // Local storage paths: /uploads/..., /media/..., /storage/...
-  // These are served by Next.js from the public/ folder and should stay relative
-  return /^\/(uploads|media|storage)\//i.test(url);
-}
-
-/**
  * Prefix a relative media URL with `baseUrl`. Absolute / protocol-relative
  * URLs are returned unchanged. `null` / `undefined` / `""` pass through.
  *
- * Local storage URLs (starting with /uploads/, /media/, /storage/) are NOT
- * absolutized since they are served by Next.js static file serving from the
- * public/ folder and should remain relative paths.
- *
  * `baseUrl` is resolved lazily — the env-backed default fires only when a
  * relative URL actually needs prefixing. Pass-through cases (absolute
- * URLs, local storage URLs, and nullish inputs) do not access the env,
- * so callers in contexts that have not booted env validation can still
- * rely on the "absolute URLs pass through" contract.
+ * URLs and nullish inputs) do not access the env, so callers in
+ * contexts that have not booted env validation can still rely on the
+ * "absolute URLs pass through" contract.
  */
 export function toAbsoluteMediaUrl<T extends string | null | undefined>(
   url: T,
@@ -164,8 +150,6 @@ export function toAbsoluteMediaUrl<T extends string | null | undefined>(
 ): T {
   if (!url) return url;
   if (isAbsoluteUrl(url)) return url;
-  // Don't absolutize local storage URLs - they're served by Next.js
-  if (isLocalStorageUrl(url)) return url;
   const resolvedBase = baseUrl ?? getMediaBaseUrl();
   const path = url.startsWith("/") ? url : `/${url}`;
   return `${resolvedBase}${path}` as T;

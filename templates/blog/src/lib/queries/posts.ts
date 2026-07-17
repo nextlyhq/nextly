@@ -267,15 +267,15 @@ export async function getPostsByCategory(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
-  const nextly = await getNextly({ config: nextlyConfig });
-  const category = await getCategoryBySlug(categorySlug);
-  if (!category) {
-    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
-  }
-
-  const categoryId = String(category.id);
-
   try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const category = await getCategoryBySlug(categorySlug);
+    if (!category) {
+      return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+    }
+
+    const categoryId = String(category.id);
+
     const result = await nextly.find({
       collection: "posts",
       where: {
@@ -308,15 +308,15 @@ export async function getPostsByTag(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
-  const nextly = await getNextly({ config: nextlyConfig });
-  const tag = await getTagBySlug(tagSlug);
-  if (!tag) {
-    return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
-  }
-
-  const tagId = String(tag.id);
-
   try {
+    const nextly = await getNextly({ config: nextlyConfig });
+    const tag = await getTagBySlug(tagSlug);
+    if (!tag) {
+      return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
+    }
+
+    const tagId = String(tag.id);
+
     const result = await nextly.find({
       collection: "posts",
       where: {

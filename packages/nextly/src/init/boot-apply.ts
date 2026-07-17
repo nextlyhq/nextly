@@ -96,9 +96,16 @@ async function reloadDynamicTables(label: string): Promise<void> {
     const adapter = container.get("adapter");
     const schemaRegistry = container.get("schemaRegistry");
 
-    if (!schemaRegistry || !adapter) {
+    if (!schemaRegistry) {
       console.warn(
-        `${label} Schema registry or adapter not available for reload. Collections from migrations may not be queryable.`
+        `${label} Schema registry not available for reload. Collections from migrations may not be queryable.`
+      );
+      return;
+    }
+
+    if (!adapter) {
+      console.warn(
+        `${label} Adapter not available for reload. Collections from migrations may not be queryable.`
       );
       return;
     }
@@ -196,9 +203,18 @@ async function registerMigrationMetadata(label: string): Promise<void> {
       "../domains/schema/migrate/metadata-register"
     );
 
-    // Get the adapter from DI
+    // Get the adapter from DI - same method as applyPendingMigrations
     const { getService } = await import("../di/register");
-    const adapter = getService("adapter") as {
+    const drizzleAdapter = getService("adapter");
+
+    if (!drizzleAdapter) {
+      console.warn(
+        `${label} Adapter not available for migration metadata registration. Run \`nextly migrate\` manually.`
+      );
+      return;
+    }
+
+    const adapter = drizzleAdapter as {
       dialect: "postgresql" | "mysql" | "sqlite";
     };
 
@@ -212,7 +228,7 @@ async function registerMigrationMetadata(label: string): Promise<void> {
     // Register collections from migration snapshots
     const result = await registerFromMigrations({
       migrationsDir,
-      adapter,
+      adapter: drizzleAdapter,
       dialect: adapter.dialect,
       logger,
     });
@@ -298,6 +314,12 @@ async function seedPermissionsForMigrationCollections(
  * This ensures template migrations (like blog schema) are applied
  * automatically when the dev server starts, eliminating the need
  * for manual `nextly migrate` commands during development.
+ *
+ * Uses migrateCore directly instead of spawning a child process to:
+ * - Avoid npx network reach-out (if local binary isn't resolvable)
+ * - Avoid expensive second Node process startup
+ * - Get proper error handling instead of exit codes
+ * - Use the intended injectable migrateCore seam
  */
 async function applyPendingMigrations(label: string): Promise<void> {
   try {
@@ -313,34 +335,162 @@ async function applyPendingMigrations(label: string): Promise<void> {
 
     console.log(`${label} Checking for pending migrations...`);
 
-    // Apply migrations using Nextly CLI
-    const { spawn } = await import("child_process");
+    // Import migrateCore and related dependencies
+    const { migrateCore } = await import("../cli/commands/migrate");
+    const { validateDatabaseEnv } = await import("../cli/utils/adapter");
+    const { getService } = await import("../di/register");
 
-    await new Promise<void>((resolve, reject) => {
-      const migrate = spawn("npx", ["nextly", "migrate"], {
-        stdio: "inherit",
-        shell: true,
-        cwd: process.cwd(),
-      });
+    // Validate database environment
+    const dbValidation = validateDatabaseEnv();
+    if (!dbValidation.valid) {
+      console.warn(
+        `${label} Database environment invalid. Run \`nextly migrate\` manually.`,
+        ...dbValidation.errors.map(e => `  - ${e}`)
+      );
+      return;
+    }
 
-      migrate.on("close", (code: number) => {
-        if (code === 0) {
-          console.log(`${label} ✅ Migrations applied successfully`);
-          resolve();
-        } else if (code === 2) {
-          // Exit code 2 means no pending migrations (expected)
-          resolve();
+    // Get adapter from DI
+    const drizzleAdapter = getService("adapter");
+
+    if (!drizzleAdapter) {
+      console.warn(
+        `${label} Adapter not available. Run \`nextly migrate\` manually.`
+      );
+      return;
+    }
+
+    // Get db instance from adapter
+    const db = (
+      drizzleAdapter as { getDrizzle?: () => unknown }
+    ).getDrizzle?.();
+
+    if (!db) {
+      console.warn(
+        `${label} Database instance not available. Run \`nextly migrate\` manually.`
+      );
+      return;
+    }
+
+    // Import config for migrations directory and lock TTL
+    const { loadConfig } = await import("../cli/utils/config-loader");
+    const configResult = await loadConfig({ cwd: process.cwd() });
+    const appMigrationsDir = path.join(
+      process.cwd(),
+      configResult.config.db.migrationsDir
+    );
+
+    // Import getSchemaEventsDdl for ledger bootstrap
+    const { getSchemaEventsDdl } = await import(
+      "../domains/schema/events/schema-events-ddl"
+    );
+
+    // Operator-set override; never in CI config (spec §4.6.1).
+    // eslint-disable-next-line turbo/no-undeclared-env-vars
+    const allowCoreDestructive =
+      process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1";
+
+    // Get dialect from adapter
+    const adapterDialect = (
+      drizzleAdapter as { dialect: "postgresql" | "mysql" | "sqlite" }
+    ).dialect;
+
+    // Create a CLI adapter wrapper for migrateCore
+    const cliAdapter = {
+      dialect: adapterDialect,
+      connect: () => Promise.resolve(),
+      disconnect: () =>
+        (drizzleAdapter as { disconnect: () => Promise<void> }).disconnect(),
+      isConnected: () => true,
+      getCapabilities: () => ({
+        dialect: adapterDialect,
+      }),
+      // Delegate executeQuery to drizzleAdapter if available (needed for ledger bootstrap)
+      executeQuery:
+        drizzleAdapter &&
+        typeof (drizzleAdapter as { executeQuery?: unknown }).executeQuery ===
+          "function"
+          ? (sql: string, params?: unknown[]) =>
+              (
+                drizzleAdapter as {
+                  executeQuery: (
+                    sql: string,
+                    params?: unknown[]
+                  ) => Promise<unknown>;
+                }
+              ).executeQuery(sql, params)
+          : undefined,
+    };
+
+    // Create a logger compatible with migrateCore's CommandContext["logger"]
+    const logger = {
+      header: (msg: string) => console.log(`${label} ${msg}`),
+      info: (msg: string) => console.log(`${label} ${msg}`),
+      success: (msg: string) => console.log(`${label} ✅ ${msg}`),
+      warn: (msg: string) => console.warn(`${label} ⚠️  ${msg}`),
+      error: (msg: string) => console.error(`${label} ❌ ${msg}`),
+      debug: (msg: string) => console.debug(`${label} ${msg}`),
+      keyValue: (key: string, value: string | number | boolean) =>
+        console.log(`${label} ${key}: ${value}`),
+      divider: () => console.log(`${label} ---`),
+      newline: () => console.log(),
+      item: (msg: string) => console.log(`${label} • ${msg}`),
+      table: (_headers: string[], _rows: (string | number | boolean)[][]) => {},
+      spinner: (msg: string) => {
+        console.log(`${label} ${msg}`);
+        return { stop: () => {} };
+      },
+      setOptions: () => {},
+      getOptions: () => ({}),
+    };
+
+    // Run migrateCore with appropriate options
+    const result = await migrateCore({
+      dialect: adapterDialect,
+      db,
+      adapter: cliAdapter,
+      migrationsDir: appMigrationsDir,
+      logger,
+      lockMode: "fail-fast",
+      ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      allowDestructive: allowCoreDestructive,
+      ensureLedger: async () => {
+        const adapter = drizzleAdapter as {
+          executeQuery?: (sql: string, params?: unknown[]) => Promise<unknown>;
+          tableExists?: (name: string) => Promise<boolean>;
+        };
+        // Check if required methods are available
+        if (
+          typeof adapter.executeQuery === "function" &&
+          typeof adapter.tableExists === "function"
+        ) {
+          try {
+            const hasLedger = await adapter.tableExists("nextly_schema_events");
+            if (!hasLedger) {
+              for (const stmt of getSchemaEventsDdl(adapterDialect)) {
+                await adapter.executeQuery(stmt);
+              }
+            }
+          } catch (err) {
+            // Ledger bootstrap failed - log but don't block migration
+            console.warn(
+              `${label} Ledger bootstrap failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
         } else {
-          reject(new Error(`Migration failed with exit code ${code}`));
+          // Methods not available - skip ledger bootstrap
+          console.debug(
+            `${label} Ledger bootstrap skipped - adapter methods not available`
+          );
         }
-      });
-
-      migrate.on("error", (err: Error) => {
-        // If nextly command fails, log but don't block startup
-        console.warn(`${label} Migration check skipped: ${err.message}`);
-        resolve();
-      });
+      },
     });
+
+    if (result.applied > 0) {
+      console.log(`${label} Applied ${result.applied} migration(s)`);
+    } else {
+      console.log(`${label} No pending migrations`);
+    }
   } catch (err) {
     // Migration check/apply failed - log but don't block startup
     const msg = err instanceof Error ? err.message : String(err);
