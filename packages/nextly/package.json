@@ -250,7 +250,7 @@
     "jiti": "^2.6.1",
     "jose": "^6.2.2",
     "mime-types": "^3.0.2",
-    "nodemailer": "^8.0.5",
+    "nodemailer": "^9.0.1",
     "picocolors": "^1.1.1",
     "resend": "^6.9.2",
     "safe-regex2": "^5.1.1",
