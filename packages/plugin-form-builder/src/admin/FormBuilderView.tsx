@@ -366,7 +366,8 @@ function FormBuilderViewInner({
         {/* Action buttons — same variant/size as Collection Builder */}
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
-            <span className="text-xs font-medium text-warning bg-warning/10 border border-warning/20 px-2.5 py-1 rounded-none whitespace-nowrap">
+            // Full-strength warning border so the unsaved-changes badge boundary is perceivable over its tinted fill.
+            <span className="text-xs font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
           )}
@@ -466,7 +467,7 @@ function FormBuilderViewInner({
                     value={formData.slug || ""}
                     onChange={e => updateFormData({ slug: e.target.value })}
                     placeholder="e.g., contact-form"
-                    className="bg-transparent placeholder:text-muted-foreground/50"
+                    className="bg-transparent placeholder:text-muted-foreground"
                   />
                 </div>
 
@@ -514,7 +515,7 @@ function FormBuilderViewInner({
                             ? "var(--nx-primary)"
                             : "transparent",
                       }}
-                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       {tab.label}
                       {tab.count !== null && (
@@ -566,7 +567,8 @@ function FormBuilderViewInner({
 
             {/* Save error */}
             {saveError && (
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-none">
+              // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
+              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
                 {saveError}
               </div>
             )}

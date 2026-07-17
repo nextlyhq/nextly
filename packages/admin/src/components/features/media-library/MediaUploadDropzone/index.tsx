@@ -573,7 +573,8 @@ export function MediaUploadDropzone({
 
   // Border styles — border-2 dashed, prominent, mode-aware
   const borderStyles = {
-    default: "border-2 border-dashed border-border hover:border-primary/50",
+    // default: full-strength hover border, more visible than the resting border, not a fainter alpha.
+    default: "border-2 border-dashed border-border hover:border-primary",
     active: "border-2 border-dashed border-primary",
     reject: "border-2 border-dashed border-destructive",
     uploading: "border-2 border-dashed border-primary/80",
@@ -661,7 +662,7 @@ export function MediaUploadDropzone({
               backgroundStyles[visualState],
               "min-h-48 md:min-h-56 py-16 px-8",
               !isUploading &&
-                "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2",
+                "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
               isUploading && "cursor-not-allowed"
             )}
             role="button"
@@ -730,7 +731,7 @@ export function MediaUploadDropzone({
               {/* File type hint */}
               <p
                 id="upload-instructions"
-                className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground/80"
+                className="mt-2 text-xs text-muted-foreground dark:text-muted-foreground"
               >
                 {fileTypeDescription}
               </p>

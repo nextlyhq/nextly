@@ -227,6 +227,7 @@ export function ComponentFieldEditor({
           Field Mode
         </Label>
         <div className="grid grid-cols-2 gap-3">
+          {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
             onClick={() => handleModeChange("single")}
@@ -235,7 +236,7 @@ export function ComponentFieldEditor({
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-foreground text-muted-foreground"
               }
             `}
           >
@@ -251,6 +252,7 @@ export function ComponentFieldEditor({
               </span>
             </div>
           </button>
+          {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
             onClick={() => handleModeChange("multi")}
@@ -259,7 +261,7 @@ export function ComponentFieldEditor({
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
-                  : "border-border bg-background hover-subtle-row hover:border-border-foreground/30 text-muted-foreground"
+                  : "border-border bg-background hover-subtle-row hover:border-foreground text-muted-foreground"
               }
             `}
           >

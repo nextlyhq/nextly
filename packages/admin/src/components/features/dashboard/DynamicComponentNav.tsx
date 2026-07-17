@@ -215,7 +215,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                         isActive={isSubActive}
                         className={
                           isSubActive
-                            ? "bg-accent/20 text-accent font-medium"
+                            ? "bg-accent/20 text-foreground font-medium"
                             : ""
                         }
                       >
@@ -292,7 +292,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                           </SidebarMenuSubButton>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                          <div className="ml-4  border-l border-border border-sidebar-border/30 pl-2">
+                          <div className="ml-4  border-l border-border border-sidebar-border pl-2">
                             {categoryComponents.map(component => {
                               const href = getComponentUrl(component);
                               const isSubActive = isActive(href);
@@ -303,7 +303,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                                   href={href}
                                   className={`flex items-center gap-2 py-1.5 px-2 text-sm rounded-none transition-colors ${
                                     isSubActive
-                                      ? "bg-accent/20 text-accent font-medium"
+                                      ? "bg-accent/20 text-foreground font-medium"
                                       : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
                                   }`}
                                 >

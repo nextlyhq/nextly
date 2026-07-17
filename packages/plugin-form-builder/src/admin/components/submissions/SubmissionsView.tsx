@@ -114,10 +114,11 @@ function StatusBadge({ status }: { status: string }) {
     <Badge
       variant="outline"
       className={`rounded-none px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wider ${
+        // Full-strength status borders (destructive/primary) so each badge boundary is perceivable; the default falls back to border-border, keeping the states distinct.
         status === "spam"
-          ? "border-destructive/40 text-destructive"
+          ? "border-destructive text-destructive"
           : status === "new"
-            ? "border-primary/40 text-primary"
+            ? "border-primary text-primary"
             : "border-border text-muted-foreground"
       }`}
     >

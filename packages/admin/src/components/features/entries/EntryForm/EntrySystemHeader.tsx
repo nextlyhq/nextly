@@ -207,7 +207,7 @@ export function EntrySystemHeader({
           readOnly={lockIdentity}
           className={cn(
             "w-full text-[19px] font-semibold tracking-tight text-foreground",
-            "bg-transparent outline-none placeholder:text-muted-foreground/50",
+            "bg-transparent outline-none placeholder:text-muted-foreground",
             isSubmitting && "opacity-60 cursor-not-allowed",
             lockIdentity && "cursor-default text-foreground/80"
           )}

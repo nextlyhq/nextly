@@ -162,10 +162,9 @@ function FieldCard({
       data-testid={`field-row-${field.name}`}
       style={{ flex: `0 0 ${flexBasis}` }}
       className={
+        // Full-strength hover border, more visible than the resting border, not a fainter alpha.
         "border border-border rounded-md p-3 bg-background flex items-center gap-2 group " +
-        (fieldReadOnly
-          ? "opacity-90"
-          : "hover:border-primary/30 cursor-pointer")
+        (fieldReadOnly ? "opacity-90" : "hover:border-primary cursor-pointer")
       }
     >
       {!fieldReadOnly && dragHandleProps && (
@@ -206,7 +205,8 @@ function FieldCard({
         {widthPct}%
       </span>
       {field.validation?.required && (
-        <span className="text-[10px] text-destructive border border-destructive/40 rounded-sm px-1">
+        // Full-strength status border so the boundary is perceivable.
+        <span className="text-[10px] text-destructive border border-destructive rounded-sm px-1">
           Required
         </span>
       )}

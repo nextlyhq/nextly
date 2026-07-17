@@ -316,7 +316,8 @@ export function UserFormFields({
         {showActiveAccount && !isInviteMode && (
           <div className="space-y-3">
             {/* Active Account Checkbox */}
-            <div className="rounded-none  border border-border dark:border-primary/30 bg-primary/5 p-3 shadow-none">
+            {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
+            <div className="rounded-none  border border-border bg-primary/5 p-3 shadow-none">
               <label className="flex items-start gap-3 cursor-pointer">
                 <Controller
                   control={control}
@@ -333,7 +334,8 @@ export function UserFormFields({
                   <div className="text-sm font-semibold text-primary">
                     Active Account (Default: Yes)
                   </div>
-                  <p className="text-xs text-primary/70">
+                  {/* Muted foreground so this secondary text meets contrast; a faint primary alpha did not. */}
+                  <p className="text-xs text-muted-foreground">
                     User will be able to log in immediately after creation.
                     Uncheck to require manual activation later.
                   </p>

@@ -97,7 +97,7 @@ export function RequestBar({
         onClick={onCopy}
         aria-label={copied ? "URL copied" : "Copy request URL"}
         title="Copy request URL"
-        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
@@ -111,7 +111,7 @@ export function RequestBar({
         onClick={onOpen}
         aria-label="Open request URL in a new tab"
         title="Open in a new tab"
-        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ExternalLink className="h-3.5 w-3.5" />
       </button>

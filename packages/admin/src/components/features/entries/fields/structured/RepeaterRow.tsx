@@ -318,13 +318,13 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                               <span className="font-mono text-xs">
                                 {fieldWithName.name}
                               </span>
-                              <span className="text-muted-foreground/70">
+                              <span className="text-muted-foreground">
                                 {" "}
                                 ({fieldWithName.type})
                               </span>
                             </>
                           ) : (
-                            <span className="text-muted-foreground/70">
+                            <span className="text-muted-foreground">
                               {fieldWithName.type} (layout)
                             </span>
                           )}
@@ -332,7 +332,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                       );
                     })}
                   </ul>
-                  <p className="text-xs text-muted-foreground/70 mt-3 italic">
+                  <p className="text-xs text-muted-foreground mt-3 italic">
                     Full field rendering will be available when FieldRenderer is
                     integrated.
                   </p>

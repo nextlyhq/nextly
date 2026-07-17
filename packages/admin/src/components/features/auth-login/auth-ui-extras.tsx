@@ -91,7 +91,7 @@ export function AuthUiExtras({
                 key={prov.strategy}
                 type="button"
                 onClick={() => onProvider?.(prov.strategy)}
-                className="w-full h-11 rounded-none border border-primary/10 bg-background text-foreground hover:bg-muted transition-colors text-sm font-medium"
+                className="w-full h-11 rounded-none border border-border bg-background text-foreground hover:bg-muted transition-colors text-sm font-medium"
               >
                 {prov.label}
               </button>

@@ -625,7 +625,8 @@ function ValidationTab({
 
       {/* Info for fields without validation options */}
       {(field.type === "checkbox" || field.type === "hidden") && (
-        <div className="p-3 bg-muted rounded-none text-xs text-muted-foreground text-center border border-dashed border-primary/5">
+        // Semantic border token so this info-box boundary is visible at the 3:1 UI minimum.
+        <div className="p-3 bg-muted rounded-none text-xs text-muted-foreground text-center border border-dashed border-border">
           No additional validation options for this field type.
         </div>
       )}
@@ -667,7 +668,8 @@ export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
         onValueChange={setActiveTab}
         className="flex-1 flex flex-col"
       >
-        <div className="border-b bg-muted border-primary/5">
+        {/* Semantic border token so the tab-bar bottom edge is visible at the 3:1 UI minimum. */}
+        <div className="border-b bg-muted border-border">
           <TabsList className="w-full justify-start gap-0">
             <TabsTrigger
               value="general"

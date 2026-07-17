@@ -46,7 +46,8 @@ const PluginsOverviewPage: React.FC = () => {
             <h1 className="text-xl font-semibold tracking-tight">
               Installed Plugins
             </h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               The plugins installed in your application, what each one adds, and
               whether it is enabled.
             </p>

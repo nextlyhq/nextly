@@ -340,9 +340,10 @@ function UserFieldInput({
       default: {
         // A plugin-contributed users-surface field type renders through its
         // own admin component (PluginSlot isolates it), the same way the entry
-        // form does — so a plugin user field is editable, not just definable.
+        // form does, so a plugin user field is editable, not just definable.
         const unsupported = (
-          <div className="rounded-none  border border-border border-destructive/50 bg-destructive/10 p-3 text-center">
+          // Full-strength destructive border so the boundary is perceivable.
+          <div className="rounded-none  border border-destructive bg-destructive/10 p-3 text-center">
             <p className="text-sm text-destructive">
               Unsupported field type: {fieldType}
             </p>

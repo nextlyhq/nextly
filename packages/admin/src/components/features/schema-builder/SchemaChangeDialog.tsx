@@ -370,8 +370,9 @@ export function SchemaChangeDialog({
             }}
             disabled={isApplying || !canApply}
             className={
+              // Solid emphasis fill so white on-color text stays AA in dark mode.
               hasDestructiveChanges
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
                 : ""
             }
           >
