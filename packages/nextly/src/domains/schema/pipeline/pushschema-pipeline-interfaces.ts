@@ -170,6 +170,7 @@ export type { Notifier } from "../../../runtime/notifications/types";
 export type {
   ClassificationResult,
   ClassifierEvent,
+  DestructiveDropEvent,
   Resolution,
   ResolutionKind,
 } from "./resolution/types";
