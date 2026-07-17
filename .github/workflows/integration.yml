@@ -124,12 +124,18 @@ jobs:
       # the upgrade-sim and drop-guard suites need.
       - name: Drizzle v1 safety suites (postgres)
         if: matrix.dialect == 'postgres'
-        run: >-
-          pnpm --filter nextly exec vitest run
-          --config vitest.integration.config.ts
-          src/domains/schema/pipeline/__tests__/v1-golden/
-          src/domains/schema/pipeline/__tests__/fresh-push.drop-guard.integration.test.ts
-          src/database/__tests__/drizzle-kit-api-contract.pg.integration.test.ts
+        # Build the concrete adapters first: nextly's database/factory.ts
+        # statically references @nextlyhq/adapter-{postgres,mysql,sqlite}, so
+        # vitest's module graph needs their dist even though this leg only
+        # queries postgres. `test:integration`'s ^build builds dependencies,
+        # not these sibling packages.
+        run: |
+          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm --filter nextly exec vitest run \
+            --config vitest.integration.config.ts \
+            src/domains/schema/pipeline/__tests__/v1-golden/ \
+            src/domains/schema/pipeline/__tests__/fresh-push.drop-guard.integration.test.ts \
+            src/database/__tests__/drizzle-kit-api-contract.pg.integration.test.ts
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -146,11 +152,14 @@ jobs:
       # and the pipeline suite pinning the tx-vs-$client regression.
       - name: Drizzle v1 safety suites (mysql)
         if: matrix.dialect == 'mysql'
-        run: >-
-          pnpm --filter nextly exec vitest run
-          --config vitest.integration.config.ts
-          src/domains/schema/pipeline/__tests__/v1-golden/
-          src/domains/schema/pipeline/__tests__/pushschema-pipeline-mysql.integration.test.ts
+        # See the postgres step: build the concrete adapters so the nextly
+        # test module graph resolves.
+        run: |
+          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm --filter nextly exec vitest run \
+            --config vitest.integration.config.ts \
+            src/domains/schema/pipeline/__tests__/v1-golden/ \
+            src/domains/schema/pipeline/__tests__/pushschema-pipeline-mysql.integration.test.ts
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
