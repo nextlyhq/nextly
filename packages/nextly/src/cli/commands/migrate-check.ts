@@ -388,6 +388,9 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        dbType?: "integer" | "decimal";
+        precision?: number;
+        scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
@@ -403,6 +406,11 @@ function toMinimalEntities(
         relationTo: f.relationTo,
         unique: f.unique,
         index: f.index,
+        // Forward decimal storage so drift detection compares a decimal column
+        // against the decimal desired state, not the integer default.
+        dbType: f.dbType,
+        precision: f.precision,
+        scale: f.scale,
       })),
       // Why: forward the Draft/Published flag so migrate:check's drift
       // detection compares status correctly. Components don't carry

@@ -383,6 +383,63 @@ export function validateSelectOptionsShared(
   }
 }
 
+// Bounds are the most restrictive across the supported dialects so a decimal
+// field stays portable: MySQL caps DECIMAL at precision 65 and scale 30
+// (Postgres allows far more, SQLite ignores them).
+const MAX_DECIMAL_PRECISION = 65;
+const MAX_DECIMAL_SCALE = 30;
+
+/**
+ * Validate the `precision`/`scale` of a `dbType: "decimal"` number field. They
+ * render straight into DDL (`numeric(p,s)` / `decimal(p,s)`), so invalid
+ * dimensions must be rejected at config time rather than failing at the database
+ * on first apply. Shared across collections, singles, and components since all
+ * three expose the same number field. Non-number/non-decimal fields are ignored.
+ */
+export function validateNumberDecimalDimensionsShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "number" || field.dbType !== "decimal") return;
+  const { precision, scale } = field;
+  const inIntRange = (v: unknown, min: number, max: number): v is number =>
+    typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+
+  if (
+    precision !== undefined &&
+    !inIntRange(precision, 1, MAX_DECIMAL_PRECISION)
+  ) {
+    errors.push({
+      path: `${path}.precision`,
+      message: `Decimal 'precision' must be an integer between 1 and ${MAX_DECIMAL_PRECISION}`,
+      code: "DECIMAL_PRECISION_INVALID",
+    });
+  }
+  if (scale !== undefined && !inIntRange(scale, 0, MAX_DECIMAL_SCALE)) {
+    errors.push({
+      path: `${path}.scale`,
+      message: `Decimal 'scale' must be an integer between 0 and ${MAX_DECIMAL_SCALE}`,
+      code: "DECIMAL_SCALE_INVALID",
+    });
+  }
+  // Cross-check the effective values (unset defaults mirror the column
+  // descriptor's DECIMAL(10, 2)); scale must not exceed precision.
+  const effPrecision = typeof precision === "number" ? precision : 10;
+  const effScale = typeof scale === "number" ? scale : 2;
+  if (
+    Number.isInteger(effPrecision) &&
+    Number.isInteger(effScale) &&
+    effScale > effPrecision
+  ) {
+    errors.push({
+      path: `${path}.scale`,
+      message: "Decimal 'scale' cannot exceed 'precision'",
+      code: "DECIMAL_SCALE_EXCEEDS_PRECISION",
+    });
+  }
+}
+
 // ============================================================
 // Relationship Target Validation
 // ============================================================

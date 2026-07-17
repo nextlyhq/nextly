@@ -231,22 +231,19 @@ export const code = (
 /**
  * Creates a number field configuration.
  *
- * Number fields store numeric values (integers or decimals)
- * with optional min/max constraints and step values.
+ * Number fields store whole numbers by default; opt into an exact decimal
+ * column with `dbType: "decimal"` for money and other fractional values.
  *
  * @param config - Field configuration without the `type` property
  * @returns Complete number field configuration
  *
  * @example
  * ```typescript
- * // Basic number field
- * number({ name: 'price', required: true })
- *
  * // Integer with range
  * number({ name: 'quantity', min: 0, max: 100, step: 1 })
  *
- * // Decimal price
- * number({ name: 'amount', min: 0, step: 0.01 })
+ * // Exact decimal price (integer is the default and truncates fractions)
+ * number({ name: 'amount', min: 0, dbType: 'decimal', scale: 2 })
  * ```
  */
 export const number = (
