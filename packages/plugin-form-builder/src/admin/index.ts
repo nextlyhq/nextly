@@ -44,11 +44,12 @@ export {
 // ============================================================================
 
 export {
-  FieldLibrary,
-  FormCanvas,
+  FieldCards,
+  AddFieldDialog,
   FieldEditor,
   FormPreview,
-  type FormCanvasProps,
+  type FieldCardsProps,
+  type AddFieldDialogProps,
   type FieldEditorProps,
   type FormPreviewProps,
 } from "./components/builder";

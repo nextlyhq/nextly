@@ -12,6 +12,7 @@
 
 "use client";
 
+import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import {
   createContext,
   useContext,
@@ -187,41 +188,39 @@ const FormBuilderContext = createContext<FormBuilderContextValue | null>(null);
 // ============================================================================
 
 /**
- * Generate a unique field name based on type and timestamp.
+ * Generate a readable unique field name: the type itself for the first
+ * field of that type, then a numeric suffix (`email`, `email_2`, ...).
+ * Names key submission data, so they should read like keys a developer
+ * would have chosen, not timestamps.
  */
-export function generateFieldName(type: FormFieldType): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 6);
-  return `${type}_${timestamp}_${random}`;
+export function generateFieldName(
+  type: FormFieldType,
+  existingNames: readonly string[] = []
+): string {
+  const taken = new Set(existingNames);
+  if (!taken.has(type)) return type;
+  let suffix = 2;
+  while (taken.has(`${type}_${suffix}`)) suffix += 1;
+  return `${type}_${suffix}`;
 }
 
 /**
- * Generate a human-readable label from field type.
+ * Generate a human-readable label from field type, using the shared catalog
+ * so a new field's default label matches what the picker called the type.
  */
 export function generateFieldLabel(type: FormFieldType): string {
-  const labels: Record<FormFieldType, string> = {
-    text: "Text Field",
-    email: "Email Address",
-    number: "Number",
-    phone: "Phone Number",
-    url: "Website URL",
-    textarea: "Text Area",
-    select: "Dropdown",
-    checkbox: "Checkbox",
-    radio: "Radio Buttons",
-    file: "File Upload",
-    date: "Date",
-    time: "Time",
-    hidden: "Hidden Field",
-  };
-  return labels[type] || "New Field";
+  const entry = FORM_FIELD_TYPE_CATALOG.find(row => row.type === type);
+  return entry?.label ?? "New Field";
 }
 
 /**
  * Create a new field from a field type with default values.
  */
-export function createFieldFromType(type: FormFieldType): FormField {
-  const name = generateFieldName(type);
+export function createFieldFromType(
+  type: FormFieldType,
+  existingNames: readonly string[] = []
+): FormField {
+  const name = generateFieldName(type, existingNames);
   const label = generateFieldLabel(type);
 
   const baseField = {
@@ -235,16 +234,16 @@ export function createFieldFromType(type: FormFieldType): FormField {
       return { ...baseField, type: "text" };
 
     case "email":
-      return { ...baseField, type: "email", label: "Email Address" };
+      return { ...baseField, type: "email" };
 
     case "number":
       return { ...baseField, type: "number" };
 
     case "phone":
-      return { ...baseField, type: "phone", label: "Phone Number" };
+      return { ...baseField, type: "phone" };
 
     case "url":
-      return { ...baseField, type: "url", label: "Website" };
+      return { ...baseField, type: "url" };
 
     case "textarea":
       return { ...baseField, type: "textarea", rows: 4 };
@@ -282,7 +281,7 @@ export function createFieldFromType(type: FormFieldType): FormField {
       return { ...baseField, type: "time" };
 
     case "hidden":
-      return { ...baseField, type: "hidden", label: "Hidden Field" };
+      return { ...baseField, type: "hidden" };
 
     default:
       return { ...baseField, type: "text" };
@@ -399,32 +398,35 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
-  const duplicateField = useCallback((fieldName: string) => {
-    let newFieldName: string | null = null;
+  const duplicateField = useCallback(
+    (fieldName: string) => {
+      // Computed from the current fields (not inside the state updater):
+      // updaters must stay pure, and the selection below needs the new name
+      // deterministically.
+      const fieldIndex = fields.findIndex(f => f.name === fieldName);
+      if (fieldIndex === -1) return;
 
-    setFieldsState(prev => {
-      const fieldIndex = prev.findIndex(f => f.name === fieldName);
-      if (fieldIndex === -1) return prev;
-
-      const field = prev[fieldIndex];
-      newFieldName = generateFieldName(field.type);
+      const field = fields[fieldIndex];
+      const newFieldName = generateFieldName(
+        field.type,
+        fields.map(f => f.name)
+      );
       const newField: FormField = {
         ...field,
         name: newFieldName,
         label: `${field.label} (Copy)`,
       };
 
-      const newFields = [...prev];
+      const newFields = [...fields];
       newFields.splice(fieldIndex + 1, 0, newField);
-      return newFields;
-    });
+      setFieldsState(newFields);
 
-    // Select the duplicated field so it appears in the editor panel
-    if (newFieldName) {
+      // Select the duplicated field so its card expands
       setSelectedFieldId(newFieldName);
-    }
-    setIsDirty(true);
-  }, []);
+      setIsDirty(true);
+    },
+    [fields]
+  );
 
   const selectField = useCallback((fieldName: string | null) => {
     setSelectedFieldId(fieldName);
