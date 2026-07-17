@@ -377,18 +377,6 @@ export function formBuilder(
         settings: {
           component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
         },
-        pages: [
-          {
-            path: "submissions",
-            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-            requiredPermission: "export-submissions",
-          },
-        ],
-        views: {
-          [resolvedConfig.formSubmissionOverrides.slug]: {
-            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-          },
-        },
       },
     },
 
@@ -446,6 +434,22 @@ export function formBuilder(
           await handleSubmissionCreated(context, resolvedConfig, nextly);
         }
       );
+
+      // Stamp admin edits of submitted data: changing what the visitor
+      // submitted must leave a visible trace. Registered directly on the
+      // registry (like the notification hook) so it runs for every API
+      // surface that updates a submission.
+      nextly.hooks.on("beforeUpdate", submissionSlug, (context: unknown) => {
+        const ctx = context as {
+          data?: Record<string, unknown>;
+          user?: { id?: string };
+        };
+        if (ctx.data && ctx.data.data !== undefined) {
+          ctx.data.editedAt = new Date();
+          ctx.data.editedBy = ctx.user?.id ?? null;
+        }
+        return ctx.data;
+      });
 
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
