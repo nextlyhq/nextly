@@ -165,7 +165,20 @@ export async function submitForm(
 
     // 2c. Single-submission forms: the same visitor (by IP) submits once.
     // Checked before spam so a repeat visitor gets the honest message
-    // instead of an inexplicable success that stored nothing new.
+    // instead of an inexplicable success that stored nothing new. This is a
+    // best-effort deterrent, not a guarantee: IPs are shared (NAT/proxies),
+    // and the check-then-create pair is not atomic, so two truly concurrent
+    // submissions can both pass — an airtight version needs a partial
+    // unique index the portable field config cannot express yet.
+    if (settings.allowMultipleSubmissions === false && !metadata?.ipAddress) {
+      // Without an identifier there is nothing to deduplicate on. Failing
+      // closed would block every server-to-server integration, so the gate
+      // stays open — loudly.
+      logger.warn?.(
+        "Single-submission form received a submission without an IP — the restriction cannot apply",
+        { formSlug }
+      );
+    }
     if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
       const existing = await collections.count(
         pluginConfig.formSubmissionOverrides.slug,

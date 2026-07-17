@@ -158,7 +158,7 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
 
           <SettingRow
             label="Allow multiple submissions"
-            description="When off, the same visitor (by IP) can submit this form only once"
+            description="When off, the same visitor (by IP) can submit this form only once. Best-effort: IP-based, so shared networks count as one visitor."
             htmlFor="settings-multiple"
           >
             <Switch
@@ -176,6 +176,12 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
       <section>
         <SectionHeading>After submission</SectionHeading>
         <div className="flex flex-col gap-4 pt-4">
+          {settings.confirmationType === "relationship" && (
+            <p className="border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+              This form redirects to a linked page (configured via the API).
+              Picking an option below replaces that behavior.
+            </p>
+          )}
           <RadioGroup
             value={settings.confirmationType ?? "message"}
             onValueChange={value =>

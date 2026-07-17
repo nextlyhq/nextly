@@ -43,8 +43,14 @@ export function normalizeFormSettings(raw: unknown): FormSettings {
       ? (source.captcha as { enabled?: unknown; siteKey?: unknown })
       : undefined;
 
+  // "relationship" is a real stored value (redirect to a linked document) —
+  // coercing it to "message" would disable the form's redirect on the next
+  // save. Only genuinely unknown values fall back to "message".
   const confirmationType =
-    source.confirmationType === "redirect" ? "redirect" : "message";
+    source.confirmationType === "redirect" ||
+    source.confirmationType === "relationship"
+      ? source.confirmationType
+      : "message";
 
   return {
     submitButtonText:
@@ -56,6 +62,7 @@ export function normalizeFormSettings(raw: unknown): FormSettings {
       legacyMessage ??
       DEFAULT_FORM_SETTINGS.successMessage,
     redirectUrl: asOptionalString(source.redirectUrl),
+    redirectPage: source.redirectPage ?? undefined,
     redirectRelation:
       source.redirectRelation && typeof source.redirectRelation === "object"
         ? (source.redirectRelation as FormSettings["redirectRelation"])

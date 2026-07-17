@@ -813,11 +813,20 @@ export interface FormSettings {
   /**
    * Confirmation type after successful submission.
    * - "message": Display a success message
-   * - "redirect": Redirect to a URL or linked document
+   * - "redirect": Redirect to a URL
+   * - "relationship": Redirect to a linked document (requires
+   *   `redirectRelationships` in the plugin options)
    *
    * @default "message"
    */
-  confirmationType?: "message" | "redirect";
+  confirmationType?: "message" | "redirect" | "relationship";
+
+  /**
+   * Linked document for relationship-based redirects (the collection's
+   * `redirectPage` relationship value). Preserved verbatim — resolution
+   * happens where the relationship is rendered.
+   */
+  redirectPage?: unknown;
 
   /** Success message (supports HTML) - used when confirmationType is "message" */
   successMessage?: string;

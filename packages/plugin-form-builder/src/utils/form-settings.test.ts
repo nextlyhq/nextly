@@ -59,6 +59,15 @@ describe("normalizeFormSettings", () => {
     ).toBe(false);
   });
 
+  it("preserves relationship-based redirects verbatim", () => {
+    const settings = normalizeFormSettings({
+      confirmationType: "relationship",
+      redirectPage: "page_123",
+    });
+    expect(settings.confirmationType).toBe("relationship");
+    expect(settings.redirectPage).toBe("page_123");
+  });
+
   it("keeps redirect configuration intact", () => {
     const settings = normalizeFormSettings({
       confirmationType: "redirect",
