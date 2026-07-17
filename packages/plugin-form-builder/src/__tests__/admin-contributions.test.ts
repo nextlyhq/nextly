@@ -4,25 +4,24 @@ import { submissionsCollection } from "../collections/submissions";
 import { formBuilder } from "../plugin";
 
 describe("form-builder contributes.admin (P5 dogfood)", () => {
-  it("declares a sidebar menu item linking to the forms collection", () => {
-    const admin = formBuilder().plugin.contributes?.admin;
-    expect(admin?.menu?.[0]).toMatchObject({
-      label: "Forms",
-      icon: "file-text",
+  it("declares standalone main-rail placement with a single Forms identity", () => {
+    const { plugin } = formBuilder();
+    // Forms lives in the main rail: standalone placement + appearance, with
+    // NO separate menu contribution — "Forms" must exist exactly once.
+    expect(plugin.admin).toMatchObject({
+      placement: "standalone",
+      after: "media",
+      appearance: { icon: "FileText", label: "Forms" },
     });
-    expect(admin?.menu?.[0]?.to).toContain("/admin/collections/");
-    expect(admin?.menu?.[0]?.requiredPermission).toMatch(/^read-/);
+    expect(plugin.contributes?.admin?.menu ?? []).toHaveLength(0);
   });
 
-  it("declares a settings component", () => {
+  it("registers no settings component, custom pages, or beforeList injections", () => {
+    // The collection Edit-view override is the single FormBuilderView mount;
+    // the old settings-component (a second full builder at /admin/plugins/…),
+    // the filter-widget-as-page, and the beforeList injection stay gone.
     const admin = formBuilder().plugin.contributes?.admin;
-    expect(admin?.settings?.component).toContain("#FormBuilderView");
-  });
-
-  it("registers no custom pages or beforeList injections", () => {
-    // The submissions experience lives in the List-view override; the old
-    // filter-widget-as-page and beforeList registrations must stay gone.
-    const admin = formBuilder().plugin.contributes?.admin;
+    expect(admin?.settings).toBeUndefined();
     expect(admin?.pages ?? []).toHaveLength(0);
     expect(admin?.views ?? {}).toEqual({});
   });
