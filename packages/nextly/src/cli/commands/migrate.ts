@@ -233,7 +233,6 @@ export async function runMigrate(
     }
 
     // Operator-set override; never in CI config (spec §4.6.1).
-    // eslint-disable-next-line turbo/no-undeclared-env-vars
     const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
 
     const dz = adapter as unknown as DrizzleAdapter & {
