@@ -813,6 +813,14 @@ async function handleServiceRequest(
       routeParams._authenticatedUserName = authorizedUser.userName;
     if (authorizedUser.userEmail)
       routeParams._authenticatedUserEmail = authorizedUser.userEmail;
+    // Forward the resolved role set so role-based access rules (collection and
+    // field-level) evaluate against the caller's actual roles, not undefined.
+    // routeParams values are strings, so the array is JSON-encoded here and
+    // decoded at the dispatcher boundary.
+    if (authorizedUser.roles && authorizedUser.roles.length > 0)
+      routeParams._authenticatedUserRoles = JSON.stringify(
+        authorizedUser.roles
+      );
   }
 
   const dispatchRequest: DispatchRequest = {

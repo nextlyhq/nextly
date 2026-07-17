@@ -478,6 +478,63 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     });
   });
 
+  it("createEntry decodes and forwards the authenticated roles", async () => {
+    const spy = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e1" },
+    });
+    const container = makeContainer({ createEntry: spy });
+
+    await dispatchCollections(
+      container,
+      "createEntry",
+      {
+        collectionName: "posts",
+        _authenticatedUserId: "u1",
+        // Route params are strings; roles arrive JSON-encoded.
+        _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
+      },
+      { title: "Hello" }
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        userId: "u1",
+        userRoles: ["editor", "author"],
+      }),
+      expect.anything()
+    );
+  });
+
+  it("createEntry degrades a malformed roles param to undefined", async () => {
+    const spy = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e1" },
+    });
+    const container = makeContainer({ createEntry: spy });
+
+    await dispatchCollections(
+      container,
+      "createEntry",
+      {
+        collectionName: "posts",
+        _authenticatedUserId: "u1",
+        _authenticatedUserRoles: "not-json",
+      },
+      { title: "Hello" }
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ userRoles: undefined }),
+      expect.anything()
+    );
+  });
+
   it("updateEntry returns { message, item } body and 200 status", async () => {
     const fakeEntry = { id: "e1", title: "Hello (updated)" };
     const fakeServiceResult = {
