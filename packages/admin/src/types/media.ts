@@ -217,7 +217,17 @@ export interface MediaListResponse {
 export interface UploadProgress {
   file: File;
   filename: string;
-  status: "pending" | "uploading" | "success" | "error";
+  /**
+   * `error` is a server-side failure (retryable); `rejected` is a client-side
+   * validation failure (too large, wrong type, over the batch cap) that would
+   * fail identically on retry.
+   */
+  status: "pending" | "uploading" | "success" | "error" | "rejected";
+  /**
+   * True for rejected rows that were dropped only because the batch exceeded
+   * the per-upload file cap (reported as "skipped", not "failed").
+   */
+  skipped?: boolean;
   progress?: number; // 0-100
   error?: string;
   mediaId?: string; // Set on success

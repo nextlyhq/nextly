@@ -114,6 +114,7 @@ import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
 import type { ImageProcessor } from "../storage/image-processor";
@@ -963,6 +964,11 @@ async function registerConfigTablesInResolver(
       const dbName = (collection as { dbName?: string }).dbName;
       const fields = (collection as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
+      // Capture function-bearing field configs (validate/access/hooks)
+      // from the LIVE config: the DB-backed registry serializes fields,
+      // which drops functions, so the write/read services resolve them
+      // through the field-level registry instead.
+      registerFieldFunctions("collection", slug, fields);
       const baseTableName = dbName ?? slug.replace(/-/g, "_");
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
@@ -1000,6 +1006,8 @@ async function registerConfigTablesInResolver(
       const dbName = (single as { dbName?: string }).dbName;
       const fields = (single as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
+      // Same live-config capture as the collections branch above.
+      registerFieldFunctions("single", slug, fields);
       const tableName = resolveSingleTableName({ slug, dbName });
       // Why: forward the code-first `status: true` flag for singles too —
       // mirrors the collection branch above. Same Draft/Published runtime

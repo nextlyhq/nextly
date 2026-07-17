@@ -13,6 +13,8 @@ export interface VerifiedUser {
   image: string | null;
   emailVerified: Date | null;
   isActive: boolean;
+  /** True when the account still holds an admin-set password to replace. */
+  mustChangePassword: boolean;
 }
 
 /**
@@ -52,6 +54,7 @@ export async function verifyCredentials(
       passwordHash: string;
       emailVerified: Date | null;
       isActive: boolean;
+      mustChangePassword: boolean | null;
       failedLoginAttempts: number;
       lockedUntil: Date | null;
     } | null>;
@@ -129,5 +132,6 @@ export async function verifyCredentials(
     image: user.image,
     emailVerified: user.emailVerified,
     isActive: user.isActive,
+    mustChangePassword: user.mustChangePassword ?? false,
   };
 }

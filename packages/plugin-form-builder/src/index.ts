@@ -101,6 +101,9 @@ export type {
 // Document types
 export type { FormDocument, SubmissionDocument, FormSubmission } from "./types";
 
+// Notification rule type (stored on the form; edited by the builder UI)
+export type { FormNotification, FormNotificationItem } from "./types";
+
 // Validation and conditional logic types
 export type {
   ValidationRules,
@@ -264,13 +267,3 @@ export {
 // ============================================================
 
 export { formsCollection, submissionsCollection } from "./collections";
-
-// ============================================================
-// Component Exports
-// ============================================================
-// Note: React components are exported from `@nextly/plugin-form-builder/components`
-// to avoid "use client" issues when importing the plugin in server contexts.
-// Use: import { SubmissionList, SubmissionDetail } from '@nextly/plugin-form-builder/components';
-
-// Type-only exports are safe for server contexts
-export type { SubmissionListProps, SubmissionDetailProps } from "./components";

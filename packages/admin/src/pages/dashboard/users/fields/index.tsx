@@ -47,6 +47,8 @@ import { UserBreadcrumbs } from "@admin/components/features/user-management/brea
 import {
   AlertTriangle,
   AlignLeft,
+  Link2,
+  Phone,
   Calendar,
   CheckSquare,
   Circle,
@@ -104,6 +106,8 @@ const FIELD_TYPE_CONFIG: Record<
   textarea: { label: "Textarea", variant: "default", icon: AlignLeft },
   number: { label: "Number", variant: "primary", icon: Hash },
   email: { label: "Email", variant: "primary", icon: Mail },
+  url: { label: "URL", variant: "primary", icon: Link2 },
+  phone: { label: "Phone", variant: "primary", icon: Phone },
   select: { label: "Select", variant: "success", icon: List },
   radio: { label: "Radio", variant: "success", icon: Circle },
   checkbox: { label: "Checkbox", variant: "default", icon: CheckSquare },

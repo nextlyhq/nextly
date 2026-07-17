@@ -147,7 +147,6 @@ export class UsersService extends BaseService {
     password?: string | null;
     roles?: string[];
     isActive?: boolean;
-    sendWelcomeEmail?: boolean;
     [key: string]: unknown;
   }): Promise<UserMutationResponse> {
     return this.mutationService.createLocalUser(userData);

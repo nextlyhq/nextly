@@ -26,9 +26,6 @@ const serverEntries = [
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
-  "src/api/media.ts",
-  "src/api/media-bulk.ts",
-  "src/api/media-folders.ts",
   "src/api/media-handlers.ts",
   "src/api/collections-schema.ts",
   "src/api/collections-schema-detail.ts",
@@ -47,7 +44,6 @@ const serverEntries = [
   "src/api/email-templates-preview.ts",
   "src/api/email-send.ts",
   "src/api/email-send-template.ts",
-  "src/api/uploads.ts",
   "src/api/storage-upload-url.ts",
   "src/actions/index.ts",
   "src/cli/nextly.ts",
@@ -55,6 +51,9 @@ const serverEntries = [
   "src/storage/index.ts",
   // Unified error system entry points
   "src/errors/index.ts",
+  // Field-type catalog subpath: pure serializable data, browser-safe —
+  // consumed by the admin's field pickers and by plugins.
+  "src/collections/fields/catalog.ts",
   "src/observability/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23

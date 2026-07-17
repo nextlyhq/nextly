@@ -12,6 +12,8 @@ export interface FieldRowProps {
   readOnly?: boolean;
   /** Base path for nested fields (e.g. from group parent) */
   basePath?: string;
+  /** Form mode; write-only fields (password) adjust their affordances */
+  mode?: "create" | "edit";
 }
 
 /**
@@ -46,6 +48,7 @@ export function FieldRow({
   disabled,
   readOnly,
   basePath,
+  mode,
 }: FieldRowProps): React.ReactElement {
   const weights = fields.map(fieldWeight);
   const sum = weights.reduce((a, b) => a + b, 0);
@@ -66,6 +69,7 @@ export function FieldRow({
           basePath={basePath}
           disabled={disabled}
           readOnly={readOnly}
+          mode={mode}
         />
       ))}
     </div>

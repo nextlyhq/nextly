@@ -325,4 +325,137 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].pages).toBeUndefined();
     expect(meta[0].settings).toBeUndefined();
   });
+
+  it("passes identity metadata through (author/links/license/category/tags)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          author: "Acme Inc.",
+          homepage: "https://acme.dev",
+          repository: "https://github.com/acme/p",
+          docsUrl: "https://acme.dev/docs",
+          license: "MIT",
+          category: "forms",
+          tags: ["forms", "email"],
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0]).toMatchObject({
+      author: "Acme Inc.",
+      homepage: "https://acme.dev",
+      repository: "https://github.com/acme/p",
+      docsUrl: "https://acme.dev/docs",
+      license: "MIT",
+      category: "forms",
+      tags: ["forms", "email"],
+    });
+  });
+
+  it("keeps identity metadata for disabled plugins", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        { ...base, enabled: false, author: "Acme Inc.", license: "MIT" },
+      ]),
+      undefined
+    );
+    expect(meta[0].author).toBe("Acme Inc.");
+    expect(meta[0].license).toBe("MIT");
+  });
+
+  it("serializes the enabled state explicitly", () => {
+    const on = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined);
+    expect(on[0].enabled).toBe(true);
+
+    const off = buildPluginAdminMeta(
+      asPlugins([{ ...base, enabled: false }]),
+      undefined
+    );
+    expect(off[0].enabled).toBe(false);
+  });
+
+  it("serializes dependsOn ranges for the detail page", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([{ ...base, dependsOn: { "@acme/core": "^1.2.0" } }]),
+      undefined
+    );
+    expect(meta[0].dependsOn).toEqual({ "@acme/core": "^1.2.0" });
+  });
+
+  it("summarizes declared permissions for enabled plugins only", () => {
+    const contributes = {
+      permissions: [
+        {
+          action: "export",
+          resource: "submissions",
+          label: "Export submissions",
+          danger: true,
+        },
+      ],
+    };
+    const enabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes }]),
+      undefined
+    );
+    expect(enabled[0].permissions).toEqual([
+      {
+        action: "export",
+        resource: "submissions",
+        label: "Export submissions",
+        danger: true,
+      },
+    ]);
+
+    const disabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, enabled: false, contributes }]),
+      undefined
+    );
+    expect(disabled[0].permissions).toBeUndefined();
+  });
+
+  it("summarizes declared routes (method + path only) for enabled plugins only", () => {
+    const contributes = {
+      routes: [
+        {
+          method: "GET",
+          path: "/submissions/export",
+          handler: () => new Response(),
+          requiredPermission: "export-submissions",
+        },
+      ],
+    };
+    const enabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes }]),
+      undefined
+    );
+    expect(enabled[0].routes).toEqual([
+      { method: "GET", path: "/submissions/export" },
+    ]);
+
+    const disabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, enabled: false, contributes }]),
+      undefined
+    );
+    expect(disabled[0].routes).toBeUndefined();
+  });
+
+  it("lists contributed singles and components slugs alongside collections", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            collections: [{ slug: "forms" }],
+            singles: [{ slug: "form-settings" }],
+            components: [{ slug: "form-block" }],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].collections).toEqual(["forms"]);
+    expect(meta[0].singles).toEqual(["form-settings"]);
+    expect(meta[0].components).toEqual(["form-block"]);
+  });
 });

@@ -38,6 +38,14 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type {
   GetSingleOptions,
@@ -316,6 +324,14 @@ export class SingleQueryService extends BaseService {
         })) as SingleDocument;
       }
 
+      // Redact password hashes BEFORE any afterRead hook runs (a hook could
+      // copy the hash elsewhere); the final redaction below is defense in
+      // depth.
+      const singleHasPassword = hasPasswordField(singleMeta.fields);
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
+
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
         const afterContext = buildSingleHookContext({
@@ -335,6 +351,30 @@ export class SingleQueryService extends BaseService {
       }
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
+
+      // Field-level afterRead hooks + read access (functions resolved via
+      // the field-level registry).
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterRead",
+        data: doc,
+        operation: "read",
+        user: options.user,
+      });
+      await applyFieldReadAccess({
+        kind: "single",
+        slug,
+        entry: doc,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
+
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
 
       return {
         success: true,

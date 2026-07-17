@@ -12,9 +12,12 @@
 
 "use client";
 import {
+  FieldOptionsEditor,
+  type FieldOptionsEditorProps,
+} from "@nextlyhq/plugin-sdk/admin";
+import {
   FormLabelWithTooltip,
   Input,
-  Button,
   Checkbox,
   Tabs,
   TabsContent,
@@ -48,10 +51,6 @@ export interface FieldEditorProps {
   allFields: FormField[];
   /** Callback when field is updated */
   onUpdate: (updates: Partial<FormField>) => void;
-  /** Callback when field is deleted */
-  onDelete: () => void;
-  /** Callback when field is duplicated */
-  onDuplicate?: () => void;
 }
 
 // ============================================================================
@@ -394,8 +393,14 @@ function TypeSpecificOptions({
   }
 }
 
+type KitOption = FieldOptionsEditorProps["options"][number];
+
 /**
- * Options editor for select/radio/checkbox-group fields
+ * Options editor for select/radio fields, delegating to the SDK's
+ * FieldOptionsEditor (drag reorder, auto-generated values, CSV/JSON import,
+ * duplicate-value reporting). The kit works on id-carrying rows for
+ * drag-and-drop; the form stores plain {label, value} pairs, so ids live in
+ * local state and are stripped before every write.
  */
 function OptionsEditor({
   field,
@@ -405,38 +410,23 @@ function OptionsEditor({
   onUpdate: (updates: Partial<FormField>) => void;
 }) {
   const optionsField = field as SelectFormField | RadioFormField;
-  const options = useMemo(
-    () => optionsField.options || [],
-    [optionsField.options]
+
+  const [kitOptions, setKitOptions] = useState<KitOption[]>(() =>
+    (optionsField.options || []).map((opt, index) => ({
+      id: `opt_initial_${index}`,
+      label: opt.label,
+      value: opt.value,
+    }))
   );
 
-  const addOption = useCallback(() => {
-    const newOptions = [
-      ...options,
-      {
-        label: `Option ${options.length + 1}`,
-        value: `option_${options.length + 1}`,
-      },
-    ];
-    onUpdate({ options: newOptions });
-  }, [options, onUpdate]);
-
-  const updateOption = useCallback(
-    (index: number, key: "label" | "value", value: string) => {
-      const newOptions = options.map((opt, i: number) =>
-        i === index ? { ...opt, [key]: value } : opt
-      );
-      onUpdate({ options: newOptions });
+  const handleOptionsChange = useCallback(
+    (next: KitOption[]) => {
+      setKitOptions(next);
+      onUpdate({
+        options: next.map(({ label, value }) => ({ label, value })),
+      });
     },
-    [options, onUpdate]
-  );
-
-  const removeOption = useCallback(
-    (index: number) => {
-      const newOptions = options.filter((_, i: number) => i !== index);
-      onUpdate({ options: newOptions });
-    },
-    [options, onUpdate]
+    [onUpdate]
   );
 
   return (
@@ -445,53 +435,11 @@ function OptionsEditor({
         label="Options"
         description="List of choices available for this field."
       />
-
-      {options.length === 0 ? (
-        <div className="p-4 bg-muted rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
-          No options defined. Add an option to get started.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {options.map((opt, index) => (
-            <div key={index} className="flex items-center gap-2 group">
-              <Input
-                type="text"
-                value={opt.label}
-                onChange={e => updateOption(index, "label", e.target.value)}
-                placeholder="Label"
-                className="flex-1 h-9 bg-transparent"
-              />
-              <Input
-                type="text"
-                value={opt.value}
-                onChange={e => updateOption(index, "value", e.target.value)}
-                placeholder="Value"
-                className="flex-1 h-9 bg-transparent"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => removeOption(index)}
-                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                title="Remove option"
-              >
-                ×
-              </Button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={addOption}
-        className="w-full border-dashed text-xs h-8"
-      >
-        + Add Option
-      </Button>
+      <FieldOptionsEditor
+        options={kitOptions}
+        onOptionsChange={handleOptionsChange}
+        fieldType={field.type === "radio" ? "radio" : "select"}
+      />
     </div>
   );
 }
@@ -707,47 +655,11 @@ function ValidationTab({
  * />
  * ```
  */
-export function FieldEditor({
-  field,
-  allFields,
-  onUpdate,
-  onDelete,
-  onDuplicate,
-}: FieldEditorProps) {
+export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
   const [activeTab, setActiveTab] = useState<string>("general");
 
-  // Get human-readable type label
-  const getTypeLabel = (type: string): string => {
-    const labels: Record<string, string> = {
-      text: "Text",
-      email: "Email",
-      number: "Number",
-      phone: "Phone",
-      url: "URL",
-      textarea: "Textarea",
-      select: "Select",
-      checkbox: "Checkbox",
-      radio: "Radio",
-      file: "File",
-      date: "Date",
-      time: "Time",
-      hidden: "Hidden",
-    };
-    return labels[type] || type;
-  };
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-4 border-b border-primary/5">
-        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-          Field Properties
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-primary/5 text-primary font-bold dark:bg-primary/20 dark:text-primary-foreground/90">
-            {getTypeLabel(field.type)}
-          </span>
-        </h3>
-      </div>
-
+    <div className="flex flex-col">
       {/* Tabs */}
       <Tabs
         value={activeTab}
@@ -777,8 +689,8 @@ export function FieldEditor({
           </TabsList>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 pb-20">
+        {/* Content */}
+        <div className="p-4">
           <TabsContent value="general" className="mt-0">
             <GeneralTab
               field={field}
@@ -800,28 +712,6 @@ export function FieldEditor({
           </TabsContent>
         </div>
       </Tabs>
-
-      {/* Sticky Footer with actions */}
-      <div className="p-4 bg-background border-t border-primary/5 flex gap-2 shrink-0">
-        {onDuplicate && (
-          <Button
-            type="button"
-            variant="outline"
-            className="flex-1 h-9"
-            onClick={onDuplicate}
-          >
-            Duplicate
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="destructive"
-          className="flex-1 h-9"
-          onClick={onDelete}
-        >
-          Delete Field
-        </Button>
-      </div>
     </div>
   );
 }

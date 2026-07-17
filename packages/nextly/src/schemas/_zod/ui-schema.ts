@@ -164,7 +164,13 @@ export type FieldNode = {
   fields?: FieldNode[];
 };
 
-const field: z.ZodType<FieldNode> = z.lazy(() =>
+/**
+ * The single-field schema, exported so the schema-apply endpoints validate
+ * incoming field payloads with EXACTLY the rules the ui-schema.json mirror
+ * enforces. One validator for both writers is what keeps the DB and the
+ * committed manifest from ever disagreeing about what a legal field is.
+ */
+export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
   z
     .object({
       name: z
@@ -207,7 +213,7 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
       components: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
       // Nested fields for container types (repeater/group/component).
-      fields: z.array(field).optional(),
+      fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
       if (
@@ -220,8 +226,13 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["options"],
         });
       }
+      // Only relationship requires relationTo: the runtime consumes it to
+      // resolve the target collection. Upload fields always target the
+      // media library and the builder's upload editor deliberately does
+      // not collect relationTo, so requiring it here would reject every
+      // builder-authored upload field the DB path accepts.
       if (
-        (f.type === "relationship" || f.type === "upload") &&
+        f.type === "relationship" &&
         (f.relationTo === undefined ||
           (typeof f.relationTo === "string" && f.relationTo.length === 0) ||
           (Array.isArray(f.relationTo) && f.relationTo.length === 0))
@@ -292,7 +303,7 @@ function entity() {
       labels: z.object({ singular: z.string(), plural: z.string() }).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
-      fields: z.array(field),
+      fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
       // Duplicate field names.

@@ -51,6 +51,7 @@ import {
 import {
   pgTable,
   text as pgText,
+  varchar as pgVarchar,
   boolean as pgBoolean,
   timestamp as pgTimestamp,
   jsonb as pgJsonb,
@@ -83,7 +84,11 @@ import type {
 import { env } from "../../../lib/env";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../services/shared";
-import type { UserFieldConfig } from "../../../users/config/types";
+import type {
+  UserFieldConfig,
+  UserUrlFieldConfig,
+  UserPhoneFieldConfig,
+} from "../../../users/config/types";
 import { checkUserFieldName } from "../../../users/config/validate-user-config";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -357,16 +362,27 @@ export class UserExtSchemaService {
     if (record.description) adminOpts.description = record.description;
     if (Object.keys(adminOpts).length > 0) base.admin = adminOpts;
 
+    // Validation bounds ride the stored row so the schema builder and the
+    // zod checks see the same constraints for UI- and code-defined fields.
+    const textBounds: Record<string, unknown> = {};
+    if (record.minLength != null) textBounds.minLength = record.minLength;
+    if (record.maxLength != null) textBounds.maxLength = record.maxLength;
+    const numberBounds: Record<string, unknown> = {};
+    if (record.minValue != null) numberBounds.min = record.minValue;
+    if (record.maxValue != null) numberBounds.max = record.maxValue;
+
     switch (record.type) {
       case "text":
         return {
           ...base,
+          ...textBounds,
           type: "text",
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
       case "textarea":
         return {
           ...base,
+          ...textBounds,
           type: "textarea",
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
@@ -376,9 +392,24 @@ export class UserExtSchemaService {
           type: "email",
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
+      case "url":
+        return {
+          ...base,
+          ...textBounds,
+          type: "url",
+          defaultValue: record.defaultValue ?? undefined,
+        } as UserFieldConfig;
+      case "phone":
+        return {
+          ...base,
+          ...textBounds,
+          type: "phone",
+          defaultValue: record.defaultValue ?? undefined,
+        } as UserFieldConfig;
       case "number":
         return {
           ...base,
+          ...numberBounds,
           type: "number",
           defaultValue: record.defaultValue
             ? Number(record.defaultValue)
@@ -398,6 +429,7 @@ export class UserExtSchemaService {
           ...base,
           type: "select",
           options: record.options || [],
+          ...(record.hasMany ? { hasMany: true } : {}),
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
       case "radio":
@@ -456,7 +488,7 @@ export class UserExtSchemaService {
 
     // Field columns
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
 
       const columnSQL = this.generateColumnSQL(field);
       if (columnSQL) {
@@ -504,7 +536,7 @@ export class UserExtSchemaService {
 
     // Field-level unique indexes
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       if (!("unique" in field && field.unique)) continue;
 
@@ -524,7 +556,7 @@ export class UserExtSchemaService {
 
     // Field-level regular indexes
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       if (!("index" in field && field.index)) continue;
       // Skip if already indexed as unique
@@ -726,7 +758,7 @@ export class UserExtSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToPostgresColumn(field);
@@ -759,7 +791,7 @@ export class UserExtSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToMySQLColumn(field);
@@ -796,7 +828,7 @@ export class UserExtSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToSQLiteColumn(field);
@@ -930,7 +962,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
    * @returns 64-character hex string (SHA-256 hash)
    */
   computeSchemaHash(fields: UserFieldConfig[]): string {
-    return calculateSchemaHash(fields);
+    return calculateSchemaHash(fields as unknown as DataFieldConfig[]);
   }
 
   // ============================================================
@@ -963,9 +995,32 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     return parts.join(" ");
   }
 
-  private getColumnType(field: DataFieldConfig): string | null {
+  /**
+   * The user-surface-only types (url, phone) store as text; they are not
+   * canonical field types, so the shared guards never match them.
+   */
+  private isUserSurfaceTextField(
+    field: UserFieldConfig
+  ): field is UserUrlFieldConfig | UserPhoneFieldConfig {
+    return field.type === "url" || field.type === "phone";
+  }
+
+  /**
+   * Whether a user field backs a column: either a canonical data field or
+   * one of the user-surface text types the shared guard cannot know about.
+   */
+  private isUserDataField(field: UserFieldConfig): boolean {
+    return this.isUserSurfaceTextField(field) || isDataField(field);
+  }
+
+  private getColumnType(field: UserFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
+    if (this.isUserSurfaceTextField(field)) {
+      return field.maxLength
+        ? types.varchar(field.maxLength)
+        : types.varchar(255);
+    }
     if (isTextField(field)) {
       return field.maxLength ? types.varchar(field.maxLength) : types.text;
     }
@@ -1003,6 +1058,11 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
+    if (this.isUserSurfaceTextField(field)) {
+      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
+      const column = pgVarchar(colName, { length: field.maxLength ?? 255 });
+      return isRequired ? column.notNull() : column;
+    }
     if (isTextField(field) || isEmailField(field)) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
@@ -1038,6 +1098,11 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
+    if (this.isUserSurfaceTextField(field)) {
+      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
+      const column = mysqlVarchar(colName, { length: field.maxLength ?? 255 });
+      return isRequired ? column.notNull() : column;
+    }
     if (isTextField(field) || isEmailField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
@@ -1084,6 +1149,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     if (
       isTextField(field) ||
       isEmailField(field) ||
+      this.isUserSurfaceTextField(field) ||
       isTextareaField(field) ||
       isSelectField(field) ||
       isRadioField(field)
@@ -1111,7 +1177,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   // Field Column Mapping (Drizzle Code Generation)
   // ============================================================
 
-  private mapFieldToDrizzleCode(field: DataFieldConfig): string {
+  private mapFieldToDrizzleCode(field: UserFieldConfig): string {
     if (!("name" in field) || !field.name) return "";
     const colName = this.toSnakeCase(field.name);
 
@@ -1125,9 +1191,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private mapFieldToPostgresCode(
-    field: DataFieldConfig,
+    field: UserFieldConfig,
     colName: string
   ): string {
+    if (this.isUserSurfaceTextField(field)) {
+      return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
+    }
     if (isTextField(field)) {
       return field.maxLength
         ? `varchar('${colName}', { length: ${field.maxLength} })`
@@ -1157,7 +1226,10 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     return `text('${colName}')`;
   }
 
-  private mapFieldToMySQLCode(field: DataFieldConfig, colName: string): string {
+  private mapFieldToMySQLCode(field: UserFieldConfig, colName: string): string {
+    if (this.isUserSurfaceTextField(field)) {
+      return `varchar('${colName}', { length: ${field.maxLength ?? 255} })`;
+    }
     if (
       isTextField(field) ||
       isEmailField(field) ||
@@ -1182,7 +1254,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private mapFieldToSQLiteCode(
-    field: DataFieldConfig,
+    field: UserFieldConfig,
     colName: string
   ): string {
     if (isNumberField(field)) {
@@ -1246,7 +1318,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
 
       if (this.dialect === "sqlite") {
         if (isNumberField(field)) imports.add("real");
@@ -1315,8 +1387,8 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   // ============================================================
 
   private isFieldModified(
-    oldField: DataFieldConfig,
-    newField: DataFieldConfig
+    oldField: UserFieldConfig,
+    newField: UserFieldConfig
   ): boolean {
     if (oldField.type !== newField.type) return true;
 
@@ -1341,10 +1413,10 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
 
   private buildFieldMap(
     fields: UserFieldConfig[]
-  ): Map<string, DataFieldConfig> {
-    const map = new Map<string, DataFieldConfig>();
+  ): Map<string, UserFieldConfig> {
+    const map = new Map<string, UserFieldConfig>();
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       map.set(field.name, field);
     }
@@ -1356,6 +1428,8 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       case "text":
       case "textarea":
       case "email":
+      case "url":
+      case "phone":
       case "select":
       case "radio":
         return "''";

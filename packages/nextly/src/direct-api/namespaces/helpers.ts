@@ -67,12 +67,18 @@ export interface ServiceResultLike {
   statusCode: number;
   message: string;
   data: unknown;
+  errors?: Array<{ path: string; code: string; message: string }>;
 }
 
 /**
  * Convert a failed service-layer result into a `NextlyError`.
  */
 export function createErrorFromResult(result: ServiceResultLike): NextlyError {
+  // Per-field validation issues survive into the Direct API error so
+  // server-side callers (and agents) see exactly which fields failed.
+  if (result.statusCode === 400 && result.errors?.length) {
+    return NextlyError.validation({ errors: result.errors });
+  }
   return new NextlyError({
     code: statusCodeToErrorCode(result.statusCode),
     publicMessage: result.message,

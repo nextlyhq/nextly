@@ -53,6 +53,13 @@ export interface FormEmailNotification {
   variables: Record<string, unknown>;
   /** Email provider id; undefined = system default. */
   providerId?: string;
+  /**
+   * Resolved sender address (rule's senderEmail, else the plugin's
+   * defaultFrom); undefined = template/provider default.
+   */
+  from?: string;
+  /** Resolved Reply-To address, if the rule configured one. */
+  replyTo?: string;
   /** CC addresses, if any. */
   cc?: string[];
   /** BCC addresses, if any. */
@@ -68,19 +75,25 @@ export interface BeforeEmailFilterContext {
 }
 
 /**
- * A single email notification integration stored on a form.
- * Matches the shape saved by the form builder admin UI.
+ * A single email notification rule stored on a form.
+ * Matches the shape saved by the form builder admin UI. This is the ONE
+ * notification rule type — the admin context re-exports it rather than
+ * keeping a parallel copy.
  */
-export interface FormNotificationItem {
+export interface FormNotification {
   /** Unique ID for this notification */
   id: string;
-  /** Display name for this integration */
+  /** Display name for this notification rule */
   name: string;
   /** Whether this notification is active */
   enabled: boolean;
   /** ID of the email provider to use; undefined = system default */
   providerId?: string;
-  /** Sender email override; undefined = use provider's configured address */
+  /**
+   * Sender email override. Resolution order at send time:
+   * this value, else the plugin's `notifications.defaultFrom` option, else
+   * the template/provider default.
+   */
   senderEmail?: string;
   /** How the recipient address is determined */
   recipientType: "static" | "field";
@@ -90,9 +103,27 @@ export interface FormNotificationItem {
   cc: string[];
   /** BCC email addresses */
   bcc: string[];
+  /**
+   * Reply-To address: a `{{fieldName}}` reference to one of the form's
+   * email fields (resolved against the submission) or a literal address.
+   */
+  replyTo?: string;
+  /**
+   * Optional send condition evaluated against the submitted data. When set
+   * and unmet, the rule is skipped for that submission. A single condition
+   * covers the common case; the JSON storage leaves room to grow into a
+   * multi-condition tree without a migration.
+   */
+  condition?: ConditionalLogicCondition;
   /** Slug of the email template to use */
   templateSlug?: string;
 }
+
+/**
+ * @deprecated Use {@link FormNotification}. Alias kept so existing imports
+ * keep compiling during the alpha; will be removed before a stable release.
+ */
+export type FormNotificationItem = FormNotification;
 
 /**
  * Form document structure (stored in database).
@@ -103,7 +134,7 @@ export interface FormDocument {
   name: string;
   fields: FormField[];
   settings: FormSettings;
-  notifications: FormNotificationItem[];
+  notifications: FormNotification[];
   webhooks?: WebhookConfig[];
   status: "draft" | "published" | "closed";
   createdAt: Date;
@@ -782,11 +813,20 @@ export interface FormSettings {
   /**
    * Confirmation type after successful submission.
    * - "message": Display a success message
-   * - "redirect": Redirect to a URL or linked document
+   * - "redirect": Redirect to a URL
+   * - "relationship": Redirect to a linked document (requires
+   *   `redirectRelationships` in the plugin options)
    *
    * @default "message"
    */
-  confirmationType?: "message" | "redirect";
+  confirmationType?: "message" | "redirect" | "relationship";
+
+  /**
+   * Linked document for relationship-based redirects (the collection's
+   * `redirectPage` relationship value). Preserved verbatim — resolution
+   * happens where the relationship is rendered.
+   */
+  redirectPage?: unknown;
 
   /** Success message (supports HTML) - used when confirmationType is "message" */
   successMessage?: string;
@@ -803,14 +843,23 @@ export interface FormSettings {
     value: string; // Document ID
   };
 
-  /** Allow multiple submissions from same user/IP */
+  /** Allow multiple submissions from same IP (default true) */
   allowMultipleSubmissions?: boolean;
 
-  /** reCAPTCHA configuration */
-  captcha?: {
-    enabled: boolean;
-    siteKey?: string;
-  };
+  /**
+   * Per-form honeypot override. Unset inherits the plugin's
+   * `spamProtection.honeypot`; the form wins where set.
+   */
+  honeypotEnabled?: boolean;
+
+  /**
+   * Per-form reCAPTCHA override. Unset inherits the plugin's
+   * `spamProtection.recaptcha.enabled`; the form wins where set.
+   */
+  captchaEnabled?: boolean;
+
+  /** reCAPTCHA site key (client-facing) when captcha is enabled per-form */
+  captchaSiteKey?: string;
 }
 
 // ============================================================

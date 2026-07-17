@@ -1,32 +1,14 @@
 /**
- * Media API Route Handlers for Next.js
+ * Media API operation handlers (INTERNAL, superseded).
  *
- * These route handlers can be re-exported in your Next.js application to provide
- * media management endpoints at /api/media.
- *
- * **IMPORTANT:** For storage plugins (S3, Vercel Blob, etc.) to work, you must
- * initialize Nextly with your config before these routes are called. The recommended
- * approach is to use Next.js instrumentation:
- *
- * ```typescript
- * // src/instrumentation.ts
- * export async function register() {
- *   if (process.env.NEXT_RUNTIME === "nodejs") {
- *     const { getNextly } = await import("nextly");
- *     const nextlyConfig = (await import("./nextly.config")).default;
- *     await getNextly({ config: nextlyConfig });
- *   }
- * }
- * ```
- *
- * @example
- * ```typescript
- * // In your Next.js app: app/api/media/route.ts
- * export { GET, POST } from 'nextly/api/media';
- *
- * // In your Next.js app: app/api/media/[id]/route.ts
- * export { getMediaById as GET, updateMedia as PATCH, deleteMedia as DELETE } from 'nextly/api/media';
- * ```
+ * Not a wire-able route surface: these handlers run no authentication of
+ * their own, so the package does not export this module. Consumer apps
+ * mount media through `nextly/api/media-handlers` (`createMediaHandlers`),
+ * which implements the same operations behind the media auth model —
+ * public mounts serve reads only, admin mounts check `{action}-media`
+ * permissions. This module is retained for its upload-validation test
+ * coverage (media.upload.test.ts) pending consolidation into the
+ * media-handlers surface.
  *
  * @module api/media
  */
@@ -98,9 +80,7 @@ export const GET = withErrorHandler(
     const folderIdParam = searchParams.get("folderId");
     const options: ListMediaOptions = {
       page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-      limit: searchParams.get("limit")
-        ? Number(searchParams.get("limit"))
-        : 24,
+      limit: searchParams.get("limit") ? Number(searchParams.get("limit")) : 24,
       search: searchParams.get("search") || undefined,
       type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
       folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
@@ -275,7 +255,9 @@ export function updateMedia(
 
       const mediaFile = await mediaService.update(id, validated, context);
 
-      return withTimezoneFormatting(respondMutation("Media updated.", mediaFile));
+      return withTimezoneFormatting(
+        respondMutation("Media updated.", mediaFile)
+      );
     }
   )(request, ctx);
 }

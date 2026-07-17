@@ -29,6 +29,7 @@ export { definePlugin } from "nextly";
 export type {
   PluginDefinition,
   PluginContributions,
+  PluginCategory,
   PluginContext,
   PluginHookRegistry,
   PluginPermission,

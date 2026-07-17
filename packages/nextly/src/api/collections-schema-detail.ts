@@ -23,12 +23,10 @@
 
 import type { FieldConfig } from "@nextly/collections";
 
-import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import { env } from "../lib/env";
 import { getNextlyLogger } from "../observability/logger";
 import {
   applyPluginAdminViews,
@@ -37,11 +35,15 @@ import {
 import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
-import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
+import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
+import {
+  requireRouteCollectionAccess,
+  requireRoutePermission,
+} from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -62,60 +64,17 @@ async function getComponentRegistry(): Promise<ComponentRegistryService> {
   return getService("componentRegistryService");
 }
 
-async function requireUser(request: Request): Promise<{ id: string }> {
-  // getSession returns GetSessionResult; throw the unified auth-required
-  // error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET || "");
-  const user = result.authenticated ? result.user : null;
-  if (!user) {
-    throw NextlyError.authRequired();
-  }
-  return { id: user.id };
-}
-
-/**
- * Authorize a non-superadmin caller for the management surface (PATCH/DELETE).
- * Identifiers and required-permission detail are kept out of the public
- * message per spec §13.8 and surfaced through `logContext`.
- */
-async function requireManageSettings(userId: string): Promise<void> {
-  if (await isSuperAdmin(userId)) return;
-  const canManage = await hasPermission(userId, "manage", "settings");
-  if (!canManage) {
-    throw NextlyError.forbidden({
-      logContext: {
-        userId,
-        required: "manage-settings",
-        operation: "manage-collection",
-      },
-    });
-  }
-}
-
 /**
  * GET handler for retrieving a single collection by slug.
  *
- * Requires authentication and read permission for the collection. The
+ * Requires a verified session or API key with read access to the
+ * collection, matching the dispatcher's `getCollection` authorization. The
  * registry throws `NOT_FOUND` if no collection matches the slug.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
-    const user = await requireUser(request);
     const { slug } = await context.params;
-
-    const isAdmin = await isSuperAdmin(user.id);
-    if (!isAdmin) {
-      const canRead = await hasPermission(user.id, "read", slug);
-      if (!canRead) {
-        throw NextlyError.forbidden({
-          logContext: {
-            userId: user.id,
-            required: `read-${slug}`,
-            operation: "read-collection",
-          },
-        });
-      }
-    }
+    await requireRouteCollectionAccess(request, "read", slug);
 
     const registry = await getCollectionRegistry();
     const collection = await registry.getCollection(slug);
@@ -174,8 +133,7 @@ export const PATCH = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    const user = await requireUser(request);
-    await requireManageSettings(user.id);
+    await requireRoutePermission(request, "manage", "settings");
 
     const { slug } = await context.params;
 
@@ -220,6 +178,8 @@ export const PATCH = withErrorHandler(
     }
 
     if (body.fields !== undefined) {
+      // Same rules as the ui-schema.json mirror (see api/fields-payload).
+      assertValidFieldsPayload(body.fields);
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -306,8 +266,7 @@ export const DELETE = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    const user = await requireUser(request);
-    await requireManageSettings(user.id);
+    await requireRoutePermission(request, "manage", "settings");
 
     const { slug } = await context.params;
 

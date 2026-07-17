@@ -65,7 +65,10 @@ import type { FieldType } from "./types/base";
  * ```
  */
 function createTypeGuard<T extends FieldConfig>(type: FieldType) {
-  return (field: FieldConfig): field is T => field.type === type;
+  // Accepts any discriminated field shape (not just FieldConfig) so callers
+  // holding a wider surface union — e.g. user fields, which add types the
+  // canonical union does not know — can narrow without casting.
+  return (field: { type: string }): field is T => field.type === type;
 }
 
 // ============================================================
@@ -174,9 +177,9 @@ export const isNumberField = createTypeGuard<NumberFieldConfig>("number");
  * }
  * ```
  */
-export const isCheckboxField = (
-  field: FieldConfig
-): field is CheckboxFieldConfig => field.type === "checkbox";
+export const isCheckboxField = (field: {
+  type: string;
+}): field is CheckboxFieldConfig => field.type === "checkbox";
 
 /**
  * Type guard for date field config.
@@ -261,7 +264,9 @@ export const isRelationshipField =
  * }
  * ```
  */
-export function isRepeaterField(field: FieldConfig): field is RepeaterFieldConfig {
+export function isRepeaterField(
+  field: FieldConfig
+): field is RepeaterFieldConfig {
   return field.type === "repeater";
 }
 
@@ -339,7 +344,7 @@ export const isChipsField = createTypeGuard<ChipsFieldConfig>("chips");
  * }
  * ```
  */
-export function isDataField(field: FieldConfig): field is DataFieldConfig {
+export function isDataField(field: { type: string }): field is DataFieldConfig {
   return (DATA_FIELD_TYPES as readonly string[]).includes(field.type);
 }
 

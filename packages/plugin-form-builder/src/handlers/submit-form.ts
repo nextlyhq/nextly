@@ -16,6 +16,7 @@ import type {
   ResolvedFormBuilderConfig,
   FormField,
 } from "../types";
+import { normalizeFormSettings } from "../utils/form-settings";
 import {
   generateZodSchema,
   transformFormData,
@@ -158,58 +159,137 @@ export async function submitForm(
       };
     }
 
-    // 3. Transform and validate submission data
-    const transformedData = transformFormData(data, form.fields);
-    const schema = generateZodSchema(form.fields);
-    const validationResult = schema.safeParse(transformedData);
+    // 2b. Settings come through the one canonical reader — stored settings
+    // may carry legacy keys from earlier builder versions.
+    const settings = normalizeFormSettings(form.settings);
 
-    if (!validationResult.success) {
-      const validationErrors = getValidationErrors(validationResult);
-      logger.debug?.("Form validation failed", {
-        formSlug,
-        errors: validationErrors,
-      });
-      return {
-        success: false,
-        error: "Validation failed",
-        validationErrors,
-      };
+    // 2c. Single-submission forms: the same visitor (by IP) submits once.
+    // Checked before spam so a repeat visitor gets the honest message
+    // instead of an inexplicable success that stored nothing new. This is a
+    // best-effort deterrent, not a guarantee: IPs are shared (NAT/proxies),
+    // and the check-then-create pair is not atomic, so two truly concurrent
+    // submissions can both pass — an airtight version needs a partial
+    // unique index the portable field config cannot express yet.
+    if (settings.allowMultipleSubmissions === false && !metadata?.ipAddress) {
+      // Without an identifier there is nothing to deduplicate on. Failing
+      // closed would block every server-to-server integration, so the gate
+      // stays open — loudly.
+      logger.warn?.(
+        "Single-submission form received a submission without an IP — the restriction cannot apply",
+        { formSlug }
+      );
+    }
+    if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
+      const existing = await collections.count(
+        pluginConfig.formSubmissionOverrides.slug,
+        {
+          where: {
+            form: { equals: form.id },
+            ipAddress: { equals: metadata.ipAddress },
+            status: { not_equals: "spam" },
+          },
+        },
+        { as: "system" }
+      );
+      if (existing > 0) {
+        logger.info?.("Repeat submission rejected (single-submission form)", {
+          formSlug,
+          ipAddress: metadata.ipAddress,
+        });
+        return {
+          success: false,
+          error: "You have already submitted this form.",
+        };
+      }
     }
 
-    // 3b. Sanitize validated submission data (strip HTML from free-text fields)
-    sanitizeSubmissionData(validationResult.data, form.fields);
+    // 3. Spam detection — BEFORE validation, so a bot that trips the trap
+    // while also failing validation still receives the same fake success as
+    // any other bot instead of a distinguishable validation error.
+    // Honeypot fields are by definition NOT declared form fields, so the
+    // probe is the raw payload minus the declared schema — a declared field
+    // (e.g. a real "website" input) must never trip the trap.
+    const declaredFieldNames = new Set(form.fields.map(field => field.name));
+    const undeclaredData = Object.fromEntries(
+      Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
+    );
 
-    // 4. Spam detection
     const spamResult = await checkSpam({
-      data: transformedData,
+      data: undeclaredData,
       ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
-        honeypot: pluginConfig.spamProtection.honeypot,
+        // Per-form overrides win where set; blank inherits the plugin config.
+        honeypot:
+          settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
         rateLimit: pluginConfig.spamProtection.rateLimit,
-        recaptcha: pluginConfig.spamProtection.recaptcha,
+        recaptcha: {
+          ...pluginConfig.spamProtection.recaptcha,
+          enabled:
+            settings.captchaEnabled ??
+            pluginConfig.spamProtection.recaptcha?.enabled ??
+            false,
+        },
       },
     });
 
-    if (spamResult.isSpam) {
-      // Silently reject spam - return fake success to avoid tipping off bots
-      logger.info?.("Spam submission detected and rejected", {
+    // Rate-limit hits are pure volume — storing them would turn the limiter
+    // into a database DoS, so they are rejected without a trace (still with
+    // fake success so the client learns nothing).
+    if (spamResult.isSpam && spamResult.reason === "rate_limit") {
+      logger.info?.("Spam submission rejected (rate limit)", {
+        formSlug,
+        ipAddress: metadata?.ipAddress,
+      });
+      return { success: true };
+    }
+
+    const isContentSpam = spamResult.isSpam;
+
+    // 4. Transform + validate. Content spam skips validation entirely — it
+    // is stored for review exactly as the bot shaped it (declared fields
+    // only, sanitized), and requiring validity would drop the evidence.
+    const transformedData = transformFormData(data, form.fields);
+    let storedData: Record<string, unknown>;
+
+    if (isContentSpam) {
+      logger.info?.("Spam submission detected — storing flagged", {
         formSlug,
         reason: spamResult.reason,
         ipAddress: metadata?.ipAddress,
       });
+      sanitizeSubmissionData(transformedData, form.fields);
+      storedData = transformedData;
+    } else {
+      const schema = generateZodSchema(form.fields);
+      const validationResult = schema.safeParse(transformedData);
 
-      // Return fake success (don't tell spammers their submission was rejected)
-      return {
-        success: true,
-      };
+      if (!validationResult.success) {
+        const validationErrors = getValidationErrors(validationResult);
+        logger.debug?.("Form validation failed", {
+          formSlug,
+          errors: validationErrors,
+        });
+        return {
+          success: false,
+          error: "Validation failed",
+          validationErrors,
+        };
+      }
+
+      // Sanitize validated submission data (strip HTML from free-text fields)
+      sanitizeSubmissionData(validationResult.data, form.fields);
+      storedData = validationResult.data;
     }
 
-    // 5. Create submission record
+    // 5. Create submission record. Content spam (honeypot/recaptcha) is
+    // stored FLAGGED, never silently dropped: a false positive stays
+    // reviewable in the Spam view and recoverable via "Not spam".
     const submissionData = {
       form: form.id,
-      data: validationResult.data,
-      status: "new" as const,
+      data: storedData,
+      status: isContentSpam ? ("spam" as const) : ("new" as const),
+      spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
       submittedAt: new Date(),
@@ -226,13 +306,20 @@ export async function submitForm(
     logger.info?.("Form submission created successfully", {
       formSlug,
       submissionId: submission.id,
+      flaggedAsSpam: isContentSpam,
     });
 
     // Email notifications are sent via the afterCreate hook registered in
     // plugin.ts init(), so they fire for all submission paths (HTTP + direct).
+    // The hook itself skips spam-flagged rows.
 
-    // 6. Determine redirect URL
+    // 6. Determine redirect URL. Spam gets the same success shape as a real
+    // submission (minus the stored row reference) so bots can't diff the two.
     const redirect = determineRedirectUrl(form);
+
+    if (isContentSpam) {
+      return { success: true, redirect };
+    }
 
     return {
       success: true,

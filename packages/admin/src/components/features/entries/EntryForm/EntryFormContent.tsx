@@ -30,6 +30,8 @@ export interface EntryFormContentProps {
   readOnly?: boolean;
   /** Whether to wrap content in a card (standalone mode) */
   withCard?: boolean;
+  /** Form mode; write-only fields (password) adjust their affordances */
+  mode?: "create" | "edit";
   /** Optional custom CSS classes for the container */
   className?: string;
 }
@@ -77,6 +79,7 @@ export function EntryFormContent({
   readOnly = false,
   withCard = false,
   className,
+  mode,
 }: EntryFormContentProps) {
   // Group fields by row (Q-D4=A: smart auto-pack widths). Width-packing rules
   // live in packFieldsIntoRows; FieldRow is the flex container.
@@ -89,6 +92,7 @@ export function EntryFormContent({
           fields={row}
           disabled={disabled}
           readOnly={readOnly}
+          mode={mode}
         />
       ))}
     </div>

@@ -16,6 +16,12 @@ export interface CollectionServiceResult<T = unknown> {
   statusCode: number;
   message: string;
   data: T | null;
+  /**
+   * Per-field validation issues (failure only). Carried through the
+   * result shape so the dispatcher and Direct API can rebuild the
+   * canonical VALIDATION_ERROR envelope with field paths intact.
+   */
+  errors?: Array<{ path: string; code: string; message: string }>;
 }
 
 /**
