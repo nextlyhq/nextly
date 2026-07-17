@@ -195,8 +195,8 @@
     "@types/react": "19.2.0",
     "@types/semver": "^7.5.8",
     "@types/ws": "^8.5.13",
-    "@vitest/coverage-v8": "^4.0.8",
-    "@vitest/ui": "^4.0.8",
+    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/ui": "^4.1.0",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
     "better-sqlite3": "^12.5.0",
@@ -210,7 +210,7 @@
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "peerDependencies": {
     "@nextlyhq/adapter-mysql": "workspace:*",
@@ -250,7 +250,7 @@
     "jiti": "^2.6.1",
     "jose": "^6.2.2",
     "mime-types": "^3.0.2",
-    "nodemailer": "^8.0.5",
+    "nodemailer": "^9.0.1",
     "picocolors": "^1.1.1",
     "resend": "^6.9.2",
     "safe-regex2": "^5.1.1",
