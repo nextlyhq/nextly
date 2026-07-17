@@ -452,14 +452,17 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // disableCreate gates every creation affordance from one place — the
   // header button, the empty-state CTA, and the keyboard shortcut all call
   // this, so a machine-created collection cannot reach the create screen
-  // through any of them.
+  // through any of them. While the collection metadata is still loading the
+  // answer is unknown, and unknown counts as disabled: the shortcut must
+  // not slip through the loading window.
   const createDisabled = Boolean(collection?.admin?.disableCreate);
+  const createAllowed = Boolean(collection) && !createDisabled;
   const handleCreateClick = useCallback(() => {
-    if (createDisabled) return;
+    if (!createAllowed) return;
     navigateTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: collectionSlug })
     );
-  }, [collectionSlug, createDisabled]);
+  }, [collectionSlug, createAllowed]);
 
   const handleApiPlaygroundClick = useCallback(() => {
     navigateTo(
