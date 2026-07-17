@@ -181,6 +181,70 @@ grep("no positional drizzle() constructors", "\\bdrizzle(Pg|Mysql|Sqlite)?\\s*\\
   },
 });
 
+// 10b. The same ban, but for MULTILINE constructor calls. Check #10 is
+// line-based (grep -n), so `drizzle(\n  client,\n)` — the argument on a later
+// line — slips past its same-line regex. Re-scan each candidate file's FULL
+// text: in JS `\s` spans newlines, so one regex catches both single- and
+// multi-line forms. Same allow-list as #10 (object form, string literal,
+// url/dsn variable). Comments are stripped first so a commented example
+// doesn't trip the gate.
+{
+  let fileList = "";
+  try {
+    fileList = execFileSync(
+      "grep",
+      [
+        "-rlE",
+        "\\bdrizzle(Pg|Mysql|Sqlite)?\\s*\\(",
+        ...SRC_GLOBS,
+        "--include=*.ts",
+        "--include=*.tsx",
+        "--include=*.js",
+        "--include=*.cjs",
+        "--include=*.mjs",
+        "--exclude-dir=node_modules",
+        "--exclude-dir=dist",
+        "--exclude-dir=.next",
+        "--exclude-dir=.turbo",
+        "--exclude-dir=build",
+      ],
+      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    );
+  } catch (e) {
+    // grep exits 1 when no file matches — the pass case.
+    if (e.status !== 1) throw e;
+  }
+  const files = fileList.split("\n").filter(Boolean);
+  const hits = [];
+  for (const rel of files) {
+    const code = readFileSync(path.join(ROOT, rel), "utf8")
+      // Strip block then line comments so `// drizzle(client)` examples and
+      // JSDoc snippets are ignored. Over-stripping only risks a false
+      // NEGATIVE (a missed hit), never a false failure.
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/([^:])\/\/[^\n]*/g, "$1");
+    const callRe =
+      /\bdrizzle(?:Pg|Mysql|Sqlite)?\s*\(\s*([A-Za-z_$][\w$]*|[{"'`)])/g;
+    let m;
+    while ((m = callRe.exec(code)) !== null) {
+      const arg = m[1];
+      if (arg === "{" || arg === '"' || arg === "'" || arg === "`" || arg === ")")
+        continue; // object form / string literal / no-arg
+      if (/url|connectionstring|dsn/i.test(arg)) continue; // string config var
+      hits.push(`${rel}: drizzle(${arg} …)`);
+    }
+  }
+  if (hits.length > 0) {
+    failures++;
+    console.error(
+      `✗ no positional drizzle() constructors — multiline (${hits.length} hit(s)):`
+    );
+    for (const h of hits.slice(0, 12)) console.error(`    ${h}`);
+  } else {
+    console.log("✓ no positional drizzle() constructors (multiline scan)");
+  }
+}
+
 // 11. No literal-Date DDL defaults — `.default(new Date())` bakes a
 // boot-time timestamp into the schema, and v1's working differ then emits
 // default-drift MODIFYs on every boot (the exact bug normalized to
