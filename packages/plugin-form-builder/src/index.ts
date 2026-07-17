@@ -72,6 +72,9 @@ export type {
 export type {
   FormField,
   FormFieldType,
+  FormFieldTypeId,
+  AnyFormField,
+  CustomFormField,
   BaseFormField,
   TextFormField,
   EmailFormField,
@@ -87,6 +90,7 @@ export type {
   TimeFormField,
   HiddenFormField,
 } from "./types";
+export { isKnownFormField, BUILT_IN_FORM_FIELD_TYPES } from "./types";
 
 // Form configuration types
 export type {

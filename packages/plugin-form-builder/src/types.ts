@@ -540,7 +540,15 @@ export type FormField =
   | HiddenFormField;
 
 /**
- * All available form field type identifiers.
+ * A form field of a built-in type OR a plugin-contributed type. Stored form
+ * data and the builder work with this; `isKnownFormField` narrows it back to
+ * the closed `FormField` union so `switch (field.type)` keeps discriminating
+ * the built-ins (a `CustomFormField` in the union itself would collapse that).
+ */
+export type AnyFormField = FormField | CustomFormField;
+
+/**
+ * All available built-in form field type identifiers.
  */
 export type FormFieldType =
   | "text"
@@ -556,6 +564,45 @@ export type FormFieldType =
   | "date"
   | "time"
   | "hidden";
+
+/**
+ * A form field's type on the wire: a built-in or a plugin-contributed type id
+ * that opted into the forms surface. The `(string & {})` arm admits the plugin
+ * id while keeping built-in autocomplete. Built-in `case` narrowing still works
+ * because every field-type switch keeps a `default` for the custom arm.
+ */
+export type FormFieldTypeId = FormFieldType | (string & {});
+
+/** Every built-in form field type, as a value list (the single source shared
+ * by the field-type guard and the config validator). */
+export const BUILT_IN_FORM_FIELD_TYPES: readonly FormFieldType[] = [
+  "text",
+  "email",
+  "number",
+  "phone",
+  "url",
+  "textarea",
+  "select",
+  "checkbox",
+  "radio",
+  "file",
+  "date",
+  "time",
+  "hidden",
+];
+
+const BUILT_IN_FORM_FIELD_TYPES_SET = new Set<string>(
+  BUILT_IN_FORM_FIELD_TYPES
+);
+
+/**
+ * Narrow an `AnyFormField` to the closed built-in `FormField` union. Returns
+ * `false` for a plugin-contributed field, so callers handle it generically
+ * before switching on the built-in discriminant.
+ */
+export function isKnownFormField(field: AnyFormField): field is FormField {
+  return BUILT_IN_FORM_FIELD_TYPES_SET.has(field.type);
+}
 
 /**
  * Base form field properties.
@@ -597,6 +644,17 @@ export interface BaseFormField {
     /** Field width */
     width?: "25%" | "33%" | "50%" | "66%" | "75%" | "100%";
   };
+}
+
+/**
+ * A plugin-contributed form field type (outside the built-in union). Carries
+ * only the base properties — the plugin owns its editor component and value
+ * semantics — and its `type` is the plugin's registered field-type id. Kept a
+ * distinct union member so built-in `case` narrowing is unaffected while a
+ * plugin field still type-checks as a `FormField`.
+ */
+export interface CustomFormField extends Omit<BaseFormField, "type"> {
+  type: string & {};
 }
 
 /**

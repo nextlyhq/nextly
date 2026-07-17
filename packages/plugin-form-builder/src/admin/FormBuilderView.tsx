@@ -30,7 +30,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { FormField } from "../types";
+import type { FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -204,7 +204,7 @@ function FormBuilderViewInner({
   }, [isCreating, notificationDefaults, seedNotifications]);
 
   const handleAddField = useCallback(
-    (type: FormFieldCatalogType) => {
+    (type: FormFieldTypeId) => {
       const newField = createFieldFromType(
         type,
         fields.map(f => f.name)

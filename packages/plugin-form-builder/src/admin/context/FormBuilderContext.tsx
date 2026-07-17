@@ -23,8 +23,8 @@ import {
 } from "react";
 
 import type {
-  FormField,
-  FormFieldType,
+  AnyFormField,
+  FormFieldTypeId,
   FormNotification,
   FormSettings,
 } from "../../types";
@@ -52,7 +52,7 @@ export type { FormNotification } from "../../types";
 
 export interface FormBuilderState {
   /** Form fields array */
-  fields: FormField[];
+  fields: AnyFormField[];
   /** Currently selected field ID (name) */
   selectedFieldId: string | null;
   /** Active tab: builder, preview, settings, or notifications */
@@ -75,11 +75,11 @@ export interface FormBuilderState {
 
 export interface FormBuilderActions {
   /** Set all fields */
-  setFields: (fields: FormField[]) => void;
+  setFields: (fields: AnyFormField[]) => void;
   /** Add a new field */
-  addField: (field: FormField, index?: number) => void;
+  addField: (field: AnyFormField, index?: number) => void;
   /** Update a field by name */
-  updateField: (fieldName: string, updates: Partial<FormField>) => void;
+  updateField: (fieldName: string, updates: Partial<AnyFormField>) => void;
   /** Delete a field by name */
   deleteField: (fieldName: string) => void;
   /** Move a field from one index to another */
@@ -122,7 +122,7 @@ export interface FormBuilderProviderProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
-    fields?: FormField[];
+    fields?: AnyFormField[];
     settings?: Partial<FormSettings>;
     notifications?: FormNotification[];
   };
@@ -164,7 +164,7 @@ const FormBuilderContext = createContext<FormBuilderContextValue | null>(null);
  * would have chosen, not timestamps.
  */
 export function generateFieldName(
-  type: FormFieldType,
+  type: FormFieldTypeId,
   existingNames: readonly string[] = []
 ): string {
   const taken = new Set(existingNames);
@@ -176,20 +176,27 @@ export function generateFieldName(
 
 /**
  * Generate a human-readable label from field type, using the shared catalog
- * so a new field's default label matches what the picker called the type.
+ * so a new field's default label matches what the picker called the type. A
+ * plugin type not in the built-in catalog falls back to a title-cased id.
  */
-export function generateFieldLabel(type: FormFieldType): string {
+export function generateFieldLabel(type: FormFieldTypeId): string {
   const entry = FORM_FIELD_TYPE_CATALOG.find(row => row.type === type);
-  return entry?.label ?? "New Field";
+  if (entry) return entry.label;
+  const titleCased = type
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+  return titleCased || "New Field";
 }
 
 /**
  * Create a new field from a field type with default values.
  */
 export function createFieldFromType(
-  type: FormFieldType,
+  type: FormFieldTypeId,
   existingNames: readonly string[] = []
-): FormField {
+): AnyFormField {
   const name = generateFieldName(type, existingNames);
   const label = generateFieldLabel(type);
 
@@ -254,7 +261,9 @@ export function createFieldFromType(
       return { ...baseField, type: "hidden" };
 
     default:
-      return { ...baseField, type: "text" };
+      // A plugin-contributed type keeps its own id; the plugin owns the editor
+      // component and value semantics, so no built-in defaults are seeded.
+      return { ...baseField, type };
   }
 }
 
@@ -280,7 +289,7 @@ export function FormBuilderProvider({
   children,
 }: FormBuilderProviderProps) {
   // State
-  const [fields, setFieldsState] = useState<FormField[]>(
+  const [fields, setFieldsState] = useState<AnyFormField[]>(
     initialData?.fields || []
   );
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
@@ -305,12 +314,12 @@ export function FormBuilderProvider({
   );
 
   // Actions
-  const setFields = useCallback((newFields: FormField[]) => {
+  const setFields = useCallback((newFields: AnyFormField[]) => {
     setFieldsState(newFields);
     setIsDirty(true);
   }, []);
 
-  const addField = useCallback((field: FormField, index?: number) => {
+  const addField = useCallback((field: AnyFormField, index?: number) => {
     setFieldsState(prev => {
       if (index !== undefined && index >= 0 && index <= prev.length) {
         const newFields = [...prev];
@@ -324,11 +333,9 @@ export function FormBuilderProvider({
   }, []);
 
   const updateField = useCallback(
-    (fieldName: string, updates: Partial<FormField>) => {
+    (fieldName: string, updates: Partial<AnyFormField>) => {
       setFieldsState(prev =>
-        prev.map(f =>
-          f.name === fieldName ? ({ ...f, ...updates } as FormField) : f
-        )
+        prev.map(f => (f.name === fieldName ? { ...f, ...updates } : f))
       );
       // If the field name is being changed, also update selectedFieldId
       // This prevents the sidebar from disappearing when renaming a field
@@ -382,7 +389,7 @@ export function FormBuilderProvider({
         field.type,
         fields.map(f => f.name)
       );
-      const newField: FormField = {
+      const newField: AnyFormField = {
         ...field,
         name: newFieldName,
         label: `${field.label} (Copy)`,

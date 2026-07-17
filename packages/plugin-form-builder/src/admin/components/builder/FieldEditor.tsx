@@ -33,11 +33,13 @@ import {
 import { useState, useCallback, useMemo } from "react";
 
 import type {
+  AnyFormField,
   FormField,
   TextFormField,
   SelectFormField,
   RadioFormField,
 } from "../../../types";
+import { isKnownFormField } from "../../../types";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
 
@@ -46,12 +48,12 @@ import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
 // ============================================================================
 
 export interface FieldEditorProps {
-  /** The field being edited */
-  field: FormField;
+  /** The field being edited (built-in or plugin-contributed). */
+  field: AnyFormField;
   /** All fields in the form (for conditional logic references) */
-  allFields: FormField[];
+  allFields: AnyFormField[];
   /** Callback when field is updated */
-  onUpdate: (updates: Partial<FormField>) => void;
+  onUpdate: (updates: Partial<AnyFormField>) => void;
 }
 
 // ============================================================================
@@ -66,9 +68,9 @@ function GeneralTab({
   allFields,
   onUpdate,
 }: {
-  field: FormField;
-  allFields: FormField[];
-  onUpdate: (updates: Partial<FormField>) => void;
+  field: AnyFormField;
+  allFields: AnyFormField[];
+  onUpdate: (updates: Partial<AnyFormField>) => void;
 }) {
   // Check if other fields have conditional logic referencing this field
   const hasConditionalReferences = useMemo(() => {
@@ -211,8 +213,11 @@ function GeneralTab({
         </Select>
       </div>
 
-      {/* Type-specific options */}
-      <TypeSpecificOptions field={field} onUpdate={onUpdate} />
+      {/* Type-specific options — built-ins only; a plugin field owns its own
+          editor component and carries no built-in type-specific settings. */}
+      {isKnownFormField(field) && (
+        <TypeSpecificOptions field={field} onUpdate={onUpdate} />
+      )}
     </div>
   );
 }
@@ -696,7 +701,13 @@ export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
           </TabsContent>
 
           <TabsContent value="validation" className="mt-0">
-            <ValidationTab field={field} onUpdate={onUpdate} />
+            {isKnownFormField(field) ? (
+              <ValidationTab field={field} onUpdate={onUpdate} />
+            ) : (
+              <p className="py-4 text-sm text-muted-foreground">
+                This field type manages its own validation.
+              </p>
+            )}
           </TabsContent>
 
           <TabsContent value="conditional" className="mt-0">

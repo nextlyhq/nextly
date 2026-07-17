@@ -32,6 +32,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { usePluginFieldTypeEntries } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   DropdownMenu,
@@ -51,7 +52,7 @@ import type {
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useMemo, useState } from "react";
 
-import type { FormField } from "../../../types";
+import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
@@ -85,14 +86,14 @@ function CatalogIcon({
 // ---------------------------------------------------------------------------
 
 interface FieldCardProps {
-  field: FormField;
+  field: AnyFormField;
   index: number;
   total: number;
   expanded: boolean;
   onToggle: () => void;
-  allFields: FormField[];
+  allFields: AnyFormField[];
   deleteBlockers: string[];
-  onUpdate: (updates: Partial<FormField>) => void;
+  onUpdate: (updates: Partial<AnyFormField>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -286,7 +287,7 @@ export interface FieldCardsProps {
    */
   enabledTypes: readonly FormFieldCatalogType[] | null;
   /** Creates a field of the given type and returns it (context helper). */
-  onAddField: (type: FormFieldCatalogType) => void;
+  onAddField: (type: FormFieldTypeId) => void;
 }
 
 export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
@@ -308,11 +309,23 @@ export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
+  // Plugin field types that opted into the forms surface, offered alongside the
+  // enabled built-ins. A plugin reusing a built-in id never shadows it.
+  const pluginEntries = usePluginFieldTypeEntries("forms");
+
   const entries = useMemo(() => {
     if (enabledTypes === null) return null;
     const allowed = new Set<string>(enabledTypes);
-    return FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
-  }, [enabledTypes]);
+    const builtinTypes = new Set<string>(
+      FORM_FIELD_TYPE_CATALOG.map(entry => entry.type)
+    );
+    const builtins: FieldTypeCatalogEntry<FormFieldTypeId>[] =
+      FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
+    return [
+      ...builtins,
+      ...pluginEntries.filter(entry => !builtinTypes.has(entry.type)),
+    ];
+  }, [enabledTypes, pluginEntries]);
 
   // One O(N^2) pass per fields/notifications change; each card then looks
   // its blockers up in O(1) instead of re-walking everything per render.
