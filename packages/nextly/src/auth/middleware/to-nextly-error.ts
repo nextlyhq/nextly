@@ -49,11 +49,7 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
 
   if (legacy.statusCode === 401) {
     if (legacy.code === "TOKEN_EXPIRED") {
-      return new NextlyError({
-        code: "TOKEN_EXPIRED",
-        publicMessage: "Authentication required.",
-        logContext,
-      });
+      return NextlyError.tokenExpired({ logContext });
     }
     return NextlyError.authRequired({ logContext });
   }

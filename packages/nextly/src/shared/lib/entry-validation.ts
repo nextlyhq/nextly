@@ -163,7 +163,14 @@ async function validateFieldValue(
     Array.isArray(value) &&
     value.length === 0 &&
     (field.type === "chips" || field.type === "repeater");
-  if (isEmpty(value) && !isProvidedEmptyList) {
+  // A non-hasMany select/radio holds a scalar; an array (including `[]`) is a
+  // shape error, not an absent value, so don't let the empty-value early
+  // return swallow it — the select/radio branch below rejects the shape.
+  const isScalarChoiceArray =
+    Array.isArray(value) &&
+    !field.hasMany &&
+    (field.type === "select" || field.type === "radio");
+  if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
     if (isRequired(field)) {
       issues.push({
         path,

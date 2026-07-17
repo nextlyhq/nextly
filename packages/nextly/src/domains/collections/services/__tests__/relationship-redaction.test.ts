@@ -7,6 +7,7 @@
  */
 import { afterAll, describe, it, expect, vi } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import { CollectionRelationshipService } from "../collection-relationship-service";
 
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the
@@ -139,7 +140,11 @@ describe("relationship expansion secret redaction", () => {
     // fields are secret, so every non-identity field is dropped rather than
     // returned unredacted.
     const collectionService = {
-      getCollection: vi.fn().mockRejectedValue(new Error("boom")),
+      getCollection: vi
+        .fn()
+        .mockRejectedValue(
+          NextlyError.notFound({ logContext: { slug: "members" } })
+        ),
     };
     const fileManager = {
       loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }),

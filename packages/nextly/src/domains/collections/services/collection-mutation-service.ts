@@ -208,7 +208,7 @@ export class CollectionMutationService extends BaseService {
    */
   private async redactResponseFields(
     entry: Record<string, unknown>,
-    fields: Parameters<typeof stripPasswordFieldValues>[1],
+    fields: FieldDefinition[],
     params: {
       user?: Record<string, unknown>;
       overrideAccess?: boolean;
@@ -216,6 +216,25 @@ export class CollectionMutationService extends BaseService {
     },
     slug: string
   ): Promise<void> {
+    // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
+    // before redaction so the read-access walker descends into them — SQLite
+    // returns these as JSON strings, and a read-denied field nested in a
+    // still-serialized container would otherwise be echoed. The single
+    // create/update paths already deserialize upstream; this makes the
+    // transaction/bulk variants safe too (a second pass is a no-op).
+    for (const field of fields) {
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof entry[field.name] === "string" &&
+        entry[field.name]
+      ) {
+        try {
+          entry[field.name] = JSON.parse(entry[field.name] as string);
+        } catch {
+          // If parsing fails, keep the raw string.
+        }
+      }
+    }
     stripPasswordFieldValues(entry, fields);
     await applyFieldReadAccess({
       kind: "collection",

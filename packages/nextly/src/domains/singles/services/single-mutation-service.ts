@@ -369,14 +369,16 @@ export class SingleMutationService extends BaseService {
 
       // Redact the response: drop write-only password hashes and any field
       // the caller may write but not read (parity with the query path), so a
-      // mutation response can never echo a value the reader is denied.
+      // mutation response can never echo a value the reader is denied. A
+      // route-authorized REST caller isn't a trusted-server read, so its
+      // override does not skip redaction (mirrors the collection path).
       stripPasswordFieldValues(updatedDoc, fieldConfigs);
       await applyFieldReadAccess({
         kind: "single",
         slug,
         entry: updatedDoc,
         user: options.user,
-        overrideAccess: options.overrideAccess,
+        overrideAccess: options.overrideAccess && !options.routeAuthorized,
       });
 
       return {

@@ -324,6 +324,28 @@ describe("validateEntryData", () => {
       expect(issues).toEqual([]);
     });
 
+    it("rejects an empty array for a scalar select (not treated as absent)", async () => {
+      // `[]` is empty, but for a scalar choice it is a wrong-shaped value, not
+      // an absent one — it must not slip past as an empty/optional value.
+      const issues = await validateEntryData({ status: [] }, scalar, {
+        mode: "create",
+      });
+      expect(issues).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a single option.",
+        },
+      ]);
+    });
+
+    it("still treats an empty array as absent for a hasMany select (optional)", async () => {
+      const issues = await validateEntryData({ status: [] }, multi, {
+        mode: "create",
+      });
+      expect(issues).toEqual([]);
+    });
+
     it("rejects an array for a scalar select even when no options are configured", async () => {
       // Shape validity is independent of option membership, so the array
       // guard must run even when the field declares no options.

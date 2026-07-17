@@ -474,6 +474,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           locale: p.locale,
           user,
           overrideAccess: !!user,
+          // Route auth already ran; the response is still redacted for this
+          // user (see UpdateSingleOptions.routeAuthorized).
+          routeAuthorized: !!user,
         }
       );
       const doc = unwrapServiceResult(result, { slug });
