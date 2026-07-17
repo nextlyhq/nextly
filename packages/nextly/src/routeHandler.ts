@@ -86,6 +86,7 @@ import {
   isSuperAdmin,
   containsSuperAdminRole,
   hasSuperAdminExcluding,
+  listRoleSlugsForUser,
 } from "./services/lib/permissions";
 import {
   builderDisabledError,
@@ -807,13 +808,7 @@ async function handleServiceRequest(
   // are silently skipped.
   // NOTE: We use _authenticatedUserId (not userId) to avoid colliding with
   // the existing routeParams.userId which is the target user ID from URL params.
-  if (authorizedUser && routeParams) {
-    routeParams._authenticatedUserId = authorizedUser.userId;
-    if (authorizedUser.userName)
-      routeParams._authenticatedUserName = authorizedUser.userName;
-    if (authorizedUser.userEmail)
-      routeParams._authenticatedUserEmail = authorizedUser.userEmail;
-  }
+  await setAuthenticatedRouteParams(routeParams, authorizedUser);
 
   const dispatchRequest: DispatchRequest = {
     service,
@@ -1391,3 +1386,42 @@ export function getCollectionsHandler(): CollectionsHandler | undefined {
 export const _handleAdminMetaRequestForTest = handleAdminMetaRequest;
 export const _handleAdminMetaSidebarGroupsForTest =
   handleAdminMetaSidebarGroups;
+
+/**
+ * Populate the reserved `_authenticated*` route params from the authorized
+ * user so downstream services get the caller's identity and roles.
+ *
+ * `parseRestRoute` copies every query-string key into `routeParams`, so these
+ * reserved keys are stripped first: they are server-authored and a
+ * client-supplied copy (e.g. `?_authenticatedUserRoles=["admin"]`) must never
+ * be trusted. Roles are forwarded as SLUGS — session auth carries role IDs on
+ * `AuthContext.roles`, so those are resolved; API-key auth already carries
+ * key-scoped slugs.
+ */
+async function setAuthenticatedRouteParams(
+  routeParams: Record<string, string> | undefined,
+  authorizedUser: AuthContext | undefined
+): Promise<void> {
+  if (!routeParams) return;
+
+  delete routeParams._authenticatedUserId;
+  delete routeParams._authenticatedUserName;
+  delete routeParams._authenticatedUserEmail;
+  delete routeParams._authenticatedUserRoles;
+
+  if (!authorizedUser) return;
+
+  routeParams._authenticatedUserId = authorizedUser.userId;
+  if (authorizedUser.userName)
+    routeParams._authenticatedUserName = authorizedUser.userName;
+  if (authorizedUser.userEmail)
+    routeParams._authenticatedUserEmail = authorizedUser.userEmail;
+
+  const roleSlugs =
+    authorizedUser.authMethod === "api-key"
+      ? authorizedUser.roles
+      : await listRoleSlugsForUser(authorizedUser.userId);
+  routeParams._authenticatedUserRoles = JSON.stringify(roleSlugs ?? []);
+}
+
+export const _setAuthenticatedRouteParamsForTest = setAuthenticatedRouteParams;

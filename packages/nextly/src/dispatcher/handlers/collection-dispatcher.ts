@@ -123,6 +123,30 @@ function formatToastSummary(summary: {
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
+// Decode the authenticated role set forwarded by the route handler. Route
+// params are strings, so roles arrive JSON-encoded; parse defensively and keep
+// only string entries so a malformed value degrades to "no roles" rather than
+// throwing.
+function readAuthenticatedRoles(p: Params): string[] | undefined {
+  const raw = p._authenticatedUserRoles;
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    // Require a non-empty array of only strings; a malformed or mixed-type
+    // value degrades to "no roles" rather than forwarding a partial set.
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((role): role is string => typeof role === "string")
+    ) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
 const COLLECTIONS_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
@@ -794,6 +818,7 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         body as Record<string, unknown>
       );
@@ -854,6 +879,7 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         body as Record<string, unknown>
       );
@@ -882,6 +908,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -916,6 +943,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -958,6 +986,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const message =
         result.failures.length === 0
@@ -1009,6 +1038,7 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          userRoles: readAuthenticatedRoles(p),
         },
         { limit: b.limit }
       );
@@ -1044,6 +1074,7 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
