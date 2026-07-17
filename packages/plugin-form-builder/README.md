@@ -46,14 +46,14 @@ export default defineConfig({
 
 > A `formBuilderPlugin` default-instance shortcut is also exported for cases where no customization is needed. See [the plugin docs](https://nextlyhq.com/docs/plugins/form-builder) for the full options reference.
 
-## Admin styling
+## Admin components
 
-The plugin's admin UI requires two imports in your admin route page so the builder and submissions filter render correctly:
+The plugin's admin UI needs one import in your admin route page (a side effect
+that registers the builder and submissions views):
 
 ```tsx
 // app/admin/[[...params]]/page.tsx
 import "@nextlyhq/plugin-form-builder/admin";
-import "@nextlyhq/plugin-form-builder/styles/submissions-filter.css";
 ```
 
 ## What this plugin adds

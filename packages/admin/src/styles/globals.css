@@ -17,6 +17,13 @@
 /* Scan @nextlyhq/ui source so Tailwind includes utility classes used by extracted components */
 @source "../../../ui/src";
 
+/* First-party plugin admin components render inside the admin shell and rely on
+ * this compiled stylesheet — Tailwind cannot auto-detect sibling packages, so
+ * without these directives any utility used only by a plugin is silently
+ * dropped from the build and becomes a no-op at runtime. */
+@source "../../../plugin-form-builder/src/admin";
+@source "../../../plugin-page-builder/src/admin";
+
 /* Scope overflow fix to nextly-admin only */
 .nextly-admin {
   overflow-x: hidden;

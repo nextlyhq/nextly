@@ -648,6 +648,7 @@ export class CollectionSyncService extends BaseService {
             hidden: config.admin.hidden,
             useAsTitle: config.admin.useAsTitle,
             isPlugin: config.admin.isPlugin,
+            disableCreate: config.admin.disableCreate,
             pagination: config.admin.pagination
               ? {
                   defaultLimit: config.admin.pagination.defaultLimit,

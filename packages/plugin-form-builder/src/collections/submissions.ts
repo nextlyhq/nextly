@@ -207,12 +207,18 @@ export function submissionsCollection(
       order: 51,
       useAsTitle: "id",
       description: "View and manage form submissions",
+      // Submissions are created by visitors submitting forms — a hand-typed
+      // "New Submission" would be fiction, so the admin never offers one.
+      disableCreate: true,
 
-      // Custom components for submissions list
       components: {
-        // Filter dropdown to filter submissions by form
-        BeforeListTable:
-          "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+        // The full submissions experience (per-form columns, status tabs,
+        // drawer detail, export) replaces the generic list.
+        views: {
+          List: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+        },
       },
 
       ...overrides.admin,
@@ -235,18 +241,14 @@ export function submissionsCollection(
     },
 
     hooks: {
-      // Auto-set submittedAt on creation; stamp admin edits of submitted data
+      // Auto-set submittedAt timestamp on creation. (The edit stamp for
+      // updates is registered in plugin.ts init — direct registry hooks are
+      // the path that runs for every API surface.)
       beforeValidate: [
         (context: HookContext) => {
           const { data, operation } = context;
           if (operation === "create" && data && !data.submittedAt) {
             data.submittedAt = new Date();
-          }
-          // Changing what the visitor submitted must leave a visible trace —
-          // an edited submission is never indistinguishable from the original.
-          if (operation === "update" && data && data.data !== undefined) {
-            data.editedAt = new Date();
-            data.editedBy = context.user?.id ?? null;
           }
           return data;
         },

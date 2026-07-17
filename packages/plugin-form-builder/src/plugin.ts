@@ -342,6 +342,13 @@ export function formBuilder(
                   defaultFrom: resolvedConfig.notifications.defaultFrom,
                   defaultToEmail: resolvedConfig.notifications.defaultToEmail,
                 },
+                // Spam defaults the Settings tab surfaces, so per-form
+                // override selects can show what "inherit" resolves to.
+                spamProtection: {
+                  honeypot: resolvedConfig.spamProtection.honeypot,
+                  recaptchaEnabled:
+                    resolvedConfig.spamProtection.recaptcha?.enabled ?? false,
+                },
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
                 // never hardcode "forms"/"form-submissions".
@@ -358,42 +365,21 @@ export function formBuilder(
             ),
         },
       ],
-      // Admin UI — the canonical contributes.admin example. Paths
-      // are the components form-builder's `/admin` module self-registers (kept
-      // as literals so this node entry stays React-free). menu links to
-      // the forms collection; settings renders the builder UI at
-      // /admin/plugins/<slug>; a custom page is gated by export-submissions;
-      // a submissions beforeList view injects the filter above the list.
-      admin: {
-        menu: [
-          {
-            label: "Forms",
-            to: `/admin/collections/${resolvedConfig.formOverrides.slug}`,
-            icon: "file-text",
-            order: 50,
-            requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
-          },
-        ],
-        settings: {
-          component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
-        },
-        pages: [
-          {
-            path: "submissions",
-            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-            requiredPermission: "export-submissions",
-          },
-        ],
-        views: {
-          [resolvedConfig.formSubmissionOverrides.slug]: {
-            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-          },
-        },
-      },
     },
 
+    // Forms is a first-class destination, not a plugin detail: standalone
+    // placement gives it its own main-rail icon after Media, and its
+    // sub-sidebar lists the plugin's collections (Forms, Submissions) —
+    // no separate menu contribution, so "Forms" exists exactly once.
+    // Hosts preferring the Plugins section override placement in config.
+    // (The old admin.settings.component that rendered a second full builder
+    // at /admin/plugins/<slug> is gone; the collection Edit-view override
+    // is the single FormBuilderView mount.)
     admin: {
+      placement: "standalone",
+      after: "media",
       order: 50,
+      appearance: { icon: "FileText", label: "Forms" },
       description: "Create and manage forms with submission tracking",
     },
 
@@ -446,6 +432,22 @@ export function formBuilder(
           await handleSubmissionCreated(context, resolvedConfig, nextly);
         }
       );
+
+      // Stamp admin edits of submitted data: changing what the visitor
+      // submitted must leave a visible trace. Registered directly on the
+      // registry (like the notification hook) so it runs for every API
+      // surface that updates a submission.
+      nextly.hooks.on("beforeUpdate", submissionSlug, (context: unknown) => {
+        const ctx = context as {
+          data?: Record<string, unknown>;
+          user?: { id?: string };
+        };
+        if (ctx.data && ctx.data.data !== undefined) {
+          ctx.data.editedAt = new Date();
+          ctx.data.editedBy = ctx.user?.id ?? null;
+        }
+        return ctx.data;
+      });
 
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").

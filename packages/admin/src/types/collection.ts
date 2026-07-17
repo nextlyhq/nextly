@@ -215,6 +215,8 @@ export interface Collection {
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;
+    /** Hide the "New …" affordances (machine-created collections) */
+    disableCreate?: boolean;
     /** Custom components for admin UI */
     components?: CollectionAdminComponents;
   };

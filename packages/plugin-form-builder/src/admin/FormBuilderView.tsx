@@ -38,7 +38,10 @@ import {
   type NotificationDefaults,
 } from "./components/builder/FormNotificationsTab";
 import { FormPreview } from "./components/builder/FormPreview";
-import { FormSettingsTab } from "./components/builder/FormSettingsTab";
+import {
+  FormSettingsTab,
+  type SpamDefaults,
+} from "./components/builder/FormSettingsTab";
 import {
   FormBuilderProvider,
   useFormBuilder,
@@ -141,6 +144,10 @@ function FormBuilderViewInner({
   const [notificationDefaults, setNotificationDefaults] =
     useState<NotificationDefaults | null>(null);
 
+  // Plugin-level spam defaults, so the Settings tab can show what
+  // "inherit" resolves to. `null` while the config request settles.
+  const [spamDefaults, setSpamDefaults] = useState<SpamDefaults | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
@@ -154,6 +161,7 @@ function FormBuilderViewInner({
           config: {
             fields?: Record<string, boolean>;
             notifications?: NotificationDefaults;
+            spamProtection?: SpamDefaults;
           } | null
         ) => {
           if (cancelled) return;
@@ -163,12 +171,14 @@ function FormBuilderViewInner({
               : allTypes
           );
           setNotificationDefaults(config?.notifications ?? {});
+          setSpamDefaults(config?.spamProtection ?? {});
         }
       )
       .catch(() => {
         if (cancelled) return;
         setEnabledTypes(allTypes);
         setNotificationDefaults({});
+        setSpamDefaults({});
       });
     return () => {
       cancelled = true;
@@ -528,7 +538,7 @@ function FormBuilderViewInner({
             {/* Settings tab */}
             {activeTab === "settings" && (
               <div className="w-full">
-                <FormSettingsTab />
+                <FormSettingsTab spamDefaults={spamDefaults} />
               </div>
             )}
 

@@ -139,3 +139,53 @@ test("seeds a default notification, edits it in the sheet, and guards referenced
   });
   await expect(page.getByText("Conditional")).toBeVisible();
 });
+
+test("the preview is an interactive simulation with real confirmation", async ({
+  page,
+}) => {
+  // Self-sufficient: the preview needs no saved form — the builder state
+  // previews live, so an unsaved form with one field is enough.
+  await gotoAdmin(page, "/collections/forms/create");
+  await page
+    .getByRole("textbox", { name: "Form Name" })
+    .fill("E2E Preview Form");
+  await page.getByRole("button", { name: "Add field" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: /^Email/ }).click();
+  await dialog.getByRole("button", { name: "Add field" }).click();
+  await page.getByRole("tab", { name: "Preview" }).click();
+
+  // Inputs are enabled — this is a simulation, not a screenshot.
+  const emailInput = page.getByRole("textbox", { name: /^Email/ });
+  await expect(emailInput).toBeEnabled();
+  await emailInput.fill("visitor@example.com");
+
+  // The simulated submit shows the form's real confirmation behavior.
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page.getByText("Thank you for your submission!")).toBeVisible();
+
+  // Reset returns to a fresh form.
+  await page.getByRole("button", { name: "Fill again" }).click();
+  await expect(emailInput).toHaveValue("");
+
+  // The device toggle must genuinely resize the simulated pane. The pane
+  // widths come from utility classes in the compiled admin stylesheet, so a
+  // class the stylesheet fails to emit leaves both modes rendering at the
+  // same width — measure the pane (via its full-width input) instead of
+  // trusting the toggle state.
+  const desktopWidth = (await emailInput.boundingBox())?.width ?? 0;
+  expect(desktopWidth).toBeGreaterThan(0);
+  await page.getByRole("tab", { name: "Mobile" }).click();
+  // boundingBox() returns null while the pane is detached mid-transition; a
+  // null-to-zero fallback would let that transient state pass the narrower
+  // check, so only a real, positive measurement may satisfy the poll.
+  await expect
+    .poll(
+      async () => {
+        const box = await emailInput.boundingBox();
+        return box !== null && box.width > 0 && box.width < desktopWidth;
+      },
+      { message: "mobile preview should be narrower than desktop" }
+    )
+    .toBe(true);
+});

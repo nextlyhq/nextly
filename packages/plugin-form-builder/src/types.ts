@@ -813,11 +813,20 @@ export interface FormSettings {
   /**
    * Confirmation type after successful submission.
    * - "message": Display a success message
-   * - "redirect": Redirect to a URL or linked document
+   * - "redirect": Redirect to a URL
+   * - "relationship": Redirect to a linked document (requires
+   *   `redirectRelationships` in the plugin options)
    *
    * @default "message"
    */
-  confirmationType?: "message" | "redirect";
+  confirmationType?: "message" | "redirect" | "relationship";
+
+  /**
+   * Linked document for relationship-based redirects (the collection's
+   * `redirectPage` relationship value). Preserved verbatim — resolution
+   * happens where the relationship is rendered.
+   */
+  redirectPage?: unknown;
 
   /** Success message (supports HTML) - used when confirmationType is "message" */
   successMessage?: string;
@@ -834,14 +843,23 @@ export interface FormSettings {
     value: string; // Document ID
   };
 
-  /** Allow multiple submissions from same user/IP */
+  /** Allow multiple submissions from same IP (default true) */
   allowMultipleSubmissions?: boolean;
 
-  /** reCAPTCHA configuration */
-  captcha?: {
-    enabled: boolean;
-    siteKey?: string;
-  };
+  /**
+   * Per-form honeypot override. Unset inherits the plugin's
+   * `spamProtection.honeypot`; the form wins where set.
+   */
+  honeypotEnabled?: boolean;
+
+  /**
+   * Per-form reCAPTCHA override. Unset inherits the plugin's
+   * `spamProtection.recaptcha.enabled`; the form wins where set.
+   */
+  captchaEnabled?: boolean;
+
+  /** reCAPTCHA site key (client-facing) when captcha is enabled per-form */
+  captchaSiteKey?: string;
 }
 
 // ============================================================
