@@ -324,6 +324,26 @@ describe("validateEntryData", () => {
       expect(issues).toEqual([]);
     });
 
+    it("rejects an array for a scalar select even when no options are configured", async () => {
+      // Shape validity is independent of option membership, so the array
+      // guard must run even when the field declares no options.
+      const noOptions: ValidatableField[] = [
+        { name: "status", type: "select" },
+      ];
+      const issues = await validateEntryData(
+        { status: ["a", "b"] },
+        noOptions,
+        { mode: "create" }
+      );
+      expect(issues).toEqual([
+        {
+          path: "status",
+          code: "INVALID_TYPE",
+          message: "status must be a single option.",
+        },
+      ]);
+    });
+
     it("requires an array for a hasMany select and validates each element", async () => {
       const scalarInput = await validateEntryData({ status: "draft" }, multi, {
         mode: "create",

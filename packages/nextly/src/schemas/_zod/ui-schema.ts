@@ -261,17 +261,37 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       }
       // A component field references a component schema by slug: either a
       // single `component`, or a `components[]` whitelist for a polymorphic
-      // slot. Exactly one must be present and non-empty.
+      // slot. Exactly one form must be present, and every referenced slug
+      // must be a real slug — a blank or malformed reference points at no
+      // loadable component, so runtime writes to it would be silently dropped.
       if (f.type === "component") {
-        const hasSingle =
-          typeof f.component === "string" && f.component.length > 0;
-        const hasMulti = Array.isArray(f.components) && f.components.length > 0;
+        const hasSingle = f.component !== undefined;
+        const hasMulti = f.components !== undefined;
         if (hasSingle === hasMulti) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
-              "component fields require either a non-empty `component` slug or a non-empty `components[]` list, but not both",
+              "component fields require either a `component` slug or a `components[]` list, but not both",
             path: [hasSingle ? "components" : "component"],
+          });
+        } else if (hasSingle) {
+          if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "component must be a valid component slug",
+              path: ["component"],
+            });
+          }
+        } else if (
+          !Array.isArray(f.components) ||
+          f.components.length === 0 ||
+          !f.components.every(s => typeof s === "string" && SLUG_RE.test(s))
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "components must be a non-empty list of valid component slugs",
+            path: ["components"],
           });
         }
       }

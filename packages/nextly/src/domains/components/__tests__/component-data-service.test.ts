@@ -938,6 +938,27 @@ describe("ComponentDataService", () => {
       expect((row.secret as string).startsWith("$2")).toBe(true);
     });
 
+    it("rejects a non-object component instance with a validation error (not a 500)", async () => {
+      // A primitive would make the field validator's `field.name in data`
+      // throw a TypeError, surfacing as a 500; guard it as a validation error.
+      ctx.registry.registerComponent("account", {
+        slug: "account",
+        tableName: "comp_account",
+        fields: [{ name: "email", type: "text" }],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await expect(
+        ctx.service.saveComponentData({
+          parentId: "e1",
+          parentTable: "dc_pages",
+          fields: [accountField()],
+          data: { account: "oops" },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
+
     it("rejects a component instance that violates its schema (required field)", async () => {
       ctx.registry.registerComponent("account", {
         slug: "account",

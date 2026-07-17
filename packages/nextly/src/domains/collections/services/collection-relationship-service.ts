@@ -583,7 +583,18 @@ export class CollectionRelationshipService extends BaseService {
     try {
       // Check if this is a system entity first
       if (isSystemEntity(collectionName)) {
-        return targetLabelField || getSystemEntityLabelField(collectionName);
+        // Never surface a secret column as a label: the label is copied onto
+        // the expanded row before row-level redaction runs, so a secret label
+        // field would leak the hash even though the column itself is stripped.
+        if (
+          targetLabelField &&
+          !(SYSTEM_ENTITY_SECRET_COLUMNS as readonly string[]).includes(
+            targetLabelField
+          )
+        ) {
+          return targetLabelField;
+        }
+        return getSystemEntityLabelField(collectionName);
       }
 
       const collection =
@@ -596,10 +607,15 @@ export class CollectionRelationshipService extends BaseService {
         (collection as Record<string, unknown>).fields ||
         []) as FieldDefinition[];
 
-      // If targetLabelField is provided, validate it exists in the collection
+      // If targetLabelField is provided, validate it exists in the collection.
+      // A `password` field is excluded: it must never become the label, or its
+      // hash would ride along in `label` past the row-level redaction.
       if (targetLabelField) {
         const fieldExists = fields.some(
-          f => f.name === targetLabelField && f.type !== "relationship"
+          f =>
+            f.name === targetLabelField &&
+            f.type !== "relationship" &&
+            f.type !== "password"
         );
 
         if (fieldExists) {
@@ -1587,11 +1603,47 @@ export class CollectionRelationshipService extends BaseService {
     }
     // Dynamic collections: drop password-type field values using the TARGET
     // collection's schema — the source collection's fields never describe a
-    // related row.
-    const targetFields = await this.getCollectionFields(targetCollection);
+    // related row. If the schema can't be resolved we cannot tell which
+    // fields are secret, so fail closed: strip every non-identity field
+    // rather than risk returning a row that carries a password hash.
+    const targetFields = await this.getRedactionFields(targetCollection);
+    if (targetFields === null) {
+      for (const row of rows) {
+        for (const key of Object.keys(row)) {
+          if (key !== "id" && key !== "label") delete row[key];
+        }
+      }
+      return;
+    }
     if (!hasPasswordField(targetFields)) return;
     for (const row of rows) {
       stripPasswordFieldValues(row, targetFields);
+    }
+  }
+
+  /**
+   * Resolve a collection's fields for redaction. Uses the same
+   * `schemaDefinition.fields` (API shape) OR `collection.fields` (raw DB row)
+   * fallback the rest of this service uses — `getCollection` returns the raw
+   * row, whose fields live at the top level, so a `schemaDefinition`-only
+   * lookup silently resolves to nothing and skips stripping. Returns null
+   * when the schema cannot be resolved so the caller fails closed.
+   */
+  private async getRedactionFields(
+    collectionName: string
+  ): Promise<FieldDefinition[] | null> {
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const fields =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields || (collection as Record<string, unknown>).fields;
+      return Array.isArray(fields) ? (fields as FieldDefinition[]) : null;
+    } catch {
+      return null;
     }
   }
 

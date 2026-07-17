@@ -326,14 +326,13 @@ async function validateFieldValue(
     case "select":
     case "radio": {
       const allowed = selectOptionValues(field);
-      // Option membership only enforceable when options are declared.
-      if (allowed.length === 0) break;
       // A scalar select/radio holds exactly one option; only `hasMany` stores
       // a list. Without this guard an array on a scalar field (e.g.
       // `["draft","published"]`) would pass element-by-element and then reach
       // a non-JSON column, so reject the shape rather than validate its items.
       // Mirrors the text/number branches, which also gate array vs scalar on
-      // `hasMany`.
+      // `hasMany`. Shape validity is independent of option membership, so this
+      // must run even when no options are configured.
       if (Array.isArray(value) !== Boolean(field.hasMany)) {
         issues.push({
           path,
@@ -344,6 +343,8 @@ async function validateFieldValue(
         });
         break;
       }
+      // Option membership only enforceable when options are declared.
+      if (allowed.length === 0) break;
       const values = Array.isArray(value) ? value : [value];
       for (let i = 0; i < values.length; i++) {
         const v = values[i];

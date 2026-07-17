@@ -10,8 +10,9 @@ import { describe, expect, it } from "vitest";
 import { isPublicEndpoint, requiresAuthOnly } from "../route-parser";
 
 describe("component route auth tier", () => {
-  it("does not expose component listing as a public endpoint", () => {
+  it("does not expose component listing or retrieval as public endpoints", () => {
     expect(isPublicEndpoint("components", "listComponents")).toBe(false);
+    expect(isPublicEndpoint("components", "getComponent")).toBe(false);
   });
 
   it("requires authentication (no specific permission) to list components", () => {

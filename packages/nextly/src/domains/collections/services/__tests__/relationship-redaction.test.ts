@@ -69,14 +69,15 @@ describe("relationship expansion secret redaction", () => {
   });
 
   it("strips a related dynamic collection's password field", async () => {
+    // getCollection returns the RAW dynamic_collections row, whose fields live
+    // at the top level (there is no schemaDefinition column) — a
+    // schemaDefinition-only lookup would resolve to [] and never strip.
     const collectionService = {
       getCollection: vi.fn().mockResolvedValue({
-        schemaDefinition: {
-          fields: [
-            { name: "email", type: "text" },
-            { name: "secret", type: "password" },
-          ],
-        },
+        fields: [
+          { name: "email", type: "text" },
+          { name: "secret", type: "password" },
+        ],
       }),
     };
     const fileManager = {
@@ -94,6 +95,65 @@ describe("relationship expansion secret redaction", () => {
 
     expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
     expect(related).not.toHaveProperty("secret");
+  });
+
+  it("strips a password nested in a JSON-string group container (sqlite shape)", async () => {
+    // SQLite stores group/repeater as a JSON string; redaction must parse it,
+    // strip the nested password, and re-serialize so the hash never leaks.
+    const collectionService = {
+      getCollection: vi.fn().mockResolvedValue({
+        fields: [
+          {
+            name: "creds",
+            type: "group",
+            fields: [
+              { name: "user", type: "text" },
+              { name: "secret", type: "password" },
+            ],
+          },
+        ],
+      }),
+    };
+    const fileManager = {
+      loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }),
+    };
+
+    const service = new CollectionRelationshipService(
+      adapterReturning({
+        id: "m1",
+        creds: JSON.stringify({ user: "ada", secret: "$2b$12$hash" }),
+      }),
+      silentLogger(),
+      fileManager as never,
+      collectionService as never
+    );
+
+    const related = await service.fetchRelatedEntry("members", "m1");
+    const creds = JSON.parse((related as Record<string, string>).creds);
+    expect(creds).toEqual({ user: "ada" });
+    expect(creds).not.toHaveProperty("secret");
+  });
+
+  it("fails closed to identity when the target schema cannot be resolved", async () => {
+    // If the related collection's schema can't be loaded we cannot tell which
+    // fields are secret, so every non-identity field is dropped rather than
+    // returned unredacted.
+    const collectionService = {
+      getCollection: vi.fn().mockRejectedValue(new Error("boom")),
+    };
+    const fileManager = {
+      loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }),
+    };
+
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "m1", email: "a@b.co", secret: "$2b$12$hash" }),
+      silentLogger(),
+      fileManager as never,
+      collectionService as never
+    );
+
+    const related = await service.fetchRelatedEntry("members", "m1");
+    expect(related).toEqual({ id: "m1" });
   });
 
   it("returns null when the related row does not exist", async () => {

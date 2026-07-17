@@ -108,6 +108,36 @@ describe("assertValidFieldsPayload", () => {
     ).toThrow(NextlyError);
   });
 
+  it("rejects blank or malformed component slug references", () => {
+    // A reference that is present but not a real slug points at no loadable
+    // component; the gate must reject it rather than accept the empty shape.
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "seo", type: "component", component: " " },
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "seo", type: "component", component: "Not A Slug" },
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "block", type: "component", components: [""] },
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "block", type: "component", components: [] },
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertValidFieldsPayload([
+        { name: "block", type: "component", components: ["hero", " "] },
+      ])
+    ).toThrow(NextlyError);
+  });
+
   it("rejects duplicate top-level field names (mirror parity with the manifest)", () => {
     try {
       assertValidFieldsPayload([

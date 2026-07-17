@@ -198,11 +198,22 @@ export class CollectionMutationService extends BaseService {
    * mutation response must run the same redaction or a create/update could
    * echo back a value the reader is denied — the write and read rules are
    * independent, so a field can be writable yet read-denied.
+   *
+   * `overrideAccess` normally skips read redaction (a trusted server-context
+   * caller asked for the full document). The REST dispatcher, however, sets
+   * `overrideAccess` only to skip the collection-level re-check after route
+   * auth — it is NOT a trusted read context, so `routeAuthorized` forces the
+   * response to still be redacted to what the authenticated user may read,
+   * matching the query path for the same caller.
    */
   private async redactResponseFields(
     entry: Record<string, unknown>,
     fields: Parameters<typeof stripPasswordFieldValues>[1],
-    params: { user?: Record<string, unknown>; overrideAccess?: boolean },
+    params: {
+      user?: Record<string, unknown>;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+    },
     slug: string
   ): Promise<void> {
     stripPasswordFieldValues(entry, fields);
@@ -211,7 +222,7 @@ export class CollectionMutationService extends BaseService {
       slug,
       entry,
       user: params.user,
-      overrideAccess: params.overrideAccess,
+      overrideAccess: params.overrideAccess && !params.routeAuthorized,
     });
   }
 
@@ -350,6 +361,10 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -864,7 +879,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         responseEntry,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 
@@ -906,6 +925,10 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -1499,7 +1522,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         responseEntry as Record<string, unknown>,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 
@@ -1741,6 +1768,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2012,7 +2041,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         entry as Record<string, unknown>,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 
@@ -2048,6 +2081,8 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2358,7 +2393,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         updated as Record<string, unknown>,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 
@@ -2571,6 +2610,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -2854,7 +2895,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         entry as Record<string, unknown>,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 
@@ -2895,6 +2940,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     entryId: string,
     body: Record<string, unknown>,
@@ -3255,7 +3302,11 @@ export class CollectionMutationService extends BaseService {
       await this.redactResponseFields(
         updated as Record<string, unknown>,
         fields,
-        { user: params.user, overrideAccess: params.overrideAccess },
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
         params.collectionName
       );
 

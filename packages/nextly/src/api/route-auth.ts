@@ -33,9 +33,7 @@ function throwAuthError(result: ErrorResponse): never {
     // AUTH_REQUIRED forces a logout. Collapsing every 401 to authRequired()
     // would turn a refreshable session into a hard logout on these routes.
     if (result.code === "TOKEN_EXPIRED") {
-      throw new NextlyError({
-        code: "TOKEN_EXPIRED",
-        publicMessage: "Your session has expired. Please refresh.",
+      throw NextlyError.tokenExpired({
         logContext: { middlewareCode: result.code },
       });
     }

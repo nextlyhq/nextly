@@ -978,6 +978,22 @@ export class ComponentMutationService extends BaseService {
     componentFields: FieldConfig[],
     mode: "create" | "update"
   ): Promise<void> {
+    // A component instance must be a plain object. A primitive (e.g. a bare
+    // string sent for a non-repeatable component field) would make the field
+    // validator's `field.name in data` throw a TypeError, surfacing as a 500
+    // instead of a validation error, so reject the shape up front.
+    const value: unknown = instance;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "",
+            code: "INVALID_TYPE",
+            message: "Component data must be an object.",
+          },
+        ],
+      });
+    }
     const issues = await validateEntryData(instance, componentFields, { mode });
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });

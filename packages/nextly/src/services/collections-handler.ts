@@ -153,7 +153,11 @@ export class CollectionsHandler {
    * activity-log hooks receive a valid user and are not silently skipped.
    *
    * We also set `overrideAccess: true` because the routeHandler has already
-   * performed auth/authorization checks.
+   * performed collection-level auth/authorization. `routeAuthorized` marks
+   * that this override came from route auth (not a trusted server context),
+   * so the entry service still redacts the response to what this user may
+   * read — the route pre-check authorizes the operation, not access to every
+   * field.
    */
   private resolveUserParam<
     T extends {
@@ -162,6 +166,7 @@ export class CollectionsHandler {
       userEmail?: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      routeAuthorized?: boolean;
     },
   >(params: T): Omit<T, "userName" | "userEmail"> {
     const { userName, userEmail, ...rest } = params;
@@ -174,6 +179,7 @@ export class CollectionsHandler {
           email: userEmail,
         },
         overrideAccess: true,
+        routeAuthorized: true,
       };
     }
     return rest;

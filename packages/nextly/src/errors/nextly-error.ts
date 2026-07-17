@@ -99,9 +99,7 @@ export type NextlyErrorResponseJSON = {
 // bundles, etc.). Symbol.for shares the symbol across module instances via
 // the global registry. Inheritance (e.g., legacy direct-api NotFoundError
 // extends NextlyError) propagates the brand through the prototype chain.
-const NEXTLY_ERROR_BRAND: unique symbol = Symbol.for(
-  "nextly/NextlyError"
-);
+const NEXTLY_ERROR_BRAND: unique symbol = Symbol.for("nextly/NextlyError");
 
 function hasBrand(value: unknown): boolean {
   if (
@@ -231,6 +229,21 @@ export class NextlyError extends Error {
     return new NextlyError({
       code: "AUTH_REQUIRED",
       publicMessage: "Authentication required.",
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * Distinct from `authRequired`: the caller was authenticated but the
+   * session token expired. Clients key on this code to silently refresh and
+   * retry rather than redirecting to login.
+   */
+  static tokenExpired(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "TOKEN_EXPIRED",
+      publicMessage: "Your session has expired. Please refresh.",
       logContext: opts?.logContext,
     });
   }
