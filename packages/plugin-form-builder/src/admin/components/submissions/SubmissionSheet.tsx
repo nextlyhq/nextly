@@ -135,16 +135,10 @@ function FieldValueInput({
           onChange={e => onChange(e.target.value)}
         />
       );
-    case "file":
-    case "hidden":
-      // Files are media references and hidden fields are machine values —
-      // neither is hand-editable without inventing data.
-      return (
-        <p className="text-sm text-muted-foreground">
-          {formatExportValue(value, field) || "—"}
-        </p>
-      );
-    default:
+    case "text":
+    case "email":
+    case "url":
+    case "phone":
       return (
         <Input
           id={id}
@@ -152,6 +146,17 @@ function FieldValueInput({
           value={typeof value === "string" ? value : ""}
           onChange={e => onChange(e.target.value)}
         />
+      );
+    case "file":
+    case "hidden":
+    default:
+      // Files are media references, hidden fields are machine values, and
+      // unknown types may hold structured data — coercing any of them
+      // through a text input would corrupt them, so they stay read-only.
+      return (
+        <p className="text-sm text-muted-foreground">
+          {formatExportValue(value, field) || "—"}
+        </p>
       );
   }
 }
@@ -189,12 +194,23 @@ export function SubmissionSheet({
     ([key]) => !fieldNames.has(key)
   );
 
+  // Only a real value difference counts as a data edit — entering edit mode
+  // and saving untouched values must not write `data` or earn an edit stamp.
+  const dataChanged =
+    editing &&
+    form.fields.some(field => {
+      const before = (submission.data ?? {})[field.name];
+      const after = draftData[field.name];
+      return JSON.stringify(before ?? null) !== JSON.stringify(after ?? null);
+    });
+
   const dirty =
-    editing ||
+    dataChanged ||
     status !== submission.status ||
     notes !== (submission.notes ?? "");
 
   const handleSave = async () => {
+    if (!canUpdate) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -207,7 +223,7 @@ export function SubmissionSheet({
         }
       }
       if (notes !== (submission.notes ?? "")) changes.notes = notes;
-      if (editing) changes.data = draftData;
+      if (dataChanged) changes.data = draftData;
       if (Object.keys(changes).length > 0) await onSave(changes);
       setEditing(false);
     } catch (err) {
@@ -354,7 +370,13 @@ export function SubmissionSheet({
           <div className="grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="submission-status">Status</Label>
-              <Select value={status} onValueChange={setStatus}>
+              {/* Status/notes writes go through the same update permission
+                  as data edits — without it, everything here is read-only. */}
+              <Select
+                value={status}
+                onValueChange={setStatus}
+                disabled={!canUpdate}
+              >
                 <SelectTrigger
                   id="submission-status"
                   className="w-full bg-transparent border-input dark:bg-muted/50"
@@ -377,6 +399,7 @@ export function SubmissionSheet({
                 onChange={e => setNotes(e.target.value)}
                 rows={3}
                 placeholder="Visible to admins only"
+                disabled={!canUpdate}
               />
             </div>
           </div>
@@ -418,7 +441,7 @@ export function SubmissionSheet({
             <Button
               type="button"
               onClick={() => void handleSave()}
-              disabled={!dirty || saving}
+              disabled={!canUpdate || !dirty || saving}
             >
               {saving ? "Saving…" : "Save"}
             </Button>

@@ -449,11 +449,17 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     setPage(1);
   }, []);
 
+  // disableCreate gates every creation affordance from one place — the
+  // header button, the empty-state CTA, and the keyboard shortcut all call
+  // this, so a machine-created collection cannot reach the create screen
+  // through any of them.
+  const createDisabled = Boolean(collection?.admin?.disableCreate);
   const handleCreateClick = useCallback(() => {
+    if (createDisabled) return;
     navigateTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: collectionSlug })
     );
-  }, [collectionSlug]);
+  }, [collectionSlug, createDisabled]);
 
   const handleApiPlaygroundClick = useCallback(() => {
     navigateTo(
@@ -575,7 +581,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           </Button>
           {/* Machine-created collections (disableCreate) never offer "New" —
               a hand-typed entry there would be fiction, not data. */}
-          {!collection?.admin?.disableCreate && (
+          {!createDisabled && (
             <Button
               onClick={handleCreateClick}
               className="flex-1 sm:flex-initial hover-unified"

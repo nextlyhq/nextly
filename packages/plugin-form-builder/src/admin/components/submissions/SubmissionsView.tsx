@@ -39,7 +39,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
@@ -152,7 +152,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [canUpdate, setCanUpdate] = useState(false);
   const [canDelete, setCanDelete] = useState(false);
 
@@ -180,24 +180,30 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
         if (cancelled) return;
         setSlugs(resolved);
 
-        const formsRes = await fetch(
-          `/admin/api/collections/${resolved.forms}/entries?pageSize=200`,
-          { credentials: "include" }
-        );
-        if (formsRes.ok) {
+        // Page through ALL forms — a capped single fetch would silently
+        // drop forms from the filter and the per-field column lookup.
+        const allForms: FormOption[] = [];
+        const formsPageSize = 200;
+        for (let formsPage = 1; ; formsPage += 1) {
+          const formsRes = await fetch(
+            `/admin/api/collections/${resolved.forms}/entries?pageSize=${formsPageSize}&page=${formsPage}`,
+            { credentials: "include" }
+          );
+          if (!formsRes.ok) break;
           const json = (await formsRes.json()) as {
             items?: Array<{ id: string; name?: string; fields?: FormField[] }>;
           };
-          if (!cancelled) {
-            setForms(
-              (json.items ?? []).map(item => ({
-                id: item.id,
-                name: item.name ?? item.id,
-                fields: Array.isArray(item.fields) ? item.fields : [],
-              }))
-            );
-          }
+          const items = json.items ?? [];
+          allForms.push(
+            ...items.map(item => ({
+              id: item.id,
+              name: item.name ?? item.id,
+              fields: Array.isArray(item.fields) ? item.fields : [],
+            }))
+          );
+          if (items.length < formsPageSize) break;
         }
+        if (!cancelled) setForms(allForms);
 
         const permsRes = await fetch("/admin/api/me/permissions", {
           credentials: "include",
@@ -216,8 +222,14 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
           }
         }
       } catch {
-        // Bootstrap failures degrade to defaults; the list fetch below
-        // reports its own errors.
+        // Bootstrap failures degrade to the default slugs — without them
+        // the list fetch would wait forever and the loading state never end.
+        if (!cancelled) {
+          setSlugs(
+            current =>
+              current ?? { forms: "forms", submissions: "form-submissions" }
+          );
+        }
       }
     })();
     return () => {
@@ -226,8 +238,13 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
   }, []);
 
   // --- the list fetch ------------------------------------------------------
+  // Monotonic request sequence: rapid filter changes overlap fetches, and
+  // only the LATEST request may commit rows — an older response finishing
+  // last must never overwrite the current filter's data.
+  const fetchSeqRef = useRef(0);
   const fetchRows = useCallback(async () => {
     if (!slugs) return;
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -255,14 +272,16 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
         items?: SubmissionRow[];
         meta?: { total?: number };
       };
+      if (seq !== fetchSeqRef.current) return;
       setRows(json.items ?? []);
       setTotal(json.meta?.total ?? (json.items ?? []).length);
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       setError(
         err instanceof Error ? err.message : "Failed to load submissions"
       );
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   }, [slugs, selectedFormId, statusTab, page]);
 
@@ -371,7 +390,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
         { method: "DELETE", credentials: "include" }
       );
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-      setOpenIndex(null);
+      setOpenId(null);
       await fetchRows();
     },
     [submissionsSlug, fetchRows]
@@ -416,7 +435,11 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
   );
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const openRow = openIndex !== null ? rows[openIndex] : null;
+  // The open record is tracked by ID: after a save refetch the row may
+  // move or leave the filtered view entirely — index tracking would silently
+  // show a different submission, while a missing ID just closes the drawer.
+  const openIndex = openId ? rows.findIndex(row => row.id === openId) : -1;
+  const openRow = openIndex === -1 ? null : rows[openIndex];
 
   return (
     <div className="space-y-4">
@@ -428,7 +451,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
             onValueChange={value => {
               setSelectedFormId(value === "__all" ? "" : value);
               setPage(1);
-              setOpenIndex(null);
+              setOpenId(null);
             }}
           >
             <SelectTrigger
@@ -452,7 +475,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
             onValueChange={value => {
               setStatusTab(value as StatusTab);
               setPage(1);
-              setOpenIndex(null);
+              setOpenId(null);
             }}
           >
             <TabsList className="rounded-none">
@@ -559,10 +582,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
             : "No submissions yet."
         }
         ariaLabel="Submissions"
-        onRowClick={row => {
-          const index = rows.findIndex(r => r.id === row.id);
-          setOpenIndex(index === -1 ? null : index);
-        }}
+        onRowClick={row => setOpenId(row.id)}
         rowActions={rowActions}
       />
 
@@ -614,15 +634,13 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
             }
           }
           canUpdate={canUpdate}
-          onClose={() => setOpenIndex(null)}
+          onClose={() => setOpenId(null)}
           onPrev={
-            openIndex !== null && openIndex > 0
-              ? () => setOpenIndex(index => (index ?? 0) - 1)
-              : undefined
+            openIndex > 0 ? () => setOpenId(rows[openIndex - 1].id) : undefined
           }
           onNext={
-            openIndex !== null && openIndex < rows.length - 1
-              ? () => setOpenIndex(index => (index ?? 0) + 1)
+            openIndex < rows.length - 1
+              ? () => setOpenId(rows[openIndex + 1].id)
               : undefined
           }
           onSave={async changes => {
