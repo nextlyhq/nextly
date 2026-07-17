@@ -32,6 +32,11 @@ vi.mock("../../lib/date-formatting", () => ({
   withTimezoneFormatting: (response: Response) => response,
 }));
 
+// Stub the role-slug resolver (real one is server-only + DB-backed).
+vi.mock("../../services/lib/permissions", () => ({
+  resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
+}));
+
 import { PATCH } from "../singles-detail";
 
 describe("singles-detail PATCH route auth forwarding", () => {
@@ -71,7 +76,12 @@ describe("singles-detail PATCH route auth forwarding", () => {
       { title: "Updated" },
       {
         locale: undefined,
-        user: { id: "u-1", name: "Ada", email: "ada@example.com" },
+        user: {
+          id: "u-1",
+          name: "Ada",
+          email: "ada@example.com",
+          roles: ["editor"],
+        },
         overrideAccess: true,
         routeAuthorized: true,
       }

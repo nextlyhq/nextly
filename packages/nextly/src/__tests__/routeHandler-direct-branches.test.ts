@@ -64,7 +64,7 @@ vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn().mockResolvedValue(false),
   containsSuperAdminRole: vi.fn().mockResolvedValue(false),
   hasSuperAdminExcluding: vi.fn().mockResolvedValue(false),
-  listRoleSlugsForUser: vi.fn().mockResolvedValue([]),
+  resolveRoleSlugs: vi.fn().mockResolvedValue([]),
 }));
 
 // Replace the ImageSizeService class with a vi.fn-backed constructor whose
@@ -133,7 +133,7 @@ import {
   _handleAdminMetaSidebarGroupsForTest,
   _setAuthenticatedRouteParamsForTest,
 } from "../routeHandler";
-import { listRoleSlugsForUser } from "../services/lib/permissions";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 import {
   createImageSize,
   deleteImageSize,
@@ -379,10 +379,16 @@ describe("deleteImageSize (DELETE /image-sizes/:id)", () => {
 void createJsonErrorResponse;
 
 describe("setAuthenticatedRouteParams", () => {
-  const listRoleSlugsMock = vi.mocked(listRoleSlugsForUser);
+  const resolveRoleSlugsMock = vi.mocked(resolveRoleSlugs);
+  const sessionUser = {
+    userId: "u1",
+    roles: ["role-id-1"],
+    permissions: [],
+    authMethod: "session" as const,
+  };
 
-  it("strips client-injected reserved params and forwards resolved session slugs", async () => {
-    listRoleSlugsMock.mockResolvedValue(["editor"]);
+  it("strips client-injected reserved params and writes resolved roles when needed", async () => {
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
     const routeParams: Record<string, string> = {
       collectionName: "posts",
       // Attacker-supplied copies of server-authored identity params.
@@ -390,12 +396,7 @@ describe("setAuthenticatedRouteParams", () => {
       _authenticatedUserRoles: JSON.stringify(["admin"]),
     };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, {
-      userId: "u1",
-      roles: ["role-id-1"],
-      permissions: [],
-      authMethod: "session",
-    });
+    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
 
     expect(routeParams._authenticatedUserId).toBe("u1");
     // Injected roles are clobbered by the resolved slugs, not trusted.
@@ -404,34 +405,26 @@ describe("setAuthenticatedRouteParams", () => {
     );
   });
 
-  it("uses API-key slugs as-is without resolving", async () => {
-    const routeParams: Record<string, string> = { collectionName: "posts" };
-
-    await _setAuthenticatedRouteParamsForTest(routeParams, {
-      userId: "u1",
-      roles: ["editor", "author"],
-      permissions: [],
-      authMethod: "api-key",
-    });
-
-    expect(listRoleSlugsMock).not.toHaveBeenCalled();
-    expect(routeParams._authenticatedUserRoles).toBe(
-      JSON.stringify(["editor", "author"])
-    );
-  });
-
-  it("writes an empty roles array (clobbering injection) when the user has none", async () => {
-    listRoleSlugsMock.mockResolvedValue([]);
+  it("skips role resolution when roles are not needed (and strips injection)", async () => {
     const routeParams: Record<string, string> = {
       _authenticatedUserRoles: JSON.stringify(["admin"]),
     };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, {
-      userId: "u1",
-      roles: [],
-      permissions: [],
-      authMethod: "session",
-    });
+    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, false);
+
+    expect(resolveRoleSlugsMock).not.toHaveBeenCalled();
+    expect(routeParams._authenticatedUserId).toBe("u1");
+    // The injected value is stripped and never re-written.
+    expect(routeParams._authenticatedUserRoles).toBeUndefined();
+  });
+
+  it("writes an empty roles array (clobbering injection) when the user has none", async () => {
+    resolveRoleSlugsMock.mockResolvedValue([]);
+    const routeParams: Record<string, string> = {
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
 
     expect(routeParams._authenticatedUserRoles).toBe("[]");
   });
@@ -442,7 +435,7 @@ describe("setAuthenticatedRouteParams", () => {
       _authenticatedUserRoles: JSON.stringify(["admin"]),
     };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, undefined);
+    await _setAuthenticatedRouteParamsForTest(routeParams, undefined, true);
 
     expect(routeParams._authenticatedUserId).toBeUndefined();
     expect(routeParams._authenticatedUserRoles).toBeUndefined();

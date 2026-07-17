@@ -24,6 +24,7 @@ import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import { transformRichTextFields } from "../lib/field-transform";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
@@ -201,10 +202,15 @@ export const PATCH = withErrorHandler(
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;
 
+    // Include resolved role slugs so field-level `access.read` (which redacts
+    // the response under `routeAuthorized`) evaluates against the caller's
+    // roles, matching the collection route path. Session auth carries role IDs,
+    // so they are resolved; API-key auth already carries slugs.
     const user = {
       id: auth.userId,
       name: auth.userName,
       email: auth.userEmail,
+      roles: await resolveRoleSlugs(auth),
     };
 
     const result = await service.update(slug, body, {
