@@ -8,6 +8,7 @@ import type {
 
 import { SchemaChangeDialog } from "../SchemaChangeDialog";
 
+// A preview diff with nothing in it; each test fills only the arrays it needs.
 const emptyChanges = (): SchemaPreviewChange => ({
   added: [],
   removed: [],
@@ -15,6 +16,9 @@ const emptyChanges = (): SchemaPreviewChange => ({
   unchanged: [],
 });
 
+// Renders the dialog in its destructive-change state (the only mode that shows
+// the confirm button as "Apply Changes") and captures the resolutions the
+// dialog emits on confirm, which is what these tests assert on.
 function renderDialog(
   changes: SchemaPreviewChange,
   onConfirm: (
@@ -40,6 +44,9 @@ function renderDialog(
 }
 
 describe("SchemaChangeDialog destructive-drop acknowledgment", () => {
+  // Removing a field drops its column; the server now refuses an
+  // unacknowledged drop, so the dialog must send an explicit confirm_drop per
+  // removed field or the deletion the user just confirmed would fail closed.
   it("attaches a confirm_drop resolution for each removed field", () => {
     const onConfirm = vi.fn();
     const changes = emptyChanges();
@@ -69,6 +76,8 @@ describe("SchemaChangeDialog destructive-drop acknowledgment", () => {
     expect(resolutions.legacy).toEqual({ action: "confirm_drop" });
   });
 
+  // A purely additive change destroys no data, so the dialog must not attach
+  // spurious confirm_drop resolutions that would misrepresent the intent.
   it("sends no confirm_drop resolutions when nothing is removed", () => {
     const onConfirm = vi.fn();
     const changes = emptyChanges();

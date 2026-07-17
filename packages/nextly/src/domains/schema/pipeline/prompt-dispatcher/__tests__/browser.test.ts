@@ -64,7 +64,7 @@ describe("BrowserPromptDispatcher", () => {
     expect(result.confirmedRenames).toEqual([candidates[0]]);
   });
 
-  it("does NOT confirm a candidate marked drop_and_add", async () => {
+  it("does NOT confirm a candidate marked drop_and_add, but still proceeds (explicit choice acknowledges the drop)", async () => {
     const candidates = [candidate("dc_posts", "body", "summary")];
     const dispatcher = new BrowserPromptDispatcher([
       {
@@ -81,9 +81,13 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
+    expect(result.proceed).toBe(true);
   });
 
-  it("does NOT confirm candidates with no matching resolution (defaults to drop_and_add)", async () => {
+  it("fails closed on a rename candidate with no resolution (would drop as drop_and_add)", async () => {
+    // A drop+add pair with no rename resolution destroys the from-column's
+    // data; its destructive_drop event is filtered upstream, so an unresolved
+    // candidate must itself fail the apply closed.
     const candidates = [candidate("dc_posts", "body", "summary")];
     const dispatcher = new BrowserPromptDispatcher([]);
     const result = await dispatcher.dispatch({
@@ -93,6 +97,7 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
+    expect(result.proceed).toBe(false);
   });
 
   it("ignores resolutions for unrelated candidates (orphan resolutions)", async () => {
@@ -121,7 +126,7 @@ describe("BrowserPromptDispatcher", () => {
     const dispatcher = new BrowserPromptDispatcher([]);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await dispatcher.dispatch({
+      const result = await dispatcher.dispatch({
         candidates,
         events: [],
         classification: "interactive",
@@ -131,6 +136,8 @@ describe("BrowserPromptDispatcher", () => {
       const msg = warnSpy.mock.calls[0]?.[0] as string;
       expect(msg).toContain("BrowserPromptDispatcher");
       expect(msg).toContain("phone -> contact on dc_users");
+      // A drifted sibling drop is unacknowledged, so the apply fails closed.
+      expect(result.proceed).toBe(false);
     } finally {
       warnSpy.mockRestore();
     }
@@ -428,6 +435,26 @@ describe("BrowserPromptDispatcher", () => {
     const result = await dispatcher.dispatch({
       candidates: [],
       events: [e1, e2],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("fails closed when a destructive_drop carries both confirm_drop and abort", async () => {
+    // Conflicting resolutions must not run the drop: abort wins so the column
+    // is never dropped-then-rolled-back after the DDL has already committed.
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        { kind: "confirm_drop", eventId: ev.id },
+        { kind: "abort", eventId: ev.id },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
       classification: "interactive",
       channel: "browser",
     });
