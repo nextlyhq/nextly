@@ -1,4 +1,6 @@
 {
-  "sqlStatements": ["ALTER TABLE `g1` DROP COLUMN `extra`;"],
+  "sqlStatements": [
+    "ALTER TABLE `g1` DROP COLUMN `extra`;"
+  ],
   "hints": []
 }

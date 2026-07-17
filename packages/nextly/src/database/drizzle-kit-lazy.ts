@@ -228,17 +228,24 @@ type DrizzleKitCache = {
 
 const g = globalThis as DrizzleKitCache;
 
-const requireKit = (subpath: string): unknown =>
-  createRequire(import.meta.url)(subpath);
+// Each dialect loads through its own LITERAL specifier. Routing the subpath
+// through a variable makes the bundler see `createRequire(...)(expr)` and
+// fail first-run setup with "Cannot find module as expression is too
+// dynamic" (caught live by the Phase 7 dev-server exercise) — Turbopack only
+// treats createRequire as opaque when the argument is a string literal.
+const requirePgKit = (): unknown =>
+  createRequire(import.meta.url)("drizzle-kit/payload/postgres");
+const requireMySqlKit = (): unknown =>
+  createRequire(import.meta.url)("drizzle-kit/payload/mysql");
+const requireSqliteKit = (): unknown =>
+  createRequire(import.meta.url)("drizzle-kit/payload/sqlite");
 
 // Accessors keep a Promise signature even though `require()` is sync —
 // callers already `await` them, and keeping the signature stable avoids churn.
 
 export function getPgDrizzleKit(): Promise<PgDrizzleKit> {
   if (g.__nextly_drizzleKitPg) return Promise.resolve(g.__nextly_drizzleKitPg);
-  const m = (g.__nextly_drizzleKitPgMod ??= requireKit(
-    "drizzle-kit/payload/postgres"
-  ) as PayloadPgModule);
+  const m = (g.__nextly_drizzleKitPgMod ??= requirePgKit() as PayloadPgModule);
   g.__nextly_drizzleKitPg = {
     pushSchema: (imports, db, entitiesConfig) =>
       m.pushSchema(imports, db, entitiesConfig),
@@ -251,9 +258,8 @@ export function getPgDrizzleKit(): Promise<PgDrizzleKit> {
 export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
   if (g.__nextly_drizzleKitMySQL)
     return Promise.resolve(g.__nextly_drizzleKitMySQL);
-  const m = (g.__nextly_drizzleKitMySqlMod ??= requireKit(
-    "drizzle-kit/payload/mysql"
-  ) as PayloadMySqlModule);
+  const m = (g.__nextly_drizzleKitMySqlMod ??=
+    requireMySqlKit() as PayloadMySqlModule);
   g.__nextly_drizzleKitMySQL = {
     pushSchema: (imports, db, databaseName) =>
       m.pushSchema(imports, mysqlKitClient(db), databaseName),
@@ -266,9 +272,8 @@ export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
 export function getSQLiteDrizzleKit(): Promise<SQLiteDrizzleKit> {
   if (g.__nextly_drizzleKitSQLite)
     return Promise.resolve(g.__nextly_drizzleKitSQLite);
-  const m = (g.__nextly_drizzleKitSqliteMod ??= requireKit(
-    "drizzle-kit/payload/sqlite"
-  ) as PayloadSqliteModule);
+  const m = (g.__nextly_drizzleKitSqliteMod ??=
+    requireSqliteKit() as PayloadSqliteModule);
   g.__nextly_drizzleKitSQLite = {
     pushSchema: (imports, db) => m.pushSchema(imports, sqliteKitClient(db)),
     generateDrizzleJson: m.generateDrizzleJson,
