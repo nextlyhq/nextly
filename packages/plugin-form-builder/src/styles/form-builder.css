@@ -3,8 +3,7 @@
  *
  * The builder UI is driven by Tailwind utilities and @nextlyhq/ui components in its
  * React components. This file holds only the few bespoke rules those can't express:
- *   1. The two-pane builder shell (fixed inspector panel; stacks in a narrow panel)
- *   2. Notifications tab: email-integration card list (hover/variant states)
+notifications-tab email-integration card states (hover/variant).
  *
  * Colors read the admin design tokens directly (`var(--token)`), so the UI looks native
  * and inherits dark mode automatically (the admin flips the tokens under `.nextly-admin.dark`).
@@ -12,27 +11,6 @@
  * @module styles/form-builder
  * @since 0.1.0
  */
-
-/* ---------------------------------------------------------- builder shell */
-
-/* Fixed-width inspector panel beside the fluid canvas. */
-.fb-builder-panel {
-  width: 360px;
-}
-
-/* Stack the canvas and inspector when the content panel itself gets narrow
-   (`content` is the admin content-area container). */
-@container content (max-width: 800px) {
-  .fb-builder-shell {
-    flex-direction: column;
-  }
-
-  .fb-builder-panel {
-    width: 100%;
-    border-left: 0;
-    border-top: 1px solid var(--nx-border);
-  }
-}
 
 /* ------------------------------------------------------- notifications tab */
 

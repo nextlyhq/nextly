@@ -12,12 +12,13 @@
 // ---------------------------------------------------------------------------
 
 export {
-  FieldLibrary,
-  FormCanvas,
+  FieldCards,
+  AddFieldDialog,
   FieldEditor,
   FormPreview,
   ConditionalLogicEditor,
-  type FormCanvasProps,
+  type FieldCardsProps,
+  type AddFieldDialogProps,
   type FieldEditorProps,
   type FormPreviewProps,
   type ConditionalLogicEditorProps,
