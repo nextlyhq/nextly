@@ -100,8 +100,7 @@ describe("generateRuntimeSchema", () => {
 
     it("maps a dbType:'decimal' number field to an exact numeric column", () => {
       const fields: FieldDefinition[] = [
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { name: "price", type: "number", dbType: "decimal", scale: 2 } as any,
+        { name: "price", type: "number", dbType: "decimal", scale: 2 },
       ];
       const result = generateRuntimeSchema("dc_products", fields, "postgresql");
       const col = getColumns(result.table).price as { getSQLType(): string };

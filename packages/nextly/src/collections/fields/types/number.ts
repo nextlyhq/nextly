@@ -171,17 +171,21 @@ export interface NumberFieldConfig
   /**
    * Database storage type for the value.
    *
-   * - `"integer"` (default) - whole numbers only; fractional input is truncated
-   *   by the database (`19.99` is stored as `19`). Use for counts, quantities,
-   *   ratings, and IDs.
-   * - `"decimal"` - an exact fixed-point `DECIMAL`/`NUMERIC` column, the correct
-   *   choice for money and other fractional values. Size it with `precision`
-   *   and `scale` (default `DECIMAL(10, 2)`).
+   * - `"integer"` (default) - whole numbers only; a fractional value is not
+   *   preserved (the database rounds or truncates it). Use for counts,
+   *   quantities, ratings, and IDs.
+   * - `"decimal"` - a fixed-point `DECIMAL`/`NUMERIC` column for money and other
+   *   fractional values, sized with `precision` and `scale` (default
+   *   `DECIMAL(10, 2)`). Exact at rest on Postgres and MySQL; on SQLite it maps
+   *   to NUMERIC affinity (best-effort, since SQLite has no fixed-precision
+   *   decimal type). Values are read back as JavaScript numbers, so a precision
+   *   beyond what a double can represent (~15 significant digits) is not fully
+   *   round-tripped.
    *
    * @default "integer"
    * @example
    * ```typescript
-   * // Store a price exactly, e.g. 1234.56
+   * // Store a price, e.g. 1234.56
    * { name: 'price', type: 'number', dbType: 'decimal', precision: 10, scale: 2 }
    * ```
    */

@@ -73,8 +73,8 @@ export interface ColumnDescriptor {
 }
 
 /** Default DECIMAL(precision, scale) when a decimal number field omits them. */
-const DEFAULT_DECIMAL_PRECISION = 10;
-const DEFAULT_DECIMAL_SCALE = 2;
+export const DEFAULT_DECIMAL_PRECISION = 10;
+export const DEFAULT_DECIMAL_SCALE = 2;
 
 /**
  * Logical column kind — used by `runtime-schema-generator.ts` to
@@ -138,10 +138,8 @@ export function getColumnDescriptor(
   const decimal =
     kind === "decimal"
       ? {
-          precision:
-            (field as { precision?: number }).precision ??
-            DEFAULT_DECIMAL_PRECISION,
-          scale: (field as { scale?: number }).scale ?? DEFAULT_DECIMAL_SCALE,
+          precision: field.precision ?? DEFAULT_DECIMAL_PRECISION,
+          scale: field.scale ?? DEFAULT_DECIMAL_SCALE,
         }
       : undefined;
 
@@ -186,13 +184,11 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     case "number": {
       // Code-first fields opt into exact fractional storage via
       // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
-      const dbType = (field as { dbType?: string }).dbType;
-      if (dbType === "decimal") return "decimal";
+      if (field.dbType === "decimal") return "decimal";
       // UI-created fields carry options.format === "float" for float storage;
       // code-first without dbType defaults to integer, matching the DDL emitted
       // by dynamic-collection-schema-service.ts.
-      const fmt = (field as { options?: { format?: string } }).options?.format;
-      return fmt === "float" ? "double" : "integer";
+      return field.options?.format === "float" ? "double" : "integer";
     }
 
     case "checkbox":
@@ -245,8 +241,13 @@ function renderDialectType(
 ): string {
   const { length } = opts;
   if (kind === "decimal") {
-    // The diff normalizes precision away (numeric(10,2) -> "numeric"), so these
-    // never cause a phantom type change; precision is carried for the emitter.
+    // The diff normalizes precision away (numeric(10,2) -> "numeric"), so a
+    // decimal column never triggers a phantom type change; precision is carried
+    // for the emitter. Trade-off: a later precision/scale change on an existing
+    // column (e.g. 10,2 -> 12,4) is NOT detected as a diff, because the live
+    // introspector reports only the base type. Resizing a decimal column needs
+    // a manual migration until the introspector captures numeric_precision/
+    // numeric_scale on the live side.
     const p = opts.precision ?? DEFAULT_DECIMAL_PRECISION;
     const s = opts.scale ?? DEFAULT_DECIMAL_SCALE;
     if (dialect === "postgresql") return `numeric(${p}, ${s})`;

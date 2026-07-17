@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { normalizeType } from "../pipeline/diff/normalize-type";
 import {
   clearFieldTypes,
@@ -19,9 +20,11 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const field = (type: string) => ({ name: "content", type }) as any;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const numberField = (extra: Record<string, unknown>) =>
-  ({ name: "price", type: "number", ...extra }) as any;
+const numberField = (extra: Partial<FieldDefinition>): FieldDefinition => ({
+  name: "price",
+  type: "number",
+  ...extra,
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 

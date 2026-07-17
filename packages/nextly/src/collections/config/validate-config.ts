@@ -88,6 +88,9 @@ export type ValidationErrorCode =
   | "RELATIONSHIP_TARGET_UNKNOWN"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
+  | "DECIMAL_PRECISION_INVALID"
+  | "DECIMAL_SCALE_INVALID"
+  | "DECIMAL_SCALE_EXCEEDS_PRECISION"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -403,6 +406,60 @@ function validateField(
     case "component":
       validateComponentFieldRefShared(f, path, errsBase);
       break;
+
+    case "number":
+      validateNumberDecimalDimensions(f, path, errors);
+      break;
+  }
+}
+
+/**
+ * A `dbType: "decimal"` number field renders precision/scale straight into the
+ * DDL (`numeric(p,s)` / `decimal(p,s)`). Invalid dimensions would otherwise fail
+ * at the database with an opaque DDL error on first apply, so reject them at
+ * config time: precision a positive integer, scale a non-negative integer no
+ * larger than precision.
+ */
+function validateNumberDecimalDimensions(
+  f: Record<string, unknown>,
+  path: string,
+  errors: ValidationError[]
+): void {
+  if (f.dbType !== "decimal") return;
+  const { precision, scale } = f;
+  const isPosInt = (v: unknown): v is number =>
+    typeof v === "number" && Number.isInteger(v) && v >= 1;
+  const isNonNegInt = (v: unknown): v is number =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0;
+
+  if (precision !== undefined && !isPosInt(precision)) {
+    errors.push({
+      path: `${path}.precision`,
+      message: "Decimal 'precision' must be an integer of at least 1",
+      code: "DECIMAL_PRECISION_INVALID",
+    });
+  }
+  if (scale !== undefined && !isNonNegInt(scale)) {
+    errors.push({
+      path: `${path}.scale`,
+      message: "Decimal 'scale' must be an integer of at least 0",
+      code: "DECIMAL_SCALE_INVALID",
+    });
+  }
+  // Cross-check the effective values (unset defaults mirror the column
+  // descriptor's DECIMAL(10, 2)); scale must not exceed precision.
+  const effPrecision = typeof precision === "number" ? precision : 10;
+  const effScale = typeof scale === "number" ? scale : 2;
+  if (
+    Number.isInteger(effPrecision) &&
+    Number.isInteger(effScale) &&
+    effScale > effPrecision
+  ) {
+    errors.push({
+      path: `${path}.scale`,
+      message: "Decimal 'scale' cannot exceed 'precision'",
+      code: "DECIMAL_SCALE_EXCEEDS_PRECISION",
+    });
   }
 }
 

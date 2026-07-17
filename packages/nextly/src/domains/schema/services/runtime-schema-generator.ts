@@ -49,6 +49,8 @@ import {
   type ColumnDescriptor,
   type ColumnKind,
   type SupportedDialect as DescriptorDialect,
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
 } from "./field-column-descriptor";
@@ -263,8 +265,8 @@ function decimalConfig(desc: ColumnDescriptor): {
   // `mode: "number"` reads the column back as a JS number, matching the number
   // field's value contract (the same contract the `double` kind honors).
   return {
-    precision: desc.precision ?? 10,
-    scale: desc.scale ?? 2,
+    precision: desc.precision ?? DEFAULT_DECIMAL_PRECISION,
+    scale: desc.scale ?? DEFAULT_DECIMAL_SCALE,
     mode: "number",
   };
 }
