@@ -185,6 +185,11 @@ export const POST = withErrorHandler(
 
     const body = await readJsonBody(request);
 
+    // Boot before parsing: the schema's `type` check consults the plugin
+    // field-type registry, which is populated during first-request init. Parsing
+    // first would reject a valid plugin field type on a cold start.
+    const service = await getUserFieldDefinitionService();
+
     let validated: z.infer<typeof createFieldSchema>;
     try {
       validated = createFieldSchema.parse(body);
@@ -192,8 +197,6 @@ export const POST = withErrorHandler(
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
     }
-
-    const service = await getUserFieldDefinitionService();
     // Force source to 'ui'; code-sourced fields are managed via defineConfig().
     const field = await service.createField({
       ...validated,

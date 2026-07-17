@@ -167,11 +167,21 @@ export function generateFieldName(
   type: FormFieldTypeId,
   existingNames: readonly string[] = []
 ): string {
+  // A plugin type id can be hyphenated (`star-rating`) or start with a digit,
+  // but a field name must match ^[a-zA-Z][a-zA-Z0-9_]*$ (it keys submission
+  // data). Normalize to a safe key; built-in type ids are already valid and
+  // pass through unchanged.
+  const base =
+    type
+      .replace(/[^a-zA-Z0-9]+/g, "_")
+      .replace(/^_+/, "")
+      .replace(/^([0-9])/, "field_$1")
+      .replace(/_+$/, "") || "field";
   const taken = new Set(existingNames);
-  if (!taken.has(type)) return type;
+  if (!taken.has(base)) return base;
   let suffix = 2;
-  while (taken.has(`${type}_${suffix}`)) suffix += 1;
-  return `${type}_${suffix}`;
+  while (taken.has(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
 }
 
 /**

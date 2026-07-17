@@ -1106,10 +1106,41 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   // Field Column Mapping (Runtime Drizzle)
   // ============================================================
 
+  /**
+   * The declared storage primitive of a users-surface plugin field, or null for
+   * a built-in / unregistered / non-users type. The column type across the DDL,
+   * runtime schema, and code-gen paths all key off this so they never diverge.
+   */
+  private pluginUserStorage(
+    field: UserFieldConfig
+  ): "text" | "longText" | "boolean" | "number" | "timestamp" | "json" | null {
+    const type = field.type;
+    if (!isPluginFieldTypeOnSurface(type, "users")) return null;
+    return getFieldType(type)?.storage ?? null;
+  }
+
   private mapFieldToPostgresColumn(field: UserFieldConfig): unknown {
     if (!("name" in field) || !field.name) return null;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      const col = (() => {
+        switch (pluginStorage) {
+          case "number":
+            return pgDoublePrecision(colName);
+          case "boolean":
+            return pgBoolean(colName);
+          case "timestamp":
+            return pgTimestamp(colName);
+          case "json":
+            return pgJsonb(colName);
+          default:
+            return pgText(colName); // text / longText
+        }
+      })();
+      return isRequired ? col.notNull() : col;
+    }
 
     if (this.isUserSurfaceTextField(field)) {
       // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
@@ -1150,6 +1181,26 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     if (!("name" in field) || !field.name) return null;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      const col = (() => {
+        switch (pluginStorage) {
+          case "number":
+            return mysqlDouble(colName);
+          case "boolean":
+            return mysqlBoolean(colName);
+          case "timestamp":
+            return mysqlTimestamp(colName);
+          case "json":
+            return mysqlJson(colName);
+          case "longText":
+            return mysqlText(colName);
+          default:
+            return mysqlVarchar(colName, { length: 255 }); // text
+        }
+      })();
+      return isRequired ? col.notNull() : col;
+    }
 
     if (this.isUserSurfaceTextField(field)) {
       // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
@@ -1198,6 +1249,22 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     if (!("name" in field) || !field.name) return null;
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
+    const pluginStorage = this.pluginUserStorage(field);
+    if (pluginStorage) {
+      const col = (() => {
+        switch (pluginStorage) {
+          case "number":
+            return sqliteReal(colName);
+          case "boolean":
+            return sqliteInteger(colName, { mode: "boolean" });
+          case "timestamp":
+            return sqliteInteger(colName, { mode: "timestamp" });
+          default:
+            return sqliteText(colName); // text / longText / json
+        }
+      })();
+      return isRequired ? col.notNull() : col;
+    }
 
     if (
       isTextField(field) ||
@@ -1476,7 +1543,31 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     return map;
   }
 
-  private getDefaultValueForType(type: string): string {
+  /**
+   * Map a field type to the built-in category whose SQL default formatting
+   * matches its column. A plugin user field is keyed by its storage primitive
+   * (so a `number`-storage plugin field defaults like a number column, not
+   * text); built-ins pass through unchanged.
+   */
+  private effectiveDefaultType(type: string): string {
+    const storage = isPluginFieldTypeOnSurface(type, "users")
+      ? getFieldType(type)?.storage
+      : undefined;
+    if (!storage) return type;
+    switch (storage) {
+      case "number":
+        return "number";
+      case "boolean":
+        return "checkbox";
+      case "timestamp":
+        return "date";
+      default:
+        return "text"; // text / longText / json
+    }
+  }
+
+  private getDefaultValueForType(rawType: string): string {
+    const type = this.effectiveDefaultType(rawType);
     switch (type) {
       case "text":
       case "textarea":
@@ -1502,8 +1593,9 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
 
   private formatDefaultValue(
     value: string | number | boolean,
-    type: string
+    rawType: string
   ): string {
+    const type = this.effectiveDefaultType(rawType);
     if (
       type === "text" ||
       type === "textarea" ||

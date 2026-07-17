@@ -89,6 +89,26 @@ describe("pluginFieldTypeCatalogEntries", () => {
     expect(pluginFieldTypeCatalogEntries(plugins, "forms")).toHaveLength(1);
   });
 
+  it("excludes a disabled plugin's field types from picker entries", () => {
+    const plugins: PluginMetadata[] = [
+      {
+        name: "@acme/disabled",
+        collections: [],
+        enabled: false,
+        fieldTypes: [{ type: "rating", component: "C", surfaces: ["entries"] }],
+      },
+      {
+        name: "@acme/enabled",
+        collections: [],
+        enabled: true,
+        fieldTypes: [{ type: "color", component: "C", surfaces: ["entries"] }],
+      },
+    ];
+    expect(
+      pluginFieldTypeCatalogEntries(plugins, "entries").map(e => e.type)
+    ).toEqual(["color"]);
+  });
+
   it("flattens field types across multiple plugins in registration order", () => {
     const plugins = [
       pluginWith([{ type: "rating", component: "C", surfaces: ["entries"] }]),

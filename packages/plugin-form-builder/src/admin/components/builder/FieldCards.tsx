@@ -286,11 +286,21 @@ export interface FieldCardsProps {
    * added.
    */
   enabledTypes: readonly FormFieldCatalogType[] | null;
+  /**
+   * Type ids the host disabled (`config.fields[type] === false`). Applied to
+   * plugin field types too, so the host exclude layer is not bypassed for
+   * contributed types.
+   */
+  disabledFieldTypes?: ReadonlySet<string>;
   /** Creates a field of the given type and returns it (context helper). */
   onAddField: (type: FormFieldTypeId) => void;
 }
 
-export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
+export function FieldCards({
+  enabledTypes,
+  disabledFieldTypes,
+  onAddField,
+}: FieldCardsProps) {
   const {
     fields,
     notifications,
@@ -323,9 +333,13 @@ export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
       FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
     return [
       ...builtins,
-      ...pluginEntries.filter(entry => !builtinTypes.has(entry.type)),
+      // A plugin type a built-in shadows, or one the host disabled, is excluded.
+      ...pluginEntries.filter(
+        entry =>
+          !builtinTypes.has(entry.type) && !disabledFieldTypes?.has(entry.type)
+      ),
     ];
-  }, [enabledTypes, pluginEntries]);
+  }, [enabledTypes, pluginEntries, disabledFieldTypes]);
 
   // One O(N^2) pass per fields/notifications change; each card then looks
   // its blockers up in O(1) instead of re-walking everything per render.

@@ -82,6 +82,8 @@ export function generateZodSchema(
  * Generate a Zod schema for a single field.
  */
 function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
+  // Captured before the switch narrows `field` to `never` in the default branch.
+  const { required, label, name } = field;
   switch (field.type) {
     case "text":
       return generateTextSchema(field);
@@ -110,7 +112,18 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
     case "hidden":
       return generateHiddenSchema(field);
     default:
-      // Unknown field type - accept any value
+      // A plugin field's value shape is owned by the plugin, so accept any
+      // value — but still enforce the base required check, otherwise a required
+      // plugin field could be omitted from a submission the builder marks
+      // required (z.unknown() alone treats a missing key as valid).
+      if (required) {
+        return z
+          .unknown()
+          .refine(
+            value => value !== undefined && value !== null && value !== "",
+            { message: `${label || name} is required` }
+          );
+      }
       return z.unknown();
   }
 }

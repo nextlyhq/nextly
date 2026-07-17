@@ -38,16 +38,22 @@ export function pluginFieldTypeCatalogEntries(
   plugins: readonly PluginMetadata[] | undefined,
   surface: FieldSurface
 ): FieldTypeCatalogEntry<string>[] {
-  return (plugins ?? [])
-    .flatMap(plugin => plugin.fieldTypes ?? [])
-    .filter(fieldType =>
-      (fieldType.surfaces ?? DEFAULT_SURFACES).includes(surface)
-    )
-    .map(fieldType => ({
-      type: fieldType.type,
-      label: fieldType.label ?? defaultLabel(fieldType.type),
-      category: fieldType.category ?? "Advanced",
-      hint: fieldType.description ?? "",
-      icon: fieldType.icon ?? "Puzzle",
-    }));
+  return (
+    (plugins ?? [])
+      // A disabled plugin's field types stay in /admin-meta so existing fields
+      // keep rendering, but a disabled plugin must not offer NEW field types in a
+      // picker — its behavioral/admin contributions are off.
+      .filter(plugin => plugin.enabled !== false)
+      .flatMap(plugin => plugin.fieldTypes ?? [])
+      .filter(fieldType =>
+        (fieldType.surfaces ?? DEFAULT_SURFACES).includes(surface)
+      )
+      .map(fieldType => ({
+        type: fieldType.type,
+        label: fieldType.label ?? defaultLabel(fieldType.type),
+        category: fieldType.category ?? "Advanced",
+        hint: fieldType.description ?? "",
+        icon: fieldType.icon ?? "Puzzle",
+      }))
+  );
 }

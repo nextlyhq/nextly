@@ -43,4 +43,12 @@ describe("createFieldFromType", () => {
     const field = createFieldFromType("rating", ["rating"]);
     expect(field.name).toBe("rating_2");
   });
+
+  it("normalizes a hyphenated or digit-leading plugin id to a valid field name", () => {
+    // name must match ^[a-zA-Z][a-zA-Z0-9_]*$ (keys submission data)
+    expect(createFieldFromType("star-rating").name).toBe("star_rating");
+    expect(createFieldFromType("2fa-code").name).toBe("field_2fa_code");
+    // type id itself is preserved even though the name is normalized
+    expect(createFieldFromType("star-rating").type).toBe("star-rating");
+  });
 });
