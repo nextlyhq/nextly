@@ -11,7 +11,8 @@
  * @packageDocumentation
  */
 
-import { asc, desc, getTableColumns } from "drizzle-orm";
+import { asc, desc, getColumns } from "drizzle-orm";
+import type { AnyRelations } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
 import type {
@@ -177,17 +178,18 @@ export abstract class DrizzleAdapter {
    * - Consistent error handling
    * - Proper connection pooling
    *
-   * @param schema - Optional schema object for typed queries
+   * @param relations - Optional drizzle v1 relations config (defineRelations
+   *   output) that enables the typed relational query API on the instance
    * @returns Raw Drizzle ORM database instance
    *
    * @example
    * ```typescript
    * // For legacy code that needs direct Drizzle access
-   * const db = adapter.getDrizzle(mySchemas);
+   * const db = adapter.getDrizzle(myRelations); // defineRelations output
    * const result = await db.insert(users).values({ ... }).returning();
    * ```
    */
-  abstract getDrizzle<T = unknown>(schema?: Record<string, unknown>): T;
+  abstract getDrizzle<T = unknown>(relations?: AnyRelations): T;
 
   // ============================================================
   // Drizzle Query API Support
@@ -486,7 +488,7 @@ export abstract class DrizzleAdapter {
         }
 
         if (options?.orderBy?.length) {
-          const columns = getTableColumns(tableObj as never);
+          const columns = getColumns(tableObj as never);
           const orderClauses = options.orderBy
             .map((o: OrderBySpec) => {
               const col = columns[o.column];
@@ -833,7 +835,7 @@ export abstract class DrizzleAdapter {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
-        const columns = getTableColumns(tableObj as never);
+        const columns = getColumns(tableObj as never);
 
         // Build conflict target columns
         const conflictTarget = options.conflictColumns
@@ -1278,8 +1280,11 @@ export abstract class DrizzleAdapter {
           break;
 
         case "mysql":
+          // The alias matters: MySQL 8's information_schema returns the
+          // column key as uppercase TABLE_NAME without it, so `row.table_name`
+          // was undefined and every caller mapping the rows crashed.
           sql = `
-            SELECT table_name
+            SELECT table_name AS table_name
             FROM information_schema.tables
             WHERE table_schema = DATABASE()
             AND table_type = 'BASE TABLE'

@@ -22,7 +22,10 @@ import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 function makeTestDb() {
   const sqlite = new Database(":memory:");
   sqlite.pragma("foreign_keys = ON");
-  const db = drizzle(sqlite);
+  // v1 constructor is object-form ONLY — the positional form silently
+  // treats the client as config and opens a NEW :memory: database,
+  // making every assertion against `sqlite` meaningless.
+  const db = drizzle({ client: sqlite });
   return { sqlite, db };
 }
 
@@ -45,33 +48,32 @@ describe("DrizzleStatementExecutor.executeSqlite", () => {
     sqlite.close();
   });
 
-  it("preserves the recreate-pattern INSERT rewrite (column substitution)", async () => {
+  it("executes v1's full rebuild block verbatim (inline PRAGMAs pass the piece filter)", async () => {
     const { sqlite, db } = makeTestDb();
 
-    // Existing source table with one column. drizzle-kit's recreate
-    // pattern emits an INSERT that references columns the source
-    // doesn't have yet. The rewrite substitutes NULL for missing cols.
-    sqlite.exec(`CREATE TABLE dc_x (id integer PRIMARY KEY)`);
-
-    // Disable FK so the recreate pattern works (in production the
-    // pipeline does this before calling us; we mirror that here).
-    sqlite.pragma("foreign_keys = OFF");
+    // Live table with a row. v1's recreate flow emits the whole rebuild
+    // choreography — including PRAGMA foreign_keys toggles and an
+    // INSERT..SELECT that lists only columns existing on the source —
+    // as plain statements. The executor must run them all verbatim.
+    sqlite.exec(
+      "CREATE TABLE dc_x (id integer PRIMARY KEY); INSERT INTO dc_x VALUES (1);"
+    );
 
     const executor = new DrizzleStatementExecutor("sqlite", db);
     await executor.executeStatements({}, [
+      "PRAGMA foreign_keys=OFF;",
       "CREATE TABLE `__new_dc_x` (id integer PRIMARY KEY, name text)",
-      'INSERT INTO `__new_dc_x`("id", "name") SELECT "id", "name" FROM `dc_x`',
+      'INSERT INTO `__new_dc_x`("id") SELECT "id" FROM `dc_x`',
       "DROP TABLE dc_x",
       "ALTER TABLE `__new_dc_x` RENAME TO `dc_x`",
+      "PRAGMA foreign_keys=ON;",
     ]);
 
-    // Without the rewrite, the INSERT would fail with "no such column: name".
-    const tables = sqlite
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='dc_x'"
-      )
-      .all();
-    expect(tables).toHaveLength(1);
+    const rows = sqlite.prepare("SELECT id, name FROM dc_x").all() as Array<{
+      id: number;
+      name: string | null;
+    }>;
+    expect(rows).toEqual([{ id: 1, name: null }]);
 
     sqlite.close();
   });
@@ -115,9 +117,7 @@ describe("DrizzleStatementExecutor.executeSqlite", () => {
     const executor = new DrizzleStatementExecutor("sqlite", db);
     // Index already exists — should be a no-op, not a throw.
     await expect(
-      executor.executeStatements({}, [
-        "CREATE INDEX idx_dc_x_id ON dc_x(id)",
-      ])
+      executor.executeStatements({}, ["CREATE INDEX idx_dc_x_id ON dc_x(id)"])
     ).resolves.toBeUndefined();
 
     sqlite.close();

@@ -628,9 +628,8 @@ export class PermissionSeedService extends BaseService {
         ).query.rolePermissions.findFirst({
           // Required by Drizzle ORM: relational query `where` callback is not
           // narrowly typed without importing internal Drizzle helper types.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          where: (rp: any, { and: andFn, eq: eqFn }: any) =>
-            andFn(eqFn(rp.roleId, roleId), eqFn(rp.permissionId, permissionId)),
+
+          where: { roleId, permissionId },
           columns: { id: true },
         });
 

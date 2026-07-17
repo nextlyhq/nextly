@@ -1,0 +1,6 @@
+{
+  "sqlStatements": [
+    "ALTER TABLE \"vg1\" ADD COLUMN \"extra\" text;"
+  ],
+  "hints": []
+}

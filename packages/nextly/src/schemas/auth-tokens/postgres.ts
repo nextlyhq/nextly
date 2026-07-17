@@ -5,8 +5,8 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks (refreshTokensRelations) live in
- * `./postgres-relations.ts` to keep this file free of cross-feature imports
+ * Drizzle v2 relations for this feature live centrally in
+ * `../_dialect-bundles/postgres.relations.ts` (defineRelations).
  * (`users`). Re-exported at the bottom so namespace consumers see them.
  *
  * @module schemas/auth-tokens/postgres

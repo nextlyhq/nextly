@@ -44,7 +44,7 @@ describe("nextly_schema_events declared-as-managed (postgres)", async () => {
 
   it("raw-DDL-created, populated ledger round-trips with no index churn or warnings", async () => {
     const pool = new Pool({ connectionString: TEST_DB_URL });
-    const db = drizzle(pool);
+    const db = drizzle({ client: pool });
 
     // Recreate the ledger exactly as first-run / `nextly upgrade` does, with a row.
     await pool.query(`DROP TABLE IF EXISTS "nextly_schema_events" CASCADE;`);
@@ -57,12 +57,11 @@ describe("nextly_schema_events declared-as-managed (postgres)", async () => {
     );
 
     const kit = await getPgDrizzleKit();
-    // tablesFilter scopes introspection to just the ledger.
+    // v1 named entities filter scopes introspection to just the ledger.
     const result = await kit.pushSchema(
       { nextlySchemaEvents: nextlySchemaEventsPg },
       db,
-      ["public"],
-      ["nextly_schema_events"]
+      { schemas: ["public"], tables: ["nextly_schema_events"] }
     );
 
     await pool.query(`DROP TABLE IF EXISTS "nextly_schema_events" CASCADE;`);
@@ -73,13 +72,13 @@ describe("nextly_schema_events declared-as-managed (postgres)", async () => {
     // ledger statements so unrelated objects in a shared/populated test DB (e.g.
     // orphan sequences from other tables, which tablesFilter doesn't scope) don't
     // fail this assertion — on a clean DB the list is empty either way.
-    const ledgerChurn = result.statementsToExecute.filter(s =>
+    const ledgerChurn = result.sqlStatements.filter(s =>
       s.includes("nextly_schema_events")
     );
     expect(ledgerChurn).toEqual([]);
-    const ledgerWarnings = result.warnings.filter(w =>
-      w.includes("nextly_schema_events")
+    const ledgerHints = result.hints.filter(h =>
+      `${h.hint} ${h.statement ?? ""}`.includes("nextly_schema_events")
     );
-    expect(ledgerWarnings).toEqual([]);
+    expect(ledgerHints).toEqual([]);
   });
 });

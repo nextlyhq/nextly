@@ -106,8 +106,13 @@ describe("MySQL Adapter Integration (Real MySQL 8)", async () => {
     rawConn = await mysql.createConnection(TEST_DB_URL);
 
     // Create a pool for the Drizzle ORM client used in tests.
+    // v1's mysql2 driver rejects the promise-pool wrapper ("Cannot set
+    // properties of undefined (setting 'supportBigNumbers')") — hand it the
+    // underlying CALLBACK pool, exactly as the production adapter does.
     pool = mysql.createPool(TEST_DB_URL);
-    db = drizzle(pool);
+    db = drizzle({
+      client: (pool as unknown as { pool: import("mysql2").Pool }).pool,
+    });
 
     // Drop and recreate test tables to ensure a clean slate.
     // Each column maps 1:1 to the Drizzle table definition above.

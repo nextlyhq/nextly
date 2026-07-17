@@ -51,7 +51,7 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Integration tests self-skip when the dialect's URL is unset. Use the root
   scripts: `pnpm test:integration:postgres17` (localhost:5435),
   `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). Start
-  the databases with `pnpm docker:test`. NEVER point a TEST_* URL at a
+  the databases with `pnpm docker:test`. NEVER point a TEST\_\* URL at a
   database you did not create for the test run.
 - Integration files in `packages/nextly` run sequentially on purpose
   (`fileParallelism: false`, single fork): system-table suites share fixed

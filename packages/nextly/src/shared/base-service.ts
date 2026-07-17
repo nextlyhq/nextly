@@ -7,6 +7,7 @@ import type {
 import { sql } from "drizzle-orm";
 
 import { getDialectTables } from "../database/index";
+import { resolveRelations } from "../database/resolve-relations";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
 import type { Logger } from "./types";
@@ -154,7 +155,6 @@ const sqliteRollback = sql.raw("ROLLBACK");
 export abstract class BaseService<
   TAdapter extends DatabaseAdapter = DatabaseAdapter,
 > {
-  private _db: TAdapter["db"] | null = null;
   private _tables: TAdapter["tables"] | null = null;
 
   constructor(
@@ -167,17 +167,18 @@ export abstract class BaseService<
    * Prefer this.adapter methods for simple CRUD; use this.db only when you need
    * Drizzle's query builder directly (JOINs, relational queries, aggregations).
    *
-   * Schema is passed to getDrizzle() so that the relational query API
-   * (db.query.users.findFirst, etc.) has access to table definitions.
-   * Cached after first access.
+   * The v1 relational query API (db.query.users.findFirst with object
+   * filters) is powered by a relations config (defineRelations output),
+   * not a table map. Resolution goes through resolveRelations on EVERY
+   * access — never cached here — so a SchemaRegistry invalidation (table
+   * re-registered by a Builder save) propagates immediately instead of
+   * stranding this service on relations that close over dropped table
+   * objects. The adapter memoizes the drizzle instance per relations
+   * object, so an unchanged schema costs two map lookups.
    */
   protected get db(): TAdapter["db"] {
-    if (!this._db) {
-      this._db = this.adapter.getDrizzle<TAdapter["db"]>(
-        this.tables
-      );
-    }
-    return this._db;
+    const relations = resolveRelations(this.adapter.getCapabilities().dialect);
+    return this.adapter.getDrizzle<TAdapter["db"]>(relations);
   }
 
   /**
@@ -186,9 +187,7 @@ export abstract class BaseService<
    */
   protected get tables(): TAdapter["tables"] {
     if (!this._tables) {
-      this._tables = getDialectTables(
-        this.adapter.getCapabilities().dialect
-      );
+      this._tables = getDialectTables(this.adapter.getCapabilities().dialect);
     }
     return this._tables;
   }

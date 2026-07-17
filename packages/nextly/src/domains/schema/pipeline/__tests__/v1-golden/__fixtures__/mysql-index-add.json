@@ -1,0 +1,6 @@
+{
+  "sqlStatements": [
+    "CREATE INDEX `vg1_title_idx` ON `vg1` (`title`);"
+  ],
+  "hints": []
+}

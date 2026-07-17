@@ -1,0 +1,6 @@
+{
+  "sqlStatements": [
+    "CREATE TABLE `vg1` (\n\t`id` varchar(64) PRIMARY KEY,\n\t`title` varchar(255)\n);\n"
+  ],
+  "hints": []
+}

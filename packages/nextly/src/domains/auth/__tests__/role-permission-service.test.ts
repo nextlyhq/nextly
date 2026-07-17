@@ -44,8 +44,7 @@ describe("RolePermissionService", () => {
 
         // Assert: Verify role-permission relationship was created
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 1);
@@ -75,8 +74,7 @@ describe("RolePermissionService", () => {
 
         // Assert: Should only have one assignment
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 1);
@@ -107,14 +105,12 @@ describe("RolePermissionService", () => {
         // Assert: Both roles should have the permission
         const role1Permissions = await testDb.db.query.rolePermissions.findMany(
           {
-            where: (rolePermissions, { eq }) =>
-              eq(rolePermissions.roleId, role1.id),
+            where: { roleId: role1.id },
           }
         );
         const role2Permissions = await testDb.db.query.rolePermissions.findMany(
           {
-            where: (rolePermissions, { eq }) =>
-              eq(rolePermissions.roleId, role2.id),
+            where: { roleId: role2.id },
           }
         );
 
@@ -152,8 +148,7 @@ describe("RolePermissionService", () => {
 
         // Assert
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 3);
@@ -183,8 +178,7 @@ describe("RolePermissionService", () => {
 
         // Assert
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 50);
@@ -212,8 +206,7 @@ describe("RolePermissionService", () => {
 
         // Assert
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 1);
@@ -264,8 +257,7 @@ describe("RolePermissionService", () => {
 
         // Verify it exists
         let rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
         expectArrayLength(rolePermissions, 1);
 
@@ -277,8 +269,7 @@ describe("RolePermissionService", () => {
 
         // Assert: Permission should be removed
         rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
         expectArrayLength(rolePermissions, 0);
       });
@@ -310,8 +301,7 @@ describe("RolePermissionService", () => {
 
         // Assert: Other 2 permissions should remain
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 2);
@@ -351,14 +341,12 @@ describe("RolePermissionService", () => {
         // Assert: role2 should still have the permission
         const role1Permissions = await testDb.db.query.rolePermissions.findMany(
           {
-            where: (rolePermissions, { eq }) =>
-              eq(rolePermissions.roleId, role1.id),
+            where: { roleId: role1.id },
           }
         );
         const role2Permissions = await testDb.db.query.rolePermissions.findMany(
           {
-            where: (rolePermissions, { eq }) =>
-              eq(rolePermissions.roleId, role2.id),
+            where: { roleId: role2.id },
           }
         );
 
@@ -425,8 +413,7 @@ describe("RolePermissionService", () => {
 
         // Assert: permA should still be there
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 1);
@@ -460,8 +447,7 @@ describe("RolePermissionService", () => {
 
         // Assert: No error, permissions empty
         const rolePermissions = await testDb.db.query.rolePermissions.findMany({
-          where: (rolePermissions, { eq }) =>
-            eq(rolePermissions.roleId, role.id),
+          where: { roleId: role.id },
         });
 
         expectArrayLength(rolePermissions, 0);

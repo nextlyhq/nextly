@@ -59,7 +59,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "nextly-fresh-multi-"));
   mkdirSync(join(dir, "meta"), { recursive: true });
   sqlite = new Database(":memory:");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 
   // Bootstrap the ledger (what migrate Phase 1 does out-of-band).
   for (const stmt of getSchemaEventsDdl("sqlite")) sqlite.exec(stmt);
@@ -74,7 +74,10 @@ beforeEach(async () => {
 
   // 0001 creates dc_articles; 0002 adds the author column.
   writeFileSync(join(dir, "0001_init.sql"), `-- UP\n${CREATE_ARTICLES};`);
-  writeFileSync(join(dir, "meta", "0001_init.snapshot.json"), snapshotFile(snap1));
+  writeFileSync(
+    join(dir, "meta", "0001_init.snapshot.json"),
+    snapshotFile(snap1)
+  );
   writeFileSync(join(dir, "0002_add_author.sql"), `-- UP\n${ADD_AUTHOR};`);
   writeFileSync(
     join(dir, "meta", "0002_add_author.snapshot.json"),

@@ -386,7 +386,7 @@ const COLLECTIONS_METHODS: Record<
   },
   // Apply confirmed schema changes via the in-process schema service.
   //
-  // Single-process model: drizzle-kit/api is loaded lazily via
+  // Single-process model: drizzle-kit's payload/* entrypoints are loaded lazily via
   // drizzle-kit-lazy.ts (webpackIgnore + turbopackIgnore magic comments
   // keep it out of the handler bundle), so DDL runs cleanly in the same
   // process serving requests.

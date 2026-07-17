@@ -36,6 +36,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
+
+import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
+import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
@@ -61,32 +65,18 @@ const TEST_DB_URL = `file:${TEST_DB_PATH}`;
 process.env.DB_DIALECT = "sqlite";
 process.env.DATABASE_URL = TEST_DB_URL;
 
-// Minimal DDL matching the Drizzle sqliteTable definition in
-// packages/nextly/src/schemas/users/sqlite.ts. Only the tables that
-// createLocalUser actually touches are created here — keeping the DDL
-// explicit makes the test fast and keeps the failure mode obvious if the
-// schema drifts. If you add a column to `users` in that file and this test
-// starts failing, update the CREATE TABLE here to match.
-const CREATE_USERS_TABLE = `
-  CREATE TABLE IF NOT EXISTS users (
-    id                   TEXT PRIMARY KEY,
-    name                 TEXT,
-    email                TEXT NOT NULL,
-    email_verified       INTEGER,
-    password_updated_at  INTEGER,
-    image                TEXT,
-    password_hash        TEXT,
-    is_active            INTEGER NOT NULL DEFAULT 0,
-    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
-    locked_until         INTEGER,
-    created_at           INTEGER NOT NULL,
-    updated_at           INTEGER NOT NULL
-  )
-`;
-
-const CREATE_USERS_EMAIL_UNIQUE = `
-  CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email)
-`;
+// The users DDL comes from the PRODUCTION sqlite table definition, turned
+// into DDL by drizzle-kit's generateMigration — never hand-copied CREATE
+// TABLE (it drifted twice already: failed_login_attempts, then
+// must_change_password; see .claude/rules/integration-tests.md).
+async function usersDdl(): Promise<string[]> {
+  const kit = await getSQLiteDrizzleKit();
+  const statements = await kit.generateMigration(
+    await kit.generateDrizzleJson({}),
+    await kit.generateDrizzleJson({ users: usersSqlite })
+  );
+  return splitStatements(statements);
+}
 
 // A no-op logger so the test output isn't cluttered by the service's
 // info/debug output. The Logger type allows missing methods to fall through.
@@ -120,8 +110,9 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
     // drizzle-kit push() here because it requires a TTY in test environments
     // (see packages/adapter-sqlite/src/__tests__/integration.test.ts for the
     // same pattern). The CREATE TABLE above mirrors the sqlite.ts schema 1:1.
-    await adapter.executeQuery(CREATE_USERS_TABLE);
-    await adapter.executeQuery(CREATE_USERS_EMAIL_UNIQUE);
+    for (const stmt of await usersDdl()) {
+      await adapter.executeQuery(stmt);
+    }
 
     // Pre-seed a sentinel user so that createLocalUser's "first user ever"
     // branch (which tries to create a super-admin role + assign it via

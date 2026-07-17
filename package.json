@@ -23,6 +23,7 @@
     "_comment_quality": "=== Code Quality ===",
     "check-types": "turbo run check-types",
     "check:drizzle-kit-pin": "node scripts/check-drizzle-kit-pin.cjs",
+    "check:drizzle-v1-legacy": "node scripts/check-drizzle-v1-legacy.cjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "lint": "turbo run lint",
     "lint:design": "node scripts/lint-design.mjs",
