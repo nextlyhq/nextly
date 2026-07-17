@@ -105,8 +105,11 @@ const sharedConfig = {
     "drizzle-orm/mysql2",
     // drizzle-kit — dev/CLI tool, must not be bundled into production Next.js builds.
     // It imports esbuild and @libsql native binaries that Turbopack cannot parse.
+    // v1 split the programmatic API into per-dialect payload/* entrypoints.
     "drizzle-kit",
-    "drizzle-kit/api",
+    "drizzle-kit/payload/postgres",
+    "drizzle-kit/payload/mysql",
+    "drizzle-kit/payload/sqlite",
     // Next.js - keep external to match user's version
     "next",
     "next/server",

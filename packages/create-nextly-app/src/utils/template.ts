@@ -370,7 +370,7 @@ export async function generatePackageJson(
     private: true,
     scripts: {
       // F1 PR 4: dev now boots Nextly in single-process mode via `next dev`.
-      // The lazy drizzle-kit/api import (PR 1) plus the in-process HMR
+      // The lazy per-dialect drizzle-kit import (PR 1) plus the in-process HMR
       // listener (PR 2) replaced the wrapper that previously owned the
       // terminal, schema prompts, and child supervision. `nextly dev` is
       // gone; the only supported dev command is the standard `next dev`.

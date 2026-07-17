@@ -22,7 +22,7 @@ import {
 // so they survive Turbopack HMR module re-execution. Tests inspect the
 // cache slots to confirm the load-once invariant. v1 loads one module PER
 // DIALECT (payload/postgres, payload/mysql, payload/sqlite) instead of the
-// removed single drizzle-kit/api module.
+// removed pre-v1 single-module kit API.
 type DrizzleKitCacheSlots = {
   __nextly_drizzleKitPgMod?: unknown;
   __nextly_drizzleKitMySqlMod?: unknown;

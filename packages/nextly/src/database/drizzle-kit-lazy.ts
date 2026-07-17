@@ -6,7 +6,7 @@
 // resolve correctly at runtime regardless of where the bundler placed
 // the importing chunk.
 //
-// Drizzle V1 (1.0.0-rc.4): the old single `drizzle-kit/api` module was
+// Drizzle V1 (1.0.0-rc.4): the old single-module kit API was
 // removed and split per dialect. The complete programmatic surface lives
 // under `drizzle-kit/payload/{postgres,mysql,sqlite}` (built for Payload
 // CMS's embedded use case — identical to Nextly's). Each module exports
