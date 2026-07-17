@@ -258,7 +258,12 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
     const missing = new Set(
       visibleFields
         .filter(field => {
+          // A plugin field renders a non-interactive placeholder in the preview
+          // (its real input lives in the plugin's component in the live form),
+          // so it can never be filled here — excluded like `file`, otherwise the
+          // simulated submit would block forever with no way to satisfy it.
           if (!field.required || field.type === "file") return false;
+          if (!isKnownFormField(field)) return false;
           const value = values[field.name];
           return value === undefined || value === "" || value === false;
         })

@@ -26,4 +26,6 @@ export { convertHooksToStoredFormat } from "./hook-converters";
 
 export { DEFAULT_SYSTEM_FIELDS } from "./constants";
 
+// Projects plugin-contributed field types into catalog rows the admin field
+// pickers render; consumed by the surface pickers via usePluginFieldTypeEntries.
 export { pluginFieldTypeCatalogEntries } from "./plugin-field-type-entries";

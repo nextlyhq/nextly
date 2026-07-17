@@ -174,6 +174,22 @@ describe("FieldOptionsEditor", () => {
     expect(screen.getByText(/invalid json format/i)).toBeInTheDocument();
   });
 
+  it("rejects malformed JSON option objects instead of importing blank rows", async () => {
+    const user = userEvent.setup();
+    const onOptionsChange = vi.fn();
+    render(
+      <FieldOptionsEditor options={[]} onOptionsChange={onOptionsChange} />
+    );
+    await user.click(screen.getByRole("button", { name: /^import$/i }));
+    await user.click(screen.getByRole("tab", { name: /^json$/i }));
+    fireEvent.change(screen.getByLabelText("JSON options"), {
+      target: { value: `[{}]` },
+    });
+    await user.click(screen.getByRole("button", { name: /import options/i }));
+    expect(screen.getByText(/non-empty string label/i)).toBeInTheDocument();
+    expect(onOptionsChange).not.toHaveBeenCalled();
+  });
+
   it("surfaces an error when a JSON empty array yields no options", async () => {
     const user = userEvent.setup();
     render(<FieldOptionsEditor options={[]} onOptionsChange={() => {}} />);

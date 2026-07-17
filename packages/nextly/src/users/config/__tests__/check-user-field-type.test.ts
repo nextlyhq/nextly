@@ -6,6 +6,8 @@ import {
 } from "../../../domains/schema/field-types/field-type-registry";
 import { checkUserFieldType } from "../validate-user-config";
 
+// The registry is a module-global singleton; clear it after each test so a
+// registered type never leaks into a later surface-permission assertion.
 afterEach(() => clearFieldTypes());
 
 describe("checkUserFieldType", () => {

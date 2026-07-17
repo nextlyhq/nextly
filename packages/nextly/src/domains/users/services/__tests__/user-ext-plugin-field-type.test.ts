@@ -11,6 +11,8 @@ import {
 import type { UserFieldConfig } from "../../../../users/config/types";
 import { UserExtSchemaService } from "../user-ext-schema-service";
 
+// The registry is a module-global singleton; clear it after each test so a
+// type registered here never leaks into a later test's column mapping.
 afterEach(() => clearFieldTypes());
 
 /** A user field of an arbitrary (plugin) type. */
@@ -51,6 +53,21 @@ describe("UserExtSchemaService — plugin field types", () => {
   it("skips an unregistered non-built-in type (no column)", () => {
     const sql = new UserExtSchemaService("postgresql").generateMigrationSQL([
       field("mystery"),
+    ]);
+    expect(sql).not.toMatch(/"score"/);
+  });
+
+  it("skips a registered type not enabled on the users surface", () => {
+    // Registration alone is not authorization: an entries-only type must never
+    // be mapped to a user column even though getFieldType() would resolve it.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "c",
+      surfaces: ["entries"],
+    });
+    const sql = new UserExtSchemaService("postgresql").generateMigrationSQL([
+      field("rating"),
     ]);
     expect(sql).not.toMatch(/"score"/);
   });

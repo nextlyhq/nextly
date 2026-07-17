@@ -90,7 +90,10 @@ import type {
   UserPhoneFieldConfig,
 } from "../../../users/config/types";
 import { checkUserFieldName } from "../../../users/config/validate-user-config";
-import { getFieldType } from "../../schema/field-types/field-type-registry";
+import {
+  getFieldType,
+  isPluginFieldTypeOnSurface,
+} from "../../schema/field-types/field-type-registry";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { UserFieldDefinitionService } from "./user-field-definition-service";
@@ -441,11 +444,12 @@ export class UserExtSchemaService {
           defaultValue: record.defaultValue ?? undefined,
         } as UserFieldConfig;
       default: {
-        // A registered plugin type keeps its own id so the admin renders the
-        // plugin's editor component; its column comes from the declared storage
-        // primitive (see getColumnType). A genuinely unknown type degrades to a
+        // A plugin type that opted into the users surface keeps its own id so
+        // the admin renders the plugin's editor component; its column comes from
+        // the declared storage primitive (see getColumnType). A type not enabled
+        // on this surface (registration alone is not authorization) degrades to a
         // text column so stray data is never stranded.
-        const isPluginType = getFieldType(record.type) !== undefined;
+        const isPluginType = isPluginFieldTypeOnSurface(record.type, "users");
         return {
           ...base,
           ...textBounds,
@@ -1024,10 +1028,11 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     return (
       this.isUserSurfaceTextField(field) ||
       isDataField(field) ||
-      // A plugin-contributed type is a real data field once registered — it
-      // passed surface-gated validation at creation and maps to a storage
-      // primitive column, so it must not be skipped by the built-in guards.
-      getFieldType(fieldType) !== undefined
+      // A plugin-contributed type is a real data field only when it opted into
+      // the users surface — it then maps to a storage-primitive column and must
+      // not be skipped by the built-in guards. Registration alone is not enough:
+      // an entries-only type must never be treated as a user column.
+      isPluginFieldTypeOnSurface(fieldType, "users")
     );
   }
 
@@ -1068,8 +1073,11 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
 
     // Plugin-contributed types persist as their declared storage primitive, so
     // a plugin field on the users surface gets a real column keyed off that
-    // primitive instead of being silently skipped (which would strand its data).
-    const pluginStorage = getFieldType(fieldType)?.storage;
+    // primitive instead of being silently skipped. Surface-gated: a type not
+    // enabled on "users" is not mapped here even if it is registered.
+    const pluginStorage = isPluginFieldTypeOnSurface(fieldType, "users")
+      ? getFieldType(fieldType)?.storage
+      : undefined;
     if (pluginStorage) {
       switch (pluginStorage) {
         case "text": {

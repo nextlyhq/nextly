@@ -142,27 +142,36 @@ function parseJson(json: string, idPrefix: string): FieldOption[] {
   }
   return parsed.map(item => {
     if (typeof item === "string") {
+      // Reject blank strings rather than importing an empty option row.
+      if (!item.trim()) {
+        throw new Error("Option labels must be non-empty strings");
+      }
       return {
         id: generateOptionId(idPrefix),
         label: item,
         value: valueFromLabel(item),
       };
     }
-    if (item && typeof item === "object") {
+    // Arrays are objects too; exclude them so `[[]]` is rejected, not coerced.
+    if (item && typeof item === "object" && !Array.isArray(item)) {
       const record = item as {
         label?: unknown;
         name?: unknown;
         value?: unknown;
       };
-      // Only string label/name/value survive; anything else falls back so a
-      // nested object can never stringify to "[object Object]".
+      // A malformed object (missing/blank/non-string label, or a non-string
+      // value) is reported as invalid instead of importing a blank row — the
+      // type guards also keep a nested object from stringifying to
+      // "[object Object]".
       const rawLabel = record.label ?? record.name;
-      const label = typeof rawLabel === "string" ? rawLabel : "";
-      const value =
-        typeof record.value === "string" && record.value
-          ? record.value
-          : valueFromLabel(label);
-      return { id: generateOptionId(idPrefix), label, value };
+      if (typeof rawLabel !== "string" || !rawLabel.trim()) {
+        throw new Error("Each object must include a non-empty string label");
+      }
+      if (record.value !== undefined && typeof record.value !== "string") {
+        throw new Error("Option values must be strings");
+      }
+      const value = record.value ? record.value : valueFromLabel(rawLabel);
+      return { id: generateOptionId(idPrefix), label: rawLabel, value };
     }
     throw new Error("Each item must be a string or an object");
   });
@@ -241,7 +250,10 @@ function SortableOptionRow({
         aria-label="Remove option"
         disabled={disabled}
         onClick={() => onDelete(option.id)}
-        className="h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+        // Revealed on pointer hover, but also on keyboard focus (focus-within on
+        // the row / focus-visible on the button) and always on touch devices
+        // (hover: none), so the action is never hidden from those users.
+        className="h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <Icons.Trash2 className="h-3.5 w-3.5" />
       </Button>
@@ -521,7 +533,12 @@ export function FieldOptionsEditor({
             </Tabs>
 
             {importError && (
-              <div className="flex items-center gap-2 text-xs text-destructive">
+              // role="alert" so the dynamically rendered import error is
+              // announced to screen readers when it appears.
+              <div
+                role="alert"
+                className="flex items-center gap-2 text-xs text-destructive"
+              >
                 <Icons.AlertTriangle className="h-3.5 w-3.5" />
                 {importError}
               </div>

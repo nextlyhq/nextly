@@ -61,17 +61,20 @@ const createFieldSchema = z
     label: z.string().min(1, "Label is required").max(255),
     // Delegates to the single source of truth (checkUserFieldType) instead of a
     // hardcoded enum, so a plugin field type that opted into the users surface
-    // is accepted here as well as a built-in scalar. Non-string values report
-    // the same "type required" message the definition service would raise.
-    type: z.string().superRefine((value, ctx) => {
-      const rejection = checkUserFieldType(value);
-      if (rejection) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: rejection.message,
-        });
-      }
-    }),
+    // is accepted here as well as a built-in scalar. A missing/non-string value
+    // reports the canonical "type required" message rather than a raw zod type
+    // error, matching what the definition service would raise.
+    type: z
+      .string({ message: "Field type is required" })
+      .superRefine((value, ctx) => {
+        const rejection = checkUserFieldType(value);
+        if (rejection) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: rejection.message,
+          });
+        }
+      }),
     required: z.boolean().optional(),
     defaultValue: z.string().optional().nullable(),
     options: z.array(optionSchema).optional().nullable(),
