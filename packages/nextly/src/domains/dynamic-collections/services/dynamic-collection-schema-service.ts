@@ -222,8 +222,11 @@ export class DynamicCollectionSchemaService {
       );
     }
 
-    // title (only if not user-defined)
-    const hasTitleField = fields.some(f => f.name === "title");
+    // title (only if not user-defined). A component named "title" produces no
+    // column, so it must not suppress the system title column.
+    const hasTitleField = fields.some(
+      f => f.name === "title" && f.type !== "component"
+    );
     if (!hasTitleField) {
       if (this.dialect === "mysql") {
         allColumnDefs.push(
@@ -234,8 +237,10 @@ export class DynamicCollectionSchemaService {
       }
     }
 
-    // slug (only if not user-defined)
-    const hasSlugField = fields.some(f => f.name === "slug");
+    // slug (only if not user-defined). Same column-less exclusion as title.
+    const hasSlugField = fields.some(
+      f => f.name === "slug" && f.type !== "component"
+    );
     if (!hasSlugField) {
       if (this.dialect === "mysql") {
         allColumnDefs.push(
@@ -351,9 +356,10 @@ ${allColumnDefs.join(",\n")}
       }
     });
 
-    // Add manual indexes requested by the user
+    // Add manual indexes requested by the user. Component fields have no column
+    // to index, so skip them (an index on a nonexistent column fails).
     fields.forEach(f => {
-      if (f.index && f.type !== "relationship") {
+      if (f.index && f.type !== "relationship" && f.type !== "component") {
         const col = this.toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
@@ -512,6 +518,12 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
+        // Component fields store their data in a separate comp_{slug} table, so
+        // adding one must not ADD COLUMN on the parent table.
+        if (field.type === "component") {
+          continue;
+        }
+
         const type = this.mapFieldTypeToSQL(field.type, field.length);
         const nullable = field.required ? "NOT NULL" : "";
 
@@ -564,6 +576,8 @@ ${allColumnDefs.join(",\n")}
 
     // Find fields that were modified to add/remove an index
     for (const field of newFields) {
+      // Component fields have no parent column, so there is no index to add/drop.
+      if (field.type === "component") continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
         const idxCol = this.toSnakeCase(field.name);
@@ -599,6 +613,9 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed source — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedFromName) continue;
+      // Component fields never had a parent column, so there is nothing to drop
+      // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
+      if (field.type === "component") continue;
       if (!newFieldMap.has(field.name)) {
         const dropCol = this.toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
@@ -619,6 +636,8 @@ ${allColumnDefs.join(",\n")}
     // For simplicity, we skip column modifications for SQLite
     if (this.dialect !== "sqlite") {
       for (const field of newFields) {
+        // Component fields have no parent column to alter.
+        if (field.type === "component") continue;
         const oldField = oldFieldMap.get(field.name);
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = this.toSnakeCase(field.name);

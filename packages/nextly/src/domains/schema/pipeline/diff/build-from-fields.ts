@@ -160,8 +160,10 @@ export function buildDesiredTableFromFields(
   for (const field of fields) {
     const col = toSnakeCase(field.name);
     // Skip fields that materialize no column (e.g. component fields): a unique
-    // or plain index on a nonexistent column is invalid DDL.
-    if (!columns.some(c => c.name === col)) continue;
+    // or plain index on a nonexistent column is invalid DDL. Check the field
+    // directly (not column presence) so a component named after a system column
+    // like `title` does not index the system-injected column instead.
+    if (!producesColumn(field)) continue;
     const isSingleRelation =
       (field.type === "relationship" || field.type === "upload") &&
       field.hasMany !== true &&
