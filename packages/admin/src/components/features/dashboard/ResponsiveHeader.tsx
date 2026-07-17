@@ -61,7 +61,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary/20! cursor-pointer relative"
+                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary! cursor-pointer relative"
               >
                 <Avatar className="h-full w-full bg-transparent rounded-none transition-all duration-200">
                   <AvatarImage

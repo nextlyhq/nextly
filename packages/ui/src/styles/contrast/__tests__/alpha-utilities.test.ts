@@ -2,15 +2,16 @@
  * Guards against faint Tailwind alpha-opacity color utilities (`text-primary/50`,
  * `border-primary/10`) creeping back into the admin. A token check cannot see
  * these because the opacity is applied per call site, not in the theme, so this
- * scans the source instead: it resolves each `text-<token>/NN` and
- * `border-<token>/NN` utility, composites it over the page surface, and fails
- * any that drop below WCAG unless the utility is in ALLOWED_DECORATIVE (below).
+ * scans the source instead: it resolves each `text-`, `border-`, and `ring-`
+ * color utility with an opacity (numeric or bracket, `ring-primary/[0.08]`),
+ * composites it over the page surface, and fails any that drop below WCAG
+ * unless the utility is in ALLOWED_DECORATIVE (below).
  *
  * Scope note: this reads sibling packages' source. Those trees are declared as
  * inputs to this package's `test` task (see packages/ui/turbo.json), so a change
  * in a scanned call-site package invalidates the cached result. It is a
- * supplementary call-site guard, deliberately narrow: text/border color
- * utilities only, evaluated on the base surface.
+ * supplementary call-site guard, deliberately narrow: text, border, and ring
+ * color utilities, evaluated on the base surface.
  */
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -41,20 +42,44 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "text-muted/10", // chart ring-track backing
   "border-warning-200/50", // soft border on a light tint badge (fill+text identify it)
   "border-success-900/50", // dark tonal badge border (fill+text identify it)
+  // Decorative accent rings: supplementary emphasis around a badge, dot, or
+  // card that is already identified by its fill and text, not a focus indicator
+  // (all focus rings are full-strength) nor a sole state cue.
+  "ring-primary/20",
+  "ring-primary/40",
+  "ring-border/10",
+  "ring-foreground/40",
+  "ring-muted/5",
+  "ring-success-500/20",
+  "ring-success-500/40",
+  "ring-destructive-500/20",
+  "ring-destructive-500/40",
+  // Faint hairline / dashed decorative borders, like border-subtle.
+  "border-primary/[0.08]",
+  "border-primary/[0.18]",
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);
 
-/** Every distinct `(text|border)-<token>/<NN>` utility used in admin source. */
+// The call-site packages scanned for faint alpha utilities. Every package that
+// renders admin UI (Tailwind classNames) must be here; SCANNED_DIRS_COMPLETE
+// below fails the build if a new one appears so it cannot go unscanned.
+const SCANNED_DIRS = [
+  "packages/ui/src/components",
+  "packages/admin/src",
+  "packages/plugin-form-builder/src",
+  "packages/plugin-page-builder/src",
+];
+
+/**
+ * Every distinct `(text|border|ring)-<token>/<NN>` utility used in the scanned
+ * source, including arbitrary bracket opacities like `border-primary/[0.08]`.
+ * Rings are included because a focus indicator is a UI boundary held to 3:1.
+ */
 function scanCombos(): Map<string, number> {
-  const dirs = [
-    "packages/ui/src/components",
-    "packages/admin/src",
-    "packages/plugin-form-builder/src",
-    "packages/plugin-page-builder/src",
-  ].map(d => `${repo}/${d}`);
+  const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
   const pattern =
-    "\\b(text|border)-(primary|foreground|destructive|success|warning|muted|accent|secondary)(-[0-9]+)?/[0-9]+";
+    "\\b(text|border|ring)-(primary|foreground|destructive|success|warning|muted|accent|secondary|ring|border|input)(-[0-9]+)?/(\\[[0-9.]+\\]|[0-9]+)";
   const out = execSync(`grep -rohE '${pattern}' ${dirs.join(" ")} || true`, {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -75,12 +100,17 @@ function scanCombos(): Map<string, number> {
  * here means the theme lost a token the source still references.
  */
 function worstRatio(combo: string): { ratio: number; need: number } {
-  const m = /^(text|border)-(.+)\/(\d+)$/.exec(combo);
+  const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+\]|\d+)$/.exec(combo);
   if (!m) {
     throw new Error(`unparseable alpha utility: ${combo}`);
   }
   const [, kind, name, alphaStr] = m;
-  const alpha = Number(alphaStr) / 100;
+  // A bracket value like `[0.08]` is already a fraction; a bare number is a
+  // percentage (`/20` -> 0.2).
+  const alpha = alphaStr.startsWith("[")
+    ? Number(alphaStr.slice(1, -1))
+    : Number(alphaStr) / 100;
+  // Text needs 4.5:1; borders and focus rings are UI boundaries at 3:1.
   const need = kind === "text" ? 4.5 : 3;
   let worst = Infinity;
   for (const tokens of [light, dark]) {
@@ -110,6 +140,35 @@ describe("alpha-opacity color utilities", () => {
 
   it("finds utilities to scan (guards against a broken scan)", () => {
     expect(combos.size).toBeGreaterThan(0);
+  });
+
+  it("scans every package that uses these alpha utilities", () => {
+    // Fingerprint the packages that actually contain target utilities and fail
+    // if one is not covered by SCANNED_DIRS, so a new admin-UI package cannot be
+    // silently unscanned (the scan would pass while its call sites go unchecked).
+    const pattern =
+      "\\b(text|border|ring)-(primary|foreground|destructive|success|warning|muted|accent|secondary|ring|border|input)(-[0-9]+)?/(\\[[0-9.]+\\]|[0-9]+)";
+    const hits = execSync(
+      `grep -rlE '${pattern}' ${repo}/packages/*/src 2>/dev/null || true`,
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    );
+    const pkg = (p: string): string | null =>
+      /\/packages\/([^/]+)\/src\//.exec(p)?.[1] ?? null;
+    const used = new Set(
+      hits
+        .split("\n")
+        .map(pkg)
+        .filter((p): p is string => p !== null)
+    );
+    const scanned = new Set(
+      SCANNED_DIRS.map(d => /packages\/([^/]+)\/src/.exec(d)?.[1])
+    );
+    for (const p of used) {
+      expect(
+        scanned.has(p),
+        `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
+      ).toBe(true);
+    }
   });
 
   it("no faint text/border alpha utility falls below WCAG outside the allowlist", () => {

@@ -33,8 +33,10 @@ const buttonVariants = cva(
           "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
         // Solid fill uses the emphasis token so white on-color text stays AA in
         // dark mode (the base token is the readable text color, too light here).
+        // Hover darkens to a deeper shade instead of opacity-90, which would
+        // composite the fill toward the page and drop white text under 4.5:1.
         destructive:
-          "bg-destructive-solid text-destructive-foreground border border-transparent hover:opacity-90",
+          "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-700",
         // border-border (not a faint primary alpha) so the outline is a visible
         // boundary at the 3:1 UI minimum.
         outline:

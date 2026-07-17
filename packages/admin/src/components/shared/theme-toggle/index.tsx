@@ -36,7 +36,7 @@ export function ThemeToggle(): React.ReactElement {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
           aria-label="Choose theme"
           title="Choose theme"
         >

@@ -95,8 +95,8 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                         className={cn(
                           "flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold uppercase tracking-wider ring-1 transition-all duration-500",
                           trend === "up"
-                            ? "bg-success-500/5 text-success-500 ring-success-500/20 group-hover:bg-success-500/10"
-                            : "bg-destructive-500/5 text-destructive-500 ring-destructive-500/20 group-hover:bg-destructive-500/10"
+                            ? "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 ring-success-500/20 group-hover:bg-success-500/10"
+                            : "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100 ring-destructive-500/20 group-hover:bg-destructive-500/10"
                         )}
                       >
                         {trend === "up" ? (

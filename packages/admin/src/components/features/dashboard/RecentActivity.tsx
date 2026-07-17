@@ -45,11 +45,11 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
   const getBadgeStyle = (type: string) => {
     const t = type.toLowerCase();
     if (t.includes("create"))
-      return "bg-success-500/10 text-success-500 ring-1 ring-success-500/20";
+      return "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 ring-1 ring-success-500/20";
     if (t.includes("update"))
       return "bg-primary/5 text-primary ring-1 ring-primary/20";
     if (t.includes("delete"))
-      return "bg-destructive-500/10 text-destructive-500 ring-1 ring-destructive-500/20";
+      return "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100 ring-1 ring-destructive-500/20";
     return "bg-primary/5 text-muted-foreground ring-1 ring-border/50";
   };
 

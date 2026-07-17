@@ -45,7 +45,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             href="https://github.com/nextlyhq/nextly"
             target="_blank"
             rel="noopener noreferrer"
-            className="relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            className="relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="GitHub Repository"
           >
             {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
@@ -58,7 +58,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             href="https://discord.gg/hJUg9AZMn"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="Discord Community"
           >
             {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
@@ -71,7 +71,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             href="https://nextlyhq.com/docs"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="Documentation"
           >
             {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}

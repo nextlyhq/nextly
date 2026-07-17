@@ -662,7 +662,7 @@ export function MediaUploadDropzone({
               backgroundStyles[visualState],
               "min-h-48 md:min-h-56 py-16 px-8",
               !isUploading &&
-                "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2",
+                "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
               isUploading && "cursor-not-allowed"
             )}
             role="button"

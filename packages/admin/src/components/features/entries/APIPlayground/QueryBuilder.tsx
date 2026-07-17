@@ -426,7 +426,7 @@ export function QueryBuilder({
                     title={fieldLabel(name, fields)}
                     className={cn(
                       "cursor-pointer border px-2 py-1 font-mono text-[11px] transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       on
                         ? "border-primary bg-primary text-primary-foreground"
                         : "border-border bg-background text-muted-foreground hover:border-border-strong hover:text-foreground"

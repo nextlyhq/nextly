@@ -285,6 +285,19 @@ const PRIMARY_BADGE: Pairing[] = [
   },
 ];
 
+// The default/info alert: text-primary on a bg-primary/5 tint, in both modes.
+// text-primary is mode-correct, so it reads on the tint over either surface.
+const INFO_ALERT: Pairing[] = ["--color-background", "--color-card"].map(
+  (over): Pairing => ({
+    fg: "--color-primary",
+    bg: "--color-primary",
+    bgAlpha: 0.05,
+    bgOver: over,
+    kind: "text",
+    label: `info alert text on ${over === "--color-card" ? "card" : "page"}`,
+  })
+);
+
 // Boundaries + focus (3:1). Alpha borders are composited over their surface.
 const BOUNDARIES: Pairing[] = [
   {
@@ -370,6 +383,7 @@ export const PAIRINGS: Pairing[] = [
   ...STATUS_SHADES,
   ...ALERT_ACCENT,
   ...PRIMARY_BADGE,
+  ...INFO_ALERT,
   ...BOUNDARIES,
 ];
 
