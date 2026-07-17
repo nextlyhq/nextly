@@ -208,24 +208,27 @@ describe("field-level registry", () => {
   });
 
   it("runs hooks for fields nested in groups and repeaters", async () => {
+    const upper = {
+      beforeChange: [
+        ({ value }: { value: unknown }) => String(value).toUpperCase(),
+      ],
+    };
     registerFieldFunctions("collection", "posts", [
       {
         name: "meta",
         type: "group",
-        fields: [
-          {
-            name: "slug",
-            type: "text",
-            hooks: {
-              beforeChange: [
-                ({ value }: { value: unknown }) => String(value).toUpperCase(),
-              ],
-            },
-          },
-        ],
+        fields: [{ name: "slug", type: "text", hooks: upper }],
+      },
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "slug", type: "text", hooks: upper }],
       },
     ]);
-    const data: Record<string, unknown> = { meta: { slug: "hi" } };
+    const data: Record<string, unknown> = {
+      meta: { slug: "hi" },
+      rows: [{ slug: "one" }, { slug: "two" }],
+    };
     await runFieldHooks({
       kind: "collection",
       slug: "posts",
@@ -234,5 +237,6 @@ describe("field-level registry", () => {
       operation: "update",
     });
     expect(data.meta).toEqual({ slug: "HI" });
+    expect(data.rows).toEqual([{ slug: "ONE" }, { slug: "TWO" }]);
   });
 });
