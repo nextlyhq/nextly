@@ -43,9 +43,11 @@ inside `packages/nextly`.
 
 - Unit: `vitest run` (excludes `*.integration.test.ts`).
 - Integration: separate config (`vitest.integration.config.ts`), forks pool,
-  single fork, `fileParallelism: false`. Suites that create system tables
-  must use the production DDL helpers and a unique per-file prefix (see
-  `src/database/__tests__/integration/helpers/test-db.ts`).
+  single fork, `fileParallelism: false`. Test-owned tables use a unique
+  per-file prefix (see
+  `src/database/__tests__/integration/helpers/test-db.ts`); fixed-name
+  system tables (created via the production DDL helpers) cannot be prefixed
+  and rely on the sequential run for isolation.
 - Integration tests self-skip when `TEST_POSTGRES_URL` / `TEST_MYSQL_URL` is
   unset; SQLite falls back to in-memory. Run from the repo root so turbo
   builds first.
