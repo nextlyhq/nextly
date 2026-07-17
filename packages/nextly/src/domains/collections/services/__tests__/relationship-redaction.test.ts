@@ -192,4 +192,48 @@ describe("relationship expansion secret redaction", () => {
 
     expect(await service.fetchRelatedEntry("members", "missing")).toBeNull();
   });
+
+  describe("label field never resolves to a secret", () => {
+    function labelService(getCollection: () => unknown) {
+      return new CollectionRelationshipService(
+        adapterReturning(null),
+        silentLogger(),
+        { loadDynamicSchema: vi.fn() } as never,
+        { getCollection: vi.fn(getCollection) } as never
+      );
+    }
+
+    it("rejects a secret column configured as a users label", async () => {
+      const service = labelService(() => ({}));
+      // Both the camelCase and stored snake_case secret columns are refused.
+      expect(await service.getBestLabelField("users", "passwordHash")).toBe(
+        "name"
+      );
+      expect(await service.getBestLabelField("users", "password_hash")).toBe(
+        "name"
+      );
+    });
+
+    it("never auto-selects a password field as the label", async () => {
+      // A `password` field named like a priority label ("email") must be
+      // skipped; the next non-secret priority field wins.
+      const service = labelService(() => ({
+        fields: [
+          { name: "email", type: "password" },
+          { name: "title", type: "text" },
+        ],
+      }));
+      expect(await service.getBestLabelField("members")).toBe("title");
+    });
+
+    it("rejects an explicit password targetLabelField and falls back", async () => {
+      const service = labelService(() => ({
+        fields: [
+          { name: "secret", type: "password" },
+          { name: "name", type: "text" },
+        ],
+      }));
+      expect(await service.getBestLabelField("members", "secret")).toBe("name");
+    });
+  });
 });

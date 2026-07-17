@@ -224,6 +224,27 @@ function getSystemEntityLabelField(targetName: string): string {
 }
 
 /**
+ * System-entity label field, honoring an explicit `targetLabelField` unless it
+ * names a secret column (e.g. users `passwordHash`). The label is copied onto
+ * the expanded row before row-level redaction runs, so a secret label field
+ * would leak the hash via `label` even though the column itself is stripped.
+ */
+function resolveSystemEntityLabelField(
+  targetName: string,
+  targetLabelField?: string
+): string {
+  if (
+    targetLabelField &&
+    !(SYSTEM_ENTITY_SECRET_COLUMNS as readonly string[]).includes(
+      targetLabelField
+    )
+  ) {
+    return targetLabelField;
+  }
+  return getSystemEntityLabelField(targetName);
+}
+
+/**
  * Recursively collects all media IDs from a data object based on field definitions.
  * Handles nested upload fields inside repeater and group fields.
  *
@@ -581,20 +602,10 @@ export class CollectionRelationshipService extends BaseService {
     targetLabelField?: string
   ): Promise<string> {
     try {
-      // Check if this is a system entity first
+      // Check if this is a system entity first. Never surface a secret column
+      // as a label (see resolveSystemEntityLabelField).
       if (isSystemEntity(collectionName)) {
-        // Never surface a secret column as a label: the label is copied onto
-        // the expanded row before row-level redaction runs, so a secret label
-        // field would leak the hash even though the column itself is stripped.
-        if (
-          targetLabelField &&
-          !(SYSTEM_ENTITY_SECRET_COLUMNS as readonly string[]).includes(
-            targetLabelField
-          )
-        ) {
-          return targetLabelField;
-        }
-        return getSystemEntityLabelField(collectionName);
+        return resolveSystemEntityLabelField(collectionName, targetLabelField);
       }
 
       const collection =
@@ -640,10 +651,17 @@ export class CollectionRelationshipService extends BaseService {
         "username",
       ];
 
-      // First try priority fields
+      // First try priority fields. A `password` field named like a priority
+      // label (e.g. "email") must never be chosen — its hash would be copied
+      // into `label` and survive the row-level password redaction.
       for (const labelField of labelPriority) {
         if (
-          fields.some(f => f.name === labelField && f.type !== "relationship")
+          fields.some(
+            f =>
+              f.name === labelField &&
+              f.type !== "relationship" &&
+              f.type !== "password"
+          )
         ) {
           console.log(
             `[LabelField] Using priority field "${labelField}" for collection "${collectionName}"`
@@ -652,11 +670,13 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
 
-      // Fallback: find first text-like field (not ID, not relationship).
+      // Fallback: find first text-like field (not ID, not relationship,
+      // never a password).
       const textField = fields.find(
         f =>
           f.name !== "id" &&
           f.type !== "relationship" &&
+          f.type !== "password" &&
           (f.type === "text" || f.type === "email")
       );
 
@@ -1011,9 +1031,13 @@ export class CollectionRelationshipService extends BaseService {
           return resultMap;
         }
 
-        const labelField =
-          field.options?.targetLabelField ||
-          getSystemEntityLabelField(targetCollection);
+        // Guard against a secret column being used as the label — the hash
+        // would be copied into `label` before row redaction (see
+        // resolveSystemEntityLabelField).
+        const labelField = resolveSystemEntityLabelField(
+          targetCollection,
+          field.options?.targetLabelField
+        );
 
         // Batch fetch all entries from system entity
         const entries = await this.db
