@@ -8,16 +8,22 @@ conventions, see AGENTS.md and CONTRIBUTING.md. For user-facing docs, see
 ## Overview
 
 Nextly is a CMS and app framework that runs INSIDE the user's Next.js app.
-There is no hosted service: the user's project mounts two catch-all routes
-that delegate to our packages, and everything (admin panel, REST API, schema
-management, media) executes in their app against their database.
+There is no hosted service: the user's project mounts routes that delegate to
+our packages, and everything (admin panel, REST API, schema management,
+media) executes in their app against their database.
 
-```
+```text
 user's Next.js app
-├── src/app/admin/[[...params]]/page.tsx      -> renders <RootLayout/> from @nextlyhq/admin
-├── src/app/api/[[...params]]/route.ts        -> createDynamicHandlers() from nextly/runtime
-└── nextly.config.ts                          -> defineConfig({ collections, singles, plugins, db, ... })
+├── src/app/admin/[[...params]]/page.tsx        -> renders <RootLayout/> from @nextlyhq/admin
+├── src/app/admin/api/[[...params]]/route.ts    -> createDynamicHandlers() from nextly/runtime
+├── src/app/api/health/route.ts                 -> standalone route modules from nextly/api/*
+├── src/app/api/media/[[...path]]/route.ts      -> (health, media, ...)
+└── nextly.config.ts                            -> defineConfig({ collections, singles, plugins, db, ... })
 ```
+
+The dynamic catch-all handler is mounted under `/admin/api`; a handful of
+public surfaces (health, media delivery) are separate route modules mounted
+under `/api/*`.
 
 Content schema can be authored two ways over the same data model: code-first
 (`defineCollection` in `nextly.config.ts`) or visually (the Schema Builder in
@@ -26,7 +32,7 @@ shapes most of the architecture below.
 
 ## Repository structure
 
-```
+```text
 packages/
 ├── nextly              core: config, Direct API, REST dispatcher, CLI, auth,
 │                       schema pipeline, migrations, media, email
@@ -143,8 +149,8 @@ the pipeline uses (for example `getSchemaEventsDdl`), never hand-copied SQL.
 
 ## Request flow
 
-```
-HTTP request to /api/[[...params]] or /admin/api/[[...params]]
+```text
+HTTP request to /admin/api/[[...params]] (the dynamic catch-all)
   -> createDynamicHandlers (src/routeHandler.ts)
     -> parseRestRoute (src/route-handler/route-parser.ts)   resource + operation
     -> auth middleware                                      session or API key
@@ -157,8 +163,9 @@ HTTP request to /api/[[...params]] or /admin/api/[[...params]]
 
 Some resources (media, uploads, health, api-keys, dashboard, schema journal,
 general-settings, image-sizes) are served by standalone modules under
-`src/api/*` rather than the dispatcher switch. Plugin routes mount under
-`/api/plugins/<name>`.
+`src/api/*` rather than the dispatcher switch. Plugin routes are served by
+the same catch-all under `plugins/<name>` (so `/admin/api/plugins/<name>`
+with the standard mount).
 
 Every response uses a canonical envelope: `{ items, meta }` for lists,
 `{ message, item }` for mutations, plus `respondDoc`/`respondAction`/
@@ -214,7 +221,8 @@ Plugins are declared with `definePlugin` and registered in `nextly.config.ts`:
 - **Context**: `ctx.services` (managed data access), `ctx.events` (on/emit),
   `ctx.logger`, `ctx.config`, `ctx.self` (own slugs after any `rename()`),
   plus experimental hooks/filters/db escape hatches.
-- Plugin routes are namespaced under `/api/plugins/<name>`; plugin admin UI
+- Plugin routes are namespaced under `plugins/<name>` on the dynamic
+  catch-all; plugin admin UI
   is referenced by component path and rendered through the admin's component
   registry.
 
