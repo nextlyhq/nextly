@@ -29,11 +29,9 @@ const noopLogger = {
   warn: () => {},
   error: () => {},
   debug: () => {},
-} as unknown as Parameters<typeof PermissionCacheService["prototype"]["constructor"]> extends [
-  unknown,
-  infer L,
-  ...unknown[],
-]
+} as unknown as Parameters<
+  (typeof PermissionCacheService)["prototype"]["constructor"]
+> extends [unknown, infer L, ...unknown[]]
   ? L
   : never;
 
@@ -62,7 +60,7 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
       );
     `);
 
-    const db = drizzle(sqlite);
+    const db = drizzle({ client: sqlite });
 
     // Minimal DrizzleAdapter shape. PermissionCacheService only touches
     // `getDrizzle()` and `getCapabilities().dialect` (for the `tables`
@@ -164,14 +162,24 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
   // a raw `sql\`${col} > ${new Date()}\`` against a SQLite typed-timestamp
   // column, this test will keep failing until they swap to a typed operator.
   it("documents that raw `sql\\`${col} > ${date}\\`` does throw the bind TypeError on SQLite", () => {
-    const db = drizzle(sqlite);
-    expect(() => {
-      // We intentionally execute the failing pattern here to keep the
-      // regression visible in code form. drizzle-orm's `sql` template
-      // does no Date conversion; the binding hits better-sqlite3 raw.
+    const db = drizzle({ client: sqlite });
+    // We intentionally execute the failing pattern here to keep the
+    // regression visible in code form. drizzle-orm's `sql` template
+    // does no Date conversion; the binding hits better-sqlite3 raw.
+    // v1 wraps every driver error in DrizzleQueryError ("Failed query: …")
+    // with the original on `.cause` — assert on the unwrapped TypeError.
+    let thrown: unknown;
+    try {
       db.all(
         sql`SELECT id FROM user_permission_cache WHERE expires_at > ${new Date()}`
       );
-    }).toThrow(/SQLite3 can only bind/);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const cause = (thrown as Error).cause;
+    expect(String((cause as Error | undefined)?.message ?? thrown)).toMatch(
+      /SQLite3 can only bind/
+    );
   });
 });

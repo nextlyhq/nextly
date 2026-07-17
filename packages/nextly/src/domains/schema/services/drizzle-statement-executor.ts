@@ -7,19 +7,23 @@
 // and then execute them itself. The old DrizzlePushService.apply() did
 // both push AND execute together — incompatible with interception.
 //
-// Dialect-specific behavior preserved verbatim from the old service:
-//   - SQLite: rewriteRecreateInsertForMissingCols handles drizzle-kit's
-//     recreate-table pattern where some columns don't yet exist on the
-//     source table. PR-4 layers PRAGMA foreign_keys = OFF / ON wrapping
-//     on top of this.
-//   - MySQL: no workaround needed at this layer. drizzle-kit 0.31.10's
-//     silent-drop bug only affected its apply() method; we get the
-//     correct statementsToExecute from pushSchema directly and run
-//     them straight.
+// Dialect notes (drizzle-kit v1):
+//   - SQLite: v1's recreate-table flow emits its PRAGMA foreign_keys
+//     OFF/ON choreography INSIDE the statement stream and its rebuild
+//     INSERT..SELECT lists only pre-existing columns — the pre-v1
+//     missing-column NULL-rewrite is gone. The pipeline still toggles
+//     the pragma outside any transaction (see PR-4 rationale below);
+//     passing v1's inline pragmas through is harmless and correct.
+//   - MySQL: statements from pushSchema are executed straight; MySQL
+//     DDL auto-commits regardless of the transaction wrapper.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { DrizzleStatementExecutor as DrizzleStatementExecutorInterface } from "../pipeline/pushschema-pipeline-interfaces";
+import {
+  isIdempotencyError,
+  splitStatements,
+} from "../pipeline/sql-statement-utils";
 
 // Minimal duck-typed shapes for the per-dialect db / tx clients.
 // Avoids `as any` casts at every call site by narrowing to what we
@@ -79,7 +83,7 @@ export class DrizzleStatementExecutor
     // Note: drizzle-kit 0.31.10's silent-drop bug for MySQL applies to
     // pushSchema's apply() method, NOT to manual statement execution.
     // The pipeline owns pushSchema invocation and passes us the
-    // statementsToExecute array directly (which IS correct), so we can
+    // kit statements array directly (which IS correct), so we can
     // execute them straight. No applyViaGenerate workaround at this layer.
     //
     // MySQL DDL is auto-committed regardless of the BEGIN/COMMIT wrapper
@@ -105,44 +109,15 @@ export class DrizzleStatementExecutor
     // pragma works inside a transaction. If it surfaces violations,
     // the throw propagates up, the transaction rolls back, and the
     // pipeline restores foreign_keys = ON in its finally block.
-    for (const rawStmt of statements) {
-      const pieces = rawStmt
-        .split("\n")
-        .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
-        .join("\n")
-        .split(";")
-        .map((s: string) => s.trim())
-        .filter(
-          (s: string) =>
-            s.length > 0 &&
-            !s.startsWith("--") &&
-            /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
-        );
-      for (const raw of pieces) {
-        const stmt = await this.rewriteRecreateInsertForMissingCols(raw);
-        try {
-          dbTyped.run(sqlTag.raw(stmt));
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // drizzle-orm's SQLite session wraps better-sqlite3 errors in a
-          // DrizzleError whose .message is "Failed to run the query '...'".
-          // The original SQLite error ("already exists", etc.) lives in
-          // err.cause. Check both so the guard fires correctly for both
-          // the raw driver error and the drizzle-orm wrapper.
-          const causeMsg =
-            err instanceof Error && err.cause instanceof Error
-              ? err.cause.message
-              : "";
-          if (
-            msg.includes("already exists") ||
-            msg.includes("duplicate column name") ||
-            causeMsg.includes("already exists") ||
-            causeMsg.includes("duplicate column name")
-          ) {
-            continue;
-          }
-          throw err;
-        }
+    // Splitting and idempotency tolerance are single-sourced in
+    // sql-statement-utils.ts — this executor and fresh-push previously
+    // carried drifting private copies of both.
+    for (const stmt of splitStatements(statements)) {
+      try {
+        dbTyped.run(sqlTag.raw(stmt));
+      } catch (err) {
+        if (isIdempotencyError(err)) continue;
+        throw err;
       }
     }
 
@@ -175,42 +150,5 @@ export class DrizzleStatementExecutor
           `First few rows: ${sample}`
       );
     }
-  }
-
-  // Preserved verbatim (with structural typing) from the old
-  // DrizzlePushService — see that class for the original rationale.
-  // Drizzle-kit 0.31.10's SQLite recreate-table strategy emits
-  //   INSERT INTO `__new_<t>`(cols) SELECT cols FROM `<t>`
-  // where `cols` includes columns that do not yet exist in `<t>`.
-  // That fails with "no such column". This rewrites the SELECT list
-  // so missing columns are substituted with NULL.
-  private async rewriteRecreateInsertForMissingCols(
-    stmt: string
-  ): Promise<string> {
-    const m = stmt.match(
-      /^INSERT\s+INTO\s+`(__new_[^`]+)`\s*\(([^)]+)\)\s+SELECT\s+([^]+?)\s+FROM\s+`([^`]+)`\s*$/i
-    );
-    if (!m) return stmt;
-    const [, , insertColsRaw, , sourceTable] = m;
-    if (/["\0]/.test(sourceTable)) return stmt;
-    const insertCols = insertColsRaw
-      .split(",")
-      .map(c => c.trim().replace(/^`|`$/g, "").replace(/^"|"$/g, ""));
-    let sourceColNames: string[];
-    try {
-      const { sql: sqlTag } = await import("drizzle-orm");
-      const dbTyped = this.db as SqliteSyncRunClient;
-      const rows = dbTyped.all(
-        sqlTag.raw(`PRAGMA table_info("${sourceTable}")`)
-      ) as Array<{ name: string }>;
-      sourceColNames = rows.map(r => r.name);
-    } catch {
-      return stmt;
-    }
-    const selectList = insertCols
-      .map(col => (sourceColNames.includes(col) ? `"${col}"` : "NULL"))
-      .join(", ");
-    const colList = insertCols.map(col => `"${col}"`).join(", ");
-    return `INSERT INTO \`__new_${sourceTable}\`(${colList}) SELECT ${selectList} FROM \`${sourceTable}\``;
   }
 }

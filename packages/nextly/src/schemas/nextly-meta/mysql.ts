@@ -9,6 +9,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
@@ -26,7 +27,14 @@ export const nextlyMeta = mysqlTable(
   {
     key: varchar("key", { length: 191 }).primaryKey(),
     value: json("value"),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    // DDL-side CURRENT_TIMESTAMP (matching postgres's defaultNow()):
+    // a JavaScript `new Date()` default bakes one module-load-time literal
+    // into the emitted DDL, so every boot saw a different default and v1's
+    // differ emitted MODIFY COLUMN churn forever (the pre-v1 MySQL differ
+    // returned empty statement lists and masked this).
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [index("nextly_meta_updated_at_idx").on(t.updatedAt)]
 );

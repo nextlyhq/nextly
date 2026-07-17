@@ -29,7 +29,7 @@ describe("readJournal — real-PG integration (nextly_schema_events)", () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create the events table via the production DDL so this fixture can
     // never drift from the real schema (a hand-copy previously dropped the

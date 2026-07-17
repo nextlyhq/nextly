@@ -27,7 +27,7 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create the events table via the production DDL so this fixture can
     // never drift from the real schema (a hand-copy previously dropped the

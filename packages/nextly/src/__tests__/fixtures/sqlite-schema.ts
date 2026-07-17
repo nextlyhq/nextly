@@ -3,7 +3,7 @@
  *
  * Existing test fixtures (`db.ts`, `seed-helpers.ts`, `service-factory.ts`)
  * pass a `* as schema` namespace import directly to
- * `drizzle(sqlite, { schema })`. They reach a few specific tables
+ * the drizzle test fixture. They reach a few specific tables
  * (`schema.users`, `schema.roles`, `schema.dynamicCollections`, etc.) and
  * rely on Drizzle picking up the matching `<table>Relations` so the
  * `db.query` API works.

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
@@ -52,7 +52,6 @@ export class RoleMutationService extends BaseService {
    */
   private async findRoleIdBySlug(slug: string): Promise<{ id: string } | null> {
     const { roles } = this.tables;
-
     const role = await this.db
       .selectDistinct({ id: roles.id })
       .from(roles)
@@ -176,10 +175,9 @@ export class RoleMutationService extends BaseService {
         });
       }
 
-      const { roles } = this.tables;
       // Check if role with same name already exists
       const existing = await this.db.query.roles.findFirst({
-        where: eq(roles.name, input.name),
+        where: { name: input.name },
         columns: { id: true, name: true },
       });
 
@@ -193,7 +191,7 @@ export class RoleMutationService extends BaseService {
 
       // Check if role with same slug already exists
       const existingSlug = await this.db.query.roles.findFirst({
-        where: eq(roles.slug, input.slug),
+        where: { slug: input.slug },
         columns: { id: true, slug: true },
       });
 
@@ -217,7 +215,7 @@ export class RoleMutationService extends BaseService {
       const existingPermissions = await (
         this.db as RBACDatabaseInstance
       ).query.permissions.findMany({
-        where: inArray(this.tables.permissions.id, uniqueIds),
+        where: { id: { in: uniqueIds } },
         columns: { id: true },
       });
 
@@ -251,7 +249,7 @@ export class RoleMutationService extends BaseService {
         const existingChildRoles = await (
           this.db as RBACDatabaseInstance
         ).query.roles.findMany({
-          where: inArray(this.tables.roles.id, uniqueChildRoleIds),
+          where: { id: { in: uniqueChildRoleIds } },
           columns: { id: true },
         });
 
@@ -319,7 +317,7 @@ export class RoleMutationService extends BaseService {
           }
 
           const rolePermRows = await executor.query.rolePermissions.findMany({
-            where: eq(this.tables.rolePermissions.roleId, id),
+            where: { roleId: id },
           });
           const assignedPermIds = (
             rolePermRows as Array<{ permissionId: unknown }>
@@ -473,7 +471,7 @@ export class RoleMutationService extends BaseService {
           const existingPermissions = await (
             this.db as RBACDatabaseInstance
           ).query.permissions.findMany({
-            where: inArray(this.tables.permissions.id, uniquePermissionIds),
+            where: { id: { in: uniquePermissionIds } },
             columns: { id: true },
           });
 
@@ -513,7 +511,7 @@ export class RoleMutationService extends BaseService {
           const existingChildRoles = await (
             this.db as RBACDatabaseInstance
           ).query.roles.findMany({
-            where: inArray(this.tables.roles.id, uniqueChildRoleIds),
+            where: { id: { in: uniqueChildRoleIds } },
             columns: { id: true },
           });
 

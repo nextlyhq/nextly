@@ -395,7 +395,7 @@ export class UserMutationService extends BaseService {
       // stays generic ("Resource already exists.") via NextlyError.duplicate;
       // the email + entity flow only through logContext.
       const existingUser = await this.db.query.users.findFirst({
-        where: eq(users.email, userData.email),
+        where: { email: userData.email },
         columns: { id: true, email: true },
       });
       if (existingUser) {
@@ -548,7 +548,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
-        where: eq(users.email, userData.email),
+        where: { email: userData.email },
         columns: {
           id: true,
           email: true,
@@ -673,7 +673,7 @@ export class UserMutationService extends BaseService {
       // 1) Load current user. §13.8 + spec note: user existence is sensitive
       // (account enumeration); the public message stays generic.
       const currentUser = await this.db.query.users.findFirst({
-        where: eq(users.id, userId),
+        where: { id: userId },
         columns: {
           id: true,
           email: true,
@@ -703,7 +703,7 @@ export class UserMutationService extends BaseService {
           normalizedNewEmail !== currentEmailNormalized
         ) {
           const existing = await this.db.query.users.findFirst({
-            where: eq(users.email, normalizedNewEmail),
+            where: { email: normalizedNewEmail },
             columns: { id: true, email: true },
           });
 
@@ -910,7 +910,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch updated user
       const user = await this.db.query.users.findFirst({
-        where: eq(users.id, currentUser.id),
+        where: { id: currentUser.id },
         columns: {
           id: true,
           email: true,
@@ -1013,7 +1013,7 @@ export class UserMutationService extends BaseService {
     let user;
     try {
       user = await this.db.query.users.findFirst({
-        where: eq(users.id, userId),
+        where: { id: userId },
         columns: { id: true },
       });
     } catch (err) {

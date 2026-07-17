@@ -166,8 +166,6 @@ export async function previewDesiredSchema(
   // event row counts; tests inject stubs that return zero.
   const classificationResult = await classifier.classify({
     operations,
-    drizzleWarnings: [],
-    hasDataLoss: false,
     countNulls: (table, column) => countNullsHelper(db, dialect, table, column),
     countRows: table => countRowsHelper(db, dialect, table),
     dialect,

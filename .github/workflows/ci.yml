@@ -57,6 +57,41 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      # Drizzle v1 zero-legacy gate: no pre-v1 API, no removed kit symbols,
+      # no positional drizzle() constructors. Cheap check, fails fast.
+      - name: Drizzle v1 legacy gate
+        run: pnpm check:drizzle-v1-legacy
+
+      # The drizzle-v1 migration's own safety net (review-driven: these
+      # suites previously executed in NO CI job because the `nextly`
+      # package's full test task carries a pre-existing failing baseline).
+      # Runs the migration-critical GREEN suites explicitly: kit contract +
+      # tripwires, golden SQL fixtures, guard scanners, fresh-push unit
+      # coverage, the #5782 cascade regression, RQB v2 conversions, and the
+      # relations registry.
+      - name: Drizzle v1 safety suites (unit)
+        # Build the concrete adapters first: this step runs a raw vitest
+        # BEFORE the Build step below, but nextly's database/factory.ts
+        # dynamically imports @nextlyhq/adapter-{postgres,mysql,sqlite}, so
+        # vite fails to resolve their (unbuilt) entry and 4 suites error at
+        # collection with "Failed to resolve entry for package". turbo builds
+        # their shared adapter-drizzle dependency in the same command.
+        run: |
+          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm --filter nextly exec vitest run \
+            src/database/__tests__/drizzle-kit-lazy.test.ts \
+            src/database/__tests__/drizzle-kit-api-contract.test.ts \
+            src/database/__tests__/schema-registry.relations.test.ts \
+            src/domains/schema/pipeline/__tests__/v1-golden/sqlite.golden.test.ts \
+            src/domains/schema/pipeline/__tests__/filter-unsafe-statements.scanner.test.ts \
+            src/domains/schema/pipeline/__tests__/filter-unsafe-statements.test.ts \
+            src/domains/schema/pipeline/__tests__/fresh-push.test.ts \
+            src/domains/schema/pipeline/__tests__/sqlite-cascade-dataloss.regression.test.ts \
+            src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts \
+            src/domains/auth/__tests__/rqb-v2-conversions.test.ts
+        env:
+          TURBO_CACHE_DIR: .turbo
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.

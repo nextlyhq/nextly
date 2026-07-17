@@ -91,6 +91,7 @@ import {
   isDatabaseError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
@@ -275,6 +276,15 @@ function applyHappyEyeballsTimeoutOnce(): void {
  * @public
  */
 export class PostgresAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'postgresql' for this adapter.
    */
@@ -451,18 +461,25 @@ export class PostgresAdapter extends DrizzleAdapter {
    * It waits for all checked-out clients to be returned before shutting down.
    */
   async disconnect(): Promise<void> {
-    if (!this.pool) {
+    // Detach the pool FIRST, then drop the memoized drizzle instances —
+    // this closes the repopulation window where a concurrent getDrizzle()
+    // call during the (async) pool.end() could cache an instance wrapping
+    // the closing pool.
+    const pool = this.pool;
+    this.pool = null;
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
+    if (!pool) {
       return;
     }
 
     try {
-      await this.pool.end();
+      await pool.end();
 
       if (this.config.logger?.info) {
         this.config.logger.info("PostgreSQL connection closed");
       }
     } finally {
-      this.pool = null;
       this.connected = false;
     }
   }
@@ -750,13 +767,26 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the pg pool connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = NodePgDatabase<any>>(schema?: Record<string, unknown>): T {
+  getDrizzle<T = NodePgDatabase<AnyRelations>>(relations?: AnyRelations): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    return (schema ? drizzle(pool, { schema }) : drizzle(pool)) as T;
+    // drizzle v1 removed the positional (client, config) form — the object
+    // form is REQUIRED (positional silently treats the client as config).
+    // `relations` (defineRelations output, assembled by Nextly's schema
+    // registry) is what powers db.query in v1; a bare instance serves the
+    // select-builder CRUD paths.
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client: pool });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client: pool, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**

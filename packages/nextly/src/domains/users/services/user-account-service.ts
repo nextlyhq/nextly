@@ -161,7 +161,7 @@ export class UserAccountService extends BaseService {
     let user;
     try {
       user = await this.db.query.users.findFirst({
-        where: eq(users.id, userId),
+        where: { id: userId },
         columns: { id: true },
       });
     } catch (err) {
@@ -191,9 +191,8 @@ export class UserAccountService extends BaseService {
    * Check if a user has a password set
    */
   async hasPassword(userId: number | string): Promise<boolean> {
-    const { users } = this.tables;
     const user = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
+      where: { id: userId },
       columns: {
         passwordHash: true,
       },
@@ -208,9 +207,8 @@ export class UserAccountService extends BaseService {
   async getUserPasswordHashById(
     userId: number | string
   ): Promise<string | null> {
-    const { users } = this.tables;
     const user = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
+      where: { id: userId },
       columns: {
         passwordHash: true,
       },
@@ -233,12 +231,10 @@ export class UserAccountService extends BaseService {
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async getAccounts(userId: number | string): Promise<GetAccountsResponse> {
-    const { accounts } = this.tables;
-
     let results;
     try {
       results = await this.db.query.accounts.findMany({
-        where: eq(accounts.userId, userId),
+        where: { userId },
         columns: {
           id: true,
           userId: true,

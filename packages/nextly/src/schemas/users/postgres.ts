@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks live in `./postgres-relations.ts` (split
+ * Cross-table `relations()` blocks live in `../_dialect-bundles/postgres.relations.ts` (split
  * out in Task 17 to keep table definitions free of sibling-feature imports).
  * Re-exported at the bottom of this file so consumers using
  * `import * as schema from "./postgres"` still see the relations in the

@@ -7,8 +7,9 @@
  * `schemas/<feature>/postgres.ts` modules, under the bare names callers
  * have always used (`apiKeys`, `users`, `dynamicCollections`, …).
  *
- * Tables are sourced from `<feature>/postgres.ts`; relations from
- * `<feature>/postgres-relations.ts`. The table modules deliberately do NOT
+ * Tables are sourced from `<feature>/postgres.ts`. Drizzle v2 relations
+ * live in `./postgres.relations.ts` (one central defineRelations per
+ * dialect). The table modules deliberately do NOT
  * re-export their relations — that back-edge created a table↔relations import
  * cycle that left tables `undefined` at module-load. This bundle is the join
  * point instead, so the dependency stays one-directional (relations → tables).
@@ -25,11 +26,6 @@
 
 // Users + Auth.js identity.
 export { users, accounts, sessions } from "../users/postgres";
-export {
-  usersRelations,
-  accountsRelations,
-  sessionsRelations,
-} from "../users/postgres-relations";
 
 // Auth tokens.
 export {
@@ -38,7 +34,6 @@ export {
   userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/postgres";
-export { refreshTokensRelations } from "../auth-tokens/postgres-relations";
 
 // RBAC.
 export {
@@ -49,28 +44,15 @@ export {
   roleInherits,
   userPermissionCache,
 } from "../rbac/postgres";
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "../rbac/postgres-relations";
 
 // API keys.
 export { apiKeys } from "../api-keys/postgres";
-export { apiKeysRelations } from "../api-keys/postgres-relations";
 
 // Audit.
 export { auditLog, activityLog } from "../audit/postgres";
-export { activityLogRelations } from "../audit/postgres-relations";
 
 // Media.
 export { media, mediaFolders, imageSizes } from "../media/postgres";
-export {
-  mediaRelations,
-  mediaFoldersRelations,
-} from "../media/postgres-relations";
 
 // Nextly meta.
 export { nextlyMeta } from "../nextly-meta/postgres";
@@ -79,7 +61,6 @@ export { nextlyMeta } from "../nextly-meta/postgres";
 // names production code uses (the legacy stub flattened
 // `dynamicCollectionsPg` → `dynamicCollections`, etc.).
 export { dynamicCollectionsPg as dynamicCollections } from "../dynamic-collections/postgres";
-export { dynamicCollectionsRelations } from "../dynamic-collections/postgres-relations";
 export { dynamicSinglesPg as dynamicSingles } from "../dynamic-singles/postgres";
 export { dynamicComponentsPg as dynamicComponents } from "../dynamic-components/postgres";
 

@@ -34,6 +34,7 @@
  */
 
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
+import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import {
   getService,
   isServicesRegistered,
@@ -94,6 +95,7 @@ export type { NextlyServiceConfig } from "./di/register";
  */
 const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
+  __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
 };
 
@@ -145,6 +147,18 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         "use `getCachedNextly()` instead.",
     });
   }
+  // Boot-time drizzle-orm version guard: a consumer app
+  // that installed its own drizzle-orm at a different version than Nextly's
+  // exact pin hits opaque cross-instance is() failures deep inside Drizzle,
+  // with no pointer back to the cause. Warn loudly ONCE with the fix
+  // command instead. (Warn, not throw: the mismatch only bites when the
+  // app's own copy is actually imported.)
+  if (!globalForInit.__nextly_drizzleVersionChecked) {
+    globalForInit.__nextly_drizzleVersionChecked = true;
+    const mismatch = checkConsumerDrizzleVersion(process.cwd());
+    if (mismatch) console.warn(`[nextly] ${mismatch}`);
+  }
+
   // Fast path: return already-initialised instance immediately.
   if (globalForInit.__nextly_cachedInstance) {
     // F1 PR 2: drain HMR reload flag before returning cached instance.

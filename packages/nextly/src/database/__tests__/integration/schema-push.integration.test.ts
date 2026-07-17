@@ -62,7 +62,7 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: TEST_DB_URL });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
     // This simulates what pushSchema would do, letting us test CRUD via Drizzle API
