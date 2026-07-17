@@ -57,6 +57,28 @@ describe("validateCollectionConfig: decimal number dimensions", () => {
     ).toContain("DECIMAL_SCALE_INVALID");
   });
 
+  it("rejects precision above the portable MySQL maximum (65)", () => {
+    expect(
+      codesFor(number({ name: "price", dbType: "decimal", precision: 66 }))
+    ).toContain("DECIMAL_PRECISION_INVALID");
+  });
+
+  it("accepts precision at the maximum (65)", () => {
+    expect(
+      codesFor(
+        number({ name: "price", dbType: "decimal", precision: 65, scale: 2 })
+      )
+    ).not.toContain("DECIMAL_PRECISION_INVALID");
+  });
+
+  it("rejects scale above the portable MySQL maximum (30)", () => {
+    expect(
+      codesFor(
+        number({ name: "price", dbType: "decimal", precision: 40, scale: 31 })
+      )
+    ).toContain("DECIMAL_SCALE_INVALID");
+  });
+
   it("ignores precision/scale on an integer field", () => {
     // These are meaningless for integer storage and must not raise errors.
     const codes = codesFor(number({ name: "count", precision: 2, scale: 5 }));

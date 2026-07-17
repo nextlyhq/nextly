@@ -413,12 +413,18 @@ function validateField(
   }
 }
 
+// Bounds are the most restrictive across the supported dialects so a decimal
+// field stays portable: MySQL caps DECIMAL at precision 65 and scale 30
+// (Postgres allows far more, SQLite ignores them).
+const MAX_DECIMAL_PRECISION = 65;
+const MAX_DECIMAL_SCALE = 30;
+
 /**
  * A `dbType: "decimal"` number field renders precision/scale straight into the
  * DDL (`numeric(p,s)` / `decimal(p,s)`). Invalid dimensions would otherwise fail
  * at the database with an opaque DDL error on first apply, so reject them at
- * config time: precision a positive integer, scale a non-negative integer no
- * larger than precision.
+ * config time: precision an integer in 1..65, scale an integer in 0..30, and
+ * scale no larger than precision.
  */
 function validateNumberDecimalDimensions(
   f: Record<string, unknown>,
@@ -427,22 +433,23 @@ function validateNumberDecimalDimensions(
 ): void {
   if (f.dbType !== "decimal") return;
   const { precision, scale } = f;
-  const isPosInt = (v: unknown): v is number =>
-    typeof v === "number" && Number.isInteger(v) && v >= 1;
-  const isNonNegInt = (v: unknown): v is number =>
-    typeof v === "number" && Number.isInteger(v) && v >= 0;
+  const inIntRange = (v: unknown, min: number, max: number): v is number =>
+    typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
 
-  if (precision !== undefined && !isPosInt(precision)) {
+  if (
+    precision !== undefined &&
+    !inIntRange(precision, 1, MAX_DECIMAL_PRECISION)
+  ) {
     errors.push({
       path: `${path}.precision`,
-      message: "Decimal 'precision' must be an integer of at least 1",
+      message: `Decimal 'precision' must be an integer between 1 and ${MAX_DECIMAL_PRECISION}`,
       code: "DECIMAL_PRECISION_INVALID",
     });
   }
-  if (scale !== undefined && !isNonNegInt(scale)) {
+  if (scale !== undefined && !inIntRange(scale, 0, MAX_DECIMAL_SCALE)) {
     errors.push({
       path: `${path}.scale`,
-      message: "Decimal 'scale' must be an integer of at least 0",
+      message: `Decimal 'scale' must be an integer between 0 and ${MAX_DECIMAL_SCALE}`,
       code: "DECIMAL_SCALE_INVALID",
     });
   }
