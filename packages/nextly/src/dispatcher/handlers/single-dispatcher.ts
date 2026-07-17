@@ -61,6 +61,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -465,6 +466,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             email: p._authenticatedUserEmail
               ? String(p._authenticatedUserEmail)
               : undefined,
+            // Forward decoded role slugs so field-level `access.read` redaction
+            // evaluates against the caller's roles, matching the collection and
+            // standalone-single paths.
+            roles: readAuthenticatedRoles(p),
           }
         : undefined;
       const result = await svc.entry.update(

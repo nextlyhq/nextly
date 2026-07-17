@@ -63,6 +63,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -121,30 +122,6 @@ function formatToastSummary(summary: {
   if (summary.changed) parts.push(`${summary.changed} changed`);
   if (summary.removed) parts.push(`${summary.removed} removed`);
   return parts.length > 0 ? parts.join(", ") : "no changes";
-}
-
-// Decode the authenticated role set forwarded by the route handler. Route
-// params are strings, so roles arrive JSON-encoded; parse defensively and keep
-// only string entries so a malformed value degrades to "no roles" rather than
-// throwing.
-function readAuthenticatedRoles(p: Params): string[] | undefined {
-  const raw = p._authenticatedUserRoles;
-  if (!raw) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    // Require a non-empty array of only strings; a malformed or mixed-type
-    // value degrades to "no roles" rather than forwarding a partial set.
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length === 0 ||
-      !parsed.every((role): role is string => typeof role === "string")
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
 }
 
 const COLLECTIONS_METHODS: Record<

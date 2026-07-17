@@ -808,10 +808,11 @@ async function handleServiceRequest(
   // are silently skipped.
   // NOTE: We use _authenticatedUserId (not userId) to avoid colliding with
   // the existing routeParams.userId which is the target user ID from URL params.
-  // Roles are consumed only by collection mutation dispatch; skip the lookup
-  // for reads and every other service so they don't incur a permissions query.
+  // Roles are consumed only by collection and single mutation dispatch; skip
+  // the lookup for reads and every other service so they don't incur a
+  // permissions query.
   const needsRoles =
-    service === "collections" &&
+    (service === "collections" || service === "singles") &&
     httpMethod !== "GET" &&
     httpMethod !== "HEAD" &&
     httpMethod !== "OPTIONS";
