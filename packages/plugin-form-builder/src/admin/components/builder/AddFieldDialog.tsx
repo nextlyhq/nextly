@@ -20,22 +20,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@nextlyhq/ui";
-import type {
-  FieldTypeCatalogEntry,
-  FormFieldCatalogType,
-} from "nextly/field-catalog";
+import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
 import { useState } from "react";
+
+import type { FormFieldTypeId } from "../../../types";
 
 export interface AddFieldDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /**
-   * The form surface's catalog, already filtered by the host's excludes;
-   * `null` while the host configuration is still loading.
+   * The form surface's catalog — built-ins already filtered by the host's
+   * excludes plus any plugin field types that opted into the forms surface;
+   * `null` while the host configuration is still loading. `type` is the open
+   * `FormFieldTypeId` so a plugin entry shares this shape with the built-ins.
    */
-  entries: readonly FieldTypeCatalogEntry<FormFieldCatalogType>[] | null;
+  entries: readonly FieldTypeCatalogEntry<FormFieldTypeId>[] | null;
   /** Called with the chosen type; the parent creates and selects the field. */
-  onAdd: (type: FormFieldCatalogType) => void;
+  onAdd: (type: FormFieldTypeId) => void;
 }
 
 export function AddFieldDialog({
@@ -44,7 +45,7 @@ export function AddFieldDialog({
   entries,
   onAdd,
 }: AddFieldDialogProps) {
-  const [selected, setSelected] = useState<FormFieldCatalogType>("text");
+  const [selected, setSelected] = useState<FormFieldTypeId>("text");
 
   const selectable = entries?.some(entry => entry.type === selected)
     ? selected

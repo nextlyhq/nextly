@@ -41,6 +41,8 @@ import { SelectInput } from "@admin/components/features/entries/fields/selection
 import { EmailInput } from "@admin/components/features/entries/fields/text/EmailInput";
 import { TextareaInput } from "@admin/components/features/entries/fields/text/TextareaInput";
 import { TextInput } from "@admin/components/features/entries/fields/text/TextInput";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
 
@@ -254,6 +256,7 @@ function UserFieldInput({
   error,
   disabled,
 }: UserFieldInputProps) {
+  const branding = useBranding();
   const isCheckbox = fieldConfig.type === "checkbox";
 
   return (
@@ -334,14 +337,33 @@ function UserFieldInput({
           <DateInput {...commonProps} field={fieldConfig as DateFieldConfig} />
         );
 
-      default:
-        return (
+      default: {
+        // A plugin-contributed users-surface field type renders through its
+        // own admin component (PluginSlot isolates it), the same way the entry
+        // form does — so a plugin user field is editable, not just definable.
+        const unsupported = (
           <div className="rounded-none  border border-border border-destructive/50 bg-destructive/10 p-3 text-center">
             <p className="text-sm text-destructive">
               Unsupported field type: {fieldType}
             </p>
           </div>
         );
+        const customComponent = (branding.plugins ?? [])
+          .flatMap(plugin => plugin.fieldTypes ?? [])
+          .find(fieldType => fieldType.type === fieldConfig.type)?.component;
+        if (customComponent) {
+          return (
+            <PluginSlot
+              path={customComponent}
+              props={{ ...commonProps, field: fieldConfig }}
+              // If the plugin component can't be resolved, keep the visible
+              // error instead of rendering a blank field.
+              fallback={unsupported}
+            />
+          );
+        }
+        return unsupported;
+      }
     }
   }
 }

@@ -13,6 +13,8 @@
  * @module domains/schema/field-types/field-type-registry
  */
 
+import type { FieldSurface } from "../../../collections/fields/catalog";
+import { DEFAULT_FIELD_SURFACES } from "../../../collections/fields/catalog";
 import { ALL_FIELD_TYPES } from "../../../collections/fields/types";
 import type { PluginFieldType } from "../../../plugins/contributions";
 
@@ -52,6 +54,20 @@ export function getFieldType(type: string): PluginFieldType | undefined {
 
 export function hasFieldType(type: string): boolean {
   return store().has(type);
+}
+
+/**
+ * Whether a registered plugin field type may be offered/accepted on `surface`,
+ * honoring its declared `surfaces` (an omitted list means the entries surface
+ * only). Returns `false` for built-ins and unregistered types — every caller
+ * keeps its own built-in handling and only consults this for plugin types.
+ */
+export function isPluginFieldTypeOnSurface(
+  type: string,
+  surface: FieldSurface
+): boolean {
+  const def = store().get(type);
+  return !!def && (def.surfaces ?? DEFAULT_FIELD_SURFACES).includes(surface);
 }
 
 /** All registered custom field types (e.g. to serialize for the admin client). */

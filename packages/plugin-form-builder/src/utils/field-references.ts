@@ -4,7 +4,7 @@
  * recipient/reply-to interpolation points at must not be silently deletable.
  */
 
-import type { FormField, FormNotification } from "../types";
+import type { AnyFormField, FormNotification } from "../types";
 
 export interface FieldReference {
   /** What kind of thing holds the reference. */
@@ -27,7 +27,7 @@ function referencesInTemplate(template: string, fieldName: string): boolean {
 /** All references to `fieldName` across the form's fields and notifications. */
 export function findFieldReferences(
   fieldName: string,
-  fields: readonly FormField[],
+  fields: readonly AnyFormField[],
   notifications: readonly FormNotification[]
 ): FieldReference[] {
   const references: FieldReference[] = [];
@@ -79,7 +79,7 @@ export function findFieldReferences(
  * each card on every render.
  */
 export function buildFieldReferenceMap(
-  fields: readonly FormField[],
+  fields: readonly AnyFormField[],
   notifications: readonly FormNotification[]
 ): Map<string, FieldReference[]> {
   const map = new Map<string, FieldReference[]>();
