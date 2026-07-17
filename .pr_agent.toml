@@ -14,6 +14,11 @@
 # (no `/agentic_describe`) so Qodo never overwrites a PR description authored
 # by the team.
 pr_commands = ["/agentic_review"]
+# Refresh the review when new commits are pushed to an open PR. `push_commands`
+# requires `handle_push_trigger = true`; Qodo updates its existing review
+# rather than stacking a new comment each push.
+handle_push_trigger = true
+push_commands = ["/agentic_review"]
 
 [review_agent]
 # Post both an inline, line-anchored review and a summary comment, matching how
