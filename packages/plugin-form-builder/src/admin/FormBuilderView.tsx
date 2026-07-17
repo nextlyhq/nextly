@@ -30,7 +30,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { FormField } from "../types";
+import type { FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -138,6 +138,13 @@ function FormBuilderViewInner({
     FormFieldCatalogType[] | null
   >(null);
 
+  // Type ids the host explicitly disabled (`config.fields[type] === false`),
+  // including plugin type ids — so the host exclude layer applies to
+  // contributed field types too, not just built-ins.
+  const [disabledFieldTypes, setDisabledFieldTypes] = useState<Set<string>>(
+    () => new Set()
+  );
+
   // The host's notification defaults (plugin options). `null` until the
   // config request settles; `{}` when the request failed or nothing is
   // configured, so consumers can distinguish "loading" from "no defaults".
@@ -169,6 +176,13 @@ function FormBuilderViewInner({
             config?.fields
               ? allTypes.filter(type => config.fields?.[type] !== false)
               : allTypes
+          );
+          setDisabledFieldTypes(
+            new Set(
+              Object.entries(config?.fields ?? {})
+                .filter(([, enabled]) => enabled === false)
+                .map(([type]) => type)
+            )
           );
           setNotificationDefaults(config?.notifications ?? {});
           setSpamDefaults(config?.spamProtection ?? {});
@@ -204,7 +218,7 @@ function FormBuilderViewInner({
   }, [isCreating, notificationDefaults, seedNotifications]);
 
   const handleAddField = useCallback(
-    (type: FormFieldCatalogType) => {
+    (type: FormFieldTypeId) => {
       const newField = createFieldFromType(
         type,
         fields.map(f => f.name)
@@ -527,6 +541,7 @@ function FormBuilderViewInner({
             {activeTab === "builder" && (
               <FieldCards
                 enabledTypes={enabledTypes}
+                disabledFieldTypes={disabledFieldTypes}
                 onAddField={handleAddField}
               />
             )}

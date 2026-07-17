@@ -14,7 +14,7 @@ import type {
   FormDocument,
   SubmissionDocument,
   ResolvedFormBuilderConfig,
-  FormField,
+  AnyFormField,
 } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
 import {
@@ -540,9 +540,10 @@ function stripHtmlTags(input: string): string {
  */
 function sanitizeSubmissionData(
   data: Record<string, unknown>,
-  fields: FormField[]
+  fields: AnyFormField[]
 ): void {
   for (const field of fields) {
+    // Plugin field types are not in TEXT_FORM_FIELDS, so they skip naturally.
     if (!TEXT_FORM_FIELDS.has(field.type)) continue;
 
     const value = data[field.name];

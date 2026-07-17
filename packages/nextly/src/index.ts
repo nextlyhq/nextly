@@ -371,6 +371,15 @@ export {
   type PluginMenuItem,
 } from "./plugins";
 
+// Field-type registry lookup (C7/D16) — lets a plugin/host ask whether a
+// contributed field type may appear on a given admin surface, so surfaces
+// (e.g. the form builder) can validate a plugin field type the same way core
+// does. Built-ins return false; each caller keeps its own built-in handling.
+export {
+  isPluginFieldTypeOnSurface,
+  getFieldType as getPluginFieldType,
+} from "./domains/schema/field-types/field-type-registry";
+
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
 export type {
   ServiceOpts,

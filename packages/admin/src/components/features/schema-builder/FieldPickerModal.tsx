@@ -18,10 +18,11 @@ import {
 } from "@nextlyhq/ui";
 import { useMemo, useState } from "react";
 
+import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
 import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
-import type { FieldPrimitiveType } from "@admin/types/collection";
+import type { FieldTypeId } from "@admin/types/collection";
 
 import {
   FIELD_TYPES_CATALOG,
@@ -40,9 +41,9 @@ function resolveIcon(name: string): LucideIcon {
 
 type Props = {
   open: boolean;
-  excludedTypes: readonly FieldPrimitiveType[];
+  excludedTypes: readonly FieldTypeId[];
   onCancel: () => void;
-  onSelect: (type: FieldPrimitiveType) => void;
+  onSelect: (type: FieldTypeId) => void;
   /** Title override — used when nesting (e.g., "Add field to author"). */
   title?: string;
 };
@@ -64,32 +65,58 @@ export function FieldPickerModal({
 }: Props) {
   const [query, setQuery] = useState("");
 
+  // Plugin field types that opted into the entry/single editing surface, merged
+  // in below the built-ins. They are exempt from the ui-schema allowlist — a
+  // plugin type persists as one of its own storage primitives, not as a
+  // canonical ui-schema type, so gating it on that allowlist would hide every
+  // plugin field.
+  const pluginEntries = usePluginFieldTypeEntries("entries");
+
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const matchesQuery = (e: FieldTypeEntry) =>
+      q === "" ||
+      e.label.toLowerCase().includes(q) ||
+      e.hint.toLowerCase().includes(q) ||
+      e.category.toLowerCase().includes(q);
+
     // The manifest is always written now (both database and file mode), so the
-    // picker offers only the canonical ui-schema-representable types in every
-    // mode — non-canonical catalog entries (e.g. toggle) are hidden.
+    // picker offers only the canonical ui-schema-representable built-ins in
+    // every mode — non-canonical catalog entries (e.g. toggle) are hidden.
     const supported = new Set<string>(UI_SCHEMA_FIELD_TYPES);
-    const matches = (e: FieldTypeEntry) =>
+    const builtinMatches = (e: FieldTypeEntry) =>
       !excludedTypes.includes(e.type) &&
       supported.has(e.type) &&
-      (q === "" ||
-        e.label.toLowerCase().includes(q) ||
-        e.hint.toLowerCase().includes(q) ||
-        e.category.toLowerCase().includes(q));
+      matchesQuery(e);
 
     const buckets = new Map<FieldTypeCategory, FieldTypeEntry[]>();
     for (const entry of FIELD_TYPES_CATALOG) {
-      if (!matches(entry)) continue;
+      if (!builtinMatches(entry)) continue;
       const arr = buckets.get(entry.category) ?? [];
       arr.push(entry);
       buckets.set(entry.category, arr);
     }
+
+    // Plugin entries: a built-in of the same type id wins, so a plugin that
+    // reuses a built-in id never shadows it in the picker.
+    const builtinTypes = new Set<string>(FIELD_TYPES_CATALOG.map(e => e.type));
+    for (const entry of pluginEntries) {
+      if (
+        builtinTypes.has(entry.type) ||
+        excludedTypes.includes(entry.type) ||
+        !matchesQuery(entry)
+      )
+        continue;
+      const arr = buckets.get(entry.category) ?? [];
+      arr.push(entry);
+      buckets.set(entry.category, arr);
+    }
+
     return CATEGORY_ORDER.flatMap(cat => {
       const arr = buckets.get(cat);
       return arr ? [{ category: cat, entries: arr }] : [];
     });
-  }, [query, excludedTypes]);
+  }, [query, excludedTypes, pluginEntries]);
 
   const handleClose = (next: boolean) => {
     if (!next) {
@@ -160,7 +187,7 @@ function FieldTypeRow({
   onSelect,
 }: {
   entry: FieldTypeEntry;
-  onSelect: (type: FieldPrimitiveType) => void;
+  onSelect: (type: FieldTypeId) => void;
 }) {
   const Icon = resolveIcon(entry.icon);
   return (

@@ -34,7 +34,8 @@ import {
 import { Eye, Monitor, Paperclip, RotateCcw, Smartphone } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { FormField } from "../../../types";
+import type { AnyFormField, CustomFormField, FormField } from "../../../types";
+import { isKnownFormField } from "../../../types";
 import { evaluateConditions } from "../../../utils/evaluate-conditions";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
@@ -173,13 +174,36 @@ function PreviewFieldInput({
   }
 }
 
+/**
+ * Preview for a plugin-contributed field. The plugin owns the real input, which
+ * renders from its own component in the live form; the builder preview shows a
+ * labeled placeholder so the field's presence and order stay visible.
+ */
+function PluginFieldPreview({ field }: { field: CustomFormField }) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`preview-${field.name}`}>
+        {field.label || field.name}
+        {field.required && <span className="ml-1 text-destructive">*</span>}
+      </Label>
+      <div className="flex items-center gap-2 border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        Custom field ({field.type}) — renders from its plugin component in the
+        live form.
+      </div>
+      {field.helpText && (
+        <p className="text-xs text-muted-foreground">{field.helpText}</p>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export interface FormPreviewProps {
-  /** Array of form fields to preview */
-  fields: FormField[];
+  /** Array of form fields to preview (built-in or plugin-contributed). */
+  fields: AnyFormField[];
   /** Form metadata */
   formData?: {
     name?: string;
@@ -204,7 +228,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
   // satisfying a downstream condition (chained show/hide would misbehave).
   const visibleFields = useMemo(() => {
     const effectiveValues: Record<string, unknown> = {};
-    const visible: FormField[] = [];
+    const visible: AnyFormField[] = [];
     for (const field of fields) {
       if (field.type === "hidden") continue;
       const isVisible =
@@ -234,7 +258,12 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
     const missing = new Set(
       visibleFields
         .filter(field => {
+          // A plugin field renders a non-interactive placeholder in the preview
+          // (its real input lives in the plugin's component in the live form),
+          // so it can never be filled here — excluded like `file`, otherwise the
+          // simulated submit would block forever with no way to satisfy it.
           if (!field.required || field.type === "file") return false;
+          if (!isKnownFormField(field)) return false;
           const value = values[field.name];
           return value === undefined || value === "" || value === false;
         })
@@ -319,56 +348,60 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
                   No visible fields — add fields in the Builder tab.
                 </p>
               )}
-              {visibleFields.map(field => (
-                <div key={field.name} className="space-y-1.5">
-                  {field.type !== "checkbox" && (
-                    <Label htmlFor={`preview-${field.name}`}>
-                      {field.label || field.name}
-                      {field.required && (
-                        <span className="ml-1 text-destructive">*</span>
-                      )}
-                    </Label>
-                  )}
-                  {field.type === "checkbox" ? (
-                    <div className="flex items-center gap-2">
-                      <PreviewFieldInput
-                        field={field}
-                        value={values[field.name]}
-                        onChange={value =>
-                          setValues(prev => ({
-                            ...prev,
-                            [field.name]: value,
-                          }))
-                        }
-                      />
+              {visibleFields.map(field =>
+                !isKnownFormField(field) ? (
+                  <PluginFieldPreview key={field.name} field={field} />
+                ) : (
+                  <div key={field.name} className="space-y-1.5">
+                    {field.type !== "checkbox" && (
                       <Label htmlFor={`preview-${field.name}`}>
                         {field.label || field.name}
                         {field.required && (
                           <span className="ml-1 text-destructive">*</span>
                         )}
                       </Label>
-                    </div>
-                  ) : (
-                    <PreviewFieldInput
-                      field={field}
-                      value={values[field.name]}
-                      onChange={value =>
-                        setValues(prev => ({ ...prev, [field.name]: value }))
-                      }
-                    />
-                  )}
-                  {field.helpText && (
-                    <p className="text-xs text-muted-foreground">
-                      {field.helpText}
-                    </p>
-                  )}
-                  {missingRequired.has(field.name) && (
-                    <p className="text-xs text-destructive">
-                      This field is required.
-                    </p>
-                  )}
-                </div>
-              ))}
+                    )}
+                    {field.type === "checkbox" ? (
+                      <div className="flex items-center gap-2">
+                        <PreviewFieldInput
+                          field={field}
+                          value={values[field.name]}
+                          onChange={value =>
+                            setValues(prev => ({
+                              ...prev,
+                              [field.name]: value,
+                            }))
+                          }
+                        />
+                        <Label htmlFor={`preview-${field.name}`}>
+                          {field.label || field.name}
+                          {field.required && (
+                            <span className="ml-1 text-destructive">*</span>
+                          )}
+                        </Label>
+                      </div>
+                    ) : (
+                      <PreviewFieldInput
+                        field={field}
+                        value={values[field.name]}
+                        onChange={value =>
+                          setValues(prev => ({ ...prev, [field.name]: value }))
+                        }
+                      />
+                    )}
+                    {field.helpText && (
+                      <p className="text-xs text-muted-foreground">
+                        {field.helpText}
+                      </p>
+                    )}
+                    {missingRequired.has(field.name) && (
+                      <p className="text-xs text-destructive">
+                        This field is required.
+                      </p>
+                    )}
+                  </div>
+                )
+              )}
 
               <Button
                 type="button"
