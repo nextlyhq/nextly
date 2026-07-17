@@ -241,18 +241,14 @@ export function submissionsCollection(
     },
 
     hooks: {
-      // Auto-set submittedAt on creation; stamp admin edits of submitted data
+      // Auto-set submittedAt timestamp on creation. (The edit stamp for
+      // updates is registered in plugin.ts init — direct registry hooks are
+      // the path that runs for every API surface.)
       beforeValidate: [
         (context: HookContext) => {
           const { data, operation } = context;
           if (operation === "create" && data && !data.submittedAt) {
             data.submittedAt = new Date();
-          }
-          // Changing what the visitor submitted must leave a visible trace —
-          // an edited submission is never indistinguishable from the original.
-          if (operation === "update" && data && data.data !== undefined) {
-            data.editedAt = new Date();
-            data.editedBy = context.user?.id ?? null;
           }
           return data;
         },

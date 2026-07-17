@@ -22,6 +22,7 @@ import {
   Badge,
   Button,
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -37,7 +38,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { FormField } from "../../../types";
@@ -280,18 +281,31 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
   );
 
   // --- columns --------------------------------------------------------------
+  // Hidden field columns, per form. Wide forms start with everything past
+  // the first few hidden; the toolbar's Columns menu toggles the rest in.
+  const [hiddenFieldColumns, setHiddenFieldColumns] = useState<Set<string>>(
+    new Set()
+  );
+  useEffect(() => {
+    setHiddenFieldColumns(
+      new Set(
+        (selectedForm?.fields ?? [])
+          .slice(VISIBLE_FIELD_COLUMNS)
+          .map(field => field.name)
+      )
+    );
+  }, [selectedForm]);
+
   const columns = useMemo<NextlyColumn<SubmissionRow>[]>(() => {
     if (selectedForm) {
-      // One form selected: real per-field columns. The first few are
-      // visible; the rest stay toggleable in the column selector.
-      const fieldColumns = selectedForm.fields.map<NextlyColumn<SubmissionRow>>(
-        (field, index) => ({
+      // One form selected: real per-field columns.
+      const fieldColumns = selectedForm.fields
+        .filter(field => !hiddenFieldColumns.has(field.name))
+        .map<NextlyColumn<SubmissionRow>>(field => ({
           name: `data.${field.name}`,
           header: field.label || field.name,
           accessor: row => formatExportValue(row.data?.[field.name], field),
-          hidden: index >= VISIBLE_FIELD_COLUMNS,
-        })
-      );
+        }));
       return [
         ...fieldColumns,
         {
@@ -330,7 +344,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
         accessor: row => formatDate(row.submittedAt),
       },
     ];
-  }, [selectedForm, formNameById]);
+  }, [selectedForm, formNameById, hiddenFieldColumns]);
 
   // --- actions ---------------------------------------------------------------
   const patchSubmission = useCallback(
@@ -455,47 +469,83 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
           </Tabs>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline">
-              <Download className="h-4 w-4" aria-hidden="true" />
-              Export
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="shadow-none border-border"
-          >
-            {selectedFormId ? (
-              <DropdownMenuItem asChild className="cursor-pointer">
-                <a href={exportHref("csv")} download>
-                  CSV
-                </a>
-              </DropdownMenuItem>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  {/* CSV columns come from one form's fields, so it needs a
-                      form selected; the tooltip says so instead of hiding it. */}
-                  <DropdownMenuItem
-                    disabled
+        <div className="flex items-center gap-2">
+          {selectedForm && selectedForm.fields.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline">
+                  <Columns3 className="h-4 w-4" aria-hidden="true" />
+                  Columns
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="shadow-none border-border"
+              >
+                {selectedForm.fields.map(field => (
+                  <DropdownMenuCheckboxItem
+                    key={field.name}
+                    checked={!hiddenFieldColumns.has(field.name)}
+                    onCheckedChange={checked =>
+                      setHiddenFieldColumns(prev => {
+                        const next = new Set(prev);
+                        if (checked) next.delete(field.name);
+                        else next.add(field.name);
+                        return next;
+                      })
+                    }
+                    // Keep the menu open while toggling several columns.
                     onSelect={event => event.preventDefault()}
                   >
+                    {field.label || field.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline">
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="shadow-none border-border"
+            >
+              {selectedFormId ? (
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <a href={exportHref("csv")} download>
                     CSV
-                  </DropdownMenuItem>
-                </TooltipTrigger>
-                <TooltipContent side="left">
-                  Select a form first — CSV columns come from its fields.
-                </TooltipContent>
-              </Tooltip>
-            )}
-            <DropdownMenuItem asChild className="cursor-pointer">
-              <a href={exportHref("json")} download>
-                JSON
-              </a>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                  </a>
+                </DropdownMenuItem>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* CSV columns come from one form's fields, so it needs a
+                      form selected; the tooltip says so instead of hiding it. */}
+                    <DropdownMenuItem
+                      disabled
+                      onSelect={event => event.preventDefault()}
+                    >
+                      CSV
+                    </DropdownMenuItem>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">
+                    Select a form first — CSV columns come from its fields.
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <a href={exportHref("json")} download>
+                  JSON
+                </a>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <DataTableView<SubmissionRow>
