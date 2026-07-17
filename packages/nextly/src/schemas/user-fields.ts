@@ -124,6 +124,18 @@ function fieldConfigToZod(field: UserFieldConfig): z.ZodTypeAny {
     }
 
     default:
+      // A plugin user field's value shape is owned by the plugin, so accept any
+      // value — but enforce the base required check for a required plugin field
+      // (buildUserFieldsSchema leaves required fields unwrapped, and z.unknown()
+      // alone would still treat a missing key as valid).
+      if ("required" in field && field.required === true) {
+        return z
+          .unknown()
+          .refine(
+            value => value !== undefined && value !== null && value !== "",
+            { message: "This field is required" }
+          );
+      }
       return z.unknown();
   }
 }

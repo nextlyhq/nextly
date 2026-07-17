@@ -180,6 +180,22 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
 ];
 
 /**
+ * The admin surfaces a field type can appear on. Each surface narrows the
+ * visible type set independently: what a picker shows resolves as the
+ * surface's own capability set ∩ the type's declared surfaces ∩ the host's
+ * excludes — every level can only remove types, never force one in. Lives
+ * here beside the surface catalogs so both the built-in surface types and
+ * plugin-declared `surfaces` reference one definition.
+ */
+export type FieldSurface = "entries" | "users" | "forms";
+
+/**
+ * The surface a plugin field type targets when its author declares none. Shared
+ * so the server-side gate and the client-side picker projection never diverge.
+ */
+export const DEFAULT_FIELD_SURFACES: readonly FieldSurface[] = ["entries"];
+
+/**
  * Field types that exist only on specific admin surfaces. They are NOT part
  * of the canonical `FieldType` union: a collection cannot declare them, so
  * they can never reach the schema pipeline's column mappers. Their storage

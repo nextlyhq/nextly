@@ -26,7 +26,7 @@ import {
 import { useCallback, useMemo } from "react";
 
 import type {
-  FormField,
+  AnyFormField,
   ConditionalLogic,
   ConditionalLogicCondition,
 } from "../../../types";
@@ -36,12 +36,12 @@ import type {
 // ============================================================================
 
 export interface ConditionalLogicEditorProps {
-  /** The field being edited */
-  field: FormField;
+  /** The field being edited (built-in or plugin-contributed). */
+  field: AnyFormField;
   /** All fields in the form (for field references) */
-  allFields: FormField[];
+  allFields: AnyFormField[];
   /** Callback when conditional logic is updated */
-  onUpdate: (updates: Partial<FormField>) => void;
+  onUpdate: (updates: Partial<AnyFormField>) => void;
 }
 
 // ============================================================================

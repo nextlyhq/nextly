@@ -14,10 +14,13 @@ import {
   Textarea,
 } from "@nextlyhq/ui";
 import { USER_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
-import { FieldTypePicker } from "@admin/components/field-ui";
+import {
+  FieldTypePicker,
+  usePluginFieldTypeEntries,
+} from "@admin/components/field-ui";
 import { ChevronDown, Info, Loader2 } from "@admin/components/icons";
 import {
   Form,
@@ -31,7 +34,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import type {
-  UserFieldType,
+  UserFieldTypeId,
   UserFieldDefinitionRecord,
 } from "@admin/services/userFieldsApi";
 
@@ -57,8 +60,10 @@ export interface UserFieldFormProps {
   onSubmit: (values: UserFieldFormValues) => void;
 }
 
-/** Types that render a placeholder input on the profile form. */
-const PLACEHOLDER_TYPES: readonly UserFieldType[] = [
+// `readonly string[]` (not the built-in union) so membership checks accept a
+// plugin-contributed type id; a plugin type is simply not a member, which
+// correctly hides the placeholder control for it.
+const PLACEHOLDER_TYPES: readonly string[] = [
   "text",
   "textarea",
   "email",
@@ -95,6 +100,19 @@ export function UserFieldForm({
   const showNumberBounds = selectedType === "number";
   const showValidation = showLengthBounds || showNumberBounds;
 
+  // Built-in user-field types plus any plugin type that opted into the users
+  // surface. A plugin whose id reuses a built-in never shadows it.
+  const pluginTypeEntries = usePluginFieldTypeEntries("users");
+  const typeEntries = useMemo(() => {
+    const builtinTypes = new Set<string>(
+      USER_FIELD_TYPE_CATALOG.map(entry => entry.type)
+    );
+    return [
+      ...USER_FIELD_TYPE_CATALOG,
+      ...pluginTypeEntries.filter(entry => !builtinTypes.has(entry.type)),
+    ];
+  }, [pluginTypeEntries]);
+
   // Populate form when field data loads in edit mode
   useEffect(() => {
     if (userField && isEdit) {
@@ -118,7 +136,7 @@ export function UserFieldForm({
   // Reset type-specific fields when switching field type, so a default or a
   // bound declared for one type never survives into a type it cannot fit.
   const handleTypeChange = useCallback(
-    (newType: UserFieldType) => {
+    (newType: UserFieldTypeId) => {
       const current = form.getValues();
       form.reset({
         ...current,
@@ -210,7 +228,7 @@ export function UserFieldForm({
                     <FormItem>
                       <FormControl>
                         <FieldTypePicker
-                          entries={USER_FIELD_TYPE_CATALOG}
+                          entries={typeEntries}
                           columns={4}
                           value={field.value}
                           onChange={val => {

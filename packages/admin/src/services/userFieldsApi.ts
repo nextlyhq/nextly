@@ -38,11 +38,19 @@ export type UserFieldType =
   | "checkbox"
   | "date";
 
+/**
+ * A user field's type on the wire: a built-in scalar or a plugin-contributed
+ * type that opted into the users surface. The `(string & {})` arm admits the
+ * plugin id while keeping built-in autocomplete; use `UserFieldType` for logic
+ * that only ever branches on the built-ins.
+ */
+export type UserFieldTypeId = UserFieldType | (string & {});
+
 export interface UserFieldDefinitionRecord {
   id: string;
   name: string;
   label: string;
-  type: UserFieldType;
+  type: UserFieldTypeId;
   required: boolean;
   defaultValue: string | null;
   options: { label: string; value: string }[] | null;
@@ -63,7 +71,7 @@ export interface UserFieldDefinitionRecord {
 export interface CreateUserFieldPayload {
   name: string;
   label: string;
-  type: UserFieldType;
+  type: UserFieldTypeId;
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
@@ -79,7 +87,7 @@ export interface CreateUserFieldPayload {
 
 export interface UpdateUserFieldPayload {
   name?: string;
-  type?: UserFieldType;
+  type?: UserFieldTypeId;
   label?: string;
   required?: boolean;
   defaultValue?: string | null;

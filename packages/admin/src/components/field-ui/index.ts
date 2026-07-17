@@ -15,12 +15,17 @@ export type {
   FieldDefaultValueInputProps,
 } from "./FieldDefaultValueInput";
 
-// The options editor lives with the schema builder (its richest consumer)
-// and is surfaced here under the kit's naming: controlled options list with
-// drag reorder, auto-generated values, CSV/JSON import, and whole-batch
-// duplicate reporting.
-export { SelectOptionsEditor as FieldOptionsEditor } from "../features/schema-builder/SelectOptionsEditor";
+// Controlled options list with drag reorder, auto-generated values, CSV/JSON
+// import, and whole-batch duplicate reporting. Owns only the option list; a
+// surface layers its own field-admin knobs (multi-select, clearable, ...)
+// around it. `withOptionIds` seeds drag ids onto plain {label,value} data.
+export { FieldOptionsEditor, withOptionIds } from "./FieldOptionsEditor";
 export type {
-  SelectOption as FieldOption,
-  SelectOptionsEditorProps as FieldOptionsEditorProps,
-} from "../features/schema-builder/types";
+  FieldOption,
+  FieldOptionsEditorProps,
+} from "./FieldOptionsEditor";
+
+// Merges plugin-contributed field types for a picker surface into catalog rows
+// a FieldTypePicker renders; a surface passes the result alongside its built-in
+// entries so plugin types appear in the picker, surface-filtered.
+export { usePluginFieldTypeEntries } from "./usePluginFieldTypeEntries";

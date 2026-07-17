@@ -2,7 +2,7 @@
 // three kinds (collection / single / component). Each builder page constructs
 // its own config and passes it down — shared components never branch on `kind`.
 
-import type { FieldPrimitiveType } from "@admin/types/collection";
+import type { FieldTypeId } from "@admin/types/collection";
 
 export type BuilderKind = "collection" | "single" | "component";
 
@@ -35,6 +35,6 @@ export type BuilderConfig = {
   picker: {
     /** Field types to omit from FieldPickerModal. Empty for all kinds today
      * per audit findings; reserved for future product decisions. */
-    excludedTypes?: readonly FieldPrimitiveType[];
+    excludedTypes?: readonly FieldTypeId[];
   };
 };
