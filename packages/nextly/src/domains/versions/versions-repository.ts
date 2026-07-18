@@ -2,15 +2,11 @@
  * Repository for `nextly_versions`, the global content-version store.
  *
  * Built on the adapter DB API (VersionsDbApi) so the same class can be
- * constructed with either the adapter or a transaction context, but the two
- * are not interchangeable for every method. `insertVersion` and
- * `getMaxVersionNo` return plain integers/strings and are safe via either;
- * `listByDoc` and `findByVersionNo` decode `createdAt`/`snapshot` through the
- * Drizzle-backed adapter select (JSON columns are parsed, timestamps become
- * `Date`), so they must be issued via the adapter, not a raw transaction
- * context, which would return the undecoded driver values instead. Column
- * names are the Drizzle property names (camelCase); the adapter maps them to
- * snake_case.
+ * constructed with either the adapter or a transaction context. All reads go
+ * through the Drizzle-backed adapter select (the transaction context binds its
+ * executor to the same path), so `createdAt`/`snapshot` are decoded (JSON
+ * parsed, timestamps become `Date`) whichever handle is used. Column names are
+ * the Drizzle property names (camelCase); the adapter maps them to snake_case.
  *
  * @module domains/versions/versions-repository
  */
@@ -174,19 +170,16 @@ export class VersionsRepository {
 
   /**
    * Highest durable (non-autosave) version_no for a document, or 0 if none.
-   * The caller allocates the next number as `getMaxVersionNo(ref) + 1`.
-   * Note this read does not run inside the caller's write transaction: the
-   * transaction context's `select` delegates to the adapter's main
-   * connection pool, not the transaction's own connection, on Postgres and
-   * MySQL. Duplicate version_no is guarded by the partial unique index on
-   * Postgres; a MySQL/SQLite serialization or unique guard is needed in a
-   * later stage before capture is wired into concurrent writes.
+   * The caller allocates the next number as `getMaxVersionNo(ref) + 1`. When
+   * invoked with the transaction context this read runs inside the caller's
+   * transaction (the tx context binds its executor), so it sees the doc's own
+   * uncommitted rows. Duplicate version_no is still only DB-guarded by the
+   * partial unique index on Postgres; a MySQL/SQLite serialization or unique
+   * guard is needed before capture is wired into concurrent writes.
    */
   async getMaxVersionNo(ref: VersionRef): Promise<number> {
-    // Order by version_no desc and take a single row so this reads at most one
-    // record instead of scanning every durable version (whose rows carry the
-    // full snapshot). The adapter select does not project columns, so limiting
-    // the row count is how the snapshot payload is kept off this hot path.
+    // Project only version_no and take a single row (order desc, limit 1), so
+    // this never materializes a full version row (which carries the snapshot).
     const rows = await this.db.select<VersionRow>(TABLE, {
       columns: ["versionNo"],
       where: {
