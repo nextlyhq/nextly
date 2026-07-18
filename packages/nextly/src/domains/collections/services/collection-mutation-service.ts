@@ -391,14 +391,16 @@ export class CollectionMutationService extends BaseService {
       typeof finalData.slug === "string" && finalData.slug.trim() !== "";
     if (provided) {
       // Explicit slug: sanitize only, never dedupe — respect the caller's value.
-      finalData.slug = generateSlug(finalData.slug as string);
+      const sanitized = generateSlug(finalData.slug as string);
+      // generateSlug strips everything outside [\w-], so an explicit slug of
+      // only non-ASCII/punctuation (e.g. "你好") sanitizes to empty. Treat that
+      // as unset and derive a valid, unique slug instead of persisting "".
+      finalData.slug =
+        sanitized !== ""
+          ? sanitized
+          : await this.deriveSlug(finalData, isSlugTaken);
     } else {
-      const titleValue = finalData.title ?? finalData.name ?? "";
-      const baseSlug =
-        typeof titleValue === "string" && titleValue.trim()
-          ? generateSlug(titleValue)
-          : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-      finalData.slug = await this.dedupeSlug(baseSlug, isSlugTaken);
+      finalData.slug = await this.deriveSlug(finalData, isSlugTaken);
     }
 
     // The `title` column is NOT NULL: fall back to the name, then the slug.
@@ -408,6 +410,45 @@ export class CollectionMutationService extends BaseService {
         typeof nameValue === "string" && nameValue.trim()
           ? nameValue.trim()
           : finalData.slug;
+    }
+  }
+
+  /**
+   * Derive a unique slug from the title (or name), falling back to a
+   * collision-proof token. `generateSlug` strips everything outside [\w-], so a
+   * CJK/emoji/punctuation-only title (or a missing one) yields an empty base;
+   * the `entry-<ts>-<rand>` fallback keeps the required, unique `slug` column
+   * populated instead of failing required-field validation.
+   */
+  private async deriveSlug(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<string> {
+    const titleValue = finalData.title ?? finalData.name ?? "";
+    const derived =
+      typeof titleValue === "string" && titleValue.trim()
+        ? generateSlug(titleValue)
+        : "";
+    const baseSlug =
+      derived !== ""
+        ? derived
+        : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    return this.dedupeSlug(baseSlug, isSlugTaken);
+  }
+
+  /**
+   * Re-sanitize `slug` after field-level beforeValidate hooks run. Those hooks
+   * execute after slug generation, so a hook that sets `slug` (for example from
+   * the title) could introduce an unsanitized value that would otherwise be
+   * validated and stored verbatim. Normalizing here keeps the stored slug
+   * URL-safe; it is idempotent for an already-clean slug and only overwrites
+   * when sanitization yields a non-empty value, so a hook that clears the slug
+   * still surfaces as the normal required-field validation error.
+   */
+  private reSanitizeSlug(finalData: Record<string, unknown>): void {
+    if (typeof finalData.slug === "string" && finalData.slug.trim() !== "") {
+      const sanitized = generateSlug(finalData.slug);
+      if (sanitized !== "") finalData.slug = sanitized;
     }
   }
 
@@ -593,6 +634,10 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
+      // so the validated and stored value stays URL-safe.
+      this.reSanitizeSlug(finalData);
 
       {
         const validationIssues = await validateEntryData(
@@ -1964,6 +2009,10 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
+      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
+      // so the validated and stored value stays URL-safe.
+      this.reSanitizeSlug(finalData);
+
       {
         const validationIssues = await validateEntryData(
           finalData,
@@ -2823,6 +2872,10 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
         });
       }
+
+      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
+      // so the validated and stored value stays URL-safe.
+      this.reSanitizeSlug(finalData);
 
       {
         const validationIssues = await validateEntryData(
