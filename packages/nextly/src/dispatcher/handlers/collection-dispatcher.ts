@@ -86,6 +86,8 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+// Shared guard that centralizes required + stale schema-version validation for
+// all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -463,7 +465,11 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
-      const currentVersion = collection.schemaVersion;
+      // Default legacy rows (schema_version NULL) to 1 so a first save is not
+      // rejected as version-less. The registry types schemaVersion as `number`
+      // via a type assertion, but the DB column is nullable, so the value can
+      // be null at runtime; singles/components apply the same `?? 1` fallback.
+      const currentVersion = collection.schemaVersion ?? 1;
       // Reject a stale or version-less UI save before any DDL runs. The shared
       // guard gives all three entity kinds (collections, singles, components)
       // one optimistic-lock behavior and one error surface.
