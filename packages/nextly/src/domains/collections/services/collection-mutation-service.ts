@@ -867,6 +867,9 @@ export class CollectionMutationService extends BaseService {
         ...finalData,
         created_at: now,
         updated_at: now,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
       const entryData: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(rawEntryData)) {
@@ -2130,8 +2133,17 @@ export class CollectionMutationService extends BaseService {
       const entryData = {
         id: this.collectionService.generateId(),
         ...finalData,
-        createdAt: nowForTxCreate,
-        updatedAt: nowForTxCreate,
+        // Snake_case keys: the runtime Drizzle schema names these columns
+        // created_at / updated_at / created_by, and the adapter maps by column
+        // name. (The prior camelCase createdAt/updatedAt keys here were ignored
+        // by Drizzle and only "worked" via the columns' DB defaults — but a
+        // strict driver like better-sqlite3 rejects the whole insert once any
+        // unknown key is present, so bulk create needs the real column names.)
+        created_at: nowForTxCreate,
+        updated_at: nowForTxCreate,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
 
       // Insert using transaction context
@@ -2999,8 +3011,17 @@ export class CollectionMutationService extends BaseService {
       const entryData = {
         id: this.collectionService.generateId(),
         ...finalData,
-        createdAt: nowForTxCreate,
-        updatedAt: nowForTxCreate,
+        // Snake_case keys: the runtime Drizzle schema names these columns
+        // created_at / updated_at / created_by, and the adapter maps by column
+        // name. (The prior camelCase createdAt/updatedAt keys here were ignored
+        // by Drizzle and only "worked" via the columns' DB defaults — but a
+        // strict driver like better-sqlite3 rejects the whole insert once any
+        // unknown key is present, so bulk create needs the real column names.)
+        created_at: nowForTxCreate,
+        updated_at: nowForTxCreate,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
 
       // Insert using transaction context

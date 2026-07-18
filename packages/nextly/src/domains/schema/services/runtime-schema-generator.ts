@@ -204,6 +204,9 @@ function buildSystemDrizzleColumn(
       // publish anything. Length 20 leaves headroom over "published" (9 chars).
       return pgVarchar("status", { length: 20 }).notNull().default("draft");
     }
+    // Row owner — nullable text (matches the id column type); no default so
+    // system/seed creates and existing rows stay null.
+    if (sys.name === "created_by") return pgText("created_by");
     // title / slug — text NOT NULL.
     return pgText(sys.name).notNull();
   }
@@ -220,6 +223,10 @@ function buildSystemDrizzleColumn(
     if (sys.name === "status") {
       return mysqlVarchar("status", { length: 20 }).notNull().default("draft");
     }
+    // Row owner — nullable varchar(36) (matches the id column type).
+    if (sys.name === "created_by") {
+      return mysqlVarchar("created_by", { length: 36 });
+    }
     return mysqlVarchar(sys.name, { length: 255 }).notNull();
   }
   // sqlite
@@ -234,6 +241,8 @@ function buildSystemDrizzleColumn(
     // SQLite has no varchar — text with default 'draft' is the equivalent.
     return sqliteText("status").notNull().default("draft");
   }
+  // Row owner — nullable text (matches the id column type).
+  if (sys.name === "created_by") return sqliteText("created_by");
   return sqliteText(sys.name).notNull();
 }
 

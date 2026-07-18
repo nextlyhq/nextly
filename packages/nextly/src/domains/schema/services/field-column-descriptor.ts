@@ -405,6 +405,16 @@ export function getSystemColumnDescriptors(
       primaryKey: false,
       default: "now()",
     });
+    // Owner of the row, stamped with the creating user's id. Nullable: existing
+    // rows and system/seed creates have no user. Mirrors
+    // runtime-schema-generator's pgText("created_by") (text, matching the id
+    // column type).
+    cols.push({
+      name: "created_by",
+      dialectType: "text",
+      nullable: true,
+      primaryKey: false,
+    });
     if (opts.hasStatus) {
       // Must mirror runtime-schema-generator's
       // pgVarchar("status", { length: 20 }).notNull().default("draft").
@@ -458,6 +468,16 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    // Owner of the row (creating user's id). Nullable; mirrors
+    // runtime-schema-generator's mysqlVarchar("created_by", { length: 36 })
+    // (matching the id column type).
+    cols.push({
+      name: "created_by",
+      dialectType: "varchar(36)",
+      length: 36,
+      nullable: true,
+      primaryKey: false,
+    });
     if (opts.hasStatus) {
       cols.push({
         name: "status",
@@ -501,6 +521,15 @@ export function getSystemColumnDescriptors(
     cols.push({
       name: "updated_at",
       dialectType: "integer",
+      nullable: true,
+      primaryKey: false,
+    });
+    // Owner of the row (creating user's id). Nullable; mirrors
+    // runtime-schema-generator's sqliteText("created_by") (matching the id
+    // column type).
+    cols.push({
+      name: "created_by",
+      dialectType: "text",
       nullable: true,
       primaryKey: false,
     });

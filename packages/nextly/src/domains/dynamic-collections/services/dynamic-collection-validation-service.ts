@@ -89,6 +89,8 @@ export const RESERVED_FIELD_NAMES = [
   "slug",
   "created_at",
   "updated_at",
+  // System owner column, auto-added and stamped on create.
+  "created_by",
 ] as const;
 
 export const collectionNameSchema = z

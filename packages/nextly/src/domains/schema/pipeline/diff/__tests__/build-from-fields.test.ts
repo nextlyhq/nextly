@@ -58,6 +58,7 @@ const RESERVED_NAMES = new Set([
   "slug",
   "created_at",
   "updated_at",
+  "created_by",
 ]);
 
 function userColumns(columns: ColumnSpec[]): ColumnSpec[] {
@@ -72,7 +73,7 @@ function findColumn(
 }
 
 describe("buildDesiredTableFromFields - reserved columns", () => {
-  it("PG: injects id + created_at + updated_at + title + slug", () => {
+  it("PG: injects id + created_at + updated_at + title + slug + created_by", () => {
     const table = buildDesiredTableFromFields("dc_x", [], "postgresql");
     expect(findColumn(table.columns, "id")).toEqual({
       name: "id",
@@ -91,6 +92,12 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     });
     expect(findColumn(table.columns, "created_at")?.type).toBe("timestamp");
     expect(findColumn(table.columns, "updated_at")?.type).toBe("timestamp");
+    // Owner column: nullable text (matches the id column type), no default.
+    expect(findColumn(table.columns, "created_by")).toEqual({
+      name: "created_by",
+      type: "text",
+      nullable: true,
+    });
   });
 
   it("keeps the system title column when a component field is named 'title'", () => {

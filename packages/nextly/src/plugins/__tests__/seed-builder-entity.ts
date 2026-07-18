@@ -39,7 +39,14 @@ const silentLogger: Logger = {
 };
 
 /** Reserved fields the schema service auto-adds; never user/plugin-owned. */
-const RESERVED = new Set(["id", "title", "slug", "created_at", "updated_at"]);
+const RESERVED = new Set([
+  "id",
+  "title",
+  "slug",
+  "created_at",
+  "updated_at",
+  "created_by",
+]);
 
 export interface SeedBuilderCollectionOptions {
   slug: string;
