@@ -1,6 +1,7 @@
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, it, expect } from "vitest";
 
+import { getDialectTables } from "../../../database/index";
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
 import { nextlyWebhookDeliveries } from "../postgres";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -27,6 +28,22 @@ describe("webhook system tables", () => {
       const names = getCoreSchema(dialect).tables.map(t => t.name);
       for (const name of WEBHOOK_TABLES) {
         expect(names).toContain(name);
+      }
+    });
+  }
+
+  for (const dialect of DIALECTS) {
+    it(`exports the webhook tables from the ${dialect} dialect bundle`, () => {
+      // getCoreSchema registration is not enough: freshPushSchema creates a
+      // fresh database from getDialectTables (the flat bundle), so the tables
+      // must be present there too or they never materialize on first boot.
+      const tables = getDialectTables(dialect) as Record<string, unknown>;
+      for (const key of [
+        "nextlyEvents",
+        "nextlyWebhooks",
+        "nextlyWebhookDeliveries",
+      ]) {
+        expect(tables[key]).toBeDefined();
       }
     });
   }
