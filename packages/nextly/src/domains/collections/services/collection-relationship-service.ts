@@ -396,6 +396,13 @@ function getTargetCollection(field: FieldDefinition): string | undefined {
       ? field.relationTo[0]
       : field.relationTo;
   }
+  // A many-to-many field carries its target on `options.target`, not
+  // `relationTo` (the typed `relationship()` helper never sets `relationTo`
+  // for m2m). Without this, every junction insert/delete/fetch resolves no
+  // target and silently no-ops.
+  if (field.options?.target) {
+    return field.options.target;
+  }
   return undefined;
 }
 
@@ -560,20 +567,30 @@ export class CollectionRelationshipService extends BaseService {
    * Run a SELECT-style raw SQL tag and return its rows in a normalized
    * `{ rows: [...] }` shape regardless of dialect.
    *
-   * Drizzle's API for raw SQL differs across dialects:
-   *   - PG / MySQL: `db.execute(sqlTag)` → `{ rows, ... }`
-   *   - SQLite (better-sqlite3): `db.all(sqlTag)` → `unknown[]`
+   * Drizzle's raw-execute result shape differs across drivers:
+   *   - Postgres (node-postgres): `db.execute(sqlTag)` → `{ rows: [...] }`
+   *   - MySQL (mysql2): `db.execute(sqlTag)` → a `[rows, fieldPackets]` tuple
+   *     (or a flat rows array), NOT `{ rows }`
+   *   - SQLite (better-sqlite3): `db.all(sqlTag)` → `unknown[]` (no execute())
    *
-   * Without this helper, the existing `(this.db as any).execute(...)`
-   * calls in the junction-table code paths blow up at runtime on
-   * SQLite with `this.db.execute is not a function`.
+   * Without this helper, the junction-table code paths blow up at runtime on
+   * SQLite (`this.db.execute is not a function`) and on MySQL (reading
+   * `.rows` off the tuple yields undefined). The MySQL normalization mirrors
+   * the defensive handling in schema/pipeline/classifier/count-helpers.ts.
    */
   private async selectRawSql(query: unknown): Promise<{ rows: unknown[] }> {
     if (this.dialect === "sqlite") {
       const rows = this.db.all(query) as unknown[];
       return { rows };
     }
-    return (await this.db.execute(query)) as { rows: unknown[] };
+    const result: unknown = await this.db.execute(query);
+    if (this.dialect === "mysql" && Array.isArray(result)) {
+      // Tuple form `[rows, fieldPackets]` -> take rows; a flat rows array (first
+      // element is a row object, not an array) is already the rows.
+      const first = result[0];
+      return { rows: Array.isArray(first) ? (first as unknown[]) : result };
+    }
+    return result as { rows: unknown[] };
   }
 
   /**
@@ -1904,13 +1921,34 @@ export class CollectionRelationshipService extends BaseService {
     for (const targetId of relatedIds) {
       try {
         const id = this.collectionService.generateId();
-        const now = new Date();
+        // This raw sql`` template binds straight to the driver, bypassing
+        // Drizzle's per-column serialization. better-sqlite3 only accepts
+        // numbers/strings/bigints/buffers/null, so a Date throws; the junction
+        // created_at column is `integer` epoch-seconds on SQLite (see
+        // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
+        const createdAt =
+          this.dialect === "sqlite"
+            ? Math.floor(Date.now() / 1000)
+            : new Date();
+
+        // "Insert, ignore an existing (source,target) pair" is spelled
+        // differently per dialect: MySQL has no ON CONFLICT (it errors with
+        // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
+        // rather than INSERT IGNORE, so only a duplicate-key conflict is
+        // swallowed while other errors (e.g. a foreign-key violation from a
+        // bad target id) still surface, matching the Postgres/SQLite
+        // ON CONFLICT DO NOTHING behaviour against the unique pair index.
+        const idCol = sql.identifier("id");
+        const conflictClause =
+          this.dialect === "mysql"
+            ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
+            : sql`ON CONFLICT DO NOTHING`;
 
         const query = sql`
           INSERT INTO ${sql.identifier(junctionTableName)}
           (id, ${sourceIdCol}, ${targetIdCol}, created_at)
-          VALUES (${id}, ${sourceEntryId}, ${targetId}, ${now})
-          ON CONFLICT DO NOTHING
+          VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
+          ${conflictClause}
         `;
 
         console.log(`[ManyToMany] Executing insert for targetId: ${targetId}`);
