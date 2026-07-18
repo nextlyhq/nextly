@@ -25,6 +25,25 @@ import type { VersionsDbApi, VersionsWhereCondition } from "./db-api";
 
 const TABLE = "nextly_versions";
 
+// Every column except `snapshot`, so metadata reads (history lists) can project
+// away the potentially large JSON payload instead of transferring then dropping
+// it. Keep in sync with VersionRow when adding a metadata column.
+const VERSION_META_COLUMNS = [
+  "id",
+  "scopeKind",
+  "scopeSlug",
+  "entryId",
+  "versionNo",
+  "status",
+  "isAutosave",
+  "label",
+  "locale",
+  "sourceVersionNo",
+  "createdBy",
+  "createdAt",
+  "updatedAt",
+] as const;
+
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
   scopeKind: VersionScopeKind;
@@ -94,13 +113,28 @@ export class VersionsRepository {
     // defaults, so id and timestamps are set explicitly here (mirrors how the
     // collection mutation service seeds dc_ rows).
     const now = new Date();
-    // `snapshot` is `unknown`; guard against values that do not serialize to a
-    // JSON string (undefined, a function, a symbol) before writing them into
-    // the NOT NULL snapshot column, where they would otherwise land as an
-    // invalid/absent value.
-    const serializedSnapshot = JSON.stringify(input.snapshot);
-    if (typeof serializedSnapshot !== "string") {
+    // A durable (non-autosave) version must carry a sequence number; only
+    // autosave rows are allowed a null version_no. Reject the invalid
+    // combination the input type cannot express, before it reaches the DB.
+    if (!input.isAutosave && input.versionNo == null) {
       throw NextlyError.internal({
+        logContext: { reason: "durable-version-missing-version-no" },
+      });
+    }
+    // `snapshot` is `unknown`; serialize defensively. JSON.stringify returns
+    // `undefined` for a top-level function/symbol/undefined and THROWS for a
+    // circular reference or a BigInt. Either way the NOT NULL snapshot column
+    // must not receive a bad value, so both cases are wrapped as a NextlyError.
+    let serializedSnapshot: string;
+    try {
+      const serialized = JSON.stringify(input.snapshot);
+      if (typeof serialized !== "string") {
+        throw new TypeError("snapshot did not serialize to a JSON string");
+      }
+      serializedSnapshot = serialized;
+    } catch (cause) {
+      throw NextlyError.internal({
+        cause: cause instanceof Error ? cause : undefined,
         logContext: { reason: "version-snapshot-not-serializable" },
       });
     }
@@ -147,6 +181,7 @@ export class VersionsRepository {
     // full snapshot). The adapter select does not project columns, so limiting
     // the row count is how the snapshot payload is kept off this hot path.
     const rows = await this.db.select<VersionRow>(TABLE, {
+      columns: ["versionNo"],
       where: {
         and: [
           ...this.docWhere(ref),
@@ -190,7 +225,10 @@ export class VersionsRepository {
     if (!opts.includeAutosave) {
       and.push({ column: "isAutosave", op: "=", value: false });
     }
-    const rows = await this.db.select<VersionRow>(TABLE, {
+    const rows = await this.db.select<VersionMeta>(TABLE, {
+      // Project metadata columns only, so the snapshot payload is never
+      // transferred for a history list (the adapter select honors `columns`).
+      columns: [...VERSION_META_COLUMNS],
       where: { and },
       // Secondary versionNo sort: seconds-precision createdAt can tie when two
       // versions are written in the same second (the tx-path SQLite encoding).
@@ -200,7 +238,6 @@ export class VersionsRepository {
       ],
       ...(typeof opts.limit === "number" ? { limit: opts.limit } : {}),
     });
-    // Strip the snapshot so a list never carries snapshots.
-    return rows.map(({ snapshot: _snapshot, ...meta }) => meta);
+    return rows;
   }
 }
