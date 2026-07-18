@@ -318,7 +318,12 @@ export class DynamicCollectionSchemaService {
     // Nullable with no default (matches getSystemColumnDescriptors) so existing
     // rows and system creates stay null; sized to the users.id column on MySQL
     // since it holds a user id, not the row id.
-    if (!_options?.isSingle) {
+    // Prefer the explicit flag, but also fall back to the `single_` table
+    // prefix so this stays in lockstep with the runtime schema / diff (which
+    // derive it from the name) even if a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+    if (!isSingleTable) {
       const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
       allColumnDefs.push(
         `  ${this.quoteIdentifier("created_by")} ${ownerType}`

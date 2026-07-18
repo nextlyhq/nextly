@@ -318,7 +318,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -459,7 +459,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version

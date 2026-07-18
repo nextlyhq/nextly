@@ -782,6 +782,14 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
+      // Final owner-column strip at the response boundary — after every
+      // afterRead hook, field-level read access, and transform — so nothing
+      // downstream can re-expose the creator's user id. (The pre-hook strip
+      // above also keeps it out of hook inputs.)
+      for (const entry of finalData as Record<string, unknown>[]) {
+        stripSystemOwnerField(entry);
+      }
+
       // Build paginated response with all metadata
       const paginatedResponse = buildPaginatedResponse(finalData, {
         total: totalDocs,
@@ -1366,6 +1374,11 @@ export class CollectionQueryService extends BaseService {
           params.richTextFormat
         );
       }
+
+      // Final owner-column strip at the response boundary — after the
+      // field-level afterRead hooks, read access, and rich-text transform — so
+      // nothing downstream can re-expose the creator's user id.
+      stripSystemOwnerField(finalData);
 
       return {
         success: true,

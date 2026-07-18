@@ -152,27 +152,32 @@ function errorToServiceResult<T = unknown>(
 }
 
 /**
- * System columns a client must never write on update: the primary key, the
- * creation timestamp, and the owner stamp (both snake_case and camelCase forms
- * a client might send). They are not declared fields, so field validation
- * passes them through — without this an authorized updater could transfer a
- * row to another user by sending `created_by`, defeating owner-only semantics,
- * or forge `created_at` / reassign `id`.
+ * System columns a client must never write: the primary key, the timestamps,
+ * and the owner stamp (both the snake_case column name and the camelCase form a
+ * client might send). They are not declared fields, so field validation passes
+ * them through. Stripping them on BOTH create and update means the service
+ * remains authoritative: on create the generated id / stamped `created_by` /
+ * timestamps win (a stray `createdBy` alias can't survive the snake-case pass
+ * and overwrite the stamp with an attacker-chosen owner), and on update an
+ * authorized updater can't transfer a row to another user, forge `created_at`,
+ * duplicate `updated_at`, or reassign `id`.
  */
-const IMMUTABLE_UPDATE_FIELDS = new Set([
+const IMMUTABLE_SYSTEM_FIELDS = new Set([
   "id",
   "created_at",
   "createdAt",
+  "updated_at",
+  "updatedAt",
   "created_by",
   "createdBy",
 ]);
 
-function stripImmutableUpdateFields(
+function stripImmutableSystemFields(
   data: Record<string, unknown>
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (!IMMUTABLE_UPDATE_FIELDS.has(key)) out[key] = value;
+    if (!IMMUTABLE_SYSTEM_FIELDS.has(key)) out[key] = value;
   }
   return out;
 }
@@ -895,7 +900,11 @@ export class CollectionMutationService extends BaseService {
       const now = new Date();
       const rawEntryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
         created_at: now,
         updated_at: now,
         // Stamp the row owner with the creating user's id so owner-only access
@@ -1497,7 +1506,7 @@ export class CollectionMutationService extends BaseService {
       // as the transaction (unlike tx.update() which delegates to the pool).
       await this.adapter.transaction(async tx => {
         const updatePayload = {
-          ...stripImmutableUpdateFields(finalData),
+          ...stripImmutableSystemFields(finalData),
           updatedAt: new Date(),
         };
 
@@ -2166,7 +2175,11 @@ export class CollectionMutationService extends BaseService {
       const nowForTxCreate = new Date();
       const entryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -2512,7 +2525,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableUpdateFields(finalData),
+          ...stripImmutableSystemFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", params.entryId),
@@ -3044,7 +3057,11 @@ export class CollectionMutationService extends BaseService {
       const nowForTxCreate = new Date();
       const entryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -3445,7 +3462,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableUpdateFields(finalData),
+          ...stripImmutableSystemFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", entryId),

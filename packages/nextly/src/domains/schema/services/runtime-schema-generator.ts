@@ -72,6 +72,11 @@ export interface RuntimeSchemaResult {
 export interface RuntimeSchemaOptions {
   /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
   status?: boolean;
+  /**
+   * True for a Single's table — suppresses the collection-only `created_by`
+   * owner column. Set internally by generateRuntimeSchema from the table name.
+   */
+  isSingle?: boolean;
 }
 
 /**
@@ -89,16 +94,22 @@ export function generateRuntimeSchema(
   dialect: SupportedDialect,
   options: RuntimeSchemaOptions = {}
 ): RuntimeSchemaResult {
+  // Single tables use the `single_` prefix (collections are `dc_`); a Single
+  // gets no owner column. Derive it here so every dialect path sees it.
+  const resolvedOptions: RuntimeSchemaOptions = {
+    ...options,
+    isSingle: options.isSingle ?? tableName.startsWith("single_"),
+  };
   let table: unknown;
   switch (dialect) {
     case "postgresql":
-      table = generatePostgresSchema(tableName, fields, options);
+      table = generatePostgresSchema(tableName, fields, resolvedOptions);
       break;
     case "mysql":
-      table = generateMySQLSchema(tableName, fields, options);
+      table = generateMySQLSchema(tableName, fields, resolvedOptions);
       break;
     case "sqlite":
-      table = generateSQLiteSchema(tableName, fields, options);
+      table = generateSQLiteSchema(tableName, fields, resolvedOptions);
       break;
     default:
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
@@ -167,6 +178,11 @@ function buildDrizzleColumnRecord(
     hasTitleField,
     hasSlugField,
     hasStatus: options.status === true,
+    // Single tables get no owner column (a Single is one global row). Set by
+    // generateRuntimeSchema from the `single_` table prefix so the runtime
+    // schema stays in lockstep with the physical table (never selects
+    // created_by for a Single).
+    isSingle: options.isSingle === true,
   })) {
     out[sys.name] = buildSystemDrizzleColumn(sys, dialect);
   }

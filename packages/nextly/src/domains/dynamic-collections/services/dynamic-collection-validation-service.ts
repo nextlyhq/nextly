@@ -89,8 +89,12 @@ export const RESERVED_FIELD_NAMES = [
   "slug",
   "created_at",
   "updated_at",
-  // System owner column, auto-added and stamped on create.
+  // System owner column, auto-added and stamped on create. Both the physical
+  // snake_case name and the camelCase alias are reserved: config validation
+  // accepts camelCase field names and snake-cases them to the same column, so
+  // a `createdBy` field would otherwise collide with the system owner column.
   "created_by",
+  "createdBy",
 ] as const;
 
 export const collectionNameSchema = z

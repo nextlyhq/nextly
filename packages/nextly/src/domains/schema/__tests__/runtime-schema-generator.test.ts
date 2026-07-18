@@ -76,6 +76,19 @@ describe("generateRuntimeSchema", () => {
       }
     });
 
+    it("omits created_by for a Single table (single_ prefix)", () => {
+      for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+        // A Single is one global row with no per-user owner — the collection
+        // owner column must not appear, or the runtime schema would select a
+        // column the Single's physical table never gets.
+        const columns = getColumns(
+          generateRuntimeSchema("single_site_settings", baseFields, dialect)
+            .table
+        );
+        expect(columns).not.toHaveProperty("created_by");
+      }
+    });
+
     it("does not duplicate title/slug columns if user defines them", () => {
       const fields: FieldDefinition[] = [
         { name: "title", type: "text", required: true },

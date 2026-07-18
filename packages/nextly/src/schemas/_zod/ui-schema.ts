@@ -41,14 +41,11 @@ export const UI_FIELD_TYPES = [
 ] as const;
 
 /** Field names the framework reserves (system columns). */
-const RESERVED_FIELD_NAMES = new Set([
-  "id",
-  "created_at",
-  "updated_at",
-  // System owner column, auto-injected and stamped on create — a ui-schema/API
-  // field of this name would collide with (or overwrite) it.
-  "created_by",
-]);
+// Universal system columns present on every entity table (collection, single,
+// component). The collection-only owner column (`created_by`/`createdBy`) is
+// NOT reserved here — it would wrongly reject valid single/component fields;
+// it is enforced per-entity by assertValidFieldsPayload({ kind: "collection" }).
+const RESERVED_FIELD_NAMES = new Set(["id", "created_at", "updated_at"]);
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 
