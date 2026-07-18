@@ -741,27 +741,38 @@ export class SqliteAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const columns = Object.keys(data);
-        const values = Object.values(data).map(sanitizeSqliteValue);
+        const mapped = this.mapKeysToSqlColumns(
+          this.getTableObject(table),
+          data
+        );
+        const columns = Object.keys(mapped);
+        const values = Object.values(mapped).map(sanitizeSqliteValue);
         const placeholders = values.map(() => "?").join(", ");
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
+        if (returningEmpty) {
+          // No RETURNING clause: better-sqlite3's .all() rejects a statement
+          // that returns no columns, so run it and return nothing.
+          stmt.run(...values);
+          return undefined as T;
+        }
         const rows = stmt.all(...values) as T[];
-        return rows[0];
+        // Return JS property-named keys to match the non-transactional insert.
+        return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -772,11 +783,15 @@ export class SqliteAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const columns = Object.keys(data[0]);
+        const tableObj = this.getTableObject(table);
+        const mappedRecords = data.map(r =>
+          this.mapKeysToSqlColumns(tableObj, r)
+        );
+        const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
 
-        for (const record of data) {
+        for (const record of mappedRecords) {
           const placeholders: string[] = [];
           for (const col of columns) {
             allValues.push(sanitizeSqliteValue(record[col]));
@@ -787,20 +802,26 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
-        return stmt.all(...allValues) as T[];
+        if (returningEmpty) {
+          stmt.run(...allValues);
+          return [];
+        }
+        return (stmt.all(...allValues) as T[]).map(r =>
+          this.mapRowKeysToJs(tableObj, r)
+        );
       },
 
       // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD

@@ -292,6 +292,148 @@ export abstract class DrizzleAdapter {
     return mapped;
   }
 
+  /**
+   * Map data keys from Drizzle JS property names to SQL column names for the
+   * raw-SQL transaction insert path. The transaction context builds INSERT
+   * statements from Object.keys(data) used directly as column identifiers, so a
+   * table whose Drizzle property names differ from its SQL column names
+   * (camelCase core tables like nextly_versions) needs its keys translated
+   * first. For tables whose property names already equal their column names
+   * (the dynamic dc_/single_/comp_ tables) every lookup is identity, so
+   * existing callers are unaffected.
+   */
+  protected mapKeysToSqlColumns(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (!tableObj || typeof tableObj !== "object") return data;
+
+    const jsToSql = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        jsToSql.set(jsName, (colDef as { name: string }).name);
+      }
+    }
+    if (jsToSql.size === 0) return data;
+
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      out[jsToSql.get(key) ?? key] = value;
+    }
+    return out;
+  }
+
+  /**
+   * Map a list of column identifiers (Drizzle property names) to their SQL
+   * column names, for the raw-SQL transaction insert paths that build a
+   * RETURNING clause from `options.returning`. Same identity behavior as
+   * `mapKeysToSqlColumns`: names that are already SQL columns (the dynamic
+   * dc_/single_/comp_ tables) pass through unchanged.
+   */
+  protected mapColumnNamesToSql(tableObj: unknown, names: string[]): string[] {
+    if (!tableObj || typeof tableObj !== "object") return names;
+
+    const jsToSql = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        jsToSql.set(jsName, (colDef as { name: string }).name);
+      }
+    }
+    if (jsToSql.size === 0) return names;
+
+    return names.map(n => jsToSql.get(n) ?? n);
+  }
+
+  /**
+   * Remap a raw-SQL result row's KEYS from SQL column names to Drizzle property
+   * names, so the raw-SQL transaction insert paths return the same key casing
+   * as the non-transactional (Drizzle) insert. Keys only - values are left
+   * untouched, so this does not change how JSON/date columns are decoded. For
+   * tables whose property names already equal their SQL columns (the dynamic
+   * dc_/single_/comp_ tables) every lookup is identity, so existing callers see
+   * no change.
+   */
+  protected mapRowKeysToJs<T = unknown>(tableObj: unknown, row: T): T {
+    if (
+      !tableObj ||
+      typeof tableObj !== "object" ||
+      !row ||
+      typeof row !== "object"
+    ) {
+      return row;
+    }
+
+    const sqlToJs = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        sqlToJs.set((colDef as { name: string }).name, jsName);
+      }
+    }
+    if (sqlToJs.size === 0) return row;
+
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+      out[sqlToJs.get(key) ?? key] = value;
+    }
+    return out as T;
+  }
+
+  /**
+   * Build a Drizzle column projection object (`{ propertyName: column }`) from a
+   * requested column list, used by `select` (columns) and `insert` (returning).
+   * A requested name resolves against either the Drizzle property name
+   * (camelCase) or the SQL column name (snake_case); the projection is keyed by
+   * the property name so the row shape matches a full select. Returns undefined
+   * for `"*"` or when nothing resolves, so callers fall back to all columns.
+   */
+  protected buildColumnProjection(
+    tableObj: unknown,
+    names: string[] | "*" | undefined
+  ): Record<string, unknown> | undefined {
+    if (
+      names == null ||
+      names === "*" ||
+      !tableObj ||
+      typeof tableObj !== "object"
+    ) {
+      return undefined;
+    }
+    const cols = getColumns(tableObj as never);
+    const byAnyName: Record<string, { jsName: string; col: unknown }> = {};
+    for (const [jsName, col] of Object.entries(cols)) {
+      byAnyName[jsName] = { jsName, col };
+      const sqlName = (col as { name?: unknown })?.name;
+      if (typeof sqlName === "string") byAnyName[sqlName] = { jsName, col };
+    }
+    const projection: Record<string, unknown> = {};
+    for (const name of names) {
+      const hit = byAnyName[name];
+      if (hit) projection[hit.jsName] = hit.col;
+    }
+    return Object.keys(projection).length ? projection : undefined;
+  }
+
   // ============================================================
   // Connection Status (Default implementations, can override)
   // ============================================================
@@ -479,7 +621,16 @@ export abstract class DrizzleAdapter {
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const db = executor ?? this.getDrizzle<any>();
-        let query = db.select().from(tableObj);
+        // Honor the columns projection when provided: select only the requested
+        // columns instead of every column, so callers can avoid transferring
+        // large columns (e.g. JSON snapshots) they do not need. Falls back to a
+        // full select when no columns are requested or none resolve.
+        const projection = options?.columns?.length
+          ? this.buildColumnProjection(tableObj, options.columns)
+          : undefined;
+        let query = projection
+          ? db.select(projection).from(tableObj)
+          : db.select().from(tableObj);
 
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
@@ -598,25 +749,40 @@ export abstract class DrizzleAdapter {
         const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
 
-        if (caps.supportsReturning && options?.returning) {
-          const result = await db
-            .insert(tableObj)
-            .values(mappedData)
-            .returning();
+        const returning = options?.returning;
+        // An empty array means "no columns back": skip RETURNING entirely and,
+        // on MySQL, skip the select-back reread. Useful for callers that ignore
+        // the insert result and don't want a large row (e.g. a JSON snapshot)
+        // materialized. `"*"` returns all; a specific list is projected.
+        const wantsReturning =
+          returning != null &&
+          !(Array.isArray(returning) && returning.length === 0);
+
+        if (caps.supportsReturning && wantsReturning) {
+          const projection = this.buildColumnProjection(tableObj, returning);
+          const insertQuery = db.insert(tableObj).values(mappedData);
+          const result = await (projection
+            ? insertQuery.returning(projection)
+            : insertQuery.returning());
           return (Array.isArray(result) ? result[0] : result) as T;
         }
 
         const result = await db.insert(tableObj).values(mappedData);
 
-        // For databases without RETURNING (MySQL): select back the inserted record
-        if (!caps.supportsReturning && options?.returning) {
-          if (data.id !== undefined) {
-            return (await this.selectOne<T>(table, {
-              where: {
-                and: [{ column: "id", op: "=", value: data.id as SqlParam }],
-              },
-            })) as T;
-          }
+        // For databases without RETURNING (MySQL): select back the inserted
+        // record, projecting only the requested columns so unrequested ones
+        // (a large JSON snapshot) are not read and decoded.
+        if (
+          !caps.supportsReturning &&
+          wantsReturning &&
+          data.id !== undefined
+        ) {
+          return (await this.selectOne<T>(table, {
+            columns: returning === "*" ? undefined : returning,
+            where: {
+              and: [{ column: "id", op: "=", value: data.id as SqlParam }],
+            },
+          })) as T;
         }
 
         return (Array.isArray(result) ? result[0] : result) as T;
