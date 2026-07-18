@@ -1,4 +1,4 @@
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
@@ -14,7 +14,7 @@ describe("generateRuntimeSchema — localized collections", () => {
       "postgresql",
       { localized: true }
     );
-    const cols = getTableColumns(table as never);
+    const cols = getColumns(table as never);
     expect(cols).toHaveProperty("price");
     expect(cols).toHaveProperty("id");
     expect(cols).not.toHaveProperty("title");
@@ -26,6 +26,6 @@ describe("generateRuntimeSchema — localized collections", () => {
       [{ name: "title", type: "text", localized: true }] as never,
       "postgresql"
     );
-    expect(getTableColumns(table as never)).toHaveProperty("title");
+    expect(getColumns(table as never)).toHaveProperty("title");
   });
 });

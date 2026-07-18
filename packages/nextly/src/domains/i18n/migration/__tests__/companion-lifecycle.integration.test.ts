@@ -23,7 +23,7 @@ let db: ReturnType<typeof drizzle>;
 beforeEach(() => {
   sqlite = new Database(":memory:");
   sqlite.pragma("foreign_keys = ON");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 });
 
 afterEach(() => {
@@ -171,7 +171,9 @@ describe("companion lifecycle (real SQLite)", () => {
     // dc_pages IS warned about, proving the guard ran and the silence is
     // companion-specific, not a no-op.)
     const warnedMessages = warn.mock.calls.map(c => String(c[0]));
-    expect(warnedMessages.some(m => m.includes("dc_pages_locales"))).toBe(false);
+    expect(warnedMessages.some(m => m.includes("dc_pages_locales"))).toBe(
+      false
+    );
     expect(
       warnedMessages.some(m => m.includes('Blocked DROP TABLE "dc_pages"'))
     ).toBe(true);

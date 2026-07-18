@@ -1,4 +1,4 @@
-import { getTableName, getTableColumns } from "drizzle-orm";
+import { getTableName, getColumns } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import { generateCompanionRuntimeSchema } from "../services/runtime-schema-generator";
@@ -15,7 +15,7 @@ describe("generateCompanionRuntimeSchema", () => {
       { status: false }
     );
     expect(getTableName(table)).toBe("dc_pages_locales");
-    const cols = getTableColumns(table);
+    const cols = getColumns(table);
     expect(cols).toHaveProperty("_parent");
     expect(cols).toHaveProperty("_locale");
     expect(cols).toHaveProperty("title");
@@ -30,7 +30,7 @@ describe("generateCompanionRuntimeSchema", () => {
       "sqlite",
       { status: true }
     );
-    expect(getTableColumns(table)).toHaveProperty("_status");
+    expect(getColumns(table)).toHaveProperty("_status");
   });
 
   it("works across dialects", () => {

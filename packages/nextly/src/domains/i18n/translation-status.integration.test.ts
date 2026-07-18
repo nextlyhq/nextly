@@ -51,7 +51,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
   describe("with per-locale status", () => {
     beforeEach(() => {
       sqlite = new Database(":memory:");
-      db = drizzle(sqlite);
+      db = drizzle({ client: sqlite });
       sqlite.exec(
         'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "title" text, "body" text, PRIMARY KEY ("_parent","_locale"))'
       );
@@ -148,7 +148,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
   describe("without status", () => {
     beforeEach(() => {
       sqlite = new Database(":memory:");
-      db = drizzle(sqlite);
+      db = drizzle({ client: sqlite });
       sqlite.exec(
         'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "title" text, "body" text, PRIMARY KEY ("_parent","_locale"))'
       );
@@ -182,7 +182,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
   describe("resilience", () => {
     beforeEach(() => {
       sqlite = new Database(":memory:");
-      db = drizzle(sqlite);
+      db = drizzle({ client: sqlite });
     });
     afterEach(() => sqlite.close());
 
