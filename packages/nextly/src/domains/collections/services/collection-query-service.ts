@@ -1186,15 +1186,31 @@ export class CollectionQueryService extends BaseService {
       // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
       finalData = (finalData as Record<string, unknown>[]).map(entry => {
         fields.forEach(field => {
-          if (
-            isJsonFieldType(field.type, field) &&
-            entry[field.name] &&
-            typeof entry[field.name] === "string"
-          ) {
+          if (!isJsonFieldType(field.type, field)) return;
+          const value = entry[field.name];
+          if (typeof value === "string") {
             try {
-              entry[field.name] = JSON.parse(entry[field.name] as string);
+              entry[field.name] = JSON.parse(value);
             } catch {
               // If parsing fails, keep as string
+            }
+          } else if (
+            params.locale === "all" &&
+            value !== null &&
+            typeof value === "object"
+          ) {
+            // locale=all yields a language-keyed map of raw companion values;
+            // parse each locale's JSON string so nested shapes match the
+            // parsed objects a single-locale read returns.
+            const keyed = value as Record<string, unknown>;
+            for (const code of Object.keys(keyed)) {
+              if (typeof keyed[code] === "string") {
+                try {
+                  keyed[code] = JSON.parse(keyed[code]);
+                } catch {
+                  // If parsing fails, keep as string
+                }
+              }
             }
           }
         });
@@ -1868,15 +1884,31 @@ export class CollectionQueryService extends BaseService {
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          finalData[field.name] &&
-          typeof finalData[field.name] === "string"
-        ) {
+        if (!isJsonFieldType(field.type, field)) return;
+        const value = finalData[field.name];
+        if (typeof value === "string") {
           try {
-            finalData[field.name] = JSON.parse(finalData[field.name] as string);
+            finalData[field.name] = JSON.parse(value);
           } catch {
             // If parsing fails, keep as string
+          }
+        } else if (
+          params.locale === "all" &&
+          value !== null &&
+          typeof value === "object"
+        ) {
+          // locale=all yields a language-keyed map of raw companion values;
+          // parse each locale's JSON string so nested shapes match the parsed
+          // objects a single-locale read returns.
+          const keyed = value as Record<string, unknown>;
+          for (const code of Object.keys(keyed)) {
+            if (typeof keyed[code] === "string") {
+              try {
+                keyed[code] = JSON.parse(keyed[code]);
+              } catch {
+                // If parsing fails, keep as string
+              }
+            }
           }
         }
       });

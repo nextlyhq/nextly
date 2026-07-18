@@ -63,7 +63,20 @@ export async function loadDynamicTables(
     : `SELECT table_name, fields, slug FROM ${sourceTable}`;
 
   try {
-    const rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+    let rows: DynamicTableRow[];
+    try {
+      rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+    } catch (err) {
+      // A database upgraded before the registry table gained the `localized`
+      // column throws on the combined SELECT. Without this retry the outer catch
+      // would treat it like a missing table and skip EVERY dynamic entity,
+      // hiding existing Builder collections. Retry without `localized` so rows
+      // still register (as non-localized). Components never select it.
+      if (!hasStatusColumn) throw err;
+      rows = await adapter.executeQuery<DynamicTableRow>(
+        `SELECT table_name, fields, slug, status FROM ${sourceTable}`
+      );
+    }
 
     for (const row of rows) {
       try {

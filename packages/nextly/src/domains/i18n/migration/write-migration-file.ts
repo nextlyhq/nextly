@@ -34,6 +34,14 @@ export interface WriteLocalizationMigrationOpts {
  *
  * @returns the absolute path of the written `.sql` file.
  */
+/**
+ * Header marker stamped on every localization/companion migration. These files
+ * are snapshot-less by design (they carry cross-table seed SQL run verbatim), so
+ * migrate:check uses this marker to skip the snapshot-pairing checks instead of
+ * flagging them MISSING_SNAPSHOT.
+ */
+export const LOCALIZATION_MIGRATION_MARKER = "-- Generated: localization";
+
 export function writeLocalizationMigrationFile(
   migrationsDir: string,
   spec: CompanionMigrationSpec,
@@ -49,7 +57,7 @@ export function writeLocalizationMigrationFile(
   const header =
     `-- Migration: ${baseName}\n` +
     `-- Collections: ${spec.collection}\n` +
-    `-- Generated: localization ${opts.direction} (i18n)\n`;
+    `${LOCALIZATION_MIGRATION_MARKER} ${opts.direction} (i18n)\n`;
   const content = `${header}\n-- UP\n${up}\n\n-- DOWN\n${down}\n`;
 
   const path = resolve(migrationsDir, `${baseName}.sql`);
@@ -90,7 +98,7 @@ export function writeCompanionMigrationFile(
   const header =
     `-- Migration: ${baseName}\n` +
     `-- Collections: ${spec.collection}\n` +
-    `-- Generated: localization companion (${opts.kind}) (i18n)\n`;
+    `${LOCALIZATION_MIGRATION_MARKER} companion (${opts.kind}) (i18n)\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
 
   const path = resolve(migrationsDir, `${baseName}.sql`);
