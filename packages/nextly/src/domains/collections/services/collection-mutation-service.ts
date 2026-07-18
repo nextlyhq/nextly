@@ -36,7 +36,10 @@ import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
-import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import type {
+  CollectionRelationshipService,
+  RelationshipDbExecutor,
+} from "../../../services/collections/collection-relationship-service";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -901,20 +904,24 @@ export class CollectionMutationService extends BaseService {
             data: componentFieldData,
           });
         }
-      });
 
-      // Handle many-to-many relationships (uses its own DB reference, outside transaction)
-      for (const field of manyToManyFields) {
-        const relatedIds = manyToManyData[field.name];
-        if (relatedIds && relatedIds.length > 0) {
-          await this.relationshipService.insertManyToManyRelations(
-            params.collectionName,
-            entry.id as string,
-            field,
-            relatedIds
-          );
+        // Write many-to-many junction rows inside the transaction so a junction
+        // failure rolls back the entry (atomic write). The tx-scoped Drizzle
+        // handle binds the junction writes to this transaction's connection.
+        const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+        for (const field of manyToManyFields) {
+          const relatedIds = manyToManyData[field.name];
+          if (relatedIds && relatedIds.length > 0) {
+            await this.relationshipService.insertManyToManyRelations(
+              params.collectionName,
+              entry.id as string,
+              field,
+              relatedIds,
+              txExecutor
+            );
+          }
         }
-      }
+      });
 
       // Execute afterCreate hooks (code-registered)
       // Hooks run after database insert completes (for side effects)
@@ -1498,6 +1505,32 @@ export class CollectionMutationService extends BaseService {
             data: componentFieldData,
           });
         }
+
+        // Replace many-to-many junction rows inside the transaction so a
+        // junction failure rolls back the update (atomic write). The entry is
+        // already known to exist (validated before the transaction). The
+        // tx-scoped Drizzle handle binds the junction writes to this tx.
+        const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+        for (const field of manyToManyFields) {
+          if (manyToManyData[field.name] !== undefined) {
+            await this.relationshipService.deleteManyToManyRelations(
+              params.collectionName,
+              params.entryId,
+              field,
+              txExecutor
+            );
+            const relatedIds = manyToManyData[field.name];
+            if (relatedIds.length > 0) {
+              await this.relationshipService.insertManyToManyRelations(
+                params.collectionName,
+                params.entryId,
+                field,
+                relatedIds,
+                txExecutor
+              );
+            }
+          }
+        }
       });
 
       // Fetch the updated entry to return it and use in hooks
@@ -1514,29 +1547,6 @@ export class CollectionMutationService extends BaseService {
           message: "Entry not found",
           data: null,
         };
-      }
-
-      // Handle many-to-many relationships (replace existing relations; outside transaction)
-      for (const field of manyToManyFields) {
-        if (manyToManyData[field.name] !== undefined) {
-          // Delete existing relations
-          await this.relationshipService.deleteManyToManyRelations(
-            params.collectionName,
-            params.entryId,
-            field
-          );
-
-          // Insert new relations
-          const relatedIds = manyToManyData[field.name];
-          if (relatedIds.length > 0) {
-            await this.relationshipService.insertManyToManyRelations(
-              params.collectionName,
-              params.entryId,
-              field,
-              relatedIds
-            );
-          }
-        }
       }
 
       // Execute afterUpdate hooks (code-registered)
@@ -2139,7 +2149,9 @@ export class CollectionMutationService extends BaseService {
         returning: "*",
       });
 
-      // Handle many-to-many relationships
+      // Handle many-to-many relationships on the caller's transaction so the
+      // junction writes commit atomically with the entry.
+      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -2147,7 +2159,8 @@ export class CollectionMutationService extends BaseService {
             params.collectionName,
             (entry as Record<string, unknown>).id as string,
             field,
-            relatedIds
+            relatedIds,
+            txExecutor
           );
         }
       }
@@ -2482,13 +2495,16 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Handle many-to-many relationships
+      // Handle many-to-many relationships on the caller's transaction so the
+      // junction writes commit atomically with the update.
+      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
             params.entryId,
-            field
+            field,
+            txExecutor
           );
 
           const relatedIds = manyToManyData[field.name];
@@ -2497,7 +2513,8 @@ export class CollectionMutationService extends BaseService {
               params.collectionName,
               params.entryId,
               field,
-              relatedIds
+              relatedIds,
+              txExecutor
             );
           }
         }
@@ -3008,7 +3025,9 @@ export class CollectionMutationService extends BaseService {
         returning: "*",
       });
 
-      // Handle many-to-many relationships
+      // Handle many-to-many relationships on the caller's transaction so the
+      // junction writes commit atomically with the entry.
+      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -3016,7 +3035,8 @@ export class CollectionMutationService extends BaseService {
             params.collectionName,
             (entry as Record<string, unknown>).id as string,
             field,
-            relatedIds
+            relatedIds,
+            txExecutor
           );
         }
       }
@@ -3404,14 +3424,17 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Handle many-to-many relationships (replace existing relations)
+      // Handle many-to-many relationships on the caller's transaction so the
+      // junction writes commit atomically with the update.
+      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           // Delete existing relations
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
             entryId,
-            field
+            field,
+            txExecutor
           );
 
           // Insert new relations
@@ -3421,7 +3444,8 @@ export class CollectionMutationService extends BaseService {
               params.collectionName,
               entryId,
               field,
-              relatedIds
+              relatedIds,
+              txExecutor
             );
           }
         }

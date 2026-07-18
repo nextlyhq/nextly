@@ -555,6 +555,17 @@ function normalizeToIdArray(value: unknown): string[] {
  * const expanded = await relationshipService.expandRelationships(entry, 'posts', fields);
  * ```
  */
+// The minimal raw-SQL surface the junction-table code needs from a database
+// handle. Both the pooled `this.db` and a transaction-scoped Drizzle instance
+// (from `tx.getDrizzle()`) satisfy it, so junction writes can run either on the
+// pool (default) or inside a caller's transaction (when an executor is passed),
+// keeping the junction write atomic with the entry write.
+export type RelationshipDbExecutor = {
+  all(query: unknown): unknown[];
+  run(query: unknown): unknown;
+  execute(query: unknown): Promise<unknown>;
+};
+
 export class CollectionRelationshipService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -580,12 +591,16 @@ export class CollectionRelationshipService extends BaseService {
    * `.rows` off the tuple yields undefined). The MySQL normalization mirrors
    * the defensive handling in schema/pipeline/classifier/count-helpers.ts.
    */
-  private async selectRawSql(query: unknown): Promise<{ rows: unknown[] }> {
+  private async selectRawSql(
+    query: unknown,
+    // Run on the caller's transaction handle when provided, else the pool.
+    db: RelationshipDbExecutor = this.db
+  ): Promise<{ rows: unknown[] }> {
     if (this.dialect === "sqlite") {
-      const rows = this.db.all(query) as unknown[];
+      const rows = db.all(query);
       return { rows };
     }
-    const result: unknown = await this.db.execute(query);
+    const result: unknown = await db.execute(query);
     if (this.dialect === "mysql" && Array.isArray(result)) {
       // Tuple form `[rows, fieldPackets]` -> take rows; a flat rows array (first
       // element is a row object, not an array) is already the rows.
@@ -598,14 +613,18 @@ export class CollectionRelationshipService extends BaseService {
   /**
    * Run an INSERT / UPDATE / DELETE / DDL raw SQL tag, dialect-aware.
    * Same rationale as `selectRawSql`. Returns void since callers don't
-   * inspect the mutation result here.
+   * inspect the mutation result here. Accepts an optional handle for the same
+   * reason as `selectRawSql` (defaults to the pool).
    */
-  private async mutateRawSql(query: unknown): Promise<void> {
+  private async mutateRawSql(
+    query: unknown,
+    db: RelationshipDbExecutor = this.db
+  ): Promise<void> {
     if (this.dialect === "sqlite") {
-      this.db.run(query);
+      db.run(query);
       return;
     }
-    await this.db.execute(query);
+    await db.execute(query);
   }
 
   /**
@@ -1837,12 +1856,17 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
    * @param relatedIds - Array of related entry IDs to link
+   * @param executor - Optional transaction-scoped Drizzle handle (from
+   *   `tx.getDrizzle()`); when provided, the junction existence check and
+   *   inserts run inside the caller's transaction so they commit atomically
+   *   with the entry write instead of always hitting the pool.
    */
   async insertManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
     field: FieldDefinition,
-    relatedIds: string[]
+    relatedIds: string[],
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     if (relatedIds.length === 0) return;
 
@@ -1901,7 +1925,7 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       }
-      const result = (await this.selectRawSql(checkQuery)) as {
+      const result = (await this.selectRawSql(checkQuery, executor)) as {
         rows: Array<{ table_exists: boolean | number }>;
       };
       const exists = Boolean(result.rows[0]?.table_exists);
@@ -1961,7 +1985,7 @@ export class CollectionRelationshipService extends BaseService {
         `;
 
         console.log(`[ManyToMany] Executing insert for targetId: ${targetId}`);
-        await this.mutateRawSql(query);
+        await this.mutateRawSql(query, executor);
         console.log(
           `[ManyToMany] ✓ Insert successful for targetId: ${targetId}`
         );
@@ -1995,11 +2019,15 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceCollectionName - Name of the source collection
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
+   * @param executor - Optional transaction-scoped Drizzle handle; when
+   *   provided, the delete runs inside the caller's transaction instead of the
+   *   pool (see `insertManyToManyRelations` for the rationale).
    */
   async deleteManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
@@ -2022,7 +2050,7 @@ export class CollectionRelationshipService extends BaseService {
       WHERE ${sourceIdCol} = ${sourceEntryId}
     `;
 
-    await this.mutateRawSql(query);
+    await this.mutateRawSql(query, executor);
   }
 
   /**
