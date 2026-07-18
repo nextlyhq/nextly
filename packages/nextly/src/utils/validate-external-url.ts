@@ -664,14 +664,29 @@ function decodeBody(
       decoded = true;
     }
     return { body: current, decoded };
-  } catch {
-    // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
+  } catch (err) {
+    // node:zlib throws ERR_BUFFER_TOO_LARGE when the inflated output exceeds
+    // maxOutputLength (a decompression bomb). That is a size problem, so report
+    // it as response-too-large (callers that cap by an attachment/size limit can
+    // then treat it uniformly); anything else is a genuinely corrupt stream.
+    const tooLarge = errorCode(err) === "ERR_BUFFER_TOO_LARGE";
     return new SafeFetchError(
-      `Failed to decode ${encoding} response body`,
+      tooLarge
+        ? `Decoded ${encoding} response body exceeded the size cap`
+        : `Failed to decode ${encoding} response body`,
       url,
-      "decode-failed"
+      tooLarge ? "response-too-large" : "decode-failed"
     );
   }
+}
+
+/** The `.code` of a Node system error, if present. */
+function errorCode(err: unknown): string | undefined {
+  if (err != null && typeof err === "object" && "code" in err) {
+    const code: unknown = err.code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------

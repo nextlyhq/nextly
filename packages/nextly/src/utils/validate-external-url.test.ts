@@ -226,6 +226,23 @@ describe("safeFetch", () => {
     expect(response.headers.get("content-length")).toBeNull();
   });
 
+  it("reports an over-cap decompressed body as response-too-large", async () => {
+    const { gzipSync } = await import("node:zlib");
+    // Small on the wire, but inflates to 4000 bytes; the 1000-byte cap trips
+    // the zlib maxOutputLength guard, which must classify as response-too-large.
+    const wire = gzipSync(Buffer.alloc(4000, 0x61));
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end(wire);
+    });
+    await expect(
+      safeFetch(`${h.base}/`, { ...local, maxResponseBytes: 1000 })
+    ).rejects.toMatchObject({
+      name: "SafeFetchError",
+      reason: "response-too-large",
+    });
+  });
+
   it("does not fail an empty body that carries a content-encoding", async () => {
     // Inflating zero bytes throws; an empty encoded 2xx must stay a success.
     const h = await startServer((_req, res) => {
