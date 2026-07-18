@@ -653,12 +653,15 @@ describe("SingleEntryService", () => {
       >;
       expect(payload.seo).toBeUndefined();
 
-      // The component service should be called with the component data
-      expect(ctx.componentDataService.saveComponentData).toHaveBeenCalledTimes(
-        1
-      );
+      // The component service should be called with the component data. The
+      // single update now writes components inside a transaction, so the call
+      // is saveComponentDataInTransaction(tx, params) — params is the 2nd arg.
+      expect(
+        ctx.componentDataService.saveComponentDataInTransaction
+      ).toHaveBeenCalledTimes(1);
       const saveCall =
-        ctx.componentDataService.saveComponentData.mock.calls[0][0];
+        ctx.componentDataService.saveComponentDataInTransaction.mock
+          .calls[0][1];
       expect(saveCall.parentTable).toBe("single_site_settings");
       expect(saveCall.data).toEqual({ seo: { metaTitle: "Hello" } });
     });
@@ -679,7 +682,9 @@ describe("SingleEntryService", () => {
 
       await ctx.service.update("site-settings", { siteName: "New" });
 
-      expect(ctx.componentDataService.saveComponentData).not.toHaveBeenCalled();
+      expect(
+        ctx.componentDataService.saveComponentDataInTransaction
+      ).not.toHaveBeenCalled();
     });
   });
 
