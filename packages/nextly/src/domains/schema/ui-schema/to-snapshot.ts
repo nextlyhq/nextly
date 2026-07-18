@@ -33,8 +33,10 @@ function toMinimal(
       name: f.name,
       type: f.type,
       required: f.required,
+      localized: f.localized,
     })),
     status: e.status === true,
+    localized: e.localized === true,
   }));
 }
 
