@@ -236,7 +236,7 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Validation error hint (shown below editor) */}
       {invalid && error?.message && (
-        <div className="border-t border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="border-t border-destructive bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error.message}
         </div>
       )}

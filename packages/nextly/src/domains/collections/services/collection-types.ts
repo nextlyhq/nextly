@@ -16,6 +16,12 @@ export interface CollectionServiceResult<T = unknown> {
   statusCode: number;
   message: string;
   data: T | null;
+  /**
+   * Per-field validation issues (failure only). Carried through the
+   * result shape so the dispatcher and Direct API can rebuild the
+   * canonical VALIDATION_ERROR envelope with field paths intact.
+   */
+  errors?: Array<{ path: string; code: string; message: string }>;
 }
 
 /**
@@ -29,8 +35,13 @@ export interface CollectionServiceResult<T = unknown> {
 export interface UserContext {
   /** Unique user identifier */
   id: string;
-  /** User's role (required for role-based access rules) */
+  /** User's role (required for single-role role-based access rules) */
   role?: string;
+  /**
+   * User's roles (many-to-many). Role-based access rules match if ANY of
+   * these roles is allowed; `role` is folded in when present.
+   */
+  roles?: string[];
   /** User's display name (optional, for logging/auditing) */
   name?: string;
   /** User's email address (optional, for logging/auditing) */

@@ -24,16 +24,13 @@
  * @module api/collections-schema-export
  */
 
-import { getSession } from "../auth/session";
 import { getService } from "../di";
-import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import { env } from "../lib/env";
 import { CollectionExportService } from "../services/collections/collection-export-service";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 
 import { respondData } from "./response-shapes";
+import { requireRouteCollectionAccess } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -47,17 +44,6 @@ interface RouteContext {
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
   await getCachedNextly();
   return getService("collectionRegistryService");
-}
-
-async function requireUser(request: Request): Promise<{ id: string }> {
-  // getSession returns GetSessionResult; throw the unified auth-required
-  // error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET || "");
-  const user = result.authenticated ? result.user : null;
-  if (!user) {
-    throw NextlyError.authRequired();
-  }
-  return { id: user.id };
 }
 
 /**
@@ -81,22 +67,8 @@ async function requireUser(request: Request): Promise<{ id: string }> {
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
-    const user = await requireUser(request);
     const { slug } = await context.params;
-
-    const isAdmin = await isSuperAdmin(user.id);
-    if (!isAdmin) {
-      const canRead = await hasPermission(user.id, "read", slug);
-      if (!canRead) {
-        throw NextlyError.forbidden({
-          logContext: {
-            userId: user.id,
-            required: `read-${slug}`,
-            operation: "export-collection",
-          },
-        });
-      }
-    }
+    await requireRouteCollectionAccess(request, "read", slug);
 
     const registry = await getCollectionRegistry();
     const collection = await registry.getCollection(slug);

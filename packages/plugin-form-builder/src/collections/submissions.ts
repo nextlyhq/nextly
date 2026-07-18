@@ -98,9 +98,22 @@ export function submissionsCollection(
         { label: "New", value: "new" },
         { label: "Read", value: "read" },
         { label: "Archived", value: "archived" },
+        // Spam is stored and flagged, never silently dropped: a false
+        // positive stays reviewable and recoverable ("Not spam" = back to new).
+        { label: "Spam", value: "spam" },
       ],
       admin: {
         description: "Track whether this submission has been reviewed",
+      },
+    }),
+
+    text({
+      name: "spamReason",
+      label: "Spam Reason",
+      admin: {
+        readOnly: true,
+        description:
+          "Which spam check flagged this submission (empty for clean submissions)",
       },
     }),
 
@@ -145,6 +158,26 @@ export function submissionsCollection(
         description: "When the form was submitted",
       },
     }),
+
+    // Honesty stamps for admin edits of submitted data: a corrected
+    // submission must never be indistinguishable from what the visitor sent.
+    date({
+      name: "editedAt",
+      label: "Edited At",
+      admin: {
+        readOnly: true,
+        description: "When an admin last edited the submitted data",
+      },
+    }),
+
+    text({
+      name: "editedBy",
+      label: "Edited By",
+      admin: {
+        readOnly: true,
+        description: "ID of the admin who last edited the submitted data",
+      },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides
@@ -174,12 +207,18 @@ export function submissionsCollection(
       order: 51,
       useAsTitle: "id",
       description: "View and manage form submissions",
+      // Submissions are created by visitors submitting forms — a hand-typed
+      // "New Submission" would be fiction, so the admin never offers one.
+      disableCreate: true,
 
-      // Custom components for submissions list
       components: {
-        // Filter dropdown to filter submissions by form
-        BeforeListTable:
-          "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+        // The full submissions experience (per-form columns, status tabs,
+        // drawer detail, export) replaces the generic list.
+        views: {
+          List: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+        },
       },
 
       ...overrides.admin,
@@ -202,7 +241,9 @@ export function submissionsCollection(
     },
 
     hooks: {
-      // Auto-set submittedAt timestamp on creation
+      // Auto-set submittedAt timestamp on creation. (The edit stamp for
+      // updates is registered in plugin.ts init — direct registry hooks are
+      // the path that runs for every API surface.)
       beforeValidate: [
         (context: HookContext) => {
           const { data, operation } = context;

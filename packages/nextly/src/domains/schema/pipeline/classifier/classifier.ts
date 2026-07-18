@@ -27,8 +27,6 @@ import { isWideningChange } from "./type-widening";
 export class RealClassifier implements Classifier {
   async classify(args: {
     operations: Operation[];
-    drizzleWarnings: string[];
-    hasDataLoss: boolean;
     countNulls: (table: string, column: string) => Promise<number>;
     countRows: (table: string) => Promise<number>;
     dialect: SupportedDialect;

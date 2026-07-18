@@ -10,6 +10,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
+import { getSchemaEventsDdl } from "../../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { DrizzleMigrationJournal } from "../migration-journal";
 
@@ -26,35 +27,13 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
-    // Create the events table from raw SQL mirroring schema-events/postgres.ts.
+    // Create the events table via the production DDL so this fixture can
+    // never drift from the real schema (a hand-copy previously dropped the
+    // `note` column and the suite failed against a real Postgres).
     await pool.query('DROP TABLE IF EXISTS "nextly_schema_events"');
-    await pool.query(`
-      CREATE TABLE "nextly_schema_events" (
-        "id" text PRIMARY KEY,
-        "event_type" text NOT NULL,
-        "status" text NOT NULL,
-        "source" text NOT NULL,
-        "filename" text,
-        "sha256" text,
-        "scope_kind" text,
-        "scope_slug" text,
-        "started_at" timestamptz NOT NULL DEFAULT NOW(),
-        "ended_at" timestamptz,
-        "duration_ms" integer,
-        "applied_by" text,
-        "statements_planned" integer,
-        "statements_executed" integer,
-        "renames_applied" integer,
-        "error_code" text,
-        "error_message" text,
-        "error_json" jsonb,
-        "superseded_event_ids" jsonb,
-        "superseded_at" timestamptz,
-        "superseded_by" text
-      )
-    `);
+    for (const stmt of getSchemaEventsDdl("postgresql")) await pool.query(stmt);
   });
 
   afterAll(async () => {
@@ -96,7 +75,9 @@ describe("DrizzleMigrationJournal → nextly_schema_events roundtrip (real PG)",
     expect(row?.scopeSlug).toBe("posts");
     expect(row?.statementsExecuted).toBe(3);
     // Only renames are carried over from the journal summary (§4.3).
-    expect((row as { renamesApplied?: number } | undefined)?.renamesApplied).toBe(1);
+    expect(
+      (row as { renamesApplied?: number } | undefined)?.renamesApplied
+    ).toBe(1);
   });
 
   it("maps fresh-push scope → global (events has no fresh-push kind)", async () => {

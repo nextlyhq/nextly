@@ -8,10 +8,10 @@ import { randomBytes } from "node:crypto";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 // Why crypto instead of Math.random: real isolation between test files
-// running in the same CI job. crypto.randomBytes is collision-free in
-// practice for an 8-char hex prefix.
+// running in the same CI job. 16 random bytes make the prefix
+// collision-resistant (not merely "unlikely") across concurrent runs.
 function makeIsolationPrefix(): string {
-  return `test_${randomBytes(4).toString("hex")}`;
+  return `test_${randomBytes(16).toString("hex")}`;
 }
 
 // Reads the canonical env var for the requested dialect.

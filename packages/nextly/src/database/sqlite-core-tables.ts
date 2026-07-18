@@ -182,5 +182,31 @@ export function generateSqliteCoreTableStatements(): string[] {
       "meta" TEXT,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    // Content-version store. Columns match schemas/versions/sqlite.ts. The
+    // durable-sequence unique index is created here too, not just the table:
+    // once a fallback-created DB exists, later boots skip ensureCoreTables and
+    // getCoreSchema's TableSpec does not track indexes, so a normal reconcile
+    // would consider the table in sync and never add the index - leaving
+    // duplicate durable version_no possible.
+    `CREATE TABLE IF NOT EXISTS "nextly_versions" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "version_no" INTEGER,
+      "status" TEXT NOT NULL,
+      "is_autosave" INTEGER NOT NULL DEFAULT 0,
+      "snapshot" TEXT NOT NULL,
+      "label" TEXT,
+      "locale" TEXT,
+      "source_version_no" INTEGER,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
+      ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_versions_doc_recent_idx"
+      ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "created_at")`,
   ];
 }

@@ -64,7 +64,7 @@ describe("BrowserPromptDispatcher", () => {
     expect(result.confirmedRenames).toEqual([candidates[0]]);
   });
 
-  it("does NOT confirm a candidate marked drop_and_add", async () => {
+  it("does NOT confirm a candidate marked drop_and_add, but still proceeds (explicit choice acknowledges the drop)", async () => {
     const candidates = [candidate("dc_posts", "body", "summary")];
     const dispatcher = new BrowserPromptDispatcher([
       {
@@ -81,9 +81,38 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
+    expect(result.proceed).toBe(true);
   });
 
-  it("does NOT confirm candidates with no matching resolution (defaults to drop_and_add)", async () => {
+  it("proceeds on a confirmed rename even when an alternate candidate for the same drop is unresolved", async () => {
+    // Dropping `body` while adding both `summary` and `excerpt` yields two
+    // candidates for one drop. The caller confirmed body->summary as a rename,
+    // which consumes the drop, so the unchosen body->excerpt alternate is moot
+    // and must not force a fail-closed on an otherwise valid minimal payload.
+    const cSummary = candidate("dc_posts", "body", "summary");
+    const cExcerpt = candidate("dc_posts", "body", "excerpt");
+    const dispatcher = new BrowserPromptDispatcher([
+      {
+        tableName: "dc_posts",
+        fromColumn: "body",
+        toColumn: "summary",
+        choice: "rename",
+      },
+    ]);
+    const result = await dispatcher.dispatch({
+      candidates: [cSummary, cExcerpt],
+      events: [],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.confirmedRenames).toEqual([cSummary]);
+    expect(result.proceed).toBe(true);
+  });
+
+  it("fails closed on a rename candidate with no resolution (would drop as drop_and_add)", async () => {
+    // A drop+add pair with no rename resolution destroys the from-column's
+    // data; its destructive_drop event is filtered upstream, so an unresolved
+    // candidate must itself fail the apply closed.
     const candidates = [candidate("dc_posts", "body", "summary")];
     const dispatcher = new BrowserPromptDispatcher([]);
     const result = await dispatcher.dispatch({
@@ -93,6 +122,7 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
+    expect(result.proceed).toBe(false);
   });
 
   it("ignores resolutions for unrelated candidates (orphan resolutions)", async () => {
@@ -121,7 +151,7 @@ describe("BrowserPromptDispatcher", () => {
     const dispatcher = new BrowserPromptDispatcher([]);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await dispatcher.dispatch({
+      const result = await dispatcher.dispatch({
         candidates,
         events: [],
         classification: "interactive",
@@ -131,6 +161,8 @@ describe("BrowserPromptDispatcher", () => {
       const msg = warnSpy.mock.calls[0]?.[0] as string;
       expect(msg).toContain("BrowserPromptDispatcher");
       expect(msg).toContain("phone -> contact on dc_users");
+      // A drifted sibling drop is unacknowledged, so the apply fails closed.
+      expect(result.proceed).toBe(false);
     } finally {
       warnSpy.mockRestore();
     }
@@ -351,6 +383,185 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.resolutions).toEqual([]);
+  });
+
+  // A column drop destroys the data in that column. The classifier emits one
+  // destructive_drop event per such column; the dispatcher must refuse to
+  // proceed unless the client explicitly acknowledged that specific drop, so
+  // the coarse request-level `confirmed` flag cannot silently authorize data
+  // loss from a buggy client or an agent.
+  const dropEvent = (tableName: string, columnName: string) =>
+    ({
+      id: `destructive_drop:${tableName}.${columnName}`,
+      kind: "destructive_drop" as const,
+      tableName,
+      columnName,
+      columnType: "text",
+      tableRowCount: 5,
+      applicableResolutions: ["confirm_drop" as const, "abort" as const],
+    }) as const;
+
+  it("fails closed on a destructive_drop with no acknowledgment", async () => {
+    const dispatcher = new BrowserPromptDispatcher([]);
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("dc_posts", "body")],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("proceeds on a destructive_drop with a typed confirm_drop resolution", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [{ kind: "confirm_drop", eventId: ev.id }]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toContainEqual({
+      kind: "confirm_drop",
+      eventId: ev.id,
+    });
+  });
+
+  it("proceeds when confirm_drop arrives via the legacy per-field channel", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_posts",
+      byFieldName: { body: { action: "confirm_drop" } },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toContainEqual({
+      kind: "confirm_drop",
+      eventId: ev.id,
+    });
+  });
+
+  it("fails closed when only some of several destructive_drops are acknowledged", async () => {
+    const e1 = dropEvent("dc_posts", "body");
+    const e2 = dropEvent("dc_posts", "legacy");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [{ kind: "confirm_drop", eventId: e1.id }]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [e1, e2],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("fails closed when a destructive_drop carries both confirm_drop and abort", async () => {
+    // Conflicting resolutions must not run the drop: abort wins so the column
+    // is never dropped-then-rolled-back after the DDL has already committed.
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        { kind: "confirm_drop", eventId: ev.id },
+        { kind: "abort", eventId: ev.id },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("fails closed on duplicate confirm_drop resolutions for one event", async () => {
+    // Duplicates would pass a naive presence check but trip the pipeline's
+    // duplicate-resolution guard after the drop has already run; fail closed.
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        { kind: "confirm_drop", eventId: ev.id },
+        { kind: "confirm_drop", eventId: ev.id },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("matches a legacy confirm_drop by the field's snake_case column name", async () => {
+    // The dialog keys the acknowledgment by the field's public (camelCase)
+    // name; the classifier keys the event by the snake_case column, so the
+    // translator must normalize or a confirmed deletion would fail closed.
+    const ev = dropEvent("dc_posts", "hero_image");
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_posts",
+      byFieldName: { heroImage: { action: "confirm_drop" } },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toContainEqual({
+      kind: "confirm_drop",
+      eventId: ev.id,
+    });
+  });
+
+  it("fails closed when a destructive_drop is aborted (legacy cancel)", async () => {
+    const ev = dropEvent("dc_posts", "body");
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_posts",
+      byFieldName: { body: { action: "cancel" } },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [ev],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(false);
+  });
+
+  it("still proceeds when there are no destructive_drop events", async () => {
+    const dispatcher = new BrowserPromptDispatcher([]);
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        {
+          id: "add_not_null_with_nulls:dc_users.email",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "email",
+          nullCount: 0,
+          tableRowCount: 5,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+      ],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.proceed).toBe(true);
   });
 
   it("handles multi-table renames independently", async () => {

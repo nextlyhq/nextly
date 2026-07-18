@@ -33,7 +33,8 @@ export function ProgressList() {
             opacity: 0,
           }}
         >
-          <span aria-hidden="true" className="mr-2 text-foreground/60">
+          {/* Muted foreground so this small arrow marker glyph meets contrast; a faint foreground alpha did not. */}
+          <span aria-hidden="true" className="mr-2 text-muted-foreground">
             ▸
           </span>
           {phase}

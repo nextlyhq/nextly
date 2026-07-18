@@ -11,7 +11,7 @@
  * verbose logging.
  *
  * Scope caveat: we use drizzle-kit's synchronous return path
- * (`pushSchema(...)` resolves to `{ statementsToExecute, ... }`) and
+ * (`pushSchema(...)` resolves to `{ sqlStatements, ... }`) and
  * execute the statements ourselves via DrizzleStatementExecutor. We do
  * NOT use drizzle-kit's `apply()` auto-execute. Most of drizzle-kit's
  * verbose logging happens inside `apply()`, so this shim's catch is

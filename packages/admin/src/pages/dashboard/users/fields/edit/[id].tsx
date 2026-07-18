@@ -133,7 +133,8 @@ export default function EditUserFieldPage() {
               <h1 className="text-xl font-semibold tracking-tight">
                 Edit User Field
               </h1>
-              <p className="text-sm font-normal text-primary/50 mt-1">
+              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
+              <p className="text-sm font-normal text-muted-foreground mt-1">
                 Modify attribute properties for user accounts
               </p>
             </div>
@@ -181,7 +182,8 @@ export default function EditUserFieldPage() {
               <h1 className="text-xl font-semibold tracking-tight">
                 Edit User Field
               </h1>
-              <p className="text-sm font-normal text-primary/50 mt-1">
+              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
+              <p className="text-sm font-normal text-muted-foreground mt-1">
                 Modify attribute properties for user accounts
               </p>
             </div>

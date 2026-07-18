@@ -71,10 +71,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     execute: async (svc, p, body) => {
       if (!p.userId || !body)
         throw new Error("UserId and update data are required");
-      const user = await svc.updateCurrentUser(
-        p.userId,
-        body
-      );
+      const user = await svc.updateCurrentUser(p.userId, body);
       return respondMutation("Profile updated.", user);
     },
   },
@@ -86,9 +83,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   },
   hasPassword: {
     execute: async (svc, p) => {
-      const result = await svc.hasPassword(
-        requireParam(p, "userId", "UserId")
-      );
+      const result = await svc.hasPassword(requireParam(p, "userId", "UserId"));
       // No-Boolean-only rule (spec §5.1): wrap in object so callers can
       // grow the shape without breaking the contract later.
       return respondData({ hasPassword: result });
@@ -106,14 +101,20 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   },
   createLocalUser: {
     execute: async (svc, _, body) => {
-      const b = requireBodyField<{ email: string }>(
+      const b = requireBodyField<{ email: string; password?: unknown }>(
         body,
         "email",
         "User data with email is required"
       );
-      const user = await svc.createLocalUser(
-        b as Parameters<typeof svc.createLocalUser>[0]
-      );
+      // This dispatch path is admin-initiated (self-registration and setup call
+      // the service directly). So when an admin supplies a password here, it is
+      // a password chosen for someone else — force a change on first sign-in.
+      const adminSetPassword =
+        typeof b.password === "string" && b.password.length > 0;
+      const user = await svc.createLocalUser({
+        ...(b as Parameters<typeof svc.createLocalUser>[0]),
+        mustChangePassword: adminSetPassword,
+      });
       return respondMutation("User created.", user, { status: 201 });
     },
   },
@@ -146,15 +147,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   unlinkAccountForUser: {
     execute: async (svc, p) => {
       if (!p.userId || !p.provider || !p.providerAccountId) {
-        throw new Error(
-          "UserId, provider, and providerAccountId are required"
-        );
+        throw new Error("UserId, provider, and providerAccountId are required");
       }
-      await svc.unlinkAccountForUser(
-        p.userId,
-        p.provider,
-        p.providerAccountId
-      );
+      await svc.unlinkAccountForUser(p.userId, p.provider, p.providerAccountId);
       return respondAction("Account unlinked.", {
         provider: p.provider,
         providerAccountId: p.providerAccountId,

@@ -21,19 +21,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // `pipeline/__tests__/preview.test.ts`. F8 PR 7's cross-dialect
 // integration matrix exercises the new preview/apply paths end-to-end
 // against real PG/MySQL/SQLite.
-import { generateRuntimeSchema } from "../../../../domains/schema/services/runtime-schema-generator";
+import { generateRuntimeSchema } from "../../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaRegistry } from "../../schema-registry";
 
-// F18 canonical env var: TEST_POSTGRES_URL.
-// Falls back to legacy TEST_DATABASE_URL, then to the dev default.
+// F18 canonical env var: TEST_POSTGRES_URL (legacy TEST_DATABASE_URL also
+// honored). No dev-default fallback on purpose: probing a hardcoded
+// localhost DB would run this suite's DROP/CREATE DDL against whatever
+// database happens to be listening there. The suite skips unless a test URL
+// is explicitly provided.
 const TEST_DB_URL =
-  process.env.TEST_POSTGRES_URL ??
-  process.env.TEST_DATABASE_URL ??
-  "postgres://postgres:postgres@localhost:5433/nextly_test";
+  process.env.TEST_POSTGRES_URL ?? process.env.TEST_DATABASE_URL ?? "";
 
-// Check if test database is available
+// Check if the test database is available (only when a URL was provided).
 const canConnect = async (): Promise<boolean> => {
+  if (!TEST_DB_URL) return false;
   const pool = new Pool({ connectionString: TEST_DB_URL });
   try {
     await pool.query("SELECT 1");
@@ -60,7 +62,7 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: TEST_DB_URL });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
     // This simulates what pushSchema would do, letting us test CRUD via Drizzle API

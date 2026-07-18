@@ -21,6 +21,7 @@ import {
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
+  decimal as mysqlDecimal,
   int as mysqlInt,
 } from "drizzle-orm/mysql-core";
 import {
@@ -30,6 +31,7 @@ import {
   timestamp as pgTimestamp,
   jsonb as pgJsonb,
   doublePrecision as pgDoublePrecision,
+  numeric as pgNumeric,
   varchar as pgVarchar,
   integer as pgInteger,
 } from "drizzle-orm/pg-core";
@@ -38,6 +40,7 @@ import {
   text as sqliteText,
   integer as sqliteInteger,
   real as sqliteReal,
+  numeric as sqliteNumeric,
 } from "drizzle-orm/sqlite-core";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -48,6 +51,8 @@ import {
   type ColumnDescriptor,
   type ColumnKind,
   type SupportedDialect as DescriptorDialect,
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
 } from "./field-column-descriptor";
@@ -242,8 +247,14 @@ function buildDrizzleColumnRecord(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
   const out: Record<string, any> = {};
 
-  const hasTitleField = fields.some(f => f.name === "title");
-  const hasSlugField = fields.some(f => f.name === "slug");
+  // A column-less field (e.g. a component, stored in its own table) must not
+  // suppress the system title/slug column, or the table would have neither.
+  const producesColumn = (f: FieldDefinition): boolean =>
+    getColumnDescriptor(f, dialect) !== null;
+  const hasTitleField = fields.some(
+    f => f.name === "title" && producesColumn(f)
+  );
+  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
 
   // Localized fields live in the companion `_locales` table; omit them from the main table.
   const localizedNames = options.localized
@@ -338,23 +349,41 @@ function buildUserDrizzleColumn(
   dialect: SupportedDialect
 ): unknown {
   if (dialect === "postgresql") {
-    return buildPgColumnFromKind(desc.kind, desc.name, desc.nullable);
+    return buildPgColumnFromKind(desc.kind, desc.name, desc.nullable, desc);
   }
   if (dialect === "mysql") {
     return buildMysqlColumnFromKind(
       desc.kind,
       desc.name,
       desc.nullable,
-      desc.length
+      desc.length,
+      desc
     );
   }
   return buildSqliteColumnFromKind(desc.kind, desc.name, desc.nullable);
 }
 
+// Decimal precision/scale carried on the descriptor; falls back to the
+// DECIMAL(10,2) default the descriptor also uses so the two never diverge.
+function decimalConfig(desc: ColumnDescriptor): {
+  precision: number;
+  scale: number;
+  mode: "number";
+} {
+  // `mode: "number"` reads the column back as a JS number, matching the number
+  // field's value contract (the same contract the `double` kind honors).
+  return {
+    precision: desc.precision ?? DEFAULT_DECIMAL_PRECISION,
+    scale: desc.scale ?? DEFAULT_DECIMAL_SCALE,
+    mode: "number",
+  };
+}
+
 function buildPgColumnFromKind(
   kind: ColumnKind,
   name: string,
-  nullable: boolean
+  nullable: boolean,
+  desc: ColumnDescriptor
 ): unknown {
   switch (kind) {
     case "text":
@@ -369,6 +398,10 @@ function buildPgColumnFromKind(
       return nullable
         ? pgDoublePrecision(name)
         : pgDoublePrecision(name).notNull();
+    case "decimal": {
+      const col = pgNumeric(name, decimalConfig(desc));
+      return nullable ? col : col.notNull();
+    }
     case "timestamp":
       return nullable ? pgTimestamp(name) : pgTimestamp(name).notNull();
     case "json":
@@ -384,7 +417,8 @@ function buildMysqlColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean,
-  length: number | undefined
+  length: number | undefined,
+  desc: ColumnDescriptor
 ): unknown {
   switch (kind) {
     case "text":
@@ -400,6 +434,10 @@ function buildMysqlColumnFromKind(
       return nullable ? mysqlInt(name) : mysqlInt(name).notNull();
     case "double":
       return nullable ? mysqlDouble(name) : mysqlDouble(name).notNull();
+    case "decimal": {
+      const col = mysqlDecimal(name, decimalConfig(desc));
+      return nullable ? col : col.notNull();
+    }
     case "timestamp":
       return nullable ? mysqlTimestamp(name) : mysqlTimestamp(name).notNull();
     case "json":
@@ -429,6 +467,12 @@ function buildSqliteColumnFromKind(
       return nullable ? sqliteInteger(name) : sqliteInteger(name).notNull();
     case "double":
       return nullable ? sqliteReal(name) : sqliteReal(name).notNull();
+    case "decimal": {
+      // SQLite has no fixed-precision decimal; NUMERIC affinity is the closest,
+      // read back as a JS number to match the field's value contract.
+      const col = sqliteNumeric(name, { mode: "number" });
+      return nullable ? col : col.notNull();
+    }
     case "timestamp":
       return nullable
         ? sqliteInteger(name, { mode: "timestamp" })

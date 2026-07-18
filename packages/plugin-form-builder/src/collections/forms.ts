@@ -177,11 +177,20 @@ export function formsCollection(
     }),
 
     checkbox({
+      name: "honeypotEnabled",
+      label: "Honeypot",
+      admin: {
+        description:
+          "Per-form honeypot override; unset inherits the plugin default",
+      },
+    }),
+
+    checkbox({
       name: "captchaEnabled",
       label: "Enable reCAPTCHA",
-      defaultValue: false,
       admin: {
-        description: "Protect this form with Google reCAPTCHA v3",
+        description:
+          "Per-form reCAPTCHA override; unset inherits the plugin default",
       },
     }),
 
@@ -258,11 +267,11 @@ export function formsCollection(
     // ============================================================
     json({
       name: "notifications",
-      label: "Email Integrations",
+      label: "Notifications",
       defaultValue: [],
       admin: {
         description:
-          "Email notification integrations. Managed by the Form Builder UI.",
+          "Email notification rules. Managed by the Form Builder UI.",
       },
     }),
 
@@ -379,17 +388,6 @@ export function formsCollection(
             throw new Error("Form must have at least one field.");
           }
 
-          return data;
-        },
-      ],
-
-      // Add virtual submission count field
-      afterRead: [
-        (context: HookContext) => {
-          const { data } = context;
-          if (data) {
-            (data as Record<string, unknown>).submissionCount = 0;
-          }
           return data;
         },
       ],

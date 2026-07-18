@@ -60,10 +60,6 @@ export function isPublicEndpoint(service: string, method: string): boolean {
   if (service === "forms") {
     return true;
   }
-  // Components list endpoint is public (admin UI needs to list components)
-  if (service === "components" && method === "listComponents") {
-    return true;
-  }
   return false;
 }
 
@@ -85,8 +81,15 @@ export function requiresAuthOnly(service: string, method: string): boolean {
   if (service === "singles" && ["listSingles"].includes(method)) {
     return true;
   }
-  // Component reads: admin UI needs to fetch component details for embedding
-  if (service === "components" && method === "getComponent") {
+  // Component reads: admin UI needs to fetch component details for embedding.
+  // Listing is the same class of builder-surface metadata read (the palette
+  // needs it), so it requires authentication but no specific permission —
+  // matching the collection/single schema-list endpoints above. It must not
+  // be public: unauthenticated callers must not enumerate component schemas.
+  if (
+    service === "components" &&
+    ["getComponent", "listComponents"].includes(method)
+  ) {
     return true;
   }
   return false;

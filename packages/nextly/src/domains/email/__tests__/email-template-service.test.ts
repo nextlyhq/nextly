@@ -80,7 +80,7 @@ function createInMemoryDb() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS et_slug_unique ON email_templates(slug);
   `);
-  const db = drizzle(sqlite, { schema: { emailTemplatesSqlite } });
+  const db = drizzle({ client: sqlite, schema: { emailTemplatesSqlite } });
   return { sqlite, db };
 }
 

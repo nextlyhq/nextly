@@ -86,6 +86,7 @@ import {
   isSuperAdmin,
   containsSuperAdminRole,
   hasSuperAdminExcluding,
+  resolveRoleSlugs,
 } from "./services/lib/permissions";
 import {
   builderDisabledError,
@@ -808,13 +809,15 @@ async function handleServiceRequest(
   // are silently skipped.
   // NOTE: We use _authenticatedUserId (not userId) to avoid colliding with
   // the existing routeParams.userId which is the target user ID from URL params.
-  if (authorizedUser && routeParams) {
-    routeParams._authenticatedUserId = authorizedUser.userId;
-    if (authorizedUser.userName)
-      routeParams._authenticatedUserName = authorizedUser.userName;
-    if (authorizedUser.userEmail)
-      routeParams._authenticatedUserEmail = authorizedUser.userEmail;
-  }
+  // Roles are consumed only by collection and single mutation dispatch; skip
+  // the lookup for reads and every other service so they don't incur a
+  // permissions query.
+  const needsRoles =
+    (service === "collections" || service === "singles") &&
+    httpMethod !== "GET" &&
+    httpMethod !== "HEAD" &&
+    httpMethod !== "OPTIONS";
+  await setAuthenticatedRouteParams(routeParams, authorizedUser, needsRoles);
 
   const dispatchRequest: DispatchRequest = {
     service,
@@ -1402,3 +1405,45 @@ export function getCollectionsHandler(): CollectionsHandler | undefined {
 export const _handleAdminMetaRequestForTest = handleAdminMetaRequest;
 export const _handleAdminMetaSidebarGroupsForTest =
   handleAdminMetaSidebarGroups;
+
+/**
+ * Populate the reserved `_authenticated*` route params from the authorized
+ * user so downstream services get the caller's identity and roles.
+ *
+ * `parseRestRoute` copies every query-string key into `routeParams`, so these
+ * reserved keys are stripped first: they are server-authored and a
+ * client-supplied copy (e.g. `?_authenticatedUserRoles=["admin"]`) must never
+ * be trusted. Roles are forwarded as SLUGS — session auth carries role IDs on
+ * `AuthContext.roles`, so those are resolved; API-key auth already carries
+ * key-scoped slugs.
+ */
+async function setAuthenticatedRouteParams(
+  routeParams: Record<string, string> | undefined,
+  authorizedUser: AuthContext | undefined,
+  // Only the collection mutation dispatch consumes `_authenticatedUserRoles`.
+  // Roles are resolved (a DB query for session auth) only when needed, so other
+  // authenticated routes don't pay for a permissions lookup they never read.
+  needsRoles: boolean
+): Promise<void> {
+  if (!routeParams) return;
+
+  delete routeParams._authenticatedUserId;
+  delete routeParams._authenticatedUserName;
+  delete routeParams._authenticatedUserEmail;
+  delete routeParams._authenticatedUserRoles;
+
+  if (!authorizedUser) return;
+
+  routeParams._authenticatedUserId = authorizedUser.userId;
+  if (authorizedUser.userName)
+    routeParams._authenticatedUserName = authorizedUser.userName;
+  if (authorizedUser.userEmail)
+    routeParams._authenticatedUserEmail = authorizedUser.userEmail;
+
+  if (!needsRoles) return;
+
+  const roleSlugs = await resolveRoleSlugs(authorizedUser);
+  routeParams._authenticatedUserRoles = JSON.stringify(roleSlugs ?? []);
+}
+
+export const _setAuthenticatedRouteParamsForTest = setAuthenticatedRouteParams;

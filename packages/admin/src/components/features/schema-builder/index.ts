@@ -36,18 +36,3 @@ export type {
 } from "./builder-config";
 
 export * from "./types";
-
-// Field Type Editors
-export * from "./field-types/BooleanFieldEditor";
-export * from "./field-types/DatePickerFieldEditor";
-export * from "./field-types/EmailFieldEditor";
-export * from "./field-types/NumberFieldEditor";
-export * from "./field-types/PasswordFieldEditor";
-export * from "./field-types/RadioFieldEditor";
-export * from "./field-types/RelationFieldEditor";
-export * from "./field-types/SelectFieldEditor";
-export * from "./field-types/TextAreaFieldEditor";
-export * from "./field-types/TextFieldEditor";
-
-// Re-export field-types subdirectory
-export * from "./field-types/shared/ValidationPatternField";

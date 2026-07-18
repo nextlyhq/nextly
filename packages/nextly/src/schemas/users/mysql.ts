@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table relations live in `./mysql-relations.ts` and are re-exported
+ * Cross-table relations live in `../_dialect-bundles/mysql.relations.ts` and are re-exported
  * at the bottom of this file. See `./postgres.ts` for the rationale.
  *
  * @module schemas/users/mysql
@@ -36,6 +36,11 @@ export const users = mysqlTable(
     image: varchar("image", { length: 255 }),
     passwordHash: varchar("password_hash", { length: 255 }),
     isActive: boolean("is_active").notNull().default(false),
+    // Set when an admin creates the account with a password they chose: the
+    // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
+    // column can be added to an existing table without a data-losing default;
+    // null and false both mean "no forced change".
+    mustChangePassword: boolean("must_change_password"),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: int("failed_login_attempts").notNull().default(0),
     lockedUntil: datetime("locked_until"),

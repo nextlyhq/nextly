@@ -2,8 +2,8 @@
  * Collection Sync Service
  *
  * Orchestrates the synchronization of code-first collections from `nextly.config.ts`
- * to the database, and generates corresponding Drizzle schemas, Zod validation schemas,
- * and TypeScript types.
+ * to the database, and generates corresponding Zod validation schemas and
+ * TypeScript types.
  *
  * This service is typically called during:
  * - Development server startup (`nextly dev`)
@@ -47,11 +47,8 @@ import {
   toSingularLabel,
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
-import {
-  ZodGenerator,
-  TypeGenerator,
-  type SupportedDialect,
-} from "../../schema";
+import type { SupportedDialect } from "../../../types/database";
+import { ZodGenerator, TypeGenerator } from "../../schema";
 
 import {
   CollectionRegistryService,
@@ -227,7 +224,7 @@ export interface CollectionSyncResultWithValidation
  * This service coordinates between:
  * - Config loader (loads nextly.config.ts)
  * - Collection Registry (syncs with database)
- * - Schema generators (Drizzle, Zod, TypeScript)
+ * - Schema generators (Zod, TypeScript)
  *
  * @extends BaseService - Provides adapter access and logging
  */
@@ -248,10 +245,9 @@ export class CollectionSyncService extends BaseService {
    * 1. Convert CollectionConfig[] to CodeFirstCollectionConfig[]
    * 2. Sync to database via CollectionRegistryService
    * 3. Detect removed collections (in DB but not in code)
-   * 4. Generate Drizzle schemas for created/updated collections
-   * 5. Generate Zod schemas for created/updated collections
-   * 6. Generate TypeScript types for all collections
-   * 7. Return comprehensive result with all generated files
+   * 4. Generate Zod schemas for created/updated collections
+   * 5. Generate TypeScript types for all collections
+   * 6. Return comprehensive result with all generated files
    *
    * @param config - The loaded nextly.config.ts configuration
    * @param options - Sync options
@@ -652,6 +648,7 @@ export class CollectionSyncService extends BaseService {
             hidden: config.admin.hidden,
             useAsTitle: config.admin.useAsTitle,
             isPlugin: config.admin.isPlugin,
+            disableCreate: config.admin.disableCreate,
             pagination: config.admin.pagination
               ? {
                   defaultLimit: config.admin.pagination.defaultLimit,

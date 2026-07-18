@@ -121,6 +121,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to view media files",
   },
   {
+    name: "Update Media",
+    slug: "update-media",
+    action: "update",
+    resource: "media",
+    description: "Permission to edit media metadata and move files",
+  },
+  {
     name: "Delete Media",
     slug: "delete-media",
     action: "delete",
@@ -621,9 +628,8 @@ export class PermissionSeedService extends BaseService {
         ).query.rolePermissions.findFirst({
           // Required by Drizzle ORM: relational query `where` callback is not
           // narrowly typed without importing internal Drizzle helper types.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          where: (rp: any, { and: andFn, eq: eqFn }: any) =>
-            andFn(eqFn(rp.roleId, roleId), eqFn(rp.permissionId, permissionId)),
+
+          where: { roleId, permissionId },
           columns: { id: true },
         });
 

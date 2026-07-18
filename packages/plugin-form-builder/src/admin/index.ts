@@ -30,43 +30,27 @@ import {
   type ComponentPath,
 } from "@nextlyhq/plugin-sdk/admin";
 
-import { SubmissionsFilter } from "./components/SubmissionsFilter";
+import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import { FormBuilderView } from "./FormBuilderView";
 
 export { FormBuilderView, type FormBuilderViewProps } from "./FormBuilderView";
-export {
-  SubmissionsFilter,
-  type SubmissionsFilterProps,
-} from "./components/SubmissionsFilter";
+export { SubmissionsView } from "./components/submissions/SubmissionsView";
+export { SubmissionSheet } from "./components/submissions/SubmissionSheet";
 
 // ============================================================================
 // Builder Sub-Components
 // ============================================================================
 
 export {
-  FieldLibrary,
-  FormCanvas,
+  FieldCards,
+  AddFieldDialog,
   FieldEditor,
   FormPreview,
-  type FormCanvasProps,
+  type FieldCardsProps,
+  type AddFieldDialogProps,
   type FieldEditorProps,
   type FormPreviewProps,
 } from "./components/builder";
-
-// ============================================================================
-// New Components
-// ============================================================================
-
-export {
-  FormFieldList,
-  type FormFieldListProps,
-  SortableFieldRow,
-  type SortableFieldRowProps,
-  AddFieldButton,
-  type AddFieldButtonProps,
-  FieldEditorPanel,
-  type FieldEditorPanelProps,
-} from "./components";
 
 // ============================================================================
 // Context & Hooks
@@ -96,24 +80,13 @@ export {
 export { FormSettingsTab } from "./components/builder/FormSettingsTab";
 export { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 
-// ============================================================================
-// Submission Components
-// ============================================================================
-
-export {
-  SubmissionList,
-  SubmissionDetail,
-  type SubmissionListProps,
-  type SubmissionDetailProps,
-} from "../components/submissions";
-
 /** Component path for FormBuilderView */
 export const FORM_BUILDER_VIEW_PATH: ComponentPath =
   "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
 
-/** Component path for SubmissionsFilter */
-export const SUBMISSIONS_FILTER_PATH: ComponentPath =
-  "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter";
+/** Component path for SubmissionsView */
+export const SUBMISSIONS_VIEW_PATH: ComponentPath =
+  "@nextlyhq/plugin-form-builder/admin#SubmissionsView";
 
 // ============================================================================
 // Auto-Registration with Admin
@@ -127,7 +100,7 @@ export const SUBMISSIONS_FILTER_PATH: ComponentPath =
  */
 registerComponents({
   [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
-  [SUBMISSIONS_FILTER_PATH]: SubmissionsFilter,
+  [SUBMISSIONS_VIEW_PATH]: SubmissionsView,
 });
 
 /**
@@ -145,7 +118,7 @@ registerKnownPlugin(
     // Components already registered above, but re-register for safety
     registerComponents({
       [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
-      [SUBMISSIONS_FILTER_PATH]: SubmissionsFilter,
+      [SUBMISSIONS_VIEW_PATH]: SubmissionsView,
     });
   }
 );

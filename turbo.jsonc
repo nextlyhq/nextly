@@ -267,6 +267,10 @@
         "src/**/*.{ts,tsx}",
         "src/**/*.test.{ts,tsx}",
         "src/**/*.spec.{ts,tsx}",
+        // Some tests read CSS at runtime (e.g. the token-contrast check parses
+        // theme.css), so CSS is a real test input; without it a CSS-only change
+        // could reuse a cached pass and skip the assertion.
+        "src/**/*.css",
         "vitest.config.ts",
         "tsconfig.json"
       ],

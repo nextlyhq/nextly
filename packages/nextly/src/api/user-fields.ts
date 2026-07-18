@@ -28,10 +28,11 @@ import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
+import { checkUserFieldType } from "../users/config/validate-user-config";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -47,40 +48,72 @@ const optionSchema = z.object({
   value: z.string().min(1, "Option value is required"),
 });
 
-const createFieldSchema = z.object({
-  name: z
-    .string()
-    .min(1, "Name is required")
-    .max(255)
-    .regex(
-      /^[a-zA-Z][a-zA-Z0-9]*$/,
-      "Name must start with a letter and contain only alphanumeric characters"
-    ),
-  label: z.string().min(1, "Label is required").max(255),
-  type: z.enum(
-    [
-      "text",
-      "textarea",
-      "number",
-      "email",
-      "select",
-      "radio",
-      "checkbox",
-      "date",
-    ],
-    {
-      message:
-        "Type must be one of: text, textarea, number, email, select, radio, checkbox, date",
+const createFieldSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1, "Name is required")
+      .max(255)
+      .regex(
+        /^[a-zA-Z][a-zA-Z0-9]*$/,
+        "Name must start with a letter and contain only alphanumeric characters"
+      ),
+    label: z.string().min(1, "Label is required").max(255),
+    // Delegates to the single source of truth (checkUserFieldType) instead of a
+    // hardcoded enum, so a plugin field type that opted into the users surface
+    // is accepted here as well as a built-in scalar. A missing/non-string value
+    // reports the canonical "type required" message rather than a raw zod type
+    // error, matching what the definition service would raise.
+    type: z
+      .string({ message: "Field type is required" })
+      .superRefine((value, ctx) => {
+        const rejection = checkUserFieldType(value);
+        if (rejection) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: rejection.message,
+          });
+        }
+      }),
+    required: z.boolean().optional(),
+    defaultValue: z.string().optional().nullable(),
+    options: z.array(optionSchema).optional().nullable(),
+    hasMany: z.boolean().optional().nullable(),
+    minLength: z.number().int().min(0).optional().nullable(),
+    maxLength: z.number().int().min(1).optional().nullable(),
+    minValue: z.number().optional().nullable(),
+    maxValue: z.number().optional().nullable(),
+    placeholder: z.string().max(255).optional().nullable(),
+    description: z.string().optional().nullable(),
+    sortOrder: z.number().int().min(0).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    // An inverted range would make every value invalid; refuse it at the
+    // boundary instead of persisting a field nobody can satisfy.
+    if (
+      data.minLength != null &&
+      data.maxLength != null &&
+      data.minLength > data.maxLength
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minLength"],
+        message: "minLength cannot exceed maxLength",
+      });
     }
-  ),
-  required: z.boolean().optional(),
-  defaultValue: z.string().optional().nullable(),
-  options: z.array(optionSchema).optional().nullable(),
-  placeholder: z.string().max(255).optional().nullable(),
-  description: z.string().optional().nullable(),
-  sortOrder: z.number().int().min(0).optional(),
-  isActive: z.boolean().optional(),
-});
+    if (
+      data.minValue != null &&
+      data.maxValue != null &&
+      data.minValue > data.maxValue
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minValue"],
+        message: "minValue cannot exceed maxValue",
+      });
+    }
+  });
 
 /**
  * GET handler for listing all user field definitions.
@@ -106,7 +139,10 @@ const createFieldSchema = z.object({
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "read", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const service = await getUserFieldDefinitionService();
     const fields = await service.listFields();
@@ -142,9 +178,17 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     const body = await readJsonBody(request);
+
+    // Boot before parsing: the schema's `type` check consults the plugin
+    // field-type registry, which is populated during first-request init. Parsing
+    // first would reject a valid plugin field type on a cold start.
+    const service = await getUserFieldDefinitionService();
 
     let validated: z.infer<typeof createFieldSchema>;
     try {
@@ -153,8 +197,6 @@ export const POST = withErrorHandler(
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
     }
-
-    const service = await getUserFieldDefinitionService();
     // Force source to 'ui'; code-sourced fields are managed via defineConfig().
     const field = await service.createField({
       ...validated,

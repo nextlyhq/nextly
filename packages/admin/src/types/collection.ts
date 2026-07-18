@@ -38,6 +38,16 @@ export type FieldPrimitiveType =
   | "json";
 
 /**
+ * A field type as it appears on a saved field: one of the built-in primitives
+ * or a plugin-contributed type id. The `(string & {})` arm keeps autocomplete
+ * for the built-ins while admitting plugin ids, which are arbitrary strings
+ * known only at runtime from `/admin-meta`. Use this wherever a field type may
+ * legitimately be a plugin type (saved fields, picker selection); keep
+ * `FieldPrimitiveType` for logic that only ever handles the built-ins.
+ */
+export type FieldTypeId = FieldPrimitiveType | (string & {});
+
+/**
  * Admin UI options for a field definition.
  * Controls field appearance and behavior in the admin interface.
  */
@@ -88,7 +98,9 @@ export interface FieldDefinitionAdmin {
 export interface FieldDefinition {
   name: string;
   label?: string;
-  type: FieldPrimitiveType;
+  // A plugin-contributed field carries a type id outside the built-in union,
+  // so a saved field's type is the open `FieldTypeId`, not just a primitive.
+  type: FieldTypeId;
   required?: boolean;
   unique?: boolean;
   index?: boolean;
@@ -220,6 +232,8 @@ export interface Collection {
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;
+    /** Hide the "New …" affordances (machine-created collections) */
+    disableCreate?: boolean;
     /** Custom components for admin UI */
     components?: CollectionAdminComponents;
   };

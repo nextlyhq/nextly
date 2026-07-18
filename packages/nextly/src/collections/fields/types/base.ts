@@ -88,6 +88,11 @@ export interface RequestContext {
     email?: string;
     /** User's role (e.g., 'admin', 'editor', 'user') */
     role?: string;
+    /**
+     * User's roles (many-to-many). Role-based access rules match if ANY of
+     * these roles is allowed; `role` is folded in when present.
+     */
+    roles?: string[];
     /** Additional user properties */
     [key: string]: unknown;
   };

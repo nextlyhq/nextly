@@ -95,6 +95,9 @@
 - name: "flag: stale"
   color: "cccccc"
   description: "No activity for a while; may be auto-closed"
+- name: "ci-nightly-failure"
+  color: "b60205"
+  description: "Filed automatically when the nightly package smoke fails"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"

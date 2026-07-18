@@ -17,7 +17,18 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     name: "@nextlyhq/plugin-page-builder",
     version: "0.0.2-alpha.29",
     nextly: ">=0.0.2-alpha.21",
+    // Identity metadata for the admin plugins page, mirroring package.json.
+    author: "Nextly",
+    homepage: "https://nextlyhq.com",
+    repository: "https://github.com/nextlyhq/nextly",
+    license: "MIT",
+    category: "content",
+    tags: ["page-builder", "blocks", "visual-editor"],
     enabled: opts.enabled,
+    admin: {
+      description:
+        "Build pages visually from blocks with drag-and-drop editing",
+    },
     contributes: {
       collections: [pagesCollection()],
       fieldTypes: [PAGE_BUILDER_FIELD_TYPE],

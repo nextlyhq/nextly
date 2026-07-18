@@ -55,7 +55,7 @@ export default [
                 "../../../database/drizzle-kit-lazy.*",
               ],
               message:
-                "Handlers must not import drizzle-kit-lazy directly. Call a service in domains/schema/services/ instead. drizzle-kit/api is dev-only and should never be in a request graph.",
+                "Handlers must not import drizzle-kit-lazy directly. Call a service in domains/schema/services/ instead. drizzle-kit's payload/* entrypoints are dev-only and should never be in a request graph.",
             },
             {
               group: [

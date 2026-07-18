@@ -60,10 +60,12 @@ export interface UserFieldDefinitionInsert {
   label: string;
 
   /**
-   * Field type determining the input component and column type.
-   * Limited to scalar types: text, textarea, number, email, select, radio, checkbox, date.
+   * Field type determining the input component and column type. A built-in
+   * scalar (text, textarea, number, email, url, phone, select, radio, checkbox,
+   * date) or a plugin-contributed type that opted into the users surface; the
+   * `(string & {})` arm admits the latter while keeping built-in autocomplete.
    */
-  type: UserFieldType;
+  type: UserFieldType | (string & {});
 
   /**
    * Whether this field is required when creating/updating a user.
@@ -83,6 +85,27 @@ export interface UserFieldDefinitionInsert {
    * Should be `null` for non-select/radio types.
    */
   options?: { label: string; value: string }[] | null;
+
+  /**
+   * Whether a `select` field stores multiple values. Fixed at creation —
+   * it decides the backing column's type and cannot change afterwards.
+   */
+  hasMany?: boolean | null;
+
+  /** Minimum string length for text/textarea values; null means unconstrained. */
+  minLength?: number | null;
+
+  /**
+   * Maximum string length for text/textarea values; null means
+   * unconstrained. Also sizes newly created varchar columns.
+   */
+  maxLength?: number | null;
+
+  /** Minimum numeric value for number fields; null means unconstrained. */
+  minValue?: number | null;
+
+  /** Maximum numeric value for number fields; null means unconstrained. */
+  maxValue?: number | null;
 
   /**
    * Placeholder text shown in the input field.
@@ -164,6 +187,21 @@ export interface UserFieldDefinitionRecord extends UserFieldDefinitionInsert {
 
   /** Options for select/radio (required on record, nullable). */
   options: { label: string; value: string }[] | null;
+
+  /** Multi-value flag for select fields (required on record, nullable). */
+  hasMany: boolean | null;
+
+  /** Minimum string length (required on record, nullable). */
+  minLength: number | null;
+
+  /** Maximum string length (required on record, nullable). */
+  maxLength: number | null;
+
+  /** Minimum numeric value (required on record, nullable). */
+  minValue: number | null;
+
+  /** Maximum numeric value (required on record, nullable). */
+  maxValue: number | null;
 
   /** Placeholder text (required on record, nullable). */
   placeholder: string | null;

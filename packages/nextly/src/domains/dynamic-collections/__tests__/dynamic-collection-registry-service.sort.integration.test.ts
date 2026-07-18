@@ -23,11 +23,9 @@ const noopLogger = {
   warn: () => {},
   error: () => {},
   debug: () => {},
-} as unknown as Parameters<typeof DynamicCollectionRegistryService["prototype"]["constructor"]> extends [
-  unknown,
-  infer L,
-  ...unknown[],
-]
+} as unknown as Parameters<
+  (typeof DynamicCollectionRegistryService)["prototype"]["constructor"]
+> extends [unknown, infer L, ...unknown[]]
   ? L
   : never;
 
@@ -118,7 +116,7 @@ describe("DynamicCollectionRegistryService.listCollections — sortBy parameter"
         baseTime + 200
       );
 
-    const db = drizzle(sqlite);
+    const db = drizzle({ client: sqlite });
     const fakeAdapter = {
       getDrizzle: () => db,
       getCapabilities: () => ({

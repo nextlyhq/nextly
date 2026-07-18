@@ -31,6 +31,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -39,16 +40,24 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  applyFieldReadAccess,
+  applyFieldWriteAccess,
+  attachFieldValidators,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import {
+  hashPasswordFieldValues,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { RequestContext } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
-import {
-  validateFields,
-  type FieldError,
-} from "../validation/validate-fields";
+import { validateFields, type FieldError } from "../validation/validate-fields";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -110,11 +119,19 @@ function errorToServiceResult<T = unknown>(
   dialect: SupportedDialect
 ): CollectionServiceResult<T> {
   if (NextlyError.is(error)) {
+    // Preserve per-field validation issues: the dispatcher and Direct API
+    // rebuild the canonical envelope from this result, and without the
+    // errors array the admin cannot map failures onto form fields.
+    const validationErrors =
+      error.code === "VALIDATION_ERROR"
+        ? (error.publicData as ValidationPublicData | undefined)?.errors
+        : undefined;
     return {
       success: false,
       statusCode: error.statusCode,
       message: error.publicMessage,
       data: null,
+      ...(validationErrors ? { errors: validationErrors } : {}),
     };
   }
   // Free helper takes dialect explicitly (no `this`) so callers pass
@@ -217,13 +234,18 @@ export class CollectionMutationService extends BaseService {
     const isMysql = this.dialect === "mysql";
     const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
     const params: unknown[] = [];
-    const ph = () => (this.dialect === "postgresql" ? `$${params.length}` : "?");
+    const ph = () =>
+      this.dialect === "postgresql" ? `$${params.length}` : "?";
 
     const allCols = ["_parent", "_locale", ...cols];
     const valuePlaceholders = allCols
       .map(c => {
         params.push(
-          c === "_parent" ? parentId : c === "_locale" ? locale : companionData[c]
+          c === "_parent"
+            ? parentId
+            : c === "_locale"
+              ? locale
+              : companionData[c]
         );
         return ph();
       })
@@ -243,7 +265,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /** Whether the companion `_locales` table physically exists (migration has run). */
-  private async companionTableExists(companionTableName: string): Promise<boolean> {
+  private async companionTableExists(
+    companionTableName: string
+  ): Promise<boolean> {
     const q =
       this.adapter.dialect === "mysql"
         ? `\`${companionTableName}\``
@@ -345,6 +369,60 @@ export class CollectionMutationService extends BaseService {
         finalData[field.name] = JSON.stringify(finalData[field.name]);
       }
     }
+  }
+
+  /**
+   * Redact a persisted entry before it is returned to the client. Drops
+   * write-only password hashes and any field the caller may write but not
+   * read (`access.read`). The query path already applies both, so every
+   * mutation response must run the same redaction or a create/update could
+   * echo back a value the reader is denied — the write and read rules are
+   * independent, so a field can be writable yet read-denied.
+   *
+   * `overrideAccess` normally skips read redaction (a trusted server-context
+   * caller asked for the full document). The REST dispatcher, however, sets
+   * `overrideAccess` only to skip the collection-level re-check after route
+   * auth — it is NOT a trusted read context, so `routeAuthorized` forces the
+   * response to still be redacted to what the authenticated user may read,
+   * matching the query path for the same caller.
+   */
+  private async redactResponseFields(
+    entry: Record<string, unknown>,
+    fields: FieldDefinition[],
+    params: {
+      user?: Record<string, unknown>;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+    },
+    slug: string
+  ): Promise<void> {
+    // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
+    // before redaction so the read-access walker descends into them — SQLite
+    // returns these as JSON strings, and a read-denied field nested in a
+    // still-serialized container would otherwise be echoed. The single
+    // create/update paths already deserialize upstream; this makes the
+    // transaction/bulk variants safe too (a second pass is a no-op).
+    for (const field of fields) {
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof entry[field.name] === "string" &&
+        entry[field.name]
+      ) {
+        try {
+          entry[field.name] = JSON.parse(entry[field.name] as string);
+        } catch {
+          // If parsing fails, keep the raw string.
+        }
+      }
+    }
+    stripPasswordFieldValues(entry, fields);
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug,
+      entry,
+      user: params.user,
+      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+    });
   }
 
   /** Resolve the physical table for a collection, honoring `dbName` overrides. */
@@ -467,6 +545,135 @@ export class CollectionMutationService extends BaseService {
   // ============================================================
 
   /**
+   * Fill the auto-injected `slug` and `title` columns on a create payload.
+   *
+   * defineCollection injects a required, unique `slug` and a NOT NULL `title`
+   * into every collection. When the caller omits them we derive them here: the
+   * slug from the title (or name, or a unique fallback token), the title from
+   * the name or the slug.
+   *
+   * A GENERATED slug is deduped so a repeated title auto-increments (`hello`,
+   * `hello-2`, …) — the WordPress/Ghost convention. An EXPLICITLY provided slug
+   * is only sanitized and kept as-is: the caller asserted a canonical value, so
+   * a collision surfaces as the normal unique-constraint conflict rather than a
+   * silent rename. `isSlugTaken` is supplied by the caller so the uniqueness
+   * check runs on the correct executor — the shared connection for a plain
+   * create, or the enclosing transaction (which sees its own pending rows) for
+   * a transactional create. Runs before field-level write access so a caller
+   * denied `title`/`slug` write does not have them reintroduced. Mutates
+   * `finalData`.
+   */
+  private async applyGeneratedSlugAndTitle(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<void> {
+    const provided =
+      typeof finalData.slug === "string" && finalData.slug.trim() !== "";
+    if (provided) {
+      // Explicit slug: sanitize only, never dedupe — respect the caller's value.
+      const sanitized = generateSlug(finalData.slug as string);
+      // generateSlug strips everything outside [\w-], so an explicit slug of
+      // only non-ASCII/punctuation (e.g. "你好") sanitizes to empty. Treat that
+      // as unset and derive a valid, unique slug instead of persisting "".
+      finalData.slug =
+        sanitized !== ""
+          ? sanitized
+          : await this.deriveSlug(finalData, isSlugTaken);
+    } else {
+      finalData.slug = await this.deriveSlug(finalData, isSlugTaken);
+    }
+
+    // The `title` column is NOT NULL: fall back to the name, then the slug.
+    if (typeof finalData.title !== "string" || finalData.title.trim() === "") {
+      const nameValue = finalData.name;
+      finalData.title =
+        typeof nameValue === "string" && nameValue.trim()
+          ? nameValue.trim()
+          : finalData.slug;
+    }
+  }
+
+  /**
+   * Derive a unique slug from the title (or name), falling back to a
+   * collision-proof token. `generateSlug` strips everything outside [\w-], so a
+   * CJK/emoji/punctuation-only title (or a missing one) yields an empty base;
+   * the `entry-<ts>-<rand>` fallback keeps the required, unique `slug` column
+   * populated instead of failing required-field validation.
+   */
+  private async deriveSlug(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<string> {
+    const titleValue = finalData.title ?? finalData.name ?? "";
+    const derived =
+      typeof titleValue === "string" && titleValue.trim()
+        ? generateSlug(titleValue)
+        : "";
+    const baseSlug =
+      derived !== ""
+        ? derived
+        : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    return this.dedupeSlug(baseSlug, isSlugTaken);
+  }
+
+  /**
+   * Re-sanitize `slug` after field-level beforeValidate hooks run. Those hooks
+   * execute after slug generation, so a hook that sets `slug` (for example from
+   * the title) could introduce an unsanitized value that would otherwise be
+   * validated and stored verbatim. Normalizing here keeps the stored slug
+   * URL-safe; it is idempotent for an already-clean slug. When the hook value
+   * sanitizes to empty (a CJK/emoji/punctuation-only string), it derives a
+   * valid slug from the title just like `applyGeneratedSlugAndTitle` does for
+   * an explicit slug that sanitizes away, rather than leaving the un-sanitized
+   * value to be stored verbatim.
+   */
+  private async reSanitizeSlug(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<void> {
+    // Respect an ABSENT slug. Field-level write access deletes the key when it
+    // denies the write, so `undefined` means "stripped by access" (or never
+    // set): leave it so access control holds and required validation applies —
+    // deriving would smuggle a slug back past access. Slug generation for a
+    // create with no user-supplied slug already ran in applyGeneratedSlugAndTitle
+    // (before write access), so a legitimately-absent-here slug is intentional.
+    if (finalData.slug === undefined) return;
+    // The field is PRESENT (a user provided it and passed access, or a hook set
+    // it). Normalize a string; a non-string or empty/non-URL-safe value (e.g.
+    // "你好", "   ", null) sanitizes to "" and is derived from the title rather
+    // than persisting an invalid slug — required validation permits empty
+    // strings, so it would not catch it, and this mirrors the empty fallback in
+    // applyGeneratedSlugAndTitle.
+    const current = finalData.slug;
+    const sanitized = typeof current === "string" ? generateSlug(current) : "";
+    finalData.slug =
+      sanitized !== ""
+        ? sanitized
+        : await this.deriveSlug(finalData, isSlugTaken);
+  }
+
+  /**
+   * Return a slug that is free, appending `-2`, `-3`, … until `isSlugTaken`
+   * reports it available. Bounded so a pathological data set can't spin
+   * forever; the final fallback appends a timestamp that is effectively
+   * collision-proof. The unique constraint on the column remains the ultimate
+   * guard against a concurrent race between the check and the insert.
+   */
+  private async dedupeSlug(
+    baseSlug: string,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<string> {
+    let candidate = baseSlug;
+    for (let suffix = 2; suffix <= 51; suffix++) {
+      if (!(await isSlugTaken(candidate))) return candidate;
+      candidate = `${baseSlug}-${suffix}`;
+    }
+    // Check the last generated candidate (`baseSlug-51`) before the fallback.
+    if (!(await isSlugTaken(candidate))) return candidate;
+    return `${baseSlug}-${Date.now()}`;
+  }
+
+  /**
    * Create a new entry.
    * Applies collection-level access control and hooks.
    *
@@ -484,6 +691,10 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       /** Write locale (i18n M5): translatable values are stored for this language. */
       locale?: string;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -585,6 +796,82 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
+      // Password fields store bcrypt hashes, never the submitted value.
+      // Runs after hooks (so hooks see the plaintext they may validate
+      // against) and before any serialization touches the column value.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+      // Generate the auto-injected `slug`/`title` BEFORE field-level write
+      // access and validation. defineCollection injects a required, unique
+      // `slug` and a NOT NULL `title`; deriving them here (slug from title,
+      // deduped for uniqueness) lets `create({ data: { title } })` succeed
+      // without a manual slug. Running before write access means a field the
+      // caller may not create is not reintroduced; the uniqueness check uses
+      // the shared connection (a plain, non-transactional create).
+      const isSlugTaken = (slug: string) =>
+        this.checkFieldUniqueness(params.collectionName, "slug", slug);
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+
+      // Field-level access: fields the caller may not create are stripped
+      // silently (Payload parity); overrideAccess bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "create",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeValidate",
+        data: finalData,
+        operation: "create",
+        user: params.user,
+      });
+
+      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
+      // so the validated and stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "create",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeChange",
+        data: finalData,
+        operation: "create",
+        user: params.user,
+      });
+
+      // A beforeChange hook runs after validation and can also set `slug`;
+      // re-sanitize once more so the stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
+
+      await hashPasswordFieldValues(finalData, fields);
+
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -640,10 +927,7 @@ export class CollectionMutationService extends BaseService {
       // Extract component field data for separate storage in comp_{slug} tables
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (
-          isComponentField(field as unknown as FieldConfig) &&
-          finalData[field.name] !== undefined
-        ) {
+        if (isComponentField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main insert
         }
@@ -725,46 +1009,7 @@ export class CollectionMutationService extends BaseService {
       // failure mode this guards against.
       coerceDateFieldsToDate(finalData, fields);
 
-      // Generate or validate slug
-      // All collections have a slug column in their database table,
-      // so we always need to generate a slug value for new entries.
-      const shouldGenerateSlug = true;
-
-      if (shouldGenerateSlug) {
-        if (
-          !finalData.slug ||
-          typeof finalData.slug !== "string" ||
-          finalData.slug.trim() === ""
-        ) {
-          // Try to generate slug from title field first
-          const titleValue = finalData.title || finalData.name || "";
-          if (typeof titleValue === "string" && titleValue.trim()) {
-            finalData.slug = generateSlug(titleValue);
-          } else {
-            // Generate a unique slug using timestamp + random string
-            finalData.slug = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-          }
-        } else {
-          // Sanitize user-provided slug
-          finalData.slug = generateSlug(finalData.slug);
-        }
-      }
-
-      // All collections have a title column (NOT NULL) in their database table,
-      // so ensure we always have a title value — fall back to the name field or
-      // the generated slug if the caller didn't provide one.
-      if (
-        !finalData.title ||
-        typeof finalData.title !== "string" ||
-        finalData.title.trim() === ""
-      ) {
-        const nameValue = finalData.name;
-        if (typeof nameValue === "string" && nameValue.trim()) {
-          finalData.title = nameValue.trim();
-        } else {
-          finalData.title = finalData.slug;
-        }
-      }
+      // slug/title are generated before validation (applyGeneratedSlugAndTitle).
 
       // Final safety pass: ensure upload field values are IDs, not populated objects.
       fields.forEach(field => {
@@ -947,6 +1192,18 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-level afterChange hooks observe the PERSISTED values — run
+      // before response expansion so hooks see stored IDs, not the
+      // populated relationship objects the response returns.
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: entry,
+        operation: "create",
+        user: params.user,
+      });
+
       // Expand relationships in response if depth is specified
       let responseEntry = entry;
       if (depth !== undefined && depth > 0) {
@@ -965,6 +1222,19 @@ export class CollectionMutationService extends BaseService {
           );
         }
       }
+
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
+        responseEntry,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -1107,6 +1377,10 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       /** Write locale (i18n M5): translatable values are updated for this language only. */
       locale?: string;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -1227,6 +1501,65 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
+      // Password fields store bcrypt hashes, never the submitted value.
+      // Runs after hooks (so hooks see the plaintext they may validate
+      // against) and before any serialization touches the column value.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+      // Field-level access: fields the caller may not update are stripped
+      // silently (Payload parity); overrideAccess bypasses. The document id
+      // is passed so owner/record-aware access rules can evaluate.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        id: params.entryId,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeValidate",
+        data: finalData,
+        operation: "update",
+        user: params.user,
+      });
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "update",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeChange",
+        data: finalData,
+        operation: "update",
+        user: params.user,
+      });
+
+      await hashPasswordFieldValues(finalData, fields);
+
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -1283,10 +1616,7 @@ export class CollectionMutationService extends BaseService {
       // Component fields should not be stored in the collection table
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (
-          isComponentField(field as unknown as FieldConfig) &&
-          finalData[field.name] !== undefined
-        ) {
+        if (isComponentField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main update
         }
@@ -1505,7 +1835,10 @@ export class CollectionMutationService extends BaseService {
 
         // i18n M5: upsert the translatable values into the companion row for the write's locale
         // (same transaction). Only the provided localized columns are touched.
-        if (localizedUpdate && Object.keys(localizedUpdate.companionData).length > 0) {
+        if (
+          localizedUpdate &&
+          Object.keys(localizedUpdate.companionData).length > 0
+        ) {
           await this.upsertCompanionRow(
             tx,
             localizedUpdate.companionTableName,
@@ -1643,6 +1976,18 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-level afterChange hooks observe the PERSISTED values — run
+      // before response expansion so hooks see stored IDs, not the
+      // populated relationship objects the response returns.
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: updated as Record<string, unknown>,
+        operation: "update",
+        user: params.user,
+      });
+
       // Expand relationships in response if depth is specified
       let responseEntry = updated;
       if (depth !== undefined && depth > 0) {
@@ -1661,6 +2006,19 @@ export class CollectionMutationService extends BaseService {
           );
         }
       }
+
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
+        responseEntry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -1896,7 +2254,13 @@ export class CollectionMutationService extends BaseService {
    */
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
+    },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
@@ -1984,6 +2348,88 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
+
+      // Password fields store bcrypt hashes, never the submitted value.
+      // Runs after hooks (so hooks see the plaintext they may validate
+      // against) and before any serialization touches the column value.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). The uniqueness check runs on the
+      // transaction so same-title creates within one uncommitted tx still
+      // dedupe — the tx sees its own pending rows.
+      const isSlugTaken = async (slug: string) => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      };
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+
+      // Field-level write access: fields the caller may not create are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "create",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeValidate",
+        data: finalData,
+        operation: "create",
+        user: params.user,
+      });
+
+      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
+      // so the validated and stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "create",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeChange",
+        data: finalData,
+        operation: "create",
+        user: params.user,
+      });
+
+      // A beforeChange hook runs after validation and can also set `slug`;
+      // re-sanitize once more so the stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
+
+      await hashPasswordFieldValues(finalData, fields);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2093,6 +2539,30 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // Stored password hashes are write-only; the response never carries
+      // them back to the client.
+      // Field-level afterChange hooks observe the saved values (before the
+      // password strip so they can see the full stored row).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: entry as Record<string, unknown>,
+        operation: "create",
+        user: params.user,
+      });
+
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
+
       return {
         success: true,
         statusCode: 201,
@@ -2120,7 +2590,14 @@ export class CollectionMutationService extends BaseService {
    */
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; entryId: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
+    },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
@@ -2228,6 +2705,65 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
+
+      // Password fields store bcrypt hashes, never the submitted value.
+      // Runs after hooks (so hooks see the plaintext they may validate
+      // against) and before any serialization touches the column value.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+      // Field-level write access: fields the caller may not update are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        id: params.entryId,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeValidate",
+        data: finalData,
+        operation: "update",
+        user: params.user,
+      });
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "update",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "beforeChange",
+        data: finalData,
+        operation: "update",
+        user: params.user,
+      });
+
+      await hashPasswordFieldValues(finalData, fields);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2353,6 +2889,30 @@ export class CollectionMutationService extends BaseService {
           params.user,
           sharedContext
         )
+      );
+
+      // Stored password hashes are write-only; the response never carries
+      // them back to the client.
+      // Field-level afterChange hooks observe the saved values (before the
+      // password strip so they can see the full stored row).
+      await runFieldHooks({
+        kind: "collection",
+        slug: params.collectionName,
+        phase: "afterChange",
+        data: updated as Record<string, unknown>,
+        operation: "update",
+        user: params.user,
+      });
+
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
       );
 
       return {
@@ -2560,7 +3120,13 @@ export class CollectionMutationService extends BaseService {
    */
   async createSingleEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
+    },
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2649,6 +3215,90 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
+
+      // Password fields store bcrypt hashes, never the submitted value —
+      // same guarantee as the non-transaction paths.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). This path backs bulk create, so an
+      // entry that omits slug/title must still receive them. The uniqueness
+      // check runs on the transaction so entries created earlier in the same
+      // bulk batch are seen.
+      const isSlugTaken = async (slug: string) => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      };
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+
+      // Field-level write access: fields the caller may not create are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "create",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry). A
+      // hook can set `slug`, so re-sanitize after it so the validated and
+      // stored value stays URL-safe. When hooks are skipped the slug is still
+      // the (already-sanitized) generated value, so no pass is needed.
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeValidate",
+          data: finalData,
+          operation: "create",
+          user: params.user,
+        });
+        await this.reSanitizeSlug(finalData, isSlugTaken);
+      }
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "create",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization). This hook can
+      // also set `slug`, so re-sanitize once more before storage.
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeChange",
+          data: finalData,
+          operation: "create",
+          user: params.user,
+        });
+        await this.reSanitizeSlug(finalData, isSlugTaken);
+      }
+
+      await hashPasswordFieldValues(finalData, fields);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2764,6 +3414,32 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // Stored password hashes are write-only; the response never carries
+      // them back to the client.
+      // Field-level afterChange hooks observe the saved values (before the
+      // password strip so they can see the full stored row).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: entry as Record<string, unknown>,
+          operation: "create",
+          user: params.user,
+        });
+      }
+
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
+
       return {
         success: true,
         statusCode: 201,
@@ -2797,7 +3473,13 @@ export class CollectionMutationService extends BaseService {
    */
   async updateSingleEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
+    },
     entryId: string,
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -2943,6 +3625,68 @@ export class CollectionMutationService extends BaseService {
 
       const finalData = currentData;
 
+      // Password fields store bcrypt hashes, never the submitted value —
+      // same guarantee as the non-transaction paths.
+      // Enforce the schema's declared rules on the server. Every writer
+      // (admin, REST, Direct API, bulk, forms) funnels through this path,
+      // so this is where required/min/max/pattern/options are guaranteed;
+      // runs on the post-hook data and before hashing so password rules
+      // see the plaintext length, not the hash's.
+      // Field-level write access: fields the caller may not update are
+      // stripped (Payload parity); a system write (no user) or an
+      // explicit override bypasses.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: finalData,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        id: entryId,
+      });
+
+      // Field-level beforeValidate hooks transform values ahead of the
+      // validation gate (functions resolved via the field-level registry).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeValidate",
+          data: finalData,
+          operation: "update",
+          user: params.user,
+        });
+      }
+
+      {
+        const validationIssues = await validateEntryData(
+          finalData,
+          attachFieldValidators("collection", params.collectionName, fields),
+          {
+            mode: "update",
+            req: params.user ? { user: params.user } : {},
+          }
+        );
+        if (validationIssues.length > 0) {
+          throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // Field-level beforeChange hooks transform the final stored value
+      // (runs after validation, before hashing/serialization).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeChange",
+          data: finalData,
+          operation: "update",
+          user: params.user,
+        });
+      }
+
+      await hashPasswordFieldValues(finalData, fields);
+
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -3076,6 +3820,32 @@ export class CollectionMutationService extends BaseService {
           )
         );
       }
+
+      // Stored password hashes are write-only; the response never carries
+      // them back to the client.
+      // Field-level afterChange hooks observe the saved values (before the
+      // password strip so they can see the full stored row).
+      if (!skipHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: updated as Record<string, unknown>,
+          operation: "update",
+          user: params.user,
+        });
+      }
+
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,

@@ -1,0 +1,12 @@
+{
+  "sqlStatements": [
+    "ALTER TABLE `g1` ADD `added` text;",
+    "PRAGMA foreign_keys=OFF;",
+    "CREATE TABLE `__new_g1` (\n\t`id` text PRIMARY KEY,\n\t`num` integer,\n\t`added` text\n);\n",
+    "INSERT INTO `__new_g1`(`id`, `num`) SELECT `id`, `num` FROM `g1`;",
+    "DROP TABLE `g1`;",
+    "ALTER TABLE `__new_g1` RENAME TO `g1`;",
+    "PRAGMA foreign_keys=ON;"
+  ],
+  "hints": []
+}

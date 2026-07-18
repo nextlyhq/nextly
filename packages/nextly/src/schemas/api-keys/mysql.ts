@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` (apiKeysRelations) lives in `./mysql-relations.ts`
+ * Cross-table `relations()` (apiKeysRelations) lives in `../_dialect-bundles/mysql.relations.ts`
  * and is re-exported at the bottom of this file. See `./postgres.ts` for the
  * rationale.
  *
@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
@@ -56,8 +57,17 @@ export const apiKeys = mysqlTable(
     expiresAt: datetime("expires_at"),
     lastUsedAt: datetime("last_used_at"),
     isActive: boolean("is_active").notNull().default(true),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-    updatedAt: datetime("updated_at").notNull().default(new Date()),
+    // DDL-side CURRENT_TIMESTAMP (matching postgres's defaultNow()):
+    // a JavaScript `new Date()` default bakes one module-load-time literal
+    // into the emitted DDL, so every boot saw a different default and v1's
+    // differ emitted MODIFY COLUMN churn forever (the pre-v1 MySQL differ
+    // returned empty statement lists and masked this).
+    createdAt: datetime("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: datetime("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
   },
   t => [
     uniqueIndex("api_keys_key_hash_unique").on(t.keyHash),

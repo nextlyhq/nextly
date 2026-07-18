@@ -81,7 +81,7 @@ function createInMemoryDb() {
     CREATE INDEX IF NOT EXISTS ep_active_idx     ON email_providers(is_active);
     CREATE INDEX IF NOT EXISTS ep_created_at_idx ON email_providers(created_at);
   `);
-  const db = drizzle(sqlite, { schema: { emailProvidersSqlite } });
+  const db = drizzle({ client: sqlite, schema: { emailProvidersSqlite } });
   return { sqlite, db };
 }
 

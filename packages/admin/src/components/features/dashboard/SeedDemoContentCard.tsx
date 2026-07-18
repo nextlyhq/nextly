@@ -57,14 +57,15 @@ export function SeedDemoContentCard() {
 
   return (
     <Card
+      // Full-strength hover and status borders so the card boundary is perceivable at the 3:1 UI minimum, not a fainter alpha.
       className={cn(
-        "group/card relative rounded-none border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary/40",
+        "group/card relative rounded-none border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary",
         // Subtle hairline tint — no gradient flood. The accent bar at
         // the top carries the dominant color cue; the card body stays
         // neutral so the eye reads the content first, status second.
         (eyebrowState === "success" || eyebrowState === "success-partial") &&
-          "border-success/15",
-        eyebrowState === "error" && "border-destructive/20"
+          "border-success",
+        eyebrowState === "error" && "border-destructive"
       )}
     >
       <AccentBar state={accentState} />
@@ -247,8 +248,9 @@ export function SeedDemoContentCard() {
 
         {status.kind === "error" && (
           <>
-            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive/15 px-4 py-3 rounded-none">
-              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-destructive/80 mb-1">
+            {/* Full-strength destructive border and label text so the error is readable and its boundary perceivable. */}
+            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive px-4 py-3 rounded-none">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-destructive mb-1">
                 Error
               </div>
               {status.message}

@@ -200,7 +200,7 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   const definition: FieldDefinition = {
     name: toSnakeName(field.name),
     label: field.label || field.name,
-    type: field.type as FieldDefinition["type"],
+    type: field.type,
     required: Boolean(field.validation?.required),
     unique: Boolean(field.advanced?.unique),
     index: Boolean(field.advanced?.index),

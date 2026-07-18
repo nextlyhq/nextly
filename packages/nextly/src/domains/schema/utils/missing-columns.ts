@@ -47,6 +47,12 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
     return null;
   }
 
+  // Component fields store their data in a separate comp_{slug} table and are
+  // stripped from the parent row on write, so they get no parent column.
+  if (field.type === "component") {
+    return null;
+  }
+
   const name = toSnakeCase(field.name);
   const required = "required" in field && field.required;
   const quotedName = dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -121,7 +127,6 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
     case "repeater":
     case "group":
     case "chips":
-    case "component":
       columnType =
         dialect === "postgresql"
           ? "JSONB"

@@ -32,6 +32,7 @@ import { getMediaStorage } from "../storage/storage";
 import type { ClientUploadData } from "../storage/types";
 
 import { respondData } from "./response-shapes";
+import { requireRoutePermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -57,9 +58,14 @@ const uploadUrlRequestSchema = z.object({
  * - collection: string - Collection slug
  * - expiresIn?: number - Optional URL expiry in seconds
  *
+ * Requires create-media, matching the media-handlers upload route: a
+ * pre-signed URL is a grant to write into the site's storage, so it
+ * carries the same permission as a direct media upload.
+ *
  * Response Codes:
  * - 200 OK: Upload URL generated successfully
  * - 400 Bad Request: Invalid input or client uploads not enabled
+ * - 401 Unauthorized / 403 Forbidden: missing or insufficient credentials
  * - 500 Internal Server Error: URL generation failed
  *
  * Response: bare `ClientUploadData` (respondData); see the
@@ -69,6 +75,10 @@ const uploadUrlRequestSchema = z.object({
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
     await ensureServicesInitialized();
+
+    // Same permission surface as media-handlers' upload route: signing an
+    // upload URL IS a media write.
+    await requireRoutePermission(request, "create", "media");
 
     let raw: unknown;
     try {

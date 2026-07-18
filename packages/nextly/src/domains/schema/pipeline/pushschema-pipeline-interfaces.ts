@@ -43,7 +43,7 @@ export interface RenameDetector {
 
 export type ClassificationLevel = "safe" | "destructive" | "interactive";
 
-// F5 + F6: classifies operations + drizzle-kit signals into events.
+// F5 + F6: classifies typed operations into events.
 // Each event represents a user-visible decision point with applicable
 // resolutions or a per-dialect warning. Reads typed Operation[] from F4
 // Option E's diff stream (no regex parsing of drizzle-kit text output for
@@ -54,8 +54,6 @@ export type ClassificationLevel = "safe" | "destructive" | "interactive";
 export interface Classifier {
   classify(args: {
     operations: Operation[];
-    drizzleWarnings: string[];
-    hasDataLoss: boolean;
     countNulls: (table: string, column: string) => Promise<number>;
     countRows: (table: string) => Promise<number>;
     dialect: SupportedDialect;
@@ -172,6 +170,7 @@ export type { Notifier } from "../../../runtime/notifications/types";
 export type {
   ClassificationResult,
   ClassifierEvent,
+  DestructiveDropEvent,
   Resolution,
   ResolutionKind,
 } from "./resolution/types";

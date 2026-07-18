@@ -61,7 +61,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary/20! cursor-pointer relative"
+                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary! cursor-pointer relative"
               >
                 <Avatar className="h-full w-full bg-transparent rounded-none transition-all duration-200">
                   <AvatarImage
@@ -101,7 +101,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                 }}
                 className="group flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors cursor-pointer hover-subtle-row"
               >
-                <UserIcon className="h-4 w-4 text-muted-foreground/70 group-hover-subtle-row transition-colors" />
+                <UserIcon className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                 <span>My Account</span>
               </DropdownMenuItem>
 
@@ -112,7 +112,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   rel="noopener noreferrer"
                   className="flex w-full items-center gap-3 px-3 py-2.5"
                 >
-                  <HelpCircle className="h-4 w-4 text-muted-foreground/70 group-hover-subtle-row transition-colors" />
+                  <HelpCircle className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                   <span>Documentation</span>
                 </a>
               </DropdownMenuItem>

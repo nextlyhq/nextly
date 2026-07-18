@@ -97,9 +97,11 @@ export interface SchemaApplyResponse {
   toastSummary?: string;
 }
 
-// User resolution for an interactive field
+// User resolution for an interactive field. "confirm_drop" acknowledges a
+// destructive column drop so the server may destroy that column's data; the
+// server fails the apply closed for any drop that is not acknowledged.
 export interface FieldResolution {
-  action: "provide_default" | "mark_nullable" | "cancel";
+  action: "provide_default" | "mark_nullable" | "cancel" | "confirm_drop";
   value?: string;
 }
 

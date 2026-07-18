@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table relations live in `./sqlite-relations.ts` and are re-exported
+ * Cross-table relations live in `../_dialect-bundles/sqlite.relations.ts` and are re-exported
  * at the bottom of this file. See `./postgres.ts` for the rationale.
  *
  * @module schemas/users/sqlite
@@ -33,6 +33,11 @@ export const users = sqliteTable(
     isActive: integer("is_active", { mode: "boolean" })
       .notNull()
       .default(false),
+    // Set when an admin creates the account with a password they chose: the
+    // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
+    // column can be added to an existing table without a data-losing default;
+    // null and false both mean "no forced change".
+    mustChangePassword: integer("must_change_password", { mode: "boolean" }),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
     lockedUntil: integer("locked_until", { mode: "timestamp" }),

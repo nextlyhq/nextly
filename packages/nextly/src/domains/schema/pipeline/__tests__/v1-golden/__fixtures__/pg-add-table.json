@@ -1,0 +1,6 @@
+{
+  "sqlStatements": [
+    "CREATE TABLE \"vg1\" (\n\t\"id\" text PRIMARY KEY,\n\t\"title\" text\n);\n"
+  ],
+  "hints": []
+}

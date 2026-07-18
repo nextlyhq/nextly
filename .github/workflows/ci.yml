@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Every job only reads the repo; nothing here writes, comments, or tags.
+# Restricting the token caps what a compromised dependency or action
+# could do with it.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,22 +24,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 2
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Cache Turbo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -49,11 +57,54 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      # Drizzle v1 zero-legacy gate: no pre-v1 API, no removed kit symbols,
+      # no positional drizzle() constructors. Cheap check, fails fast.
+      - name: Drizzle v1 legacy gate
+        run: pnpm check:drizzle-v1-legacy
+
+      # The drizzle-v1 migration's own safety net (review-driven: these
+      # suites previously executed in NO CI job because the `nextly`
+      # package's full test task carries a pre-existing failing baseline).
+      # Runs the migration-critical GREEN suites explicitly: kit contract +
+      # tripwires, golden SQL fixtures, guard scanners, fresh-push unit
+      # coverage, the #5782 cascade regression, RQB v2 conversions, and the
+      # relations registry.
+      - name: Drizzle v1 safety suites (unit)
+        # Build the concrete adapters first: this step runs a raw vitest
+        # BEFORE the Build step below, but nextly's database/factory.ts
+        # dynamically imports @nextlyhq/adapter-{postgres,mysql,sqlite}, so
+        # vite fails to resolve their (unbuilt) entry and 4 suites error at
+        # collection with "Failed to resolve entry for package". turbo builds
+        # their shared adapter-drizzle dependency in the same command.
+        run: |
+          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm --filter nextly exec vitest run \
+            src/database/__tests__/drizzle-kit-lazy.test.ts \
+            src/database/__tests__/drizzle-kit-api-contract.test.ts \
+            src/database/__tests__/schema-registry.relations.test.ts \
+            src/domains/schema/pipeline/__tests__/v1-golden/sqlite.golden.test.ts \
+            src/domains/schema/pipeline/__tests__/filter-unsafe-statements.scanner.test.ts \
+            src/domains/schema/pipeline/__tests__/filter-unsafe-statements.test.ts \
+            src/domains/schema/pipeline/__tests__/fresh-push.test.ts \
+            src/domains/schema/pipeline/__tests__/sqlite-cascade-dataloss.regression.test.ts \
+            src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts \
+            src/domains/schema/pipeline/prompt-dispatcher/__tests__/clack-terminal.test.ts \
+            src/domains/auth/__tests__/rqb-v2-conversions.test.ts
+        env:
+          TURBO_CACHE_DIR: .turbo
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.
       - name: Design tokens lint
         run: pnpm lint:design
+
+      # Workspace manifest consistency across all 19 packages (sherif):
+      # unordered keys, unsynced sibling versions, cross-package version
+      # drift, malformed manifests. All rules gate. Runs in milliseconds,
+      # fails fast.
+      - name: Workspace consistency
+        run: pnpm lint:workspace
 
       - name: Build
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
@@ -149,7 +200,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # This job never pushes. Left on, the default keeps GITHUB_TOKEN in
           # the git config for everything that follows, which here is a pnpm
@@ -157,16 +208,16 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
       - name: Cache Turbo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -179,7 +230,7 @@ jobs:
       # Keyed on the lockfile: the browser build only has to change when the
       # Playwright version does, and a download is most of this job's runtime.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
@@ -200,7 +251,7 @@ jobs:
 
       - name: Upload report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: e2e/.playwright/report
@@ -222,13 +273,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm

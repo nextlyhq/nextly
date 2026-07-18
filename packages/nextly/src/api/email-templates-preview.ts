@@ -22,9 +22,9 @@ import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -66,7 +66,10 @@ const previewSchema = z.object({
  */
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "email-templates" },
+      { action: "manage", resource: "email-templates" },
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();

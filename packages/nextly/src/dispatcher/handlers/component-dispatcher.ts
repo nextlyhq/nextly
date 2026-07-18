@@ -13,6 +13,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { assertValidFieldsPayload } from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -56,6 +57,8 @@ import {
 } from "../helpers/di";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
+
+import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
   registry: ComponentRegistryService;
@@ -367,6 +370,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentFields = (component.fields ??
         []) as unknown as FieldDefinition[];
@@ -451,8 +458,15 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
 
       const currentVersion = component.schemaVersion ?? 1;
+      // Reject a stale UI save before any DDL runs so two admins editing the
+      // same component cannot silently overwrite each other (last-write-wins).
+      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
       const tableName = component.tableName;
 
       const legacyBundle = resolutions
@@ -510,8 +524,16 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         );
       }
 
+      const newSchemaVersion = currentVersion + 1;
+
       // Post-apply: update dynamic_components fields JSON + schema_hash directly
-      // to avoid the registry's auto-bump of schemaVersion / migrationStatus.
+      // (not via the registry helper, whose auto-bump would also reset
+      // migration_status). Advance schema_version here so the optimistic-lock
+      // check above sees a new value on the next save; without the bump the
+      // stored version never changes and a second stale save would pass. The
+      // write is non-fatal (the DDL already succeeded), but track whether it
+      // landed so the response never reports a version the DB did not persist.
+      let versionPersisted = true;
       try {
         await adapter.update(
           "dynamic_components",
@@ -519,14 +541,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
       } catch (err) {
+        versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
         );
       }
 
@@ -543,15 +568,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         fields as FieldConfig[]
       );
 
-      // Pipeline (PipelineResult) does not carry per-slug schema versions;
-      // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by
-      // 1 locally — matches the collection fallback pattern.
-      const newSchemaVersion = currentVersion + 1;
-
-      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
-
       return respondAction(`Schema applied for component '${slug}'`, {
-        newSchemaVersion,
+        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
       });
     },
   },
