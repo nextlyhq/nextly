@@ -252,7 +252,16 @@ export class CollectionFileManager {
             // collection / single has the lifecycle enabled. Boot path
             // in di/register.ts already does this; FileManager's lazy
             // fallback used to drop the option silently.
-            { status: metadata.status === true }
+            //
+            // Forward `localized` too: on a localized collection, migrations
+            // move translatable fields into `<table>_locales`, so the main-table
+            // schema must omit those columns. Without this, a lazy schema built
+            // after a restart/cache-miss would still declare the moved columns and
+            // `select().from(schema)` would reference columns that no longer exist.
+            {
+              status: metadata.status === true,
+              localized: metadata.localized === true,
+            }
           );
 
           this.schemaRegistry.set(schemaKey, runtimeSchema.table);
