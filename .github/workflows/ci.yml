@@ -88,6 +88,7 @@ jobs:
             src/domains/schema/pipeline/__tests__/fresh-push.test.ts \
             src/domains/schema/pipeline/__tests__/sqlite-cascade-dataloss.regression.test.ts \
             src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts \
+            src/domains/schema/pipeline/prompt-dispatcher/__tests__/clack-terminal.test.ts \
             src/domains/auth/__tests__/rqb-v2-conversions.test.ts
         env:
           TURBO_CACHE_DIR: .turbo

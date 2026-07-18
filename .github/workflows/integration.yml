@@ -104,68 +104,36 @@ jobs:
       # runs only the packages its dialect covers. `test:integration`
       # declares `dependsOn: ^build`, so turbo builds prerequisites itself.
       #
-      # The core `nextly` integration suite is NOT gated yet, same policy as
-      # the unit `Test` step in ci.yml: it carries a pre-existing failing
-      # baseline (suites that import the absent `pg` package or a moved
-      # admin util fail at collection, and stale fixtures miss newer user
-      # columns). It joins the sqlite leg — and its pg-targeting files join
-      # the postgres leg — once that baseline is repaired.
+      # The core `nextly` integration suite is now gated on every leg. Its
+      # in-memory-SQLite suites (createTestNextly) run on all legs; its
+      # dialect-gated files self-skip unless the matching URL is set, so the
+      # pushschema / notifications / drizzle-v1 pg suites run on the postgres
+      # leg and the mysql suites on the mysql leg. nextly's database/factory.ts
+      # statically references @nextlyhq/adapter-{postgres,mysql,sqlite}, so the
+      # three concrete adapters are built first (they are `^build` siblings,
+      # not dependencies of the test:integration task).
       - name: Run integration tests (postgres)
         if: matrix.dialect == 'postgres'
-        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-postgres
-        env:
-          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
-          TURBO_CACHE_DIR: .turbo
-
-      # drizzle-v1 data-safety proofs on real PostgreSQL (review-driven —
-      # the upgrade sim's "v1 proposes zero changes over a 0.31 schema" and
-      # the golden fixtures previously skipIf'd without a DB URL and ran in
-      # no CI job). The postgres service user can create databases, which
-      # the upgrade-sim and drop-guard suites need.
-      - name: Drizzle v1 safety suites (postgres)
-        if: matrix.dialect == 'postgres'
-        # Build the concrete adapters first: nextly's database/factory.ts
-        # statically references @nextlyhq/adapter-{postgres,mysql,sqlite}, so
-        # vitest's module graph needs their dist even though this leg only
-        # queries postgres. `test:integration`'s ^build builds dependencies,
-        # not these sibling packages.
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
-          pnpm --filter nextly exec vitest run \
-            --config vitest.integration.config.ts \
-            src/domains/schema/pipeline/__tests__/v1-golden/ \
-            src/domains/schema/pipeline/__tests__/fresh-push.drop-guard.integration.test.ts \
-            src/database/__tests__/drizzle-kit-api-contract.pg.integration.test.ts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo test:integration --filter=@nextlyhq/adapter-postgres --filter=nextly
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
 
       - name: Run integration tests (mysql)
         if: matrix.dialect == 'mysql'
-        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-mysql
-        env:
-          TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
-          TURBO_CACHE_DIR: .turbo
-
-      # drizzle-v1 data-safety proofs on real MySQL: golden fixtures,
-      # upgrade sim (one metadata reconcile then zero), phantom-diff gate,
-      # and the pipeline suite pinning the tx-vs-$client regression.
-      - name: Drizzle v1 safety suites (mysql)
-        if: matrix.dialect == 'mysql'
-        # See the postgres step: build the concrete adapters so the nextly
-        # test module graph resolves.
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
-          pnpm --filter nextly exec vitest run \
-            --config vitest.integration.config.ts \
-            src/domains/schema/pipeline/__tests__/v1-golden/ \
-            src/domains/schema/pipeline/__tests__/pushschema-pipeline-mysql.integration.test.ts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo test:integration --filter=@nextlyhq/adapter-mysql --filter=nextly
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
 
       - name: Run integration tests (sqlite)
         if: matrix.dialect == 'sqlite'
-        run: pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite
+        run: |
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly
         env:
           TURBO_CACHE_DIR: .turbo
