@@ -14,26 +14,32 @@
  *      IP is private/loopback/link-local/CGNAT/multicast/cloud-metadata.
  *      A single bad IP poisons the lookup — attacker-controlled DNS
  *      could rotate which IP is returned per call.
- *   4. Return the validated URL + first resolved IP (the caller can use
- *      it as a hint; full DNS-rebinding defense via dispatcher pinning
- *      is documented as a follow-up).
+ *   4. Return the validated URL + the first resolved IP so the fetch can
+ *      dial that exact address (see `safeFetch`).
  *
- * `safeFetch(url, init?, opts?)`:
- *   Validate → fetch. Convenience wrapper for the common case.
+ * `safeFetch(url, opts?)`:
+ *   Validate, then fetch the response with the validated IP pinned at the
+ *   socket. The validation and the connection resolve the hostname only
+ *   once between them, so a second DNS answer at connect time cannot
+ *   redirect the request to a private address (DNS rebinding). Uses
+ *   `node:http`/`node:https` `request({ lookup })` — `undici` is not a
+ *   dependency of this lean package, and the built-in modules pin the
+ *   address without one. Redirects are not followed (a 3xx is returned as
+ *   is), the response body is size-capped, and the whole request is bounded
+ *   by a deadline. Node-runtime only.
  *
- * Implementation note: this module avoids module-level Node imports
- * so downstream packages that bundle for the browser
+ * Implementation note: this module avoids module-level *runtime* Node
+ * imports so downstream packages that bundle for the browser
  * (e.g. `@nextlyhq/admin`) don't fail at build time. `node:dns/promises`
- * is loaded lazily inside the validation function.
- *
- * Known gap: full DNS-rebinding defense requires pinning the resolved
- * IP on the actual fetch dispatcher (undici Agent + custom connect).
- * Not implemented in v1 — the validation itself closes the primary
- * attack surface (URL pointing directly at private IP). Tracked for
- * follow-up.
+ * and `node:http`/`node:https` are loaded lazily inside the functions that
+ * need them; the `node:http`/`node:net` type-only imports are erased at
+ * compile time.
  *
  * @module utils/validate-external-url
  */
+
+import type { IncomingMessage } from "node:http";
+import type { LookupFunction } from "node:net";
 
 const IPV4_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -189,7 +195,9 @@ export async function validateExternalUrl(
     const allow =
       options.allowLocalhost === true && isLocalhostHostname && family === 4;
     const ok =
-      family === 4 ? isPublicIpv4(address, allow) : isPublicIpv6(address, allow);
+      family === 4
+        ? isPublicIpv4(address, allow)
+        : isPublicIpv6(address, allow);
     if (!ok) {
       throw new ExternalUrlError(
         `Resolved to non-public IP: ${address}`,
@@ -206,26 +214,257 @@ export async function validateExternalUrl(
   };
 }
 
-export interface SafeFetchOptions
-  extends ValidateExternalUrlOptions,
-    Omit<RequestInit, never> {}
+/** Default response body cap: reject anything larger before buffering it all. */
+const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MiB
+/** Default overall deadline covering DNS + connect + TLS + response. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+export interface SafeFetchOptions extends ValidateExternalUrlOptions {
+  /** HTTP method. Defaults to GET. */
+  method?: string;
+  /** Request headers (plain object, entries array, or `Headers`). */
+  headers?: HeadersInit;
+  /** Request body. Only string / binary bodies are supported. */
+  body?: string | Uint8Array;
+  /** Abort signal; an external timeout surfaces as a standard `AbortError`. */
+  signal?: AbortSignal | null;
+  /** Reject once the response body exceeds this many bytes. Default 10 MiB. */
+  maxResponseBytes?: number;
+  /** Overall deadline in ms covering connect + response. Default 30s. */
+  timeoutMs?: number;
+}
 
 /**
- * Validate `rawUrl` then `fetch()` it. Convenience wrapper for the
- * common case (webhook delivery, email attachment fetch).
+ * Raised for fetch-phase failures that are NOT SSRF rejections: an over-large
+ * response body or the overall deadline elapsing. Kept distinct from
+ * `ExternalUrlError` so a caller can tell "URL refused for safety" apart from
+ * "the request itself failed" (which would otherwise be mislabeled as an SSRF
+ * rejection).
+ */
+export class SafeFetchError extends Error {
+  constructor(
+    message: string,
+    public readonly url: string,
+    /** Discriminates the failure so callers branch without string-matching. */
+    public readonly reason: "response-too-large" | "timeout"
+  ) {
+    super(message);
+    this.name = "SafeFetchError";
+  }
+}
+
+/**
+ * Build a `dns.lookup`-compatible function that ignores the hostname and
+ * always resolves to `ip`/`family`. Handing this to `http(s).request` forces
+ * the socket to dial the exact address `validateExternalUrl` already vetted,
+ * closing the DNS-rebinding window where a second resolution at connect time
+ * could return a private IP. Not re-exported from the package barrel; exported
+ * here so the rebinding invariant can be unit-tested directly.
+ */
+export function createPinnedLookup(ip: string, family: 4 | 6): LookupFunction {
+  return (_hostname, options, callback) => {
+    // Node calls lookup with an options object. `all: true` expects the array
+    // form of the callback; otherwise the (address, family) form. The
+    // hostname argument is deliberately unused: the whole point is to bypass
+    // a fresh resolution and pin the vetted address.
+    if (options && options.all) {
+      callback(null, [{ address: ip, family }]);
+    } else {
+      callback(null, ip, family);
+    }
+  };
+}
+
+/**
+ * Validate `rawUrl` then fetch it with the validated IP pinned at the socket.
+ * The convenience wrapper for the common case (webhook delivery, email
+ * attachment fetch). Node-runtime only.
  *
- * NOTE: this does NOT pin the resolved IP on the actual connection.
- * If full DNS-rebinding defense is required, the caller should
- * implement a dispatcher with a custom `connect` that forces the
- * `pinnedIp` returned by `validateExternalUrl()`.
+ * DNS is resolved once by `validateExternalUrl`; `createPinnedLookup` forces
+ * the connection to that same address, so an attacker's DNS cannot rebind the
+ * request to a private host between validation and connect. Redirects are not
+ * followed, the body is capped at `maxResponseBytes`, and the request is
+ * bounded by `timeoutMs`.
  */
 export async function safeFetch(
   rawUrl: string,
   options: SafeFetchOptions = {}
 ): Promise<Response> {
-  const { allowLocalhost, allowedProtocols, ...init } = options;
-  await validateExternalUrl(rawUrl, { allowLocalhost, allowedProtocols });
-  return fetch(rawUrl, init);
+  const {
+    allowLocalhost,
+    allowedProtocols,
+    method,
+    headers,
+    body,
+    signal,
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = options;
+
+  const validated = await validateExternalUrl(rawUrl, {
+    allowLocalhost,
+    allowedProtocols,
+  });
+
+  return pinnedFetch(validated, {
+    method,
+    headers,
+    body,
+    signal: signal ?? undefined,
+    maxResponseBytes,
+    timeoutMs,
+  });
+}
+
+interface PinnedFetchInit {
+  method?: string;
+  headers?: HeadersInit;
+  body?: string | Uint8Array;
+  signal?: AbortSignal;
+  maxResponseBytes: number;
+  timeoutMs: number;
+}
+
+/**
+ * Issue the request over `node:http`/`node:https` with the validated IP pinned
+ * via a custom `lookup`, then adapt the Node response into a WHATWG `Response`.
+ * `agent: false` forces a fresh socket per call so no pooled connection can
+ * reuse a differently-resolved address.
+ */
+async function pinnedFetch(
+  validated: ValidatedUrl,
+  init: PinnedFetchInit
+): Promise<Response> {
+  const { url, pinnedIp, family } = validated;
+  // Lazy, literal-specifier imports keep the module import-safe for bundlers
+  // targeting the browser (some packages re-export this util).
+  const httpMod =
+    url.protocol === "https:"
+      ? await import("node:https")
+      : await import("node:http");
+
+  const lookup = createPinnedLookup(pinnedIp, family);
+
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    // Holder so the timer id is mutated (not reassigned) after `settle` closes
+    // over it; the request callback needs `settle` before the timer exists.
+    const timer: { id?: ReturnType<typeof setTimeout> } = {};
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer.id) clearTimeout(timer.id);
+      fn();
+    };
+
+    const req = httpMod.request(
+      url,
+      {
+        method: init.method ?? "GET",
+        headers: toOutgoingHeaders(init.headers),
+        lookup,
+        // Fresh socket per request so a pooled connection can't reuse a
+        // differently-resolved address, and so the pinned lookup always runs.
+        agent: false,
+        // Forward the caller's abort signal so an external timeout surfaces
+        // as a standard AbortError.
+        signal: init.signal,
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        res.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > init.maxResponseBytes) {
+            res.destroy();
+            req.destroy();
+            settle(() =>
+              reject(
+                new SafeFetchError(
+                  `Response body exceeded ${init.maxResponseBytes} bytes`,
+                  url.href,
+                  "response-too-large"
+                )
+              )
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          settle(() => resolve(toWhatwgResponse(res, Buffer.concat(chunks))));
+        });
+        res.on("error", err => settle(() => reject(err)));
+      }
+    );
+
+    // Overall deadline. The socket-level `timeout` option only measures
+    // inactivity, so we keep our own clock over the whole request.
+    timer.id = setTimeout(() => {
+      req.destroy();
+      settle(() =>
+        reject(
+          new SafeFetchError(
+            `Request exceeded ${init.timeoutMs}ms`,
+            url.href,
+            "timeout"
+          )
+        )
+      );
+    }, init.timeoutMs);
+
+    req.on("error", err => settle(() => reject(err)));
+
+    // A pre-aborted signal destroys the request synchronously; the `error`
+    // handler above then rejects. Otherwise send the body and finish.
+    if (!req.destroyed) {
+      if (init.body != null) req.write(init.body);
+      req.end();
+    }
+  });
+}
+
+/** Normalize a `HeadersInit` into Node's outgoing-header shape. */
+function toOutgoingHeaders(
+  headers?: HeadersInit
+): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  if (!headers) return out;
+  if (headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+  } else if (Array.isArray(headers)) {
+    for (const [key, value] of headers) out[key] = value;
+  } else {
+    for (const [key, value] of Object.entries(headers)) out[key] = value;
+  }
+  return out;
+}
+
+/** Adapt a Node `IncomingMessage` + buffered body into a WHATWG `Response`. */
+function toWhatwgResponse(res: IncomingMessage, body: Buffer): Response {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(res.headers)) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      // set-cookie and other repeated headers arrive as arrays.
+      for (const v of value) headers.append(key, v);
+    } else {
+      headers.append(key, value);
+    }
+  }
+  const status = res.statusCode ?? 502;
+  // Null-body statuses cannot carry an entity body in the WHATWG constructor.
+  const nullBody = status === 204 || status === 205 || status === 304;
+  // Copy into a fresh ArrayBuffer-backed Uint8Array; Node's Buffer generic
+  // (ArrayBufferLike) does not satisfy the DOM BodyInit type on its own.
+  const bytes = Uint8Array.from(body);
+  return new Response(nullBody ? null : bytes, {
+    status,
+    statusText: res.statusMessage ?? "",
+    headers,
+  });
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------
@@ -249,7 +488,7 @@ function isIpv4InCidr(intIp: number, cidr: string): boolean {
   const prefix = Number(prefixRaw);
   if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
   const mask = prefix === 0 ? 0 : (-1 >>> (32 - prefix)) << (32 - prefix);
-  return ((intIp & mask) >>> 0) === ((intCidr & mask) >>> 0);
+  return (intIp & mask) >>> 0 === (intCidr & mask) >>> 0;
 }
 
 function isPublicIpv4(addr: string, allowLoopback: boolean): boolean {
@@ -278,10 +517,13 @@ function isPublicIpv6(addr: string, allowLoopback: boolean): boolean {
   // Take first hextet for prefix-style checks
   const firstHextet = lower.split(":")[0] || "";
   // ULA fc00::/7 — first hextet starts with fc or fd
-  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd")) return false;
+  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd"))
+    return false;
   // Link-local fe80::/10 — first hextet fe80..febf
-  if (firstHextet.startsWith("fe8") || firstHextet.startsWith("fe9")) return false;
-  if (firstHextet.startsWith("fea") || firstHextet.startsWith("feb")) return false;
+  if (firstHextet.startsWith("fe8") || firstHextet.startsWith("fe9"))
+    return false;
+  if (firstHextet.startsWith("fea") || firstHextet.startsWith("feb"))
+    return false;
   // Multicast ff00::/8
   if (firstHextet.startsWith("ff")) return false;
 
