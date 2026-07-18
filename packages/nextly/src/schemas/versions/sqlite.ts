@@ -12,7 +12,13 @@
  * @module schemas/versions/sqlite
  */
 
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 import type { VersionScopeKind, VersionStatus } from "./types";
 
@@ -50,6 +56,18 @@ export const nextlyVersionsSqlite = sqliteTable(
       .notNull(),
   },
   table => [
+    // Durable version_no uniqueness per document. A FULL (non-partial) unique
+    // index: autosave rows carry a NULL version_no and SQLite allows multiple
+    // NULLs in a unique index, so only durable rows are constrained. Postgres
+    // expresses this as a partial unique index (WHERE is_autosave = false);
+    // SQLite/MySQL cannot, but the NULL tolerance of a full unique index gives
+    // the same durable guarantee. Same index name across dialects.
+    uniqueIndex("nextly_versions_seq_uidx").on(
+      table.scopeKind,
+      table.scopeSlug,
+      table.entryId,
+      table.versionNo
+    ),
     index("nextly_versions_doc_recent_idx").on(
       table.scopeKind,
       table.scopeSlug,

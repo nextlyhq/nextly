@@ -42,7 +42,42 @@ describe("VersionsRepository (integration)", () => {
       const list = await repo.listByDoc(ref);
       expect(list.map(m => m.versionNo)).toEqual([2, 1]);
       // listByDoc returns metadata only (no snapshot).
-      expect((list[0] as Record<string, unknown>).snapshot).toBeUndefined();
+      expect("snapshot" in list[0]).toBe(false);
+    } finally {
+      await handle.destroy();
+    }
+  });
+
+  it("rejects a duplicate durable version_no for the same document", async () => {
+    const handle = await createTestNextly();
+    try {
+      const repo = new VersionsRepository(handle.adapter);
+      const dupRef: VersionRef = {
+        scopeKind: "collection",
+        scopeSlug: "posts",
+        entryId: "entry-dup",
+      };
+      await repo.insertVersion({
+        ref: dupRef,
+        versionNo: 1,
+        status: "published",
+        isAutosave: false,
+        snapshot: {},
+        createdBy: "user-1",
+      });
+      // The durable-sequence unique index (partial on Postgres, full/NULL-
+      // tolerant on MySQL/SQLite) must reject a second row with the same
+      // version_no for the same document.
+      await expect(
+        repo.insertVersion({
+          ref: dupRef,
+          versionNo: 1,
+          status: "published",
+          isAutosave: false,
+          snapshot: {},
+          createdBy: "user-1",
+        })
+      ).rejects.toThrow();
     } finally {
       await handle.destroy();
     }
