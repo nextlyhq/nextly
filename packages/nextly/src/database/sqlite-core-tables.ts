@@ -182,5 +182,25 @@ export function generateSqliteCoreTableStatements(): string[] {
       "meta" TEXT,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    // Content-version store. Columns match schemas/versions/sqlite.ts; the
+    // durable-sequence unique index and the recent index are additive and get
+    // created by the normal reconcile (this degraded fallback creates tables
+    // only, like the entries above).
+    `CREATE TABLE IF NOT EXISTS "nextly_versions" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "version_no" INTEGER,
+      "status" TEXT NOT NULL,
+      "is_autosave" INTEGER NOT NULL DEFAULT 0,
+      "snapshot" TEXT NOT NULL,
+      "label" TEXT,
+      "locale" TEXT,
+      "source_version_no" INTEGER,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
   ];
 }
