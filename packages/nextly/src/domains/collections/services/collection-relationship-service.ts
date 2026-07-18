@@ -391,19 +391,21 @@ function expandMediaInData(
  * For polymorphic relationships (relationTo is array), returns the first collection.
  */
 function getTargetCollection(field: FieldDefinition): string | undefined {
+  // A many-to-many field's junction table is created from `options.target`
+  // (see generateJunctionTable), so resolve m2m targets from there FIRST. A
+  // stale or legacy `relationTo` would otherwise make reads/writes derive a
+  // different junction-table name than the one that physically exists.
+  if (field.options?.relationType === "manyToMany" && field.options.target) {
+    return field.options.target;
+  }
   if (field.relationTo) {
     return Array.isArray(field.relationTo)
       ? field.relationTo[0]
       : field.relationTo;
   }
-  // A many-to-many field carries its target on `options.target`, not
-  // `relationTo` (the typed `relationship()` helper never sets `relationTo`
-  // for m2m). Without this, every junction insert/delete/fetch resolves no
-  // target and silently no-ops.
-  if (field.options?.target) {
-    return field.options.target;
-  }
-  return undefined;
+  // Other Builder-authored relationship fields may also carry the target under
+  // `options.target`; fall back to it when `relationTo` is absent.
+  return field.options?.target;
 }
 
 /**
@@ -1296,7 +1298,14 @@ export class CollectionRelationshipService extends BaseService {
       const targetCollection = getTargetCollection(field);
       const hasMany = isHasManyRelationship(field);
 
-      if (!targetCollection || !entry[field.name]) {
+      if (!targetCollection) {
+        continue;
+      }
+      // A many-to-many field has no parent-row value (its links live in the
+      // junction table, keyed by entry.id), so the `entry[field.name]` guard
+      // would wrongly skip it on single-entry reads. Only non-m2m fields read
+      // their FK id(s) off the row, so gate on the row value for those.
+      if (relationType !== "manyToMany" && !entry[field.name]) {
         continue;
       }
 

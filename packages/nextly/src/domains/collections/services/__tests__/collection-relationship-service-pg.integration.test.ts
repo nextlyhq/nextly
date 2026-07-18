@@ -36,8 +36,9 @@ const collectionServiceStub = {
   generateId: () => randomUUID(),
 } as unknown as DynamicCollectionService;
 
-const PG_URL =
-  process.env.TEST_POSTGRES_URL ?? process.env.TEST_DATABASE_URL ?? "";
+// Skip ONLY when the Postgres-specific URL is unset; do not fall back to a
+// generic URL, or this gate could silently run against a non-Postgres database.
+const PG_URL = process.env.TEST_POSTGRES_URL ?? "";
 
 const silentLogger: Logger = {
   debug() {},
@@ -72,16 +73,14 @@ async function connectIfAvailable(): Promise<Awaited<
   // isn't enough to satisfy that validation — DATABASE_URL must also be set
   // on process.env, or the validation throws regardless of run order.
   process.env.DATABASE_URL = PG_URL;
-  try {
-    const adapter = await createAdapter({
-      type: "postgresql",
-      url: PG_URL,
-    } as Parameters<typeof createAdapter>[0]);
-    await adapter.executeQuery("SELECT 1");
-    return adapter;
-  } catch {
-    return null;
-  }
+  // When the URL IS configured, a connection failure must surface (fail the
+  // suite), not be swallowed into a skip that would hide a broken database.
+  const adapter = await createAdapter({
+    type: "postgresql",
+    url: PG_URL,
+  } as Parameters<typeof createAdapter>[0]);
+  await adapter.executeQuery("SELECT 1");
+  return adapter;
 }
 
 const adapter = await connectIfAvailable();

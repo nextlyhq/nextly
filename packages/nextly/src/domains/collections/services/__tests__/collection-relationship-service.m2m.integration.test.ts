@@ -160,6 +160,24 @@ describe("CollectionRelationshipService many-to-many junction writes (integratio
     expect(related?.[0].id).toBe(tagId);
   });
 
+  it("expandRelationships populates m2m links on a single-entry read", async () => {
+    await rel.insertManyToManyRelations("posts", postId, m2mField, [tagId]);
+
+    // The single-entry expansion path (findById / create+update responses at
+    // depth > 0) must populate m2m links even though a m2m field has no
+    // parent-row value — its links live only in the junction table, keyed by
+    // entry.id. A row-value guard here would wrongly skip the field.
+    const entry = { id: postId, title: "Hello", slug: "hello" };
+    const expanded = await rel.expandRelationships(entry, "posts", [m2mField], {
+      depth: 1,
+    });
+
+    const tags = expanded.tags as Array<{ id: string }> | undefined;
+    expect(tags).toBeDefined();
+    expect(tags).toHaveLength(1);
+    expect(tags?.[0].id).toBe(tagId);
+  });
+
   it("deleteManyToManyRelations removes the junction row", async () => {
     const adapter = handle!.adapter;
 
