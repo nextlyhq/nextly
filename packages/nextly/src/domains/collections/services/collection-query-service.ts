@@ -571,6 +571,11 @@ export class CollectionQueryService extends BaseService {
             // totalPages then hides the tail of its own result set.
             status: params.status,
             overrideAccess: params.overrideAccess,
+            // The count must answer the same access question as the rows, or a
+            // route-authorized update/delete-only caller gets its read gate
+            // denied here and totalDocs silently falls back to 0 — breaking the
+            // bulk-by-query limit guard and pagination.
+            routeAuthorized: params.routeAuthorized,
           }),
         ]);
 
@@ -863,6 +868,14 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * The route middleware already ran the RBAC gate for the authorizing
+     * operation; skip only that redundant re-check while stored read rules
+     * (owner-only filter) still apply. Mirrors listEntries so the count
+     * beside a route-authorized enumeration answers the same question and
+     * does not fall back to 0 for update/delete-only callers.
+     */
+    routeAuthorized?: boolean;
+    /**
      * Draft/Published filter override (only effective when collection.status === true).
      * See listEntries for full semantics.
      */
@@ -882,7 +895,8 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;

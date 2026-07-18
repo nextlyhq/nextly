@@ -219,3 +219,24 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     expect(accessControlService.evaluateAccess).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("CollectionAccessService.isSuperAdmin", () => {
+  it("is true for the plural authorized role set including super-admin", () => {
+    const { service } = buildAccessService();
+    expect(service.isSuperAdmin(superAdminUser)).toBe(true);
+  });
+
+  it("is true for the singular super-admin role (Direct API shape)", () => {
+    const { service } = buildAccessService();
+    expect(service.isSuperAdmin(singularRoleSuperAdmin)).toBe(true);
+  });
+
+  it("is false for a scoped context without the super-admin role", () => {
+    const { service } = buildAccessService();
+    // The transaction owner-only safety nets rely on this being scope-keyed:
+    // an editor (even one whose account owns a super-admin key elsewhere) must
+    // not skip the owner check.
+    expect(service.isSuperAdmin(user)).toBe(false);
+    expect(service.isSuperAdmin(undefined)).toBe(false);
+  });
+});

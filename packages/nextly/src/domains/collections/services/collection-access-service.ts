@@ -61,6 +61,18 @@ export class CollectionAccessService extends BaseService {
   }
 
   /**
+   * Whether the caller's authorized role set makes them a super-admin.
+   *
+   * Public wrapper over the module predicate so other services (e.g. the
+   * transaction owner-only safety nets) can honor the same "bypass stored
+   * rules on every transport" contract without re-deriving super-admin
+   * status. Keyed on authorized scope (`role`/`roles`), never the account id.
+   */
+  isSuperAdmin(user?: UserContext): boolean {
+    return isSuperAdminContext(user);
+  }
+
+  /**
    * Build RequestContext from UserContext for access control evaluation.
    */
   buildRequestContext(user?: UserContext): RequestContext {

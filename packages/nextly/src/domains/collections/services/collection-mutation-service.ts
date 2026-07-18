@@ -3191,7 +3191,14 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
-      if (accessRules?.update?.type === "owner-only" && params.user) {
+      if (
+        accessRules?.update?.type === "owner-only" &&
+        params.user &&
+        // Super-admins bypass stored rules on every transport, including the
+        // batch transaction path — mirror the SQL owner-predicate bypass so
+        // this safety net does not re-impose owner-only on them.
+        !this.accessService.isSuperAdmin(params.user)
+      ) {
         const ownerField = accessRules.update.ownerField ?? "createdBy";
         const ownerId = existingEntry[ownerField];
         if (ownerId !== params.user.id) {
@@ -3578,7 +3585,14 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
-      if (accessRules?.delete?.type === "owner-only" && params.user) {
+      if (
+        accessRules?.delete?.type === "owner-only" &&
+        params.user &&
+        // Super-admins bypass stored rules on every transport, including the
+        // batch transaction path — mirror the SQL owner-predicate bypass so
+        // this safety net does not re-impose owner-only on them.
+        !this.accessService.isSuperAdmin(params.user)
+      ) {
         const ownerField = accessRules.delete.ownerField ?? "createdBy";
         const ownerId = entry[ownerField];
         if (ownerId !== params.user.id) {

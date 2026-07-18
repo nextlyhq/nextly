@@ -189,7 +189,12 @@ export class CollectionsHandler {
         // clobber an explicit trusted-server override (overrideAccess: true)
         // if one was passed alongside the userId.
         overrideAccess: rest.overrideAccess ?? false,
-        routeAuthorized: true,
+        // Mark route authorization only for real route callers. When a trusted
+        // override is in play the caller is NOT a route caller, and stamping
+        // routeAuthorized would defeat the mutation response redaction guard
+        // (`overrideAccess && !routeAuthorized`), stripping fields the explicit
+        // override was meant to expose unredacted.
+        routeAuthorized: !(rest.overrideAccess ?? false),
       };
     }
     return rest;
