@@ -164,7 +164,8 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
     // Pre-create with the reserved columns (as a real managed table would
     // have) so the only diff against `desired` is title→name; a populated
     // table can't take a bare ADD COLUMN … NOT NULL for missing reserved
-    // columns.
+    // columns. `created_by` is one of those system owner columns now injected
+    // into every collection's desired schema, so the live table carries it too.
     await pool.query(
       `CREATE TABLE "${ctx.prefix}_dc_users" (
         "id" text PRIMARY KEY,
@@ -172,6 +173,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
         "slug" text NOT NULL,
         "created_at" timestamp,
         "updated_at" timestamp,
+        "created_by" text,
         "nickname" text
       )`
     );

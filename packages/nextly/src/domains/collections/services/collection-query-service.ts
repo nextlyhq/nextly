@@ -69,6 +69,7 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -512,9 +513,19 @@ export class CollectionQueryService extends BaseService {
 
         const sortFieldSnake = toSnakeCase(sortField);
 
+        // The system owner column is stripped from responses, so it must not be
+        // sortable either — sorting by it would let a caller order/target rows
+        // by creator. Ignore an owner-column sort instead of resolving it.
+        const ownerSort =
+          sortField === "created_by" ||
+          sortField === "createdBy" ||
+          sortFieldSnake === "created_by";
+
         // Try both camelCase and snake_case versions of the field name
         // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-        const column = schema[sortField] || schema[sortFieldSnake];
+        const column = ownerSort
+          ? undefined
+          : schema[sortField] || schema[sortFieldSnake];
 
         if (column) {
           query = query.orderBy(sortDesc ? desc(column) : asc(column));
@@ -679,6 +690,12 @@ export class CollectionQueryService extends BaseService {
           stripPasswordFieldValues(entry, fields);
         }
       }
+      // Always strip the system owner column so a list readable by non-creators
+      // never leaks the creator's user id (unconditional — not gated on
+      // password fields).
+      for (const entry of expandedEntries) {
+        stripSystemOwnerField(entry);
+      }
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -788,6 +805,14 @@ export class CollectionQueryService extends BaseService {
         finalData = (finalData as Record<string, unknown>[]).map(entry =>
           transformRichTextFields(entry, fieldConfig, params.richTextFormat)
         );
+      }
+
+      // Final owner-column strip at the response boundary — after every
+      // afterRead hook, field-level read access, and transform — so nothing
+      // downstream can re-expose the creator's user id. (The pre-hook strip
+      // above also keeps it out of hook inputs.)
+      for (const entry of finalData as Record<string, unknown>[]) {
+        stripSystemOwnerField(entry);
       }
 
       // Build paginated response with all metadata
@@ -1283,6 +1308,8 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(expandedEntry, fields);
       }
+      // Always strip the system owner column (see listEntries).
+      stripSystemOwnerField(expandedEntry);
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -1334,6 +1361,8 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(finalData, fields);
       }
+      // Same defense in depth for the owner column.
+      stripSystemOwnerField(finalData);
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
@@ -1379,6 +1408,11 @@ export class CollectionQueryService extends BaseService {
           params.richTextFormat
         );
       }
+
+      // Final owner-column strip at the response boundary — after the
+      // field-level afterRead hooks, read access, and rich-text transform — so
+      // nothing downstream can re-expose the creator's user id.
+      stripSystemOwnerField(finalData);
 
       return {
         success: true,

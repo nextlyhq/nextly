@@ -120,6 +120,16 @@ const ADDITIVE_STATEMENT =
 const isPost045TableStatement = (stmt: string): boolean =>
   ADDITIVE_STATEMENT.test(stmt.trim()) && namesPost045Table(stmt);
 
+// The `created_by` system owner column is nullable with no default, so on a
+// schema captured before it existed the v1 upgrade legitimately emits one
+// additive `ADD COLUMN created_by` per pre-existing collection table (the
+// zero-backfill upgrade the feature promises). That add names a table outside
+// the post-0.45 allowlist, so it is accepted here explicitly rather than being
+// mistaken for a phantom diff. Tolerant of pg ("created_by") and MySQL
+// (`created_by`) quoting and the optional COLUMN keyword.
+const addsOwnerColumn = (stmt: string): boolean =>
+  /^ALTER TABLE .+ ADD (COLUMN )?[`"]?created_by[`"]?\b/i.test(stmt.trim());
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -221,7 +231,10 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           schemas: ["public"],
         });
         for (const s of first.sqlStatements) {
-          expect(isPost045TableStatement(s), `phantom diff: ${s}`).toBe(true);
+          expect(
+            isPost045TableStatement(s) || addsOwnerColumn(s),
+            `phantom diff: ${s}`
+          ).toBe(true);
         }
         for (const t of POST_045_TABLES) {
           expect(
@@ -289,7 +302,9 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               s
             );
           expect(
-            isDefaultReconcile || isPost045TableStatement(s),
+            isDefaultReconcile ||
+              isPost045TableStatement(s) ||
+              addsOwnerColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

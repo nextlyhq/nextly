@@ -54,6 +54,7 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -153,6 +154,37 @@ function errorToServiceResult<T = unknown>(
   };
 }
 
+/**
+ * System columns a client must never write: the primary key, the timestamps,
+ * and the owner stamp (both the snake_case column name and the camelCase form a
+ * client might send). They are not declared fields, so field validation passes
+ * them through. Stripping them on BOTH create and update means the service
+ * remains authoritative: on create the generated id / stamped `created_by` /
+ * timestamps win (a stray `createdBy` alias can't survive the snake-case pass
+ * and overwrite the stamp with an attacker-chosen owner), and on update an
+ * authorized updater can't transfer a row to another user, forge `created_at`,
+ * duplicate `updated_at`, or reassign `id`.
+ */
+const IMMUTABLE_SYSTEM_FIELDS = new Set([
+  "id",
+  "created_at",
+  "createdAt",
+  "updated_at",
+  "updatedAt",
+  "created_by",
+  "createdBy",
+]);
+
+function stripImmutableSystemFields(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (!IMMUTABLE_SYSTEM_FIELDS.has(key)) out[key] = value;
+  }
+  return out;
+}
+
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -239,6 +271,10 @@ export class CollectionMutationService extends BaseService {
       }
     }
     stripPasswordFieldValues(entry, fields);
+    // Strip the system owner column so a mutation response (e.g. an admin or
+    // role-based updater) does not echo the row creator's user id. Owner-only
+    // access reads it from SQL, never from the returned row.
+    stripSystemOwnerField(entry);
     await applyFieldReadAccess({
       kind: "collection",
       slug,
@@ -868,9 +904,16 @@ export class CollectionMutationService extends BaseService {
       const now = new Date();
       const rawEntryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
         created_at: now,
         updated_at: now,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
       const entryData: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(rawEntryData)) {
@@ -1471,7 +1514,10 @@ export class CollectionMutationService extends BaseService {
       // tx.execute() is used for the UPDATE so it runs on the same DB client
       // as the transaction (unlike tx.update() which delegates to the pool).
       await this.adapter.transaction(async tx => {
-        const updatePayload = { ...finalData, updatedAt: new Date() };
+        const updatePayload = {
+          ...stripImmutableSystemFields(finalData),
+          updatedAt: new Date(),
+        };
 
         // Dialect-aware identifier quoting and placeholder syntax.
         // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
@@ -2145,9 +2191,22 @@ export class CollectionMutationService extends BaseService {
       const nowForTxCreate = new Date();
       const entryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
-        createdAt: nowForTxCreate,
-        updatedAt: nowForTxCreate,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
+        // Snake_case keys: the runtime Drizzle schema names these columns
+        // created_at / updated_at / created_by, and the adapter maps by column
+        // name. (The prior camelCase createdAt/updatedAt keys here were ignored
+        // by Drizzle and only "worked" via the columns' DB defaults — but a
+        // strict driver like better-sqlite3 rejects the whole insert once any
+        // unknown key is present, so bulk create needs the real column names.)
+        created_at: nowForTxCreate,
+        updated_at: nowForTxCreate,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
 
       // Insert using transaction context
@@ -2485,7 +2544,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...finalData,
+          ...stripImmutableSystemFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", params.entryId),
@@ -3021,9 +3080,22 @@ export class CollectionMutationService extends BaseService {
       const nowForTxCreate = new Date();
       const entryData = {
         id: this.collectionService.generateId(),
-        ...finalData,
-        createdAt: nowForTxCreate,
-        updatedAt: nowForTxCreate,
+        // Strip client-supplied system columns (id / timestamps / created_by,
+        // both snake and camel) so the generated id, stamped owner, and
+        // timestamps below are authoritative — a stray `createdBy` alias can't
+        // survive to overwrite the owner stamp.
+        ...stripImmutableSystemFields(finalData),
+        // Snake_case keys: the runtime Drizzle schema names these columns
+        // created_at / updated_at / created_by, and the adapter maps by column
+        // name. (The prior camelCase createdAt/updatedAt keys here were ignored
+        // by Drizzle and only "worked" via the columns' DB defaults — but a
+        // strict driver like better-sqlite3 rejects the whole insert once any
+        // unknown key is present, so bulk create needs the real column names.)
+        created_at: nowForTxCreate,
+        updated_at: nowForTxCreate,
+        // Stamp the row owner with the creating user's id so owner-only access
+        // works zero-config. Null for system/seed creates (no user context).
+        created_by: params.user?.id ?? null,
       };
 
       // Insert using transaction context
@@ -3224,7 +3296,9 @@ export class CollectionMutationService extends BaseService {
         !params.overrideAccess &&
         !this.accessService.isSuperAdmin(params.user)
       ) {
-        const ownerField = accessRules.update.ownerField ?? "createdBy";
+        // Default to the auto-stamped system owner column (snake_case, matching
+        // the runtime schema and raw rows) so zero-config owner-only works.
+        const ownerField = accessRules.update.ownerField ?? "created_by";
         const ownerId = existingEntry[ownerField];
         if (ownerId !== params.user.id) {
           return {
@@ -3426,7 +3500,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...finalData,
+          ...stripImmutableSystemFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", entryId),
@@ -3631,7 +3705,9 @@ export class CollectionMutationService extends BaseService {
         !params.overrideAccess &&
         !this.accessService.isSuperAdmin(params.user)
       ) {
-        const ownerField = accessRules.delete.ownerField ?? "createdBy";
+        // Default to the auto-stamped system owner column (snake_case, matching
+        // the runtime schema and raw rows) so zero-config owner-only works.
+        const ownerField = accessRules.delete.ownerField ?? "created_by";
         const ownerId = entry[ownerField];
         if (ownerId !== params.user.id) {
           return {
