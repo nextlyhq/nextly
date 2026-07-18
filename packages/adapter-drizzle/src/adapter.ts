@@ -399,6 +399,36 @@ export abstract class DrizzleAdapter {
     return out as T;
   }
 
+  /**
+   * Build a Drizzle column projection object (`{ propertyName: column }`) from a
+   * requested column list, used by `select` (columns) and `insert` (returning).
+   * A requested name resolves against either the Drizzle property name
+   * (camelCase) or the SQL column name (snake_case); the projection is keyed by
+   * the property name so the row shape matches a full select. Returns undefined
+   * for `"*"` or when nothing resolves, so callers fall back to all columns.
+   */
+  protected buildColumnProjection(
+    tableObj: unknown,
+    names: string[] | "*"
+  ): Record<string, unknown> | undefined {
+    if (names === "*" || !tableObj || typeof tableObj !== "object") {
+      return undefined;
+    }
+    const cols = getColumns(tableObj as never);
+    const byAnyName: Record<string, { jsName: string; col: unknown }> = {};
+    for (const [jsName, col] of Object.entries(cols)) {
+      byAnyName[jsName] = { jsName, col };
+      const sqlName = (col as { name?: unknown })?.name;
+      if (typeof sqlName === "string") byAnyName[sqlName] = { jsName, col };
+    }
+    const projection: Record<string, unknown> = {};
+    for (const name of names) {
+      const hit = byAnyName[name];
+      if (hit) projection[hit.jsName] = hit.col;
+    }
+    return Object.keys(projection).length ? projection : undefined;
+  }
+
   // ============================================================
   // Connection Status (Default implementations, can override)
   // ============================================================
@@ -588,36 +618,14 @@ export abstract class DrizzleAdapter {
         const db = executor ?? this.getDrizzle<any>();
         // Honor the columns projection when provided: select only the requested
         // columns instead of every column, so callers can avoid transferring
-        // large columns (e.g. JSON snapshots) they do not need. A requested name
-        // may be either the Drizzle property name (camelCase) or the SQL column
-        // name (snake_case), matching the tolerance of the insert/where paths;
-        // the projection is always keyed by the property name so the returned
-        // row shape matches a full select. Unknown names are skipped; if nothing
-        // resolves, fall back to a full select so a bad option never yields
-        // empty rows.
-        let query;
-        if (options?.columns?.length) {
-          const cols = getColumns(tableObj as never);
-          const byAnyName: Record<string, { jsName: string; col: unknown }> =
-            {};
-          for (const [jsName, col] of Object.entries(cols)) {
-            byAnyName[jsName] = { jsName, col };
-            const sqlName = (col as { name?: unknown })?.name;
-            if (typeof sqlName === "string") {
-              byAnyName[sqlName] = { jsName, col };
-            }
-          }
-          const projection: Record<string, unknown> = {};
-          for (const name of options.columns) {
-            const hit = byAnyName[name];
-            if (hit) projection[hit.jsName] = hit.col;
-          }
-          query = Object.keys(projection).length
-            ? db.select(projection).from(tableObj)
-            : db.select().from(tableObj);
-        } else {
-          query = db.select().from(tableObj);
-        }
+        // large columns (e.g. JSON snapshots) they do not need. Falls back to a
+        // full select when no columns are requested or none resolve.
+        const projection = options?.columns?.length
+          ? this.buildColumnProjection(tableObj, options.columns)
+          : undefined;
+        let query = projection
+          ? db.select(projection).from(tableObj)
+          : db.select().from(tableObj);
 
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
@@ -737,10 +745,17 @@ export abstract class DrizzleAdapter {
         const caps = this.getCapabilities();
 
         if (caps.supportsReturning && options?.returning) {
-          const result = await db
-            .insert(tableObj)
-            .values(mappedData)
-            .returning();
+          // Honor a specific returning list by projecting only those columns, so
+          // the insert does not transfer unrequested columns (e.g. a large JSON
+          // snapshot) back. `"*"` (and an empty/unresolved list) returns all.
+          const projection = this.buildColumnProjection(
+            tableObj,
+            options.returning
+          );
+          const insertQuery = db.insert(tableObj).values(mappedData);
+          const result = await (projection
+            ? insertQuery.returning(projection)
+            : insertQuery.returning());
           return (Array.isArray(result) ? result[0] : result) as T;
         }
 
