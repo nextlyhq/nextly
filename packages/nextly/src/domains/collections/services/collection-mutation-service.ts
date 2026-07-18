@@ -451,11 +451,19 @@ export class CollectionMutationService extends BaseService {
     finalData: Record<string, unknown>,
     isSlugTaken: (slug: string) => Promise<boolean>
   ): Promise<void> {
-    // `applyGeneratedSlugAndTitle` always sets a string slug before hooks run,
-    // so any blank, non-URL-safe, or non-string value here means a hook set it.
-    // All of those sanitize to "" (a non-string yields ""), and each is derived
-    // back to a valid slug: the post-beforeChange call runs after validation,
-    // so nothing downstream catches an empty or invalid slug a hook may leave.
+    // Respect an ABSENT slug. Field-level write access deletes the key when it
+    // denies the write, so `undefined` means "stripped by access" (or never
+    // set): leave it so access control holds and required validation applies —
+    // deriving would smuggle a slug back past access. Slug generation for a
+    // create with no user-supplied slug already ran in applyGeneratedSlugAndTitle
+    // (before write access), so a legitimately-absent-here slug is intentional.
+    if (finalData.slug === undefined) return;
+    // The field is PRESENT (a user provided it and passed access, or a hook set
+    // it). Normalize a string; a non-string or empty/non-URL-safe value (e.g.
+    // "你好", "   ", null) sanitizes to "" and is derived from the title rather
+    // than persisting an invalid slug — required validation permits empty
+    // strings, so it would not catch it, and this mirrors the empty fallback in
+    // applyGeneratedSlugAndTitle.
     const current = finalData.slug;
     const sanitized = typeof current === "string" ? generateSlug(current) : "";
     finalData.slug =
