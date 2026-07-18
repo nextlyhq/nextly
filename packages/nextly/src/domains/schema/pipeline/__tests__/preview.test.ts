@@ -36,9 +36,9 @@ const introspectEmpty = vi.fn().mockResolvedValue({ tables: [] });
 
 describe("previewDesiredSchema", () => {
   // buildDesiredTableFromFields injects reserved system columns
-  // (id, title, slug, created_at, updated_at) onto every collection,
-  // mirroring what runtime-schema-generator does. Tests need the live
-  // snapshot to match exactly so the diff doesn't see drift.
+  // (id, title, slug, created_at, updated_at, created_by) onto every
+  // collection, mirroring what runtime-schema-generator does. Tests need the
+  // live snapshot to match exactly so the diff doesn't see drift.
   // SQLite shape (lowercase tokens; integer for timestamps):
   const reservedColumnsLive = [
     { name: "id", type: "text", nullable: false },
@@ -46,6 +46,7 @@ describe("previewDesiredSchema", () => {
     { name: "slug", type: "text", nullable: false },
     { name: "created_at", type: "integer", nullable: true },
     { name: "updated_at", type: "integer", nullable: true },
+    { name: "created_by", type: "text", nullable: true },
   ];
 
   it("returns empty operations when desired matches live (no changes)", async () => {

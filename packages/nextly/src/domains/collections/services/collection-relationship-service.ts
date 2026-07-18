@@ -15,6 +15,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
@@ -1671,6 +1672,15 @@ export class CollectionRelationshipService extends BaseService {
     rows: Record<string, unknown>[]
   ): Promise<void> {
     if (rows.length === 0) return;
+    // The system owner column must never ride along a populated relationship:
+    // a collection readable by non-creators would otherwise leak a related
+    // row's creator user id through the nested payload. Strip it from every
+    // related row up front (it's a reserved system column, so this can't touch
+    // a user field) — this runs at each expansion level, so nested relations
+    // are covered too.
+    for (const row of rows) {
+      stripSystemOwnerField(row);
+    }
     // System entities expose secret columns that are not schema fields, so
     // strip them by name.
     if (isSystemEntity(targetCollection)) {

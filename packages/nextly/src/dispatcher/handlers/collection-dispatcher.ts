@@ -83,6 +83,7 @@ import {
   parseWhereParam,
   requireBody,
   requireParam,
+  stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -318,7 +319,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -459,7 +460,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -1035,7 +1036,13 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
-          where: b.where as WhereFilter,
+          // Strip owner-column conditions from the request body so a caller
+          // cannot target rows by the system owner column via `body.where`
+          // (mirrors parseWhereParam on the query-string path). The service's
+          // own owner constraint is added separately and is unaffected; a where
+          // that was only an owner filter becomes {} and stays bounded by the
+          // collection's access rules.
+          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)
