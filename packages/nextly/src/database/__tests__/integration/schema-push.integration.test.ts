@@ -65,7 +65,10 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
     db = drizzle({ client: pool });
 
     // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
-    // This simulates what pushSchema would do, letting us test CRUD via Drizzle API
+    // This simulates what pushSchema would do, letting us test CRUD via Drizzle API.
+    // `created_by` is included because it is a system owner column injected into
+    // every collection table's runtime schema, so the fixture must carry it or the
+    // Drizzle CRUD (which selects/inserts it) would reference a missing column.
     await pool.query(`
       DROP TABLE IF EXISTS "dc_int_products" CASCADE;
       CREATE TABLE "dc_int_products" (
@@ -76,7 +79,8 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
         "is_active" boolean,
         "metadata" jsonb,
         "created_at" timestamp DEFAULT now(),
-        "updated_at" timestamp DEFAULT now()
+        "updated_at" timestamp DEFAULT now(),
+        "created_by" text
       );
     `);
 
@@ -89,7 +93,8 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
         "body" text,
         "status" text DEFAULT 'draft',
         "created_at" timestamp DEFAULT now(),
-        "updated_at" timestamp DEFAULT now()
+        "updated_at" timestamp DEFAULT now(),
+        "created_by" text
       );
     `);
   });

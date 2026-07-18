@@ -113,6 +113,10 @@ describe.skipIf(!MYSQL_URL)("PushSchemaPipeline integration — MySQL", () => {
   it("rename with data preserves the row through pre-resolution", async () => {
     const p = pool.promise();
     await p.query(`DROP TABLE IF EXISTS dc_people_my`);
+    // `created_by` is a system owner column now present on every collection
+    // table's desired schema. On MySQL it is varchar(191) (sized to the user id
+    // it stores), so the live table must match that exact type or the diff would
+    // add/modify created_by alongside the rename this scenario isolates.
     await p.query(
       `CREATE TABLE dc_people_my (
         id varchar(64) PRIMARY KEY,
@@ -120,6 +124,7 @@ describe.skipIf(!MYSQL_URL)("PushSchemaPipeline integration — MySQL", () => {
         slug varchar(255) NOT NULL,
         created_at datetime,
         updated_at datetime,
+        created_by varchar(191),
         nickname text
       )`
     );
