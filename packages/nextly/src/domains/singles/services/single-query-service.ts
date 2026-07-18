@@ -176,6 +176,10 @@ export async function checkSingleAccess(params: {
   // caller holding the coarse `update-<single>` permission but failing a
   // stored rule is still denied.
   if (accessControlService && accessRules) {
+    // A stored `custom` rule may key on the document id, so forward it (from
+    // the loaded document) alongside the document itself.
+    const documentId =
+      typeof document?.id === "string" ? document.id : undefined;
     const result = await accessControlService.evaluateAccess(
       accessRules,
       operation,
@@ -189,7 +193,7 @@ export async function checkSingleAccess(params: {
             }
           : undefined,
       },
-      undefined,
+      documentId,
       document
     );
     if (!result.allowed) {

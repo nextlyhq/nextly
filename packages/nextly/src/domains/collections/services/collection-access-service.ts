@@ -138,6 +138,21 @@ export class CollectionAccessService extends BaseService {
       return null;
     }
 
+    // `routeAuthorized` asserts the route middleware already authenticated AND
+    // gated THIS user, so it may skip only the redundant RBAC re-check. Without
+    // a user that assertion is invalid: a bare flag on an exported surface
+    // (e.g. bulkUpdateByQuery) must not skip the gate and fall through to the
+    // public default for a rule-less collection. Fail closed, mirroring the
+    // Single helper's `routeAuthorized && user` guard.
+    if (routeAuthorized && !user) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
+        data: null as unknown as T,
+      };
+    }
+
     // RBAC coarse gate: super-admin bypass → code-defined access → DB
     // permissions. Skipped when routeAuthorized, because the route middleware
     // (requireCollectionAccess) already performed this exact check; the stored

@@ -187,13 +187,14 @@ describe("checkSingleAccess — stored rule enforcement", () => {
       logger: silentLogger,
     });
 
-    // The document is passed as the 5th arg so evaluateOwnerAccess compares
-    // ownership instead of allowing by default.
+    // The document id is passed as the 4th arg (for custom rules) and the
+    // document as the 5th arg so evaluateOwnerAccess compares ownership instead
+    // of allowing by default.
     expect(accessControlService.evaluateAccess).toHaveBeenCalledWith(
       ownerOnly,
       "update",
       expect.anything(),
-      undefined,
+      "site",
       doc
     );
   });

@@ -82,6 +82,9 @@ describe("singles-detail PATCH route auth forwarding", () => {
           name: "Ada",
           email: "ada@example.com",
           roles: ["editor"],
+          // Representative singular role for field-access callbacks reading
+          // `req.user.role`.
+          role: "editor",
         },
         overrideAccess: false,
         routeAuthorized: true,

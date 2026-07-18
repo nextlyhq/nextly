@@ -215,11 +215,16 @@ export const PATCH = withErrorHandler(
     // the response under `routeAuthorized`) evaluates against the caller's
     // roles, matching the collection route path. Session auth carries role IDs,
     // so they are resolved; API-key auth already carries slugs.
+    const roles = await resolveRoleSlugs(auth);
     const user = {
       id: auth.userId,
       name: auth.userName,
       email: auth.userEmail,
-      roles: await resolveRoleSlugs(auth),
+      roles,
+      // A representative singular `role` so field-level `access.update`/
+      // `access.read` callbacks reading `req.user.role` see an authorized
+      // value instead of stripping fields for a legitimate caller.
+      role: roles?.[0],
     };
 
     const result = await service.update(slug, body, {

@@ -194,6 +194,28 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
   });
 
+  it("fails closed when routeAuthorized is set without an authenticated user", async () => {
+    const { service, accessControlService, rbac } = buildAccessService();
+    // A rule-less collection would otherwise fall through to the public default.
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "update",
+      undefined, // no user
+      "doc-1",
+      { id: "doc-1" },
+      false, // overrideAccess
+      true // routeAuthorized
+    );
+
+    // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
+    // not skip the RBAC gate and reach the stored-rule public default.
+    expect(result?.statusCode).toBe(403);
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
   it("does NOT grant the super-admin bypass to a scoped context (no super-admin role)", async () => {
     const { service, accessControlService } = buildAccessService();
     accessControlService.evaluateAccess.mockResolvedValue({
