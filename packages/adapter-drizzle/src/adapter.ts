@@ -532,15 +532,19 @@ export abstract class DrizzleAdapter {
    */
   async select<T = unknown>(
     table: string,
-    options?: SelectOptions
+    options?: SelectOptions,
+    executor?: unknown
   ): Promise<T[]> {
     // Drizzle query API path: use when table resolver has a Drizzle table object
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
+        // Run on the transaction's executor when one is supplied, otherwise the
+        // pooled instance. Without this, a read inside a transaction would use
+        // the pool and miss rows written earlier in the same uncommitted tx.
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle<any>();
+        const db = executor ?? this.getDrizzle<any>();
         // Honor the columns projection when provided: select only the requested
         // columns instead of every column, so callers can avoid transferring
         // large columns (e.g. JSON snapshots) they do not need. A requested name
@@ -642,9 +646,14 @@ export abstract class DrizzleAdapter {
    */
   async selectOne<T = unknown>(
     table: string,
-    options?: SelectOptions
+    options?: SelectOptions,
+    executor?: unknown
   ): Promise<T | null> {
-    const results = await this.select<T>(table, { ...options, limit: 1 });
+    const results = await this.select<T>(
+      table,
+      { ...options, limit: 1 },
+      executor
+    );
     return results.length > 0 ? results[0] : null;
   }
 
@@ -789,15 +798,17 @@ export abstract class DrizzleAdapter {
     table: string,
     data: Record<string, unknown>,
     where: WhereClause,
-    options?: UpdateOptions
+    options?: UpdateOptions,
+    executor?: unknown
   ): Promise<T[]> {
     // Drizzle query API path
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
+        // Transaction executor when supplied, otherwise the pooled instance.
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle<any>();
+        const db = executor ?? this.getDrizzle<any>();
         const caps = this.getCapabilities();
         // Map snake_case keys to Drizzle JS property names
         const mappedData = this.mapDataToColumnNames(tableObj, data);
@@ -814,9 +825,10 @@ export abstract class DrizzleAdapter {
 
         await query;
 
-        // For databases without RETURNING: select back the updated records
+        // For databases without RETURNING: select back the updated records on
+        // the same executor so a transactional update reads its own writes.
         if (!caps.supportsReturning && options?.returning) {
-          return await this.select<T>(table, { where });
+          return await this.select<T>(table, { where }, executor);
         }
 
         return [] as T[];
@@ -857,15 +869,17 @@ export abstract class DrizzleAdapter {
   async delete(
     table: string,
     where: WhereClause,
-    _options?: DeleteOptions
+    _options?: DeleteOptions,
+    executor?: unknown
   ): Promise<number> {
     // Drizzle query API path
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
+        // Transaction executor when supplied, otherwise the pooled instance.
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle<any>();
+        const db = executor ?? this.getDrizzle<any>();
         let query = db.delete(tableObj);
 
         const whereCondition = buildDrizzleWhere(tableObj as never, where);
@@ -922,15 +936,17 @@ export abstract class DrizzleAdapter {
   async upsert<T = unknown>(
     table: string,
     data: Record<string, unknown>,
-    options: UpsertOptions
+    options: UpsertOptions,
+    executor?: unknown
   ): Promise<T> {
     // Drizzle query API path
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
+        // Transaction executor when supplied, otherwise the pooled instance.
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle<any>();
+        const db = executor ?? this.getDrizzle<any>();
         const caps = this.getCapabilities();
         const columns = getColumns(tableObj as never);
 
@@ -970,21 +986,26 @@ export abstract class DrizzleAdapter {
         await query;
 
         // For databases without RETURNING: select back using conflict columns
+        // on the same executor so a transactional upsert reads its own write.
         if (
           options.conflictColumns.length &&
           data[options.conflictColumns[0]] !== undefined
         ) {
-          return (await this.selectOne<T>(table, {
-            where: {
-              and: [
-                {
-                  column: options.conflictColumns[0],
-                  op: "=",
-                  value: data[options.conflictColumns[0]] as SqlParam,
-                },
-              ],
+          return (await this.selectOne<T>(
+            table,
+            {
+              where: {
+                and: [
+                  {
+                    column: options.conflictColumns[0],
+                    op: "=",
+                    value: data[options.conflictColumns[0]] as SqlParam,
+                  },
+                ],
+              },
             },
-          })) as T;
+            executor
+          )) as T;
         }
 
         return data as T;

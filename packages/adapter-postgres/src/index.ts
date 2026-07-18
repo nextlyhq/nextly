@@ -919,6 +919,14 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Creates a TransactionContext for the given client.
    */
   private createTransactionContext(client: PoolClient): TransactionContext {
+    // Bind a Drizzle instance to this transaction's checked-out client so the
+    // delegated CRUD methods run inside the transaction and see its uncommitted
+    // rows. getDrizzle() wraps the pool, which would use a different connection.
+    // Built lazily and memoized: transactions that use only raw execute/insert
+    // never construct it.
+    const buildTxExecutor = () => drizzle({ client });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       execute: async <T = unknown>(
         sql: string,
@@ -1007,21 +1015,21 @@ export class PostgresAdapter extends DrizzleAdapter {
         return result.rows as T[];
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
-      // The Drizzle transaction is handled at a higher level.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -1030,15 +1038,15 @@ export class PostgresAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -1046,7 +1054,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       savepoint: async (name: string): Promise<void> => {

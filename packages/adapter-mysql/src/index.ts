@@ -65,7 +65,10 @@ import {
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
-import type { Pool as CallbackPool } from "mysql2";
+import type {
+  Pool as CallbackPool,
+  Connection as CallbackConnection,
+} from "mysql2";
 import mysql from "mysql2/promise";
 import type {
   PoolOptions,
@@ -750,6 +753,21 @@ export class MySqlAdapter extends DrizzleAdapter {
   private createTransactionContext(
     connection: PoolConnection
   ): TransactionContext {
+    // Bind a Drizzle instance to this transaction's checked-out connection so
+    // the delegated CRUD methods run inside the transaction and see its
+    // uncommitted rows. drizzle's mysql2 driver needs the underlying CALLBACK
+    // connection, which the mysql2/promise wrapper exposes on `.connection`
+    // (mirrors the `.pool` unwrap in getDrizzle()); getDrizzle() itself wraps
+    // the pool, which would use a different connection. Built lazily and
+    // memoized: transactions that use only raw execute/insert never construct
+    // it.
+    const buildTxExecutor = () =>
+      drizzle({
+        client: (connection as unknown as { connection: CallbackConnection })
+          .connection,
+      });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       execute: async <T = unknown>(
         sql: string,
@@ -850,20 +868,21 @@ export class MySqlAdapter extends DrizzleAdapter {
         return [];
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -872,15 +891,15 @@ export class MySqlAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -888,7 +907,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       // Savepoints disabled per approved approach
