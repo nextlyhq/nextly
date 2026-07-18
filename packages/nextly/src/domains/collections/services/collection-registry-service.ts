@@ -89,6 +89,8 @@ export interface CodeFirstCollectionConfig {
   timestamps?: boolean;
   /** Whether the collection has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Resolved content-versioning config (or null when unversioned). */
+  versions?: DynamicCollectionInsert["versions"];
   admin?: DynamicCollectionInsert["admin"];
   configPath?: string;
   /**
@@ -258,6 +260,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       // `timestamps` and `locked` are written in this code path; the
       // SQLite/postgres/mysql Drizzle column types accept either form.
       status: data.status === true ? 1 : 0,
+      // Persist the resolved versioning config as JSON (or null), the same way
+      // `admin`/`hooks` are written on this raw-insert path.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -384,6 +389,13 @@ export class CollectionRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    // Versioning config: when explicitly provided (including null to disable),
+    // write the resolved JSON; when undefined, leave the column unchanged.
+    if (data.versions !== undefined) {
+      updateData.versions = data.versions
+        ? JSON.stringify(data.versions)
+        : null;
+    }
     // Writeable so code-first sync can reconcile a changed `dbName`.
     if (data.tableName !== undefined) {
       updateData.table_name = this.ensureTableNamePrefix(data.tableName);
@@ -486,6 +498,8 @@ export class CollectionRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first collections that
             // opt in actually write the column on first sync.
             status: config.status === true,
+            // Forward the resolved versioning config on first sync.
+            versions: config.versions,
             configPath: config.configPath,
             schemaHash,
           });
@@ -494,6 +508,10 @@ export class CollectionRegistryService extends BaseRegistryService<
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.status === true) !== (existing.status === true) ||
+          // Re-sync when the resolved versioning config changed (both are
+          // normalized JSON, so a stable string compare detects a real change).
+          JSON.stringify(config.versions ?? null) !==
+            JSON.stringify(existing.versions ?? null) ||
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -518,6 +536,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              versions: config.versions,
               tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
@@ -583,6 +602,8 @@ export class CollectionRegistryService extends BaseRegistryService<
                 admin: config.admin,
                 source: config.source ?? "code",
                 locked: true,
+                status: config.status === true,
+                versions: config.versions,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,
               });
@@ -652,6 +673,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       locked: (data.locked ?? isPipelineSource(data.source)) ? 1 : 0,
       // Same as registerCollection — persist Draft/Published as 0/1.
       status: data.status === true ? 1 : 0,
+      // Same as registerCollection — persist the resolved versioning config.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -761,6 +784,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     const labels = (r.labels || r.labels) as string | object;
     const fields = (r.fields || r.fields) as string | object;
     const admin = (r.admin || r.admin) as string | object | null;
+    const versions = r.versions as string | object | null | undefined;
     const hooks = (r.hooks || r.hooks) as string | object | null;
     const tableName = (r.table_name || r.tableName) as string;
     const configPath = (r.config_path || r.configPath) as string | undefined;
@@ -799,6 +823,14 @@ export class CollectionRegistryService extends BaseRegistryService<
       // SQLite returns 0/1 even with mode:"boolean" in some driver/dialect
       // combinations, so accept both shapes.
       status: r.status === 1 || r.status === true,
+      // Parse the resolved versioning config (JSON string on the raw-insert
+      // path / SQLite; already an object on pg/mysql jsonb). null when
+      // unversioned or on rows written before this column existed.
+      versions: versions
+        ? typeof versions === "string"
+          ? JSON.parse(versions)
+          : versions
+        : null,
       configPath,
       schemaHash,
       schemaVersion,

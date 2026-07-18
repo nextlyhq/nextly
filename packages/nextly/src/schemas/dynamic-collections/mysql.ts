@@ -43,6 +43,7 @@ import {
 import type { FieldConfig } from "@nextly/collections";
 
 import { users } from "../users/mysql";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   CollectionLabels,
@@ -144,6 +145,13 @@ export const dynamicCollectionsMysql = mysqlTable(
      * postgres schema for full semantics.
      */
     status: boolean("status").default(false).notNull(),
+
+    /**
+     * Resolved content-versioning config, or null when unversioned. Stores the
+     * normalized `ResolvedVersionsConfig` so every consumer reads one shape and
+     * later stages read more fields without a re-migration. See postgres schema.
+     */
+    versions: json("versions").$type<ResolvedVersionsConfig>(),
 
     /**
      * Admin UI configuration options.

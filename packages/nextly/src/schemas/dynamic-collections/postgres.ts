@@ -43,6 +43,7 @@ import {
 import type { FieldConfig } from "@nextly/collections";
 
 import { users } from "../users/postgres";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   CollectionLabels,
@@ -145,6 +146,15 @@ export const dynamicCollectionsPg = pgTable(
      * unpublished rows from public callers.
      */
     status: boolean("status").default(false).notNull(),
+
+    /**
+     * Resolved content-versioning config for this collection, or null when
+     * unversioned. Stored as the normalized `ResolvedVersionsConfig` (produced
+     * by resolveVersionsConfig) so every consumer reads one canonical shape and
+     * later stages (drafts, autosave, retention) read more fields without a
+     * re-migration.
+     */
+    versions: jsonb("versions").$type<ResolvedVersionsConfig>(),
 
     /**
      * Admin UI configuration options.

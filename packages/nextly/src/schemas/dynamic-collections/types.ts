@@ -12,6 +12,7 @@
 import type { FieldConfig, IndexConfig } from "@nextly/collections";
 
 import type { CollectionAccessRules } from "../../services/access/types";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 /**
  * Source of the collection definition.
@@ -379,6 +380,13 @@ export interface DynamicCollectionInsert {
    */
   status?: boolean;
 
+  /**
+   * Resolved content-versioning config for this collection, or null/undefined
+   * when unversioned. The normalized `ResolvedVersionsConfig` produced by
+   * `resolveVersionsConfig`, persisted on the `versions` column.
+   */
+  versions?: ResolvedVersionsConfig | null;
+
   /** Admin UI configuration options */
   admin?: CollectionAdminConfig;
 
@@ -528,6 +536,9 @@ export interface DynamicCollectionRecord extends DynamicCollectionInsert {
 
   /** Whether Draft/Published status is enabled (required, defaults to false) */
   status: boolean;
+
+  /** Resolved content-versioning config, or null/undefined when unversioned. */
+  versions?: ResolvedVersionsConfig | null;
 
   /** Whether collection is locked from UI edits (required) */
   locked: boolean;

@@ -103,6 +103,9 @@ export interface CodeFirstSingleConfig {
   /** Whether the Single has the Draft/Published status feature enabled. */
   status?: boolean;
 
+  /** Resolved content-versioning config (or null when unversioned). */
+  versions?: DynamicSingleInsert["versions"];
+
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
 
@@ -397,6 +400,22 @@ export class SingleRegistryService extends BaseRegistryService<
       updateData.status = data.status === true ? 1 : 0;
     }
 
+    // Versioning config: when explicitly provided (including null to disable),
+    // write the resolved JSON; when undefined, leave the column unchanged.
+    if (data.versions !== undefined) {
+      updateData.versions = data.versions
+        ? JSON.stringify(data.versions)
+        : null;
+    }
+
+    // Versioning config: when explicitly provided (including null to disable),
+    // write the resolved JSON; when undefined, leave the column unchanged.
+    if (data.versions !== undefined) {
+      updateData.versions = data.versions
+        ? JSON.stringify(data.versions)
+        : null;
+    }
+
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
         this.registryTableName,
@@ -555,6 +574,8 @@ export class SingleRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first Singles that opt
             // in actually write the column on first sync.
             status: config.status === true,
+            // Forward the resolved versioning config on first sync.
+            versions: config.versions,
             configPath: config.configPath,
             schemaHash,
           });
@@ -562,7 +583,11 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.seedPermissionsForSingle(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true)
+          (config.status === true) !== (existing.status === true) ||
+          // Re-sync when the resolved versioning config changed (both sides are
+          // normalized JSON, so a stable string compare detects a real change).
+          JSON.stringify(config.versions ?? null) !==
+            JSON.stringify(existing.versions ?? null)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -578,6 +603,7 @@ export class SingleRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              versions: config.versions,
             },
             { source: "code" }
           );
@@ -628,6 +654,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     const fields = r.fields as string | object;
     const admin = r.admin as string | object | null;
+    const versions = r.versions as string | object | null;
     const accessRules = (r.access_rules ?? r.accessRules) as
       | string
       | object
@@ -666,6 +693,14 @@ export class SingleRegistryService extends BaseRegistryService<
       // Why: read the new status meta-column, defaulting to false for legacy
       // rows written before the column existed.
       status: Boolean(r.status),
+      // Parse the resolved versioning config (JSON string on SQLite / raw
+      // inserts; already an object on pg/mysql). null when unversioned or on
+      // rows written before this column existed.
+      versions: versions
+        ? typeof versions === "string"
+          ? JSON.parse(versions)
+          : versions
+        : null,
       configPath,
       schemaHash,
       schemaVersion,
@@ -741,6 +776,9 @@ export class SingleRegistryService extends BaseRegistryService<
       // Persist Draft/Published flag so the Singles edit form shows the
       // Save Draft / Publish split when the schema opts in.
       status: data.status === true ? 1 : 0,
+      // Persist the resolved versioning config (JSON-serialized like admin) so
+      // the mutation service can read it back and capture version snapshots.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,

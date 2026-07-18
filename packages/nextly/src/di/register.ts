@@ -55,6 +55,7 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
+import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -1115,6 +1116,10 @@ async function syncCodeFirstCollections(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,
+      // Resolve + forward the versioning config so it persists to
+      // dynamic_collections.versions. `status: true` aliases to a versioned
+      // config, so pass both to the resolver.
+      versions: resolveVersionsConfig(collection.versions, collection.status),
     }));
 
   const syncResult =
@@ -1581,6 +1586,9 @@ async function syncCodeFirstSingles(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_singles.status.
       status: single.status === true,
+      // Resolve + forward the versioning config so it persists to
+      // dynamic_singles.versions (status:true aliases to a versioned config).
+      versions: resolveVersionsConfig(single.versions, single.status),
     }));
 
   try {

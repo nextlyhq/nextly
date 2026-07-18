@@ -22,6 +22,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { StoredAccessRule } from "../../services/access/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 // ============================================================
 // Single Source & Status Types
@@ -200,6 +201,13 @@ export interface DynamicSingleInsert {
    * `resolveStatusFilter` for enforcement. Default: false.
    */
   status?: boolean;
+
+  /**
+   * Resolved content-versioning config (from `resolveVersionsConfig`), or null
+   * when unversioned. Persisted on the `versions` column; the mutation service
+   * reads it back to decide whether to capture a version snapshot on write.
+   */
+  versions?: ResolvedVersionsConfig | null;
 
   /**
    * Path to the config file (code-first Singles only).

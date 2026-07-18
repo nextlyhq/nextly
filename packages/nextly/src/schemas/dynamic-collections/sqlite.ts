@@ -34,6 +34,7 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 import type { FieldConfig } from "@nextly/collections";
 
 import { users } from "../users/sqlite";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   CollectionLabels,
@@ -134,6 +135,15 @@ export const dynamicCollectionsSqlite = sqliteTable(
      * postgres schema for full semantics.
      */
     status: integer("status", { mode: "boolean" }).default(false).notNull(),
+
+    /**
+     * Resolved content-versioning config, or null when unversioned. Stores the
+     * normalized `ResolvedVersionsConfig` so every consumer reads one shape and
+     * later stages read more fields without a re-migration. See postgres schema.
+     */
+    versions: text("versions", {
+      mode: "json",
+    }).$type<ResolvedVersionsConfig>(),
 
     /**
      * Admin UI configuration options.

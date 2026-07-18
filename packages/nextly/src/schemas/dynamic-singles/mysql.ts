@@ -51,6 +51,7 @@ import {
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   SingleSource,
@@ -179,6 +180,13 @@ export const dynamicSinglesMysql = mysqlTable(
      * Default false; users opt in via the Schema Builder modal.
      */
     status: boolean("status").default(false).notNull(),
+
+    /**
+     * Resolved content-versioning config for this single, or null when
+     * unversioned. Mirrors the collections schema; stores the normalized
+     * `ResolvedVersionsConfig` so every consumer reads one canonical shape.
+     */
+    versions: json("versions").$type<ResolvedVersionsConfig>(),
 
     /**
      * Path to the config file (code-first Singles only).
