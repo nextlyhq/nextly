@@ -116,4 +116,36 @@ describe("fanOutDueEvents (invalid payload)", () => {
     expect(marked).toHaveLength(0);
     expect(warnings.some(w => w.includes("evt_bad"))).toBe(true);
   });
+
+  it("skips a structurally-invalid envelope (missing resource) without throwing", async () => {
+    const marked: string[] = [];
+    const warnings: string[] = [];
+    const tx: FanOutTx = {
+      select: async <T>() => [] as T[],
+      insertMany: async <T>() => [] as T[],
+      update: async <T>() => {
+        marked.push("update");
+        return [] as T[];
+      },
+    };
+    const db: FanOutDatabase = {
+      // Parseable object but missing `resource`; matchesFilter would throw on
+      // a collections filter if it reached it.
+      select: async <T>() =>
+        [{ id: "evt_noresource", payload: { type: "entry.updated" } }] as T[],
+      transaction: async fn => fn(tx),
+    };
+
+    const result = await fanOutDueEvents({
+      db,
+      loadEndpoints: async () => [
+        endpoint({ id: "f", filter: { version: 1, collections: ["posts"] } }),
+      ],
+      logger: { warn: m => warnings.push(m) },
+    });
+
+    expect(result).toEqual({ eventsProcessed: 0, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(0);
+    expect(warnings.some(w => w.includes("evt_noresource"))).toBe(true);
+  });
 });

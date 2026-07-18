@@ -97,18 +97,28 @@ interface EventRow {
   payload: unknown;
 }
 
-/** Parse the stored envelope, tolerating both a JSON string and a parsed object. */
+/**
+ * Parse the stored envelope, tolerating both a JSON string and a parsed object,
+ * and structurally validate the fields matching relies on. An object missing
+ * `type` or `resource` would otherwise throw inside `matchesFilter`; returning
+ * null routes it through the same skip-and-log path as an unparseable payload.
+ */
 function parseEnvelope(payload: unknown): WebhookEvent | null {
-  if (payload == null) return null;
+  let value: unknown = payload;
   if (typeof payload === "string") {
     try {
-      return JSON.parse(payload) as WebhookEvent;
+      value = JSON.parse(payload);
     } catch {
       return null;
     }
   }
-  if (typeof payload === "object") return payload as WebhookEvent;
-  return null;
+  if (value == null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.type !== "string") return null;
+  if (typeof record.resource !== "object" || record.resource === null) {
+    return null;
+  }
+  return value as WebhookEvent;
 }
 
 /** Build a fresh, due-immediately delivery row (snake_case columns). */
@@ -170,9 +180,11 @@ export async function fanOutDueEvents(deps: FanOutDeps): Promise<FanOutResult> {
       );
       continue;
     }
-    const targets = selectDeliveryTargets(endpoints, envelope);
 
     try {
+      // Inside the try so a matching throw (e.g. a structurally-odd envelope)
+      // is caught per-event and never aborts the whole batch.
+      const targets = selectDeliveryTargets(endpoints, envelope);
       const created = await deps.db.transaction(async tx => {
         let inserted = 0;
         if (targets.length > 0) {
