@@ -81,9 +81,14 @@ export class VersionsRepository {
     ];
   }
 
-  /** Insert one version row. Ids/timestamps are filled by the table defaults. */
+  /** Insert one version row. */
   async insertVersion(input: InsertVersionInput): Promise<void> {
+    // The transaction-context insert path does not apply Drizzle column
+    // defaults, so id and timestamps are set explicitly here (mirrors how the
+    // collection mutation service seeds dc_ rows).
+    const now = new Date();
     await this.db.insert(TABLE, {
+      id: crypto.randomUUID(),
       scopeKind: input.ref.scopeKind,
       scopeSlug: input.ref.scopeSlug,
       entryId: input.ref.entryId,
@@ -95,6 +100,8 @@ export class VersionsRepository {
       locale: input.locale ?? null,
       sourceVersionNo: input.sourceVersionNo ?? null,
       createdBy: input.createdBy ?? null,
+      createdAt: now,
+      updatedAt: now,
     });
   }
 
@@ -154,7 +161,12 @@ export class VersionsRepository {
     }
     const rows = await this.db.select<VersionRow>(TABLE, {
       where: { and },
-      orderBy: [{ column: "createdAt", direction: "desc" }],
+      // Secondary versionNo sort: seconds-precision createdAt can tie when two
+      // versions are written in the same second (the tx-path SQLite encoding).
+      orderBy: [
+        { column: "createdAt", direction: "desc" },
+        { column: "versionNo", direction: "desc" },
+      ],
       ...(typeof opts.limit === "number" ? { limit: opts.limit } : {}),
     });
     // Strip the snapshot so a list never carries snapshots.

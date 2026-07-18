@@ -2,8 +2,10 @@
  * `nextly_versions` - SQLite.
  *
  * See ./postgres.ts for the canonical column list (mirrored with SQLite types).
- * Timestamps are integer epoch-ms; JSON columns use text(mode:json); booleans
- * use integer(mode:boolean). No partial unique indexes (drizzle-kit 0.31.10
+ * Timestamps are integer epoch seconds (timestamp mode), matching the
+ * dynamic tables and the transaction-path Date encoding; JSON columns use
+ * text(mode:json); booleans use integer(mode:boolean). No partial unique
+ * indexes (drizzle-kit 0.31.10
  * cannot round-trip a SQLite partial index, drizzle-team/drizzle-orm#4688), so
  * uniqueness is enforced in the repository, matching MySQL.
  *
@@ -40,10 +42,10 @@ export const nextlyVersionsSqlite = sqliteTable(
     sourceVersionNo: integer("source_version_no"),
 
     createdBy: text("created_by"),
-    createdAt: integer("created_at", { mode: "timestamp_ms" })
+    createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
       .notNull(),
-    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    updatedAt: integer("updated_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
       .notNull(),
   },
