@@ -220,6 +220,10 @@ describe("safeFetch", () => {
     });
     const response = await safeFetch(`${h.base}/`, local);
     expect(await response.text()).toBe("compressed payload");
+    // The wire content-encoding/-length describe the compressed bytes; after
+    // decoding they would misdescribe the returned body, so they are dropped.
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
   });
 
   it("strips a caller-supplied Host header (no vhost override)", async () => {

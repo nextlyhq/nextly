@@ -502,8 +502,12 @@ async function pinnedFetch(
             return;
           }
           // toWhatwgResponse is total (skips headers the WHATWG layer rejects,
-          // clamps the status), so building the Response cannot throw here.
-          settle(() => resolve(toWhatwgResponse(res, decoded)));
+          // clamps the status), so building the Response cannot throw here. When
+          // the body was decoded, the content-encoding/-length headers describe
+          // the wire bytes and would misdescribe the returned body, so drop them.
+          settle(() =>
+            resolve(toWhatwgResponse(res, decoded.body, decoded.decoded))
+          );
         });
         res.on("error", err => settle(() => reject(failure(err))));
       }
@@ -559,10 +563,23 @@ function toOutgoingHeaders(
  * status is clamped to a constructible range, so this never throws (a throw
  * would otherwise escape the `end` handler as an uncaught error).
  */
-function toWhatwgResponse(res: IncomingMessage, body: Buffer): Response {
+function toWhatwgResponse(
+  res: IncomingMessage,
+  body: Buffer,
+  stripContentHeaders: boolean
+): Response {
   const headers = new Headers();
   for (const [key, value] of Object.entries(res.headers)) {
     if (value == null) continue;
+    // When the body was content-decoded, the wire content-encoding/-length no
+    // longer describe the returned bytes, so drop them (Node lowercases keys).
+    const lower = key.toLowerCase();
+    if (
+      stripContentHeaders &&
+      (lower === "content-encoding" || lower === "content-length")
+    ) {
+      continue;
+    }
     // set-cookie and other repeated headers arrive as arrays.
     const values = Array.isArray(value) ? value : [value];
     for (const v of values) {
@@ -605,24 +622,26 @@ function decodeBody(
   zlib: ZlibSyncApi,
   cap: number,
   url: string
-): Buffer | SafeFetchError {
-  if (!encoding) return buf;
+): { body: Buffer; decoded: boolean } | SafeFetchError {
+  if (!encoding) return { body: buf, decoded: false };
   const enc = encoding.trim().toLowerCase();
   const opts = { maxOutputLength: cap };
   try {
-    if (enc === "gzip" || enc === "x-gzip") return zlib.gunzipSync(buf, opts);
-    if (enc === "br") return zlib.brotliDecompressSync(buf, opts);
+    if (enc === "gzip" || enc === "x-gzip")
+      return { body: zlib.gunzipSync(buf, opts), decoded: true };
+    if (enc === "br")
+      return { body: zlib.brotliDecompressSync(buf, opts), decoded: true };
     if (enc === "deflate") {
       // `Content-Encoding: deflate` is zlib-wrapped per spec, but some servers
       // send raw deflate; fall back to raw before giving up.
       try {
-        return zlib.inflateSync(buf, opts);
+        return { body: zlib.inflateSync(buf, opts), decoded: true };
       } catch {
-        return zlib.inflateRawSync(buf, opts);
+        return { body: zlib.inflateRawSync(buf, opts), decoded: true };
       }
     }
     // identity or an encoding we do not decode: pass the bytes through.
-    return buf;
+    return { body: buf, decoded: false };
   } catch {
     // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
     return new SafeFetchError(
