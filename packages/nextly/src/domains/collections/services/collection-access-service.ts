@@ -21,33 +21,12 @@ import type {
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
+import { isSuperAdminContext } from "../../../services/access";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
-
-/** Role slug that grants the full stored-rule bypass. */
-const SUPER_ADMIN_SLUG = "super-admin";
-
-/**
- * Whether the caller's AUTHORIZED role set makes them a super-admin.
- *
- * Keyed on the authorized role slugs (`user.roles`, the resolved session slugs
- * or the key-scoped slugs for API-key auth, plus the singular `user.role` that
- * the Direct API boundary forwards) rather than the account id: a scoped API
- * key owned by a super-admin must NOT inherit the owner's super-admin bypass —
- * the authorized scope is what matters. The singular `role` is folded in so a
- * caller reaching us through a surface that only carries `{ id, role }` (the
- * Direct API collection namespace) still gets the bypass the changeset promises
- * on every transport. Paths that populate neither simply don't get the bypass
- * (fail-safe), falling through to the normal RBAC + stored-rule checks.
- */
-function isSuperAdminContext(user?: UserContext): boolean {
-  if (!user) return false;
-  if (user.role === SUPER_ADMIN_SLUG) return true;
-  return Array.isArray(user.roles) && user.roles.includes(SUPER_ADMIN_SLUG);
-}
 
 export class CollectionAccessService extends BaseService {
   constructor(

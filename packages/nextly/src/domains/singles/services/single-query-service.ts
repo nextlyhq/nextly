@@ -34,6 +34,11 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type { CollectionAccessRules } from "../../../services/access";
+import {
+  AccessControlService,
+  isSuperAdminContext,
+} from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -106,13 +111,21 @@ export function buildSingleHookContext<T>(
 }
 
 /**
- * Check RBAC access for a Single operation.
+ * Check access for a Single operation.
  *
  * Evaluation order:
  * 1. `overrideAccess` bypass → null (allow)
- * 2. No RBAC service or no user → null (skip)
- * 3. RBAC check (super-admin → code-defined → DB permissions)
- * 4. Fail-secure on unexpected errors
+ * 2. Super-admin (by authorized role) bypass → null (allow)
+ * 3. Stored access rules (`accessRules[operation]`: public / authenticated /
+ *    role-based / owner-only / custom) — denies with 403 when they fail. UI
+ *    Singles persist these, so they must be enforced on every transport, not
+ *    just the coarse RBAC permission.
+ * 4. `routeAuthorized` with a verified user → null: the route middleware
+ *    already ran the RBAC gate, so skip only that redundant re-check (the
+ *    stored rules above still ran).
+ * 5. No RBAC service or no user → null (skip)
+ * 6. RBAC check (super-admin → code-defined → DB permissions)
+ * 7. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
@@ -123,6 +136,10 @@ export async function checkSingleAccess(params: {
   overrideAccess?: boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  /** Evaluator for the Single's stored access rules. */
+  accessControlService?: AccessControlService;
+  /** The Single's stored access rules (from the registry metadata). */
+  accessRules?: CollectionAccessRules;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -132,6 +149,8 @@ export async function checkSingleAccess(params: {
     overrideAccess,
     routeAuthorized,
     rbacAccessControlService,
+    accessControlService,
+    accessRules,
     logger,
   } = params;
 
@@ -139,11 +158,48 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
+  // Super-admins bypass the stored rules on every transport, keyed on the
+  // authorized role set (never the account id).
+  if (isSuperAdminContext(user)) {
+    return null;
+  }
+
+  // Evaluate the Single's stored access rules (owner-only is degenerate for a
+  // single global document; public / authenticated / role-based / custom all
+  // apply). This runs for both route-authorized and Direct API callers so a
+  // caller holding the coarse `update-<single>` permission but failing a
+  // stored rule is still denied.
+  if (accessControlService && accessRules) {
+    const result = await accessControlService.evaluateAccess(
+      accessRules,
+      operation,
+      {
+        user: user
+          ? {
+              id: user.id,
+              role: user.role,
+              roles: user.roles,
+              email: user.email,
+            }
+          : undefined,
+      }
+    );
+    if (!result.allowed) {
+      return {
+        success: false,
+        statusCode: 403,
+        message:
+          result.reason ??
+          `Access denied: ${operation} on single "${slug}" is not permitted`,
+      };
+    }
+  }
+
   // The route middleware already ran this exact RBAC gate; skip the redundant
   // re-check — but only when a verified user is present, so a caller that sets
   // routeAuthorized without authenticating cannot silently allow an anonymous
-  // write. Singles have no per-row stored rules, so nothing else runs here;
-  // field-level write access still applies downstream (overrideAccess is false).
+  // write. The stored rules above already ran; field-level write access still
+  // applies downstream (overrideAccess is false).
   if (routeAuthorized && user) {
     return null;
   }
@@ -197,15 +253,21 @@ export async function checkSingleAccess(params: {
  * service can reuse them without duplication.
  */
 export class SingleQueryService extends BaseService {
+  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
+  private readonly accessControlService: AccessControlService;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
   }
 
   // ============================================================
@@ -235,13 +297,16 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 1.5. RBAC access check (after metadata, before hooks/DB operations)
+      // 1.5. Access check (stored rules + RBAC) after metadata, before
+      // hooks/DB operations.
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
         user: options.user,
         overrideAccess: options.overrideAccess,
         rbacAccessControlService: this.rbacAccessControlService,
+        accessControlService: this.accessControlService,
+        accessRules: singleMeta.accessRules,
         logger: this.logger,
       });
       if (accessDenied) {

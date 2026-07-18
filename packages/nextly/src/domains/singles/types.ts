@@ -21,6 +21,16 @@ export interface UserContext {
   /** User email */
   email?: string;
 
+  /** Singular authorized role (the Direct API forwards only this). */
+  role?: string;
+
+  /**
+   * Full authorized role set. The route path forwards the caller's decoded
+   * roles so stored Single access rules (role-based) and the super-admin
+   * bypass evaluate against the real authorized scope.
+   */
+  roles?: string[];
+
   /** Additional user properties */
   [key: string]: unknown;
 }
