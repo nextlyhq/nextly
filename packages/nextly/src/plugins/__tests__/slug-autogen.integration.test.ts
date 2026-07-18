@@ -10,7 +10,7 @@ describe("slug auto-generation on create", () => {
   let current: Awaited<ReturnType<typeof createTestNextly>> | undefined;
 
   afterEach(async () => {
-    await current?.teardown?.();
+    await current?.destroy();
     current = undefined;
   });
 
@@ -47,6 +47,29 @@ describe("slug auto-generation on create", () => {
 
     expect((first.item as { slug?: string }).slug).toBe("hello-world");
     expect((second.item as { slug?: string }).slug).toBe("hello-world-2");
+  });
+
+  it("does not dedupe an explicit slug on collision", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [text({ name: "title" })],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    await current.nextly.create({
+      collection: "posts",
+      data: { title: "First", slug: "shared" },
+    });
+    const second = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Second", slug: "shared" },
+    });
+
+    // An explicit slug is respected verbatim — never auto-incremented to
+    // "shared-2". Uniqueness is the column constraint's job, not a silent
+    // rename, so the caller's canonical URL is preserved (or a conflict
+    // surfaces on databases that enforce the constraint).
+    expect((second.item as { slug?: string }).slug).toBe("shared");
   });
 
   it("keeps and sanitizes an explicitly provided slug", async () => {

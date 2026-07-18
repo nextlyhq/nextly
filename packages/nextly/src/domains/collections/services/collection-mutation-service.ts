@@ -368,29 +368,38 @@ export class CollectionMutationService extends BaseService {
    * Fill the auto-injected `slug` and `title` columns on a create payload.
    *
    * defineCollection injects a required, unique `slug` and a NOT NULL `title`
-   * into every collection. When the caller omits them we derive them here:
-   * the slug from the title (or name, or a unique fallback token), the title
-   * from the name or the slug. The slug is deduped against existing rows so a
-   * repeated title auto-increments (`hello`, `hello-2`, …) instead of colliding
-   * on the unique column — the WordPress/Ghost convention. Mutates `finalData`.
+   * into every collection. When the caller omits them we derive them here: the
+   * slug from the title (or name, or a unique fallback token), the title from
+   * the name or the slug.
+   *
+   * A GENERATED slug is deduped so a repeated title auto-increments (`hello`,
+   * `hello-2`, …) — the WordPress/Ghost convention. An EXPLICITLY provided slug
+   * is only sanitized and kept as-is: the caller asserted a canonical value, so
+   * a collision surfaces as the normal unique-constraint conflict rather than a
+   * silent rename. `isSlugTaken` is supplied by the caller so the uniqueness
+   * check runs on the correct executor — the shared connection for a plain
+   * create, or the enclosing transaction (which sees its own pending rows) for
+   * a transactional create. Runs before field-level write access so a caller
+   * denied `title`/`slug` write does not have them reintroduced. Mutates
+   * `finalData`.
    */
   private async applyGeneratedSlugAndTitle(
     finalData: Record<string, unknown>,
-    collectionName: string
+    isSlugTaken: (slug: string) => Promise<boolean>
   ): Promise<void> {
-    const hasSlug =
+    const provided =
       typeof finalData.slug === "string" && finalData.slug.trim() !== "";
-    let baseSlug: string;
-    if (hasSlug) {
-      baseSlug = generateSlug(finalData.slug as string);
+    if (provided) {
+      // Explicit slug: sanitize only, never dedupe — respect the caller's value.
+      finalData.slug = generateSlug(finalData.slug as string);
     } else {
       const titleValue = finalData.title ?? finalData.name ?? "";
-      baseSlug =
+      const baseSlug =
         typeof titleValue === "string" && titleValue.trim()
           ? generateSlug(titleValue)
           : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      finalData.slug = await this.dedupeSlug(baseSlug, isSlugTaken);
     }
-    finalData.slug = await this.dedupeSlug(collectionName, baseSlug);
 
     // The `title` column is NOT NULL: fall back to the name, then the slug.
     if (typeof finalData.title !== "string" || finalData.title.trim() === "") {
@@ -403,26 +412,23 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Return a slug that is free within the collection, appending `-2`, `-3`, …
-   * until unique. Bounded so a pathological data set can't spin forever; the
-   * final fallback appends a timestamp that is effectively collision-proof.
-   * The unique constraint on the column remains the ultimate guard against a
-   * concurrent race.
+   * Return a slug that is free, appending `-2`, `-3`, … until `isSlugTaken`
+   * reports it available. Bounded so a pathological data set can't spin
+   * forever; the final fallback appends a timestamp that is effectively
+   * collision-proof. The unique constraint on the column remains the ultimate
+   * guard against a concurrent race between the check and the insert.
    */
   private async dedupeSlug(
-    collectionName: string,
-    baseSlug: string
+    baseSlug: string,
+    isSlugTaken: (slug: string) => Promise<boolean>
   ): Promise<string> {
     let candidate = baseSlug;
-    for (let suffix = 2; suffix < 52; suffix++) {
-      const taken = await this.checkFieldUniqueness(
-        collectionName,
-        "slug",
-        candidate
-      );
-      if (!taken) return candidate;
+    for (let suffix = 2; suffix <= 51; suffix++) {
+      if (!(await isSlugTaken(candidate))) return candidate;
       candidate = `${baseSlug}-${suffix}`;
     }
+    // Check the last generated candidate (`baseSlug-51`) before the fallback.
+    if (!(await isSlugTaken(candidate))) return candidate;
     return `${baseSlug}-${Date.now()}`;
   }
 
@@ -555,6 +561,17 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+      // Generate the auto-injected `slug`/`title` BEFORE field-level write
+      // access and validation. defineCollection injects a required, unique
+      // `slug` and a NOT NULL `title`; deriving them here (slug from title,
+      // deduped for uniqueness) lets `create({ data: { title } })` succeed
+      // without a manual slug. Running before write access means a field the
+      // caller may not create is not reintroduced; the uniqueness check uses
+      // the shared connection (a plain, non-transactional create).
+      await this.applyGeneratedSlugAndTitle(finalData, slug =>
+        this.checkFieldUniqueness(params.collectionName, "slug", slug)
+      );
+
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
       await applyFieldWriteAccess({
@@ -576,15 +593,6 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
-
-      // Fill the auto-injected `slug`/`title` columns BEFORE validation so the
-      // required-field checks see the generated values. defineCollection injects
-      // a required, unique `slug` and a NOT NULL `title` into every collection;
-      // deriving them here (slug from the title, title from name/slug) lets
-      // `create({ data: { title } })` succeed without a manual slug — matching
-      // the WordPress/Ghost slug-from-title convention. Runs after beforeValidate
-      // hooks so it sees their transformed values.
-      await this.applyGeneratedSlugAndTitle(finalData, params.collectionName);
 
       {
         const validationIssues = await validateEntryData(
@@ -1918,6 +1926,21 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). The uniqueness check runs on the
+      // transaction so same-title creates within one uncommitted tx still
+      // dedupe — the tx sees its own pending rows.
+      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      });
+
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses.
@@ -1940,15 +1963,6 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
-
-      // Fill the auto-injected `slug`/`title` columns BEFORE validation so the
-      // required-field checks see the generated values. defineCollection injects
-      // a required, unique `slug` and a NOT NULL `title` into every collection;
-      // deriving them here (slug from the title, title from name/slug) lets
-      // `create({ data: { title } })` succeed without a manual slug — matching
-      // the WordPress/Ghost slug-from-title convention. Runs after beforeValidate
-      // hooks so it sees their transformed values.
-      await this.applyGeneratedSlugAndTitle(finalData, params.collectionName);
 
       {
         const validationIssues = await validateEntryData(
@@ -2769,6 +2783,22 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). This path backs bulk create, so an
+      // entry that omits slug/title must still receive them. The uniqueness
+      // check runs on the transaction so entries created earlier in the same
+      // bulk batch are seen.
+      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      });
+
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses.
