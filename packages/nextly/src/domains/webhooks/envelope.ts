@@ -118,9 +118,16 @@ export interface BuildEnvelopeInput {
   timestamp: Date;
   site?: string;
   resource: WebhookResource;
-  /** Current state of the resource. */
+  /**
+   * Current state of the resource as the DESERIALIZED document — group/repeater
+   * and other JSON container fields parsed back to objects/arrays, i.e. the
+   * shape the API returns, not the raw persisted row. Recursive secret
+   * stripping only reaches a nested field when it is a real object, so callers
+   * must pass the parsed document (the write paths already parse it for their
+   * response); a field still held as a JSON string would not be traversed.
+   */
   data: Record<string, unknown>;
-  /** Prior state on update/delete/status-change; null/undefined on create. */
+  /** Prior state on update/delete/status-change; null/undefined on create. Same deserialized-document requirement as `data`. */
   previous?: Record<string, unknown> | null;
   actor?: WebhookActor | null;
   /** Field names to strip from both `data` and `previous` before shipping. */

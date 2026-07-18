@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { buildEnvelope, type BuildEnvelopeInput } from "../envelope";
 
+// A fixed Date fixture so every timestamp assertion is deterministic.
 const base: BuildEnvelopeInput = {
   id: "evt_1",
   type: "entry.updated",
@@ -23,6 +24,7 @@ describe("buildEnvelope", () => {
     });
   });
 
+  // The envelope boundary owns time formatting: a Date in, an ISO string out.
   it("normalizes the Date timestamp to an ISO-8601 string", () => {
     const env = buildEnvelope({
       ...base,
@@ -96,6 +98,8 @@ describe("buildEnvelope", () => {
     expect(env.data).toEqual({ id: "p1", title: "World" });
   });
 
+  // Secrets can live inside groups/repeaters, so stripping must remove the
+  // named fields recursively before the payload is ever exposed.
   it("strips sensitive fields nested inside groups and arrays, at any depth", () => {
     const env = buildEnvelope({
       ...base,
@@ -114,6 +118,8 @@ describe("buildEnvelope", () => {
     });
   });
 
+  // Date instances have no enumerable keys, so the diff must compare them by
+  // value; otherwise a date-only change would be missed.
   it("detects a Date-only change and treats equal Dates as unchanged", () => {
     const changed = buildEnvelope({
       ...base,
