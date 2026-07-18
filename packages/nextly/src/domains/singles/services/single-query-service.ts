@@ -140,9 +140,11 @@ export async function checkSingleAccess(params: {
   }
 
   // The route middleware already ran this exact RBAC gate; skip the redundant
-  // re-check. Singles have no per-row stored rules, so nothing else runs here —
+  // re-check — but only when a verified user is present, so a caller that sets
+  // routeAuthorized without authenticating cannot silently allow an anonymous
+  // write. Singles have no per-row stored rules, so nothing else runs here;
   // field-level write access still applies downstream (overrideAccess is false).
-  if (routeAuthorized) {
+  if (routeAuthorized && user) {
     return null;
   }
 

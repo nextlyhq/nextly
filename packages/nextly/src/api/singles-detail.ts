@@ -219,7 +219,9 @@ export const PATCH = withErrorHandler(
       locale,
       user,
       overrideAccess: false,
-      routeAuthorized: true,
+      // Guard on a resolved user id (matches the dispatcher) so the
+      // RBAC-skip only applies to an authenticated caller.
+      routeAuthorized: !!user.id,
     });
 
     if (!result.success) {

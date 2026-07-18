@@ -281,6 +281,9 @@ export class CollectionBulkService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** When true, the route middleware already ran the RBAC gate; forwarded to
+     * each per-entry delete so it isn't redundantly re-checked. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
@@ -302,6 +305,7 @@ export class CollectionBulkService extends BaseService {
               entryId,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              routeAuthorized: params.routeAuthorized,
               context: params.context,
             });
 
@@ -718,6 +722,7 @@ export class CollectionBulkService extends BaseService {
       ids,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
     });
   }

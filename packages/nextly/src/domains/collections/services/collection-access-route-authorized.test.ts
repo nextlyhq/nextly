@@ -21,8 +21,11 @@ import {
 } from "../__tests__/collection-test-helpers";
 
 // isSuperAdmin does a DB lookup; mock it so we can drive the super-admin path
-// deterministically. Default: not a super-admin.
-const isSuperAdminMock = vi.fn().mockResolvedValue(false);
+// deterministically. Declared via vi.hoisted so it exists when the hoisted
+// vi.mock factory runs. Default: not a super-admin.
+const { isSuperAdminMock } = vi.hoisted(() => ({
+  isSuperAdminMock: vi.fn().mockResolvedValue(false),
+}));
 vi.mock("../../../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<
     typeof import("../../../services/lib/permissions")
@@ -152,6 +155,33 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     expect(result).toBeNull();
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
+  it("lets a super-admin bypass stored rules on the Direct API path too", async () => {
+    const { service, accessControlService, rbac } = buildAccessService();
+    isSuperAdminMock.mockResolvedValue(true);
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "not the owner",
+    });
+
+    // routeAuthorized: false = Direct API. Before this change a super-admin was
+    // still subject to owner-only stored rules here; now they bypass on every
+    // transport (matching the RBAC super-admin short-circuit).
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "update",
+      user,
+      "doc-1",
+      { id: "doc-1", createdBy: "someone-else" },
+      false,
+      false // routeAuthorized (Direct API)
+    );
+
+    expect(result).toBeNull();
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+    // Super-admin short-circuits before the RBAC gate too.
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
   it("fails safe (no bypass) when the super-admin lookup throws", async () => {

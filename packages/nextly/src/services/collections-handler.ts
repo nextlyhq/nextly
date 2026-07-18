@@ -185,7 +185,10 @@ export class CollectionsHandler {
           // field-level access.read evaluate against the real user.
           roles: userRoles,
         },
-        overrideAccess: false,
+        // Default the bridged route caller to enforced access, but never
+        // clobber an explicit trusted-server override (overrideAccess: true)
+        // if one was passed alongside the userId.
+        overrideAccess: rest.overrideAccess ?? false,
         routeAuthorized: true,
       };
     }
