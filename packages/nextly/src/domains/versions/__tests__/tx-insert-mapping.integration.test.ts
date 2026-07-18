@@ -51,4 +51,85 @@ describe("transaction context insert column mapping (integration)", () => {
       await handle.destroy();
     }
   });
+
+  it("maps camelCase RETURNING columns to their sql column names", async () => {
+    const handle = await createTestNextly();
+    try {
+      const now = new Date();
+      // `returning` uses camelCase property names; without mapping the RETURNING
+      // clause would reference `versionNo`/`scopeKind`, which do not exist as
+      // SQL columns, and the insert would fail.
+      const inserted = await handle.adapter.transaction(async tx =>
+        tx.insert(
+          "nextly_versions",
+          {
+            id: "v-ret-1",
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e-ret-1",
+            versionNo: 7,
+            status: "published",
+            isAutosave: false,
+            snapshot: {},
+            createdBy: "u",
+            createdAt: now,
+            updatedAt: now,
+          },
+          { returning: ["versionNo", "scopeKind"] }
+        )
+      );
+      expect(inserted).toBeTruthy();
+
+      const rows = await handle.adapter.select("nextly_versions", {
+        where: { and: [{ column: "entryId", op: "=", value: "e-ret-1" }] },
+      });
+      expect(rows).toHaveLength(1);
+    } finally {
+      await handle.destroy();
+    }
+  });
+
+  it("resolves both snake_case and camelCase names in a select projection", async () => {
+    const handle = await createTestNextly();
+    try {
+      const now = new Date();
+      await handle.adapter.transaction(async tx =>
+        tx.insert(
+          "nextly_versions",
+          {
+            id: "v-proj-1",
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e-proj-1",
+            versionNo: 1,
+            status: "published",
+            isAutosave: false,
+            snapshot: {},
+            createdBy: "u",
+            createdAt: now,
+            updatedAt: now,
+          },
+          { returning: "*" }
+        )
+      );
+
+      // Mixed casing: `scopeKind` (property name) and `entry_id` (SQL name)
+      // both resolve, the projected rows are keyed by the property name, and
+      // the unrequested `snapshot` column is absent.
+      const rows = await handle.adapter.select<{
+        scopeKind?: string;
+        entryId?: string;
+        snapshot?: unknown;
+      }>("nextly_versions", {
+        columns: ["scopeKind", "entry_id"],
+        where: { and: [{ column: "entryId", op: "=", value: "e-proj-1" }] },
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].scopeKind).toBe("collection");
+      expect(rows[0].entryId).toBe("e-proj-1");
+      expect(rows[0].snapshot).toBeUndefined();
+    } finally {
+      await handle.destroy();
+    }
+  });
 });
