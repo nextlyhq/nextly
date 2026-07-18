@@ -94,6 +94,7 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
+  isValidLocale,
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -159,7 +160,25 @@ export class CollectionQueryService extends BaseService {
     // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
     if (!this.localization || locale === "all") return null;
     const requested = resolveRequestedLocale(this.localization, locale);
+    // A per-request opt-out disables fallback: return the requested language only.
     if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    // A concrete per-request fallback locale overrides the configured chain: the
+    // requested locale first, then the named fallback's own chain (deduped).
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
+    }
+    // The global localization.fallback switch (default true) disables fallback
+    // for ordinary reads when turned off.
+    if (!this.localization.fallback) {
       return [requested];
     }
     return resolveFallbackChain(this.localization, requested);
@@ -355,15 +374,42 @@ export class CollectionQueryService extends BaseService {
             ? sql`${t}.${col} ILIKE ${value}`
             : sql`${t}.${col} LIKE ${value}`;
         break;
-      case "IS NULL":
-        valueCondition = sql`${t}.${col} IS NULL`;
-        break;
+      case "IS NULL": {
+        // A localized field is absent for the locale when no companion row holds
+        // a value — an untranslated entry usually has no companion row at all.
+        // Match those with NOT EXISTS(row with a value) rather than
+        // EXISTS(col IS NULL), which would require a companion row to exist.
+        const present = buildCompanionExists({
+          companionTableName: ctx.companionTableName,
+          mainIdColumn: ctx.mainIdColumn,
+          locale: ctx.locale,
+          valueCondition: sql`${t}.${col} IS NOT NULL`,
+        });
+        return sql`NOT ${present}`;
+      }
       case "IS NOT NULL":
         valueCondition = sql`${t}.${col} IS NOT NULL`;
         break;
       case "IN":
         if (Array.isArray(value) && value.length > 0) {
-          valueCondition = sql`${t}.${col} IN ${value}`;
+          // Expand the array into an SQL list; a bare array bind would emit
+          // `col IN $1` and compare against the whole array as one value.
+          const inList = sql.join(
+            value.map(v => sql`${v}`),
+            sql`, `
+          );
+          valueCondition = sql`${t}.${col} IN (${inList})`;
+        }
+        break;
+      case "NOT IN":
+        if (Array.isArray(value) && value.length > 0) {
+          // Expand into an SQL list, mirroring the IN case; without this the
+          // localized not_in filter is silently dropped and excludes nothing.
+          const notInList = sql.join(
+            value.map(v => sql`${v}`),
+            sql`, `
+          );
+          valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
         }
         break;
       default:
@@ -925,7 +971,16 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
-            where: cleanedWhere, // Use cleaned where (without geo operators)
+            // Re-attach the translation filter so the count applies the same
+            // companion predicate as the rows (countEntries re-extracts it);
+            // geo operators stay excluded via cleanedWhere. Without this the
+            // language filter paginates against the unfiltered total.
+            where: translationFilter
+              ? ({
+                  ...(cleanedWhere ?? {}),
+                  _translated: translationFilter,
+                } as WhereFilter)
+              : cleanedWhere,
             // Forward locale so count mirrors any locale-scoped filter (M4b parity).
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
