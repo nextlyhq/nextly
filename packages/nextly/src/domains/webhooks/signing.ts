@@ -189,12 +189,20 @@ export function verifySignature(input: VerifyInput): boolean {
   if (presented.length === 0) return false;
 
   for (const secret of input.secrets) {
-    const expected = computeSignature(
-      secret,
-      input.id,
-      input.timestamp,
-      input.body
-    );
+    // Verification must stay fail-closed: a malformed/empty secret entry (which
+    // `secretToKey` rejects by throwing) simply can't match, so skip it rather
+    // than let the exception escape. Signing still fails loud on a bad key.
+    let expected: string;
+    try {
+      expected = computeSignature(
+        secret,
+        input.id,
+        input.timestamp,
+        input.body
+      );
+    } catch {
+      continue;
+    }
     if (presented.some(sig => signaturesEqual(sig, expected))) return true;
   }
   return false;

@@ -213,6 +213,27 @@ describe("verifySignature", () => {
     ).toBe(false);
   });
 
+  it("stays fail-closed (returns false, does not throw) on a bad secret entry", () => {
+    // A zero-length secret in the list must not crash verification; a valid
+    // secret alongside it still verifies.
+    expect(
+      verifySignature({
+        ...base,
+        signatureHeader: header,
+        secrets: [""],
+        now,
+      })
+    ).toBe(false);
+    expect(
+      verifySignature({
+        ...base,
+        signatureHeader: header,
+        secrets: ["", secret],
+        now,
+      })
+    ).toBe(true);
+  });
+
   it("rejects a header with no v1 token", () => {
     expect(
       verifySignature({
