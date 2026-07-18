@@ -226,6 +226,53 @@ describe("safeFetch", () => {
     expect(response.headers.get("content-length")).toBeNull();
   });
 
+  it("reports an over-cap decompressed body as response-too-large", async () => {
+    const { gzipSync } = await import("node:zlib");
+    // Small on the wire, but inflates to 4000 bytes; the 1000-byte cap trips
+    // the zlib maxOutputLength guard, which must classify as response-too-large.
+    const wire = gzipSync(Buffer.alloc(4000, 0x61));
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end(wire);
+    });
+    await expect(
+      safeFetch(`${h.base}/`, { ...local, maxResponseBytes: 1000 })
+    ).rejects.toMatchObject({
+      name: "SafeFetchError",
+      reason: "response-too-large",
+    });
+  });
+
+  it("reports an over-cap deflate body as response-too-large (not decode-failed)", async () => {
+    const { deflateSync } = await import("node:zlib");
+    // zlib-wrapped deflate that inflates past the cap: the size signal must
+    // survive the raw-deflate fallback.
+    const wire = deflateSync(Buffer.alloc(4000, 0x61));
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "deflate" });
+      res.end(wire);
+    });
+    await expect(
+      safeFetch(`${h.base}/`, { ...local, maxResponseBytes: 1000 })
+    ).rejects.toMatchObject({
+      name: "SafeFetchError",
+      reason: "response-too-large",
+    });
+  });
+
+  it("does not fail an empty body that carries a content-encoding", async () => {
+    // Inflating zero bytes throws; an empty encoded 2xx must stay a success.
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end();
+    });
+    const response = await safeFetch(`${h.base}/`, local);
+    expect(response.ok).toBe(true);
+    expect(await response.text()).toBe("");
+    // The now-meaningless content-encoding header is stripped, like a decoded body.
+    expect(response.headers.get("content-encoding")).toBeNull();
+  });
+
   it("strips a caller-supplied Host header (no vhost override)", async () => {
     // A forwarded Host could route to an internal vhost behind the validated
     // public IP; it must be derived from the URL, not the caller's headers.

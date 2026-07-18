@@ -100,6 +100,12 @@ export async function resolveAttachments(
     try {
       content = await deps.readBytes(media.filename);
     } catch (err) {
+      // Pass through only the precise validation error a URL-backed fetch raises
+      // when the object is over the limit (size-exceeded). Everything else —
+      // including SSRF/timeout errors, whose messages (e.g. "Resolved to
+      // non-public IP") must not reach the caller, and a missing-file relative
+      // URL — is wrapped as an opaque storage-read failure.
+      if (NextlyError.is(err) && err.code === "VALIDATION_ERROR") throw err;
       throw NextlyError.internal({
         cause: err instanceof Error ? err : undefined,
         logContext: {

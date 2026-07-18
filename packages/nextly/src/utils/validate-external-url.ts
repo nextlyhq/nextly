@@ -621,6 +621,11 @@ function decodeBody(
   url: string
 ): { body: Buffer; decoded: boolean } | SafeFetchError {
   if (!encoding) return { body: buf, decoded: false };
+  // An empty body has nothing to decode; inflating zero bytes would throw and
+  // turn a valid empty 2xx/204/304 response into a failure. Report it as decoded
+  // so the now-meaningless content-encoding/-length headers are stripped, the
+  // same as a normally-decoded body.
+  if (buf.length === 0) return { body: buf, decoded: true };
   // Content-Encoding may stack (e.g. "br, gzip"): the layers are listed in the
   // order applied, so decode from the last (outermost) inward.
   const layers = encoding
@@ -642,7 +647,12 @@ function decodeBody(
         // `deflate` is zlib-wrapped per spec, but some servers send raw deflate.
         try {
           current = zlib.inflateSync(current, opts);
-        } catch {
+        } catch (inflateErr) {
+          // Only a zlib-wrapped/raw mismatch warrants the raw retry; a size-cap
+          // overflow must keep its ERR_BUFFER_TOO_LARGE signal so it classifies
+          // as response-too-large rather than decode-failed.
+          if (errorCode(inflateErr) === "ERR_BUFFER_TOO_LARGE")
+            throw inflateErr;
           current = zlib.inflateRawSync(current, opts);
         }
       } else {
@@ -661,14 +671,29 @@ function decodeBody(
       decoded = true;
     }
     return { body: current, decoded };
-  } catch {
-    // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
+  } catch (err) {
+    // node:zlib throws ERR_BUFFER_TOO_LARGE when the inflated output exceeds
+    // maxOutputLength (a decompression bomb). That is a size problem, so report
+    // it as response-too-large (callers that cap by an attachment/size limit can
+    // then treat it uniformly); anything else is a genuinely corrupt stream.
+    const tooLarge = errorCode(err) === "ERR_BUFFER_TOO_LARGE";
     return new SafeFetchError(
-      `Failed to decode ${encoding} response body`,
+      tooLarge
+        ? `Decoded ${encoding} response body exceeded the size cap`
+        : `Failed to decode ${encoding} response body`,
       url,
-      "decode-failed"
+      tooLarge ? "response-too-large" : "decode-failed"
     );
   }
+}
+
+/** The `.code` of a Node system error, if present. */
+function errorCode(err: unknown): string | undefined {
+  if (err != null && typeof err === "object" && "code" in err) {
+    const code: unknown = err.code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------

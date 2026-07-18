@@ -5,14 +5,16 @@
  * so that both direct API callers and the dispatcher can resolve them.
  */
 
+import { EmailErrorCode } from "../../domains/email/errors";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
+import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
 import { EmailService } from "../../services/email/email-service";
 import { EmailTemplateService } from "../../services/email/email-template-service";
 import type { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { SYSTEM_CONTEXT } from "../../shared/types";
-import { safeFetch } from "../../utils/validate-external-url";
+import { SafeFetchError, safeFetch } from "../../utils/validate-external-url";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
@@ -83,16 +85,46 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           const url = storagePath.startsWith("http")
             ? storagePath
             : storage.getPublicUrl(storagePath);
+          const limits = getAttachmentLimits();
           // Cap the fetch at the attachment size limit so a valid large
-          // attachment is not rejected by the default safeFetch cap, which is
-          // smaller than the configured attachment total.
-          const response = await safeFetch(url, {
-            maxResponseBytes: getAttachmentLimits().maxTotalBytes,
-          });
+          // attachment is not rejected by the smaller default safeFetch cap. A
+          // body over the limit surfaces as the same size-exceeded validation
+          // error the local/S3 path produces, not an opaque storage failure.
+          let response: Response;
+          try {
+            response = await safeFetch(url, {
+              maxResponseBytes: limits.maxTotalBytes,
+            });
+          } catch (err) {
+            if (
+              err instanceof SafeFetchError &&
+              err.reason === "response-too-large"
+            ) {
+              throw NextlyError.validation({
+                errors: [
+                  {
+                    path: "attachments",
+                    code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+                    message: "Attachment size exceeds the limit.",
+                  },
+                ],
+                logContext: {
+                  emailAttachmentCode: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+                  max: limits.maxTotalBytes,
+                },
+              });
+            }
+            throw err;
+          }
           if (!response.ok) {
-            throw new Error(
-              `Failed to fetch attachment from ${url}: HTTP ${response.status}`
-            );
+            throw NextlyError.internal({
+              logContext: {
+                emailAttachmentCode:
+                  EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+                url,
+                status: response.status,
+              },
+            });
           }
           return Buffer.from(await response.arrayBuffer());
         },
