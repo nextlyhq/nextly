@@ -614,6 +614,17 @@ describe("SqliteAdapter", () => {
       });
     });
 
+    it("transaction context exposes a bound Drizzle handle", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+
+      await adapter.transaction(async tx => {
+        expect(typeof tx.getDrizzle).toBe("function");
+        const db = tx.getDrizzle!();
+        expect(db).toBeDefined();
+      });
+    });
+
     it("should provide savepoint methods", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
