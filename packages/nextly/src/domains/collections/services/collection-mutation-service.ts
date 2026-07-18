@@ -365,6 +365,68 @@ export class CollectionMutationService extends BaseService {
   // ============================================================
 
   /**
+   * Fill the auto-injected `slug` and `title` columns on a create payload.
+   *
+   * defineCollection injects a required, unique `slug` and a NOT NULL `title`
+   * into every collection. When the caller omits them we derive them here:
+   * the slug from the title (or name, or a unique fallback token), the title
+   * from the name or the slug. The slug is deduped against existing rows so a
+   * repeated title auto-increments (`hello`, `hello-2`, …) instead of colliding
+   * on the unique column — the WordPress/Ghost convention. Mutates `finalData`.
+   */
+  private async applyGeneratedSlugAndTitle(
+    finalData: Record<string, unknown>,
+    collectionName: string
+  ): Promise<void> {
+    const hasSlug =
+      typeof finalData.slug === "string" && finalData.slug.trim() !== "";
+    let baseSlug: string;
+    if (hasSlug) {
+      baseSlug = generateSlug(finalData.slug as string);
+    } else {
+      const titleValue = finalData.title ?? finalData.name ?? "";
+      baseSlug =
+        typeof titleValue === "string" && titleValue.trim()
+          ? generateSlug(titleValue)
+          : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    }
+    finalData.slug = await this.dedupeSlug(collectionName, baseSlug);
+
+    // The `title` column is NOT NULL: fall back to the name, then the slug.
+    if (typeof finalData.title !== "string" || finalData.title.trim() === "") {
+      const nameValue = finalData.name;
+      finalData.title =
+        typeof nameValue === "string" && nameValue.trim()
+          ? nameValue.trim()
+          : finalData.slug;
+    }
+  }
+
+  /**
+   * Return a slug that is free within the collection, appending `-2`, `-3`, …
+   * until unique. Bounded so a pathological data set can't spin forever; the
+   * final fallback appends a timestamp that is effectively collision-proof.
+   * The unique constraint on the column remains the ultimate guard against a
+   * concurrent race.
+   */
+  private async dedupeSlug(
+    collectionName: string,
+    baseSlug: string
+  ): Promise<string> {
+    let candidate = baseSlug;
+    for (let suffix = 2; suffix < 52; suffix++) {
+      const taken = await this.checkFieldUniqueness(
+        collectionName,
+        "slug",
+        candidate
+      );
+      if (!taken) return candidate;
+      candidate = `${baseSlug}-${suffix}`;
+    }
+    return `${baseSlug}-${Date.now()}`;
+  }
+
+  /**
    * Create a new entry.
    * Applies collection-level access control and hooks.
    *
@@ -514,6 +576,15 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // Fill the auto-injected `slug`/`title` columns BEFORE validation so the
+      // required-field checks see the generated values. defineCollection injects
+      // a required, unique `slug` and a NOT NULL `title` into every collection;
+      // deriving them here (slug from the title, title from name/slug) lets
+      // `create({ data: { title } })` succeed without a manual slug — matching
+      // the WordPress/Ghost slug-from-title convention. Runs after beforeValidate
+      // hooks so it sees their transformed values.
+      await this.applyGeneratedSlugAndTitle(finalData, params.collectionName);
 
       {
         const validationIssues = await validateEntryData(
@@ -679,46 +750,7 @@ export class CollectionMutationService extends BaseService {
       // failure mode this guards against.
       coerceDateFieldsToDate(finalData, fields);
 
-      // Generate or validate slug
-      // All collections have a slug column in their database table,
-      // so we always need to generate a slug value for new entries.
-      const shouldGenerateSlug = true;
-
-      if (shouldGenerateSlug) {
-        if (
-          !finalData.slug ||
-          typeof finalData.slug !== "string" ||
-          finalData.slug.trim() === ""
-        ) {
-          // Try to generate slug from title field first
-          const titleValue = finalData.title || finalData.name || "";
-          if (typeof titleValue === "string" && titleValue.trim()) {
-            finalData.slug = generateSlug(titleValue);
-          } else {
-            // Generate a unique slug using timestamp + random string
-            finalData.slug = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-          }
-        } else {
-          // Sanitize user-provided slug
-          finalData.slug = generateSlug(finalData.slug);
-        }
-      }
-
-      // All collections have a title column (NOT NULL) in their database table,
-      // so ensure we always have a title value — fall back to the name field or
-      // the generated slug if the caller didn't provide one.
-      if (
-        !finalData.title ||
-        typeof finalData.title !== "string" ||
-        finalData.title.trim() === ""
-      ) {
-        const nameValue = finalData.name;
-        if (typeof nameValue === "string" && nameValue.trim()) {
-          finalData.title = nameValue.trim();
-        } else {
-          finalData.title = finalData.slug;
-        }
-      }
+      // slug/title are generated before validation (applyGeneratedSlugAndTitle).
 
       // Final safety pass: ensure upload field values are IDs, not populated objects.
       fields.forEach(field => {
@@ -1908,6 +1940,15 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // Fill the auto-injected `slug`/`title` columns BEFORE validation so the
+      // required-field checks see the generated values. defineCollection injects
+      // a required, unique `slug` and a NOT NULL `title` into every collection;
+      // deriving them here (slug from the title, title from name/slug) lets
+      // `create({ data: { title } })` succeed without a manual slug — matching
+      // the WordPress/Ghost slug-from-title convention. Runs after beforeValidate
+      // hooks so it sees their transformed values.
+      await this.applyGeneratedSlugAndTitle(finalData, params.collectionName);
 
       {
         const validationIssues = await validateEntryData(
