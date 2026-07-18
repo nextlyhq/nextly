@@ -28,19 +28,20 @@ export const WEBHOOK_ID_HEADER = "webhook-id";
 export const WEBHOOK_TIMESTAMP_HEADER = "webhook-timestamp";
 export const WEBHOOK_SIGNATURE_HEADER = "webhook-signature";
 
-/** Standard Webhooks secrets may be `whsec_`-prefixed and base64-encoded. */
+/** Standard Webhooks secrets are `whsec_`-prefixed, base64-encoded key bytes. */
 const SECRET_PREFIX = "whsec_";
 
 /**
- * Resolve a secret string to its raw key bytes. A `whsec_`-prefixed secret is
- * base64-decoded (the Standard Webhooks convention); any other string is used
- * as UTF-8 bytes, so plain shared secrets also work.
+ * Resolve a secret string to its raw key bytes. Matches the `standardwebhooks`
+ * reference libraries exactly: strip the optional `whsec_` prefix, then
+ * base64-decode the remainder to the HMAC key. Decoding is unconditional so a
+ * receiver using the same secret with those libraries computes the same HMAC.
  */
 function secretToKey(secret: string): Buffer {
-  if (secret.startsWith(SECRET_PREFIX)) {
-    return Buffer.from(secret.slice(SECRET_PREFIX.length), "base64");
-  }
-  return Buffer.from(secret, "utf8");
+  const encoded = secret.startsWith(SECRET_PREFIX)
+    ? secret.slice(SECRET_PREFIX.length)
+    : secret;
+  return Buffer.from(encoded, "base64");
 }
 
 /** The exact content the signature is computed over. */
@@ -82,28 +83,47 @@ export function signPayload(input: SignInput): string {
   return `v1,${sig}`;
 }
 
+export interface SignHeadersInput {
+  id: string;
+  timestamp: string;
+  body: string;
+  /**
+   * Active signing secrets, primary first. One `v1` signature is emitted per
+   * secret so that during a rotation window a consumer holding either the new
+   * or the old secret can verify.
+   */
+  secrets: readonly string[];
+}
+
 /**
- * The three Standard Webhooks headers for a delivery. Signed with the primary
- * (first) secret; additional secrets exist only so verification survives a
- * rotation.
+ * The three Standard Webhooks headers for a delivery. The `webhook-signature`
+ * value is the space-delimited set of `v1,<sig>` tokens — one per active
+ * secret — which is how the spec expects a producer to sign through a rotation.
  */
 export function buildSignatureHeaders(
-  input: SignInput
+  input: SignHeadersInput
 ): Record<string, string> {
+  const signatures = input.secrets.map(
+    secret =>
+      `v1,${computeSignature(secret, input.id, input.timestamp, input.body)}`
+  );
   return {
     [WEBHOOK_ID_HEADER]: input.id,
     [WEBHOOK_TIMESTAMP_HEADER]: input.timestamp,
-    [WEBHOOK_SIGNATURE_HEADER]: signPayload(input),
+    [WEBHOOK_SIGNATURE_HEADER]: signatures.join(" "),
   };
 }
 
-/** Constant-time equality for two base64 signature strings. */
+/** Constant-time equality over the raw HMAC bytes of two base64 signatures. */
 function signaturesEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
+  const bufA = Buffer.from(a, "base64");
+  const bufB = Buffer.from(b, "base64");
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
 }
+
+/** Default replay window: reject timestamps more than 5 minutes from now. */
+const DEFAULT_TOLERANCE_SECONDS = 300;
 
 export interface VerifyInput {
   id: string;
@@ -113,14 +133,32 @@ export interface VerifyInput {
   signatureHeader: string;
   /** Every currently-valid secret (plaintext); rotation keeps more than one. */
   secrets: readonly string[];
+  /**
+   * Max allowed difference between the signed timestamp and `now`, in seconds.
+   * Defaults to 300 (the Standard Webhooks recommendation); pass `Infinity` to
+   * skip the freshness check.
+   */
+  toleranceSeconds?: number;
+  /** Current time; defaults to the wall clock. Injectable for tests. */
+  now?: Date;
 }
 
 /**
- * Whether `signatureHeader` contains a valid `v1` signature for `body` under
- * any of `secrets`. A verify helper for tests and for documenting the scheme;
- * receivers are pointed at the `standardwebhooks` libraries.
+ * Whether `signatureHeader` contains a valid, fresh `v1` signature for `body`
+ * under any of `secrets`. A verify helper for tests and for documenting the
+ * scheme; receivers are pointed at the `standardwebhooks` libraries. The
+ * timestamp is checked against a tolerance first so a captured delivery cannot
+ * be replayed indefinitely.
  */
 export function verifySignature(input: VerifyInput): boolean {
+  const tolerance = input.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS;
+  if (Number.isFinite(tolerance)) {
+    const signedAt = Number(input.timestamp);
+    if (!Number.isFinite(signedAt)) return false;
+    const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1000);
+    if (Math.abs(nowSeconds - signedAt) > tolerance) return false;
+  }
+
   const presented = input.signatureHeader
     .split(" ")
     .filter(token => token.startsWith("v1,"))
