@@ -93,11 +93,19 @@ const POST_045_TABLES = [
   "nextly_webhook_deliveries",
 ];
 
+// The post-045 names are static identifiers, but escape defensively so the
+// generated RegExp can never carry a metacharacter (also silences the
+// variable-in-regex lint).
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // Whole-identifier match tolerant of the per-dialect quoting drizzle-kit emits
 // ("pg" / `mysql` / bare), so a table whose name merely contains an allowlisted
 // name cannot slip through on a substring.
 const namesPost045Table = (stmt: string): boolean =>
-  POST_045_TABLES.some(t => new RegExp(`[\`"\\s(]${t}[\`"\\s)(]`).test(stmt));
+  POST_045_TABLES.some(t =>
+    new RegExp(`[\`"\\s(]${escapeRegExp(t)}[\`"\\s)(]`).test(stmt)
+  );
 
 // Only additive DDL is acceptable in the upgrade sim: CREATE TABLE, CREATE
 // [UNIQUE] INDEX, or ALTER TABLE ... ADD (the shape drizzle-kit emits for a
@@ -115,8 +123,10 @@ const isPost045TableStatement = (stmt: string): boolean =>
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
   stmts.some(s =>
+    // Trailing `[\s(]` requires a real identifier boundary after the name, so
+    // `nextly_webhooks` does not match `CREATE TABLE nextly_webhooks_archive`.
     new RegExp(
-      `^CREATE TABLE\\s+(IF NOT EXISTS\\s+)?[\`"]?${table}[\`"]?`,
+      `^CREATE TABLE\\s+(IF NOT EXISTS\\s+)?[\`"]?${escapeRegExp(table)}[\`"]?[\\s(]`,
       "i"
     ).test(s.trim())
   );
