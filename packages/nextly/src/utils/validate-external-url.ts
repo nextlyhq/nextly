@@ -40,6 +40,17 @@
 
 import type { IncomingMessage } from "node:http";
 import type { LookupFunction } from "node:net";
+import type { InputType, ZlibOptions, BrotliOptions } from "node:zlib";
+
+import { NextlyError } from "../errors/nextly-error";
+
+/** The subset of node:zlib's sync decoders `decodeBody` needs. */
+interface ZlibSyncApi {
+  gunzipSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  inflateSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  inflateRawSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  brotliDecompressSync(buffer: InputType, options?: BrotliOptions): Buffer;
+}
 
 const IPV4_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -98,12 +109,23 @@ export interface ValidatedUrl {
   family: 4 | 6;
 }
 
-export class ExternalUrlError extends Error {
+/**
+ * An outbound URL refused for SSRF safety. Extends `NextlyError` (the package's
+ * canonical error) so throw sites honor the error contract, while remaining a
+ * distinct class the callers (e.g. the form-builder webhook handler) match with
+ * `instanceof`.
+ */
+export class ExternalUrlError extends NextlyError {
   constructor(
     message: string,
     public readonly url: string
   ) {
-    super(message);
+    super({
+      code: "EXTERNAL_URL_BLOCKED",
+      publicMessage: message,
+      statusCode: 400,
+      logContext: { url },
+    });
     this.name = "ExternalUrlError";
   }
 }
@@ -236,19 +258,25 @@ export interface SafeFetchOptions extends ValidateExternalUrlOptions {
 
 /**
  * Raised for fetch-phase failures that are NOT SSRF rejections: an over-large
- * response body or the overall deadline elapsing. Kept distinct from
- * `ExternalUrlError` so a caller can tell "URL refused for safety" apart from
- * "the request itself failed" (which would otherwise be mislabeled as an SSRF
- * rejection).
+ * response body, the overall deadline elapsing, or an undecodable content
+ * encoding. Extends `NextlyError` (the canonical error contract) while staying a
+ * distinct class, so a caller can tell "URL refused for safety"
+ * (`ExternalUrlError`) apart from "the request itself failed".
  */
-export class SafeFetchError extends Error {
+export class SafeFetchError extends NextlyError {
   constructor(
     message: string,
     public readonly url: string,
     /** Discriminates the failure so callers branch without string-matching. */
-    public readonly reason: "response-too-large" | "timeout"
+    public readonly reason: "response-too-large" | "timeout" | "decode-failed"
   ) {
-    super(message);
+    super({
+      code: "EXTERNAL_REQUEST_FAILED",
+      publicMessage: message,
+      // Timeout maps to a gateway timeout; the rest to a bad upstream response.
+      statusCode: reason === "timeout" ? 504 : 502,
+      logContext: { url, reason },
+    });
     this.name = "SafeFetchError";
   }
 }
@@ -396,6 +424,9 @@ async function pinnedFetch(
     url.protocol === "https:"
       ? await import("node:https")
       : await import("node:http");
+  // node:http does not content-decode responses the way global fetch does, so
+  // decompress explicitly to preserve the previous behavior for encoded bodies.
+  const zlib = await import("node:zlib");
 
   const lookup = createPinnedLookup(pinnedIp, family);
 
@@ -457,9 +488,20 @@ async function pinnedFetch(
           chunks.push(chunk);
         });
         res.on("end", () => {
+          const decoded = decodeBody(
+            Buffer.concat(chunks),
+            res.headers["content-encoding"],
+            zlib,
+            init.maxResponseBytes,
+            url.href
+          );
+          if (decoded instanceof SafeFetchError) {
+            settle(() => reject(decoded));
+            return;
+          }
           // toWhatwgResponse is total (skips headers the WHATWG layer rejects,
           // clamps the status), so building the Response cannot throw here.
-          settle(() => resolve(toWhatwgResponse(res, Buffer.concat(chunks))));
+          settle(() => resolve(toWhatwgResponse(res, decoded)));
         });
         res.on("error", err => settle(() => reject(failure(err))));
       }
@@ -537,6 +579,47 @@ function toWhatwgResponse(res: IncomingMessage, body: Buffer): Response {
     statusText: res.statusMessage ?? "",
     headers,
   });
+}
+
+/**
+ * Content-decode a response body per its `Content-Encoding`. node:http returns
+ * raw wire bytes (unlike global fetch), so gzip/deflate/br bodies are inflated
+ * here to preserve the previous behavior. `maxOutputLength` bounds the inflated
+ * size, turning a decompression bomb into a `SafeFetchError` rather than an OOM.
+ * Returns the (possibly decoded) buffer, or a `SafeFetchError` on failure.
+ */
+function decodeBody(
+  buf: Buffer,
+  encoding: string | undefined,
+  zlib: ZlibSyncApi,
+  cap: number,
+  url: string
+): Buffer | SafeFetchError {
+  if (!encoding) return buf;
+  const enc = encoding.trim().toLowerCase();
+  const opts = { maxOutputLength: cap };
+  try {
+    if (enc === "gzip" || enc === "x-gzip") return zlib.gunzipSync(buf, opts);
+    if (enc === "br") return zlib.brotliDecompressSync(buf, opts);
+    if (enc === "deflate") {
+      // `Content-Encoding: deflate` is zlib-wrapped per spec, but some servers
+      // send raw deflate; fall back to raw before giving up.
+      try {
+        return zlib.inflateSync(buf, opts);
+      } catch {
+        return zlib.inflateRawSync(buf, opts);
+      }
+    }
+    // identity or an encoding we do not decode: pass the bytes through.
+    return buf;
+  } catch {
+    // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
+    return new SafeFetchError(
+      `Failed to decode ${enc} response body`,
+      url,
+      "decode-failed"
+    );
+  }
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------

@@ -211,6 +211,17 @@ describe("safeFetch", () => {
     expect(response.headers.get("x-echo-auth")).toBe("Bearer t0ken");
   });
 
+  it("decodes a gzip-encoded response body", async () => {
+    // node:http returns raw wire bytes; safeFetch must inflate to match fetch.
+    const { gzipSync } = await import("node:zlib");
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end(gzipSync(Buffer.from("compressed payload")));
+    });
+    const response = await safeFetch(`${h.base}/`, local);
+    expect(await response.text()).toBe("compressed payload");
+  });
+
   it("does not follow redirects (returns the 3xx as-is)", async () => {
     const h = await startServer((req, res) => {
       if (req.url === "/redirect") {
