@@ -658,6 +658,7 @@ export {
   validateExternalUrl,
   safeFetch,
   ExternalUrlError,
+  SafeFetchError,
   type ValidateExternalUrlOptions,
   type ValidatedUrl,
   type SafeFetchOptions,

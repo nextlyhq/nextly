@@ -24,6 +24,10 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_ERROR: 500,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
+  // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
+  EXTERNAL_URL_BLOCKED: 400,
+  EXTERNAL_REQUEST_FAILED: 502,
   FILENAME_INVALID: 400,
   EXTENSION_BLOCKED: 400,
   MIME_BLOCKED: 415,

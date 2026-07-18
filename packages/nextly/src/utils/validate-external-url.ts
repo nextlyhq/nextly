@@ -14,26 +14,43 @@
  *      IP is private/loopback/link-local/CGNAT/multicast/cloud-metadata.
  *      A single bad IP poisons the lookup — attacker-controlled DNS
  *      could rotate which IP is returned per call.
- *   4. Return the validated URL + first resolved IP (the caller can use
- *      it as a hint; full DNS-rebinding defense via dispatcher pinning
- *      is documented as a follow-up).
+ *   4. Return the validated URL + the first resolved IP so the fetch can
+ *      dial that exact address (see `safeFetch`).
  *
- * `safeFetch(url, init?, opts?)`:
- *   Validate → fetch. Convenience wrapper for the common case.
+ * `safeFetch(url, opts?)`:
+ *   Validate, then fetch the response with the validated IP pinned at the
+ *   socket. The validation and the connection resolve the hostname only
+ *   once between them, so a second DNS answer at connect time cannot
+ *   redirect the request to a private address (DNS rebinding). Uses
+ *   `node:http`/`node:https` `request({ lookup })` — `undici` is not a
+ *   dependency of this lean package, and the built-in modules pin the
+ *   address without one. Redirects are not followed (a 3xx is returned as
+ *   is), the response body is size-capped, and the whole request is bounded
+ *   by a deadline. Node-runtime only.
  *
- * Implementation note: this module avoids module-level Node imports
- * so downstream packages that bundle for the browser
+ * Implementation note: this module avoids module-level *runtime* Node
+ * imports so downstream packages that bundle for the browser
  * (e.g. `@nextlyhq/admin`) don't fail at build time. `node:dns/promises`
- * is loaded lazily inside the validation function.
- *
- * Known gap: full DNS-rebinding defense requires pinning the resolved
- * IP on the actual fetch dispatcher (undici Agent + custom connect).
- * Not implemented in v1 — the validation itself closes the primary
- * attack surface (URL pointing directly at private IP). Tracked for
- * follow-up.
+ * and `node:http`/`node:https` are loaded lazily inside the functions that
+ * need them; the `node:http`/`node:net` type-only imports are erased at
+ * compile time.
  *
  * @module utils/validate-external-url
  */
+
+import type { IncomingMessage } from "node:http";
+import type { LookupFunction } from "node:net";
+import type { InputType, ZlibOptions, BrotliOptions } from "node:zlib";
+
+import { NextlyError } from "../errors/nextly-error";
+
+/** The subset of node:zlib's sync decoders `decodeBody` needs. */
+interface ZlibSyncApi {
+  gunzipSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  inflateSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  inflateRawSync(buffer: InputType, options?: ZlibOptions): Buffer;
+  brotliDecompressSync(buffer: InputType, options?: BrotliOptions): Buffer;
+}
 
 const IPV4_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -92,12 +109,22 @@ export interface ValidatedUrl {
   family: 4 | 6;
 }
 
-export class ExternalUrlError extends Error {
+/**
+ * An outbound URL refused for SSRF safety. Extends `NextlyError` (the package's
+ * canonical error) so throw sites honor the error contract, while remaining a
+ * distinct class the callers (e.g. the form-builder webhook handler) match with
+ * `instanceof`.
+ */
+export class ExternalUrlError extends NextlyError {
   constructor(
     message: string,
     public readonly url: string
   ) {
-    super(message);
+    super({
+      code: "EXTERNAL_URL_BLOCKED",
+      publicMessage: message,
+      logContext: { url },
+    });
     this.name = "ExternalUrlError";
   }
 }
@@ -189,7 +216,9 @@ export async function validateExternalUrl(
     const allow =
       options.allowLocalhost === true && isLocalhostHostname && family === 4;
     const ok =
-      family === 4 ? isPublicIpv4(address, allow) : isPublicIpv6(address, allow);
+      family === 4
+        ? isPublicIpv4(address, allow)
+        : isPublicIpv6(address, allow);
     if (!ok) {
       throw new ExternalUrlError(
         `Resolved to non-public IP: ${address}`,
@@ -206,26 +235,440 @@ export async function validateExternalUrl(
   };
 }
 
-export interface SafeFetchOptions
-  extends ValidateExternalUrlOptions,
-    Omit<RequestInit, never> {}
+/** Default response body cap: reject anything larger before buffering it all. */
+const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MiB
+/** Default overall deadline covering DNS + connect + TLS + response. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+export interface SafeFetchOptions extends ValidateExternalUrlOptions {
+  /** HTTP method. Defaults to GET. */
+  method?: string;
+  /** Request headers (plain object, entries array, or `Headers`). */
+  headers?: HeadersInit;
+  /** Request body. Only string / binary bodies are supported. */
+  body?: string | Uint8Array;
+  /** Abort signal; an external timeout surfaces as a standard `AbortError`. */
+  signal?: AbortSignal | null;
+  /** Reject once the response body exceeds this many bytes. Default 10 MiB. */
+  maxResponseBytes?: number;
+  /** Overall deadline in ms covering connect + response. Default 30s. */
+  timeoutMs?: number;
+}
 
 /**
- * Validate `rawUrl` then `fetch()` it. Convenience wrapper for the
- * common case (webhook delivery, email attachment fetch).
+ * Raised for fetch-phase failures that are NOT SSRF rejections: an over-large
+ * response body, the overall deadline elapsing, or an undecodable content
+ * encoding. Extends `NextlyError` (the canonical error contract) while staying a
+ * distinct class, so a caller can tell "URL refused for safety"
+ * (`ExternalUrlError`) apart from "the request itself failed".
+ */
+export class SafeFetchError extends NextlyError {
+  constructor(
+    message: string,
+    public readonly url: string,
+    /** Discriminates the failure so callers branch without string-matching. */
+    public readonly reason: "response-too-large" | "timeout" | "decode-failed"
+  ) {
+    super({
+      code: "EXTERNAL_REQUEST_FAILED",
+      publicMessage: message,
+      logContext: { url, reason },
+    });
+    this.name = "SafeFetchError";
+  }
+}
+
+/**
+ * Build a `dns.lookup`-compatible function that ignores the hostname and
+ * always resolves to `ip`/`family`. Handing this to `http(s).request` forces
+ * the socket to dial the exact address `validateExternalUrl` already vetted,
+ * closing the DNS-rebinding window where a second resolution at connect time
+ * could return a private IP. Not re-exported from the package barrel; exported
+ * here so the rebinding invariant can be unit-tested directly.
+ */
+export function createPinnedLookup(ip: string, family: 4 | 6): LookupFunction {
+  return (_hostname, options, callback) => {
+    // Node calls lookup with an options object. `all: true` expects the array
+    // form of the callback; otherwise the (address, family) form. The
+    // hostname argument is deliberately unused: the whole point is to bypass
+    // a fresh resolution and pin the vetted address.
+    if (options && options.all) {
+      callback(null, [{ address: ip, family }]);
+    } else {
+      callback(null, ip, family);
+    }
+  };
+}
+
+/**
+ * Validate `rawUrl` then fetch it with the validated IP pinned at the socket.
+ * The convenience wrapper for the common case (webhook delivery, email
+ * attachment fetch). Node-runtime only.
  *
- * NOTE: this does NOT pin the resolved IP on the actual connection.
- * If full DNS-rebinding defense is required, the caller should
- * implement a dispatcher with a custom `connect` that forces the
- * `pinnedIp` returned by `validateExternalUrl()`.
+ * DNS is resolved once by `validateExternalUrl`; `createPinnedLookup` forces
+ * the connection to that same address, so an attacker's DNS cannot rebind the
+ * request to a private host between validation and connect. Redirects are not
+ * followed, the body is capped at `maxResponseBytes`, and the request is
+ * bounded by `timeoutMs`.
  */
 export async function safeFetch(
   rawUrl: string,
   options: SafeFetchOptions = {}
 ): Promise<Response> {
-  const { allowLocalhost, allowedProtocols, ...init } = options;
-  await validateExternalUrl(rawUrl, { allowLocalhost, allowedProtocols });
-  return fetch(rawUrl, init);
+  const {
+    allowLocalhost,
+    allowedProtocols,
+    method,
+    headers,
+    body,
+    signal,
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = options;
+
+  // One controller bounds the WHOLE operation — DNS validation and the request
+  // alike — so a stalled lookup can't outlive the advertised deadline, and a
+  // caller abort is honored during validation too. Both the deadline timer and
+  // the caller's signal feed it.
+  const controller = new AbortController();
+  const forwardAbort = (): void => controller.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+  }
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new SafeFetchError(`Request exceeded ${timeoutMs}ms`, rawUrl, "timeout")
+      ),
+    timeoutMs
+  );
+
+  try {
+    const validated = await abortable(
+      validateExternalUrl(rawUrl, { allowLocalhost, allowedProtocols }),
+      controller.signal
+    );
+    return await pinnedFetch(validated, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+      maxResponseBytes,
+    });
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", forwardAbort);
+  }
+}
+
+/**
+ * The signal's abort reason as an `Error`. Our own aborts carry a
+ * `SafeFetchError` (timeout); a caller's `AbortController.abort()` carries a
+ * DOMException `AbortError`; anything else (a non-Error reason) is surfaced as
+ * a standard `AbortError` so downstream `name === "AbortError"` checks hold.
+ */
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  return new DOMException("The operation was aborted", "AbortError");
+}
+
+/**
+ * Resolve `promise`, but reject with the signal's reason if it aborts first.
+ * Lets a phase that runs before the request (DNS validation) share the overall
+ * deadline and caller cancellation.
+ */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  let onAbort!: () => void;
+  // Race the work against the abort. `promise`'s own rejection propagates
+  // natively through the race; only the abort path rejects explicitly (with a
+  // typed Error), so the promise's arbitrary reason is never re-wrapped.
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = (): void => reject(abortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([promise, aborted]).finally(() =>
+    signal.removeEventListener("abort", onAbort)
+  );
+}
+
+interface PinnedFetchInit {
+  method?: string;
+  headers?: HeadersInit;
+  body?: string | Uint8Array;
+  /** The combined deadline/caller signal built by `safeFetch`. */
+  signal: AbortSignal;
+  maxResponseBytes: number;
+}
+
+/**
+ * Issue the request over `node:http`/`node:https` with the validated IP pinned
+ * via a custom `lookup`, then adapt the Node response into a WHATWG `Response`.
+ * `agent: false` forces a fresh socket per call so no pooled connection can
+ * reuse a differently-resolved address. The overall deadline is enforced by the
+ * caller through `init.signal`, so there is no separate timer here.
+ */
+async function pinnedFetch(
+  validated: ValidatedUrl,
+  init: PinnedFetchInit
+): Promise<Response> {
+  const { url, pinnedIp, family } = validated;
+  // Lazy, literal-specifier imports keep the module import-safe for bundlers
+  // targeting the browser (some packages re-export this util).
+  const httpMod =
+    url.protocol === "https:"
+      ? await import("node:https")
+      : await import("node:http");
+  // node:http does not content-decode responses the way global fetch does, so
+  // decompress explicitly to preserve the previous behavior for encoded bodies.
+  const zlib = await import("node:zlib");
+
+  const lookup = createPinnedLookup(pinnedIp, family);
+
+  const outHeaders = toOutgoingHeaders(init.headers);
+  // Frame a fixed-size body with the exact content-length (overriding any
+  // caller-supplied one, which could be wrong or wrongly cased) and drop any
+  // transfer-encoding, so Node never falls back to chunked encoding, which some
+  // webhook receivers and strict HTTP/1.0 servers reject with 411.
+  if (init.body != null) {
+    delete outHeaders["transfer-encoding"];
+    outHeaders["content-length"] = String(
+      typeof init.body === "string"
+        ? Buffer.byteLength(init.body)
+        : init.body.byteLength
+    );
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    // Prefer the abort reason (our timeout SafeFetchError, or the caller's
+    // AbortError) over Node's generic socket error when the signal fired.
+    const failure = (err: Error): Error =>
+      init.signal.aborted ? abortError(init.signal) : err;
+
+    const req = httpMod.request(
+      url,
+      {
+        method: init.method ?? "GET",
+        headers: outHeaders,
+        lookup,
+        // Fresh socket per request so a pooled connection can't reuse a
+        // differently-resolved address, and so the pinned lookup always runs.
+        agent: false,
+        // The combined deadline/caller signal aborts the request in flight.
+        signal: init.signal,
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        res.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > init.maxResponseBytes) {
+            res.destroy();
+            req.destroy();
+            settle(() =>
+              reject(
+                new SafeFetchError(
+                  `Response body exceeded ${init.maxResponseBytes} bytes`,
+                  url.href,
+                  "response-too-large"
+                )
+              )
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          const decoded = decodeBody(
+            Buffer.concat(chunks),
+            res.headers["content-encoding"],
+            zlib,
+            init.maxResponseBytes,
+            url.href
+          );
+          if (decoded instanceof SafeFetchError) {
+            settle(() => reject(decoded));
+            return;
+          }
+          // toWhatwgResponse is total (skips headers the WHATWG layer rejects,
+          // clamps the status), so building the Response cannot throw here. When
+          // the body was decoded, the content-encoding/-length headers describe
+          // the wire bytes and would misdescribe the returned body, so drop them.
+          settle(() =>
+            resolve(toWhatwgResponse(res, decoded.body, decoded.decoded))
+          );
+        });
+        res.on("error", err => settle(() => reject(failure(err))));
+      }
+    );
+
+    req.on("error", err => settle(() => reject(failure(err))));
+
+    // A pre-aborted signal destroys the request synchronously; the `error`
+    // handler above then rejects. Otherwise send the body and finish.
+    if (!req.destroyed) {
+      if (init.body != null) req.write(init.body);
+      req.end();
+    }
+  });
+}
+
+/**
+ * Normalize a `HeadersInit` into Node's outgoing-header shape. Header names are
+ * lowercased (they are case-insensitive) so later framing checks
+ * (`content-length`) and the Host strip are reliable regardless of caller
+ * casing. A caller-supplied `Host` is dropped: it is derived from the validated
+ * URL, and honoring an override would let Host-based routing reach an internal
+ * vhost behind a validated public IP, defeating the SSRF pin.
+ */
+function toOutgoingHeaders(
+  headers?: HeadersInit
+): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  if (!headers) return out;
+  // Repeated keys must accumulate rather than clobber: only the entries-array
+  // form can carry duplicates (a plain object can't, and `Headers` already
+  // merges same-name values on iteration).
+  const add = (rawKey: string, value: string): void => {
+    const key = rawKey.toLowerCase();
+    if (key === "host") return;
+    const existing = out[key];
+    out[key] =
+      existing === undefined ? value : ([] as string[]).concat(existing, value);
+  };
+  if (headers instanceof Headers) {
+    headers.forEach((value, key) => add(key, value));
+  } else if (Array.isArray(headers)) {
+    for (const [key, value] of headers) add(key, value);
+  } else {
+    for (const [key, value] of Object.entries(headers)) add(key, value);
+  }
+  return out;
+}
+
+/**
+ * Adapt a Node `IncomingMessage` + buffered body into a WHATWG `Response`.
+ * Total by construction: a header the WHATWG layer rejects is skipped and the
+ * status is clamped to a constructible range, so this never throws (a throw
+ * would otherwise escape the `end` handler as an uncaught error).
+ */
+function toWhatwgResponse(
+  res: IncomingMessage,
+  body: Buffer,
+  stripContentHeaders: boolean
+): Response {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(res.headers)) {
+    if (value == null) continue;
+    // When the body was content-decoded, the wire content-encoding/-length no
+    // longer describe the returned bytes, so drop them (Node lowercases keys).
+    const lower = key.toLowerCase();
+    if (
+      stripContentHeaders &&
+      (lower === "content-encoding" || lower === "content-length")
+    ) {
+      continue;
+    }
+    // set-cookie and other repeated headers arrive as arrays.
+    const values = Array.isArray(value) ? value : [value];
+    for (const v of values) {
+      try {
+        headers.append(key, v);
+      } catch {
+        // A header Node accepted but the stricter WHATWG layer rejects is
+        // dropped rather than failing the whole response.
+      }
+    }
+  }
+  // Received responses are always >= 200; clamp defensively so the Response
+  // constructor (valid range 200-599) can never throw on a malformed status.
+  const raw = res.statusCode ?? 502;
+  const status = raw >= 200 && raw <= 599 ? raw : 502;
+  // Null-body statuses cannot carry an entity body in the WHATWG constructor.
+  const nullBody = status === 204 || status === 205 || status === 304;
+  // Bulk-copy into a fresh ArrayBuffer-backed Uint8Array: this satisfies the
+  // DOM BodyInit type (Node's Buffer generic does not) without the O(n)
+  // element-by-element copy that `Uint8Array.from` performs.
+  const bytes = new Uint8Array(body.byteLength);
+  bytes.set(body);
+  return new Response(nullBody ? null : bytes, {
+    status,
+    statusText: res.statusMessage ?? "",
+    headers,
+  });
+}
+
+/**
+ * Content-decode a response body per its `Content-Encoding`. node:http returns
+ * raw wire bytes (unlike global fetch), so gzip/deflate/br bodies are inflated
+ * here to preserve the previous behavior. `maxOutputLength` bounds the inflated
+ * size, turning a decompression bomb into a `SafeFetchError` rather than an OOM.
+ * Returns the (possibly decoded) buffer, or a `SafeFetchError` on failure.
+ */
+function decodeBody(
+  buf: Buffer,
+  encoding: string | undefined,
+  zlib: ZlibSyncApi,
+  cap: number,
+  url: string
+): { body: Buffer; decoded: boolean } | SafeFetchError {
+  if (!encoding) return { body: buf, decoded: false };
+  // Content-Encoding may stack (e.g. "br, gzip"): the layers are listed in the
+  // order applied, so decode from the last (outermost) inward.
+  const layers = encoding
+    .split(",")
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+  const opts = { maxOutputLength: cap };
+  let current = buf;
+  let decoded = false;
+  try {
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const enc = layers[i];
+      if (enc === "identity") continue;
+      if (enc === "gzip" || enc === "x-gzip") {
+        current = zlib.gunzipSync(current, opts);
+      } else if (enc === "br") {
+        current = zlib.brotliDecompressSync(current, opts);
+      } else if (enc === "deflate") {
+        // `deflate` is zlib-wrapped per spec, but some servers send raw deflate.
+        try {
+          current = zlib.inflateSync(current, opts);
+        } catch {
+          current = zlib.inflateRawSync(current, opts);
+        }
+      } else {
+        // An encoding we do not decode. If we have already peeled some layers,
+        // the bytes are partially decoded and can't be labeled honestly, so
+        // fail; otherwise pass the response through untouched (header kept).
+        if (decoded) {
+          return new SafeFetchError(
+            `Cannot fully decode content-encoding "${encoding}"`,
+            url,
+            "decode-failed"
+          );
+        }
+        return { body: buf, decoded: false };
+      }
+      decoded = true;
+    }
+    return { body: current, decoded };
+  } catch {
+    // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
+    return new SafeFetchError(
+      `Failed to decode ${encoding} response body`,
+      url,
+      "decode-failed"
+    );
+  }
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------
@@ -249,7 +692,7 @@ function isIpv4InCidr(intIp: number, cidr: string): boolean {
   const prefix = Number(prefixRaw);
   if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
   const mask = prefix === 0 ? 0 : (-1 >>> (32 - prefix)) << (32 - prefix);
-  return ((intIp & mask) >>> 0) === ((intCidr & mask) >>> 0);
+  return (intIp & mask) >>> 0 === (intCidr & mask) >>> 0;
 }
 
 function isPublicIpv4(addr: string, allowLoopback: boolean): boolean {
@@ -262,14 +705,32 @@ function isPublicIpv4(addr: string, allowLoopback: boolean): boolean {
   return true;
 }
 
+/**
+ * Extract the embedded IPv4 of an IPv4-mapped IPv6 address, or null. Handles
+ * both the dotted form (`::ffff:1.2.3.4`) and the hex form (`::ffff:7f00:1`)
+ * that `URL.hostname` normalizes the dotted literal to — the latter would
+ * otherwise skip the IPv4 denylist and pin, e.g., loopback as public.
+ */
+function mappedIpv4(lower: string): string | null {
+  const dotted = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const hex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join(".");
+  }
+  return null;
+}
+
 function isPublicIpv6(addr: string, allowLoopback: boolean): boolean {
   const lower = addr.toLowerCase();
   if (allowLoopback && lower === "::1") return true;
 
-  // IPv4-mapped IPv6 (::ffff:1.2.3.4) — defer to IPv4 rules
-  const v4mapped = lower.match(/^::ffff:([0-9.]+)$/);
-  if (v4mapped) {
-    return isPublicIpv4(v4mapped[1], allowLoopback);
+  // IPv4-mapped IPv6 — defer to IPv4 rules (both dotted and hex-normalized).
+  const mapped = mappedIpv4(lower);
+  if (mapped) {
+    return isPublicIpv4(mapped, allowLoopback);
   }
 
   // Hard rejects on exact / prefix matches
@@ -278,10 +739,13 @@ function isPublicIpv6(addr: string, allowLoopback: boolean): boolean {
   // Take first hextet for prefix-style checks
   const firstHextet = lower.split(":")[0] || "";
   // ULA fc00::/7 — first hextet starts with fc or fd
-  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd")) return false;
+  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd"))
+    return false;
   // Link-local fe80::/10 — first hextet fe80..febf
-  if (firstHextet.startsWith("fe8") || firstHextet.startsWith("fe9")) return false;
-  if (firstHextet.startsWith("fea") || firstHextet.startsWith("feb")) return false;
+  if (firstHextet.startsWith("fe8") || firstHextet.startsWith("fe9"))
+    return false;
+  if (firstHextet.startsWith("fea") || firstHextet.startsWith("feb"))
+    return false;
   // Multicast ff00::/8
   if (firstHextet.startsWith("ff")) return false;
 
