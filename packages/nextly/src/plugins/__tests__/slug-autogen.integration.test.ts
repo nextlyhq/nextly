@@ -183,4 +183,28 @@ describe("slug auto-generation on create", () => {
 
     expect((created.item as { slug?: string }).slug).toBe("changed-by-hook");
   });
+
+  it("derives a slug when a beforeChange hook blanks it", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A beforeChange hook that clears the slug runs after validation, so
+          // nothing else catches the blank value — it must be re-derived.
+          hooks: { beforeChange: [() => "   "] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Fallback Title" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("fallback-title");
+  });
 });
