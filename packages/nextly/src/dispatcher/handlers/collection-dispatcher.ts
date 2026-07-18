@@ -384,7 +384,11 @@ const COLLECTIONS_METHODS: Record<
       return respondData({
         ...legacyAsRecord,
         renamed,
-        schemaVersion: collection.schemaVersion,
+        // Normalize legacy rows (schema_version NULL) to 1 so the editor always
+        // receives a concrete version to echo back on apply; otherwise JSON
+        // omits an undefined value and the guard rejects the first save as
+        // version-less. Mirrors the single-dispatcher preview.
+        schemaVersion: collection.schemaVersion ?? 1,
       });
     },
   },
