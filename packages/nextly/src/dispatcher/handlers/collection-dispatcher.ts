@@ -807,6 +807,10 @@ const COLLECTIONS_METHODS: Record<
             ? String(p._authenticatedUserEmail)
             : undefined,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -868,6 +872,10 @@ const COLLECTIONS_METHODS: Record<
             ? String(p._authenticatedUserEmail)
             : undefined,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -897,6 +905,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -932,6 +944,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -975,6 +991,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const message =
         result.failures.length === 0
@@ -1027,6 +1047,10 @@ const COLLECTIONS_METHODS: Record<
             ? String(p._authenticatedUserEmail)
             : undefined,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         { limit: b.limit }
       );
@@ -1063,6 +1087,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

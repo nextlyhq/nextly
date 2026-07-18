@@ -867,6 +867,12 @@ ${dropStatement}`;
       timestampDefault = "timestamp DEFAULT now() NOT NULL";
     }
 
+    // The result is split on `--> statement-breakpoint` and each part executed
+    // as one statement, so every part must be a complete, standalone statement:
+    // one CREATE TABLE (closed by its own `);`), then the two CREATE INDEX
+    // statements. The UNIQUE pair constraint belongs inside the CREATE TABLE
+    // body only; it must not appear again as a trailing fragment (a bare
+    // `CONSTRAINT ... );` is not valid SQL on any dialect).
     return `-- Junction table for many-to-many: ${sourceCollectionName}.${field.name} -> ${targetCollectionName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("id")} ${this.dialect === "mysql" ? "varchar(36)" : "text"} PRIMARY KEY NOT NULL,
@@ -875,9 +881,6 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("created_at")} ${timestampDefault},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${sourceCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${sourceCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(sourceTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${targetCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${targetCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(targetTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
-  CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
-);
---> statement-breakpoint
   CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
 );
 --> statement-breakpoint
