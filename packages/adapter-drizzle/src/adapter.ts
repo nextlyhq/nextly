@@ -513,7 +513,24 @@ export abstract class DrizzleAdapter {
         // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const db = this.getDrizzle<any>();
-        let query = db.select().from(tableObj);
+        // Honor the columns projection when provided: select only the requested
+        // columns (keyed by Drizzle property name) instead of every column, so
+        // callers can avoid transferring large columns (e.g. JSON snapshots)
+        // they do not need. Unknown names are skipped; if nothing resolves, fall
+        // back to a full select so a bad option never yields empty rows.
+        let query;
+        if (options?.columns?.length) {
+          const cols = getColumns(tableObj as never);
+          const projection: Record<string, unknown> = {};
+          for (const name of options.columns) {
+            if (cols[name]) projection[name] = cols[name];
+          }
+          query = Object.keys(projection).length
+            ? db.select(projection).from(tableObj)
+            : db.select().from(tableObj);
+        } else {
+          query = db.select().from(tableObj);
+        }
 
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
