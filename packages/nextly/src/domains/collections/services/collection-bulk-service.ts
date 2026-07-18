@@ -501,6 +501,10 @@ export class CollectionBulkService extends BaseService {
       where: params.where,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      // Route auth authorized the update; enumerating the targets must not be
+      // rejected by a redundant read RBAC gate (owner-only read scoping still
+      // applies). Restores the pre-enforcement behavior for update-only keys.
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit, // Use limit or max allowed
@@ -660,6 +664,10 @@ export class CollectionBulkService extends BaseService {
       where: params.where,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      // Route auth authorized the delete; enumerating the targets must not be
+      // rejected by a redundant read RBAC gate (owner-only read scoping still
+      // applies). Restores the pre-enforcement behavior for delete-only keys.
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit,

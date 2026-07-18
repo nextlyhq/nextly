@@ -39,6 +39,9 @@ function buildAccessService() {
 // the bypass must key off this authorized set, not the account.
 const user = { id: "user-1", roles: ["editor"] };
 const superAdminUser = { id: "user-1", roles: ["super-admin"] };
+// The Direct API collection namespace forwards only `{ id, role }` (singular),
+// so the bypass must also honor a super-admin arriving via the singular slug.
+const singularRoleSuperAdmin = { id: "user-1", role: "super-admin" };
 
 describe("checkCollectionAccess — route-authorized decoupling", () => {
   it("still evaluates stored rules when routeAuthorized (denies via stored rule)", async () => {
@@ -165,6 +168,30 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     expect(result).toBeNull();
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
     expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("lets a super-admin identified by the singular `role` bypass stored rules", async () => {
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "not the owner",
+    });
+
+    // A Direct API caller carrying only `{ id, role: "super-admin" }` (no
+    // `roles` array) must still bypass — the changeset promises the bypass on
+    // every transport, and this surface only forwards the singular slug.
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "update",
+      singularRoleSuperAdmin,
+      "doc-1",
+      { id: "doc-1", createdBy: "someone-else" },
+      false,
+      false // routeAuthorized (Direct API)
+    );
+
+    expect(result).toBeNull();
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
   });
 
   it("does NOT grant the super-admin bypass to a scoped context (no super-admin role)", async () => {
