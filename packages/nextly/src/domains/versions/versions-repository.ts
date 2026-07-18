@@ -138,31 +138,38 @@ export class VersionsRepository {
         logContext: { reason: "version-snapshot-not-serializable" },
       });
     }
-    await this.db.insert(TABLE, {
-      id: crypto.randomUUID(),
-      scopeKind: input.ref.scopeKind,
-      scopeSlug: input.ref.scopeSlug,
-      entryId: input.ref.entryId,
-      versionNo: input.versionNo,
-      status: input.status,
-      isAutosave: input.isAutosave,
-      // Pre-stringify: the raw-SQL transaction insert path binds this value
-      // straight into a driver query with no column-type awareness, and
-      // mysql2 turns a plain object into invalid `key = value` SQL for a
-      // query parameter (it is not stringified for us the way SQLite
-      // stringifies a bound object). The non-transactional Drizzle path
-      // re-parses a stringified value for JSON columns before handing it to
-      // the query builder (mapDataToColumnNames), so this is correct on
-      // both paths and matches the JSON-field convention used by the
-      // collection mutation service.
-      snapshot: serializedSnapshot,
-      label: input.label ?? null,
-      locale: input.locale ?? null,
-      sourceVersionNo: input.sourceVersionNo ?? null,
-      createdBy: input.createdBy ?? null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await this.db.insert(
+      TABLE,
+      {
+        id: crypto.randomUUID(),
+        scopeKind: input.ref.scopeKind,
+        scopeSlug: input.ref.scopeSlug,
+        entryId: input.ref.entryId,
+        versionNo: input.versionNo,
+        status: input.status,
+        isAutosave: input.isAutosave,
+        // Pre-stringify: the raw-SQL transaction insert path binds this value
+        // straight into a driver query with no column-type awareness, and
+        // mysql2 turns a plain object into invalid `key = value` SQL for a
+        // query parameter (it is not stringified for us the way SQLite
+        // stringifies a bound object). The non-transactional Drizzle path
+        // re-parses a stringified value for JSON columns before handing it to
+        // the query builder (mapDataToColumnNames), so this is correct on
+        // both paths and matches the JSON-field convention used by the
+        // collection mutation service.
+        snapshot: serializedSnapshot,
+        label: input.label ?? null,
+        locale: input.locale ?? null,
+        sourceVersionNo: input.sourceVersionNo ?? null,
+        createdBy: input.createdBy ?? null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      // The insert result is discarded, so request a minimal RETURNING instead of
+      // the adapter default (RETURNING *), which would transfer the full snapshot
+      // back on every capture.
+      { returning: ["id"] }
+    );
   }
 
   /**
