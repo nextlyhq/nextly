@@ -34,9 +34,14 @@ export interface CaptureResult {
 export class VersionCaptureService {
   /**
    * Allocate the next durable version_no for the document and insert one row,
-   * using `db` (the transaction context) so the version commits atomically with
-   * the caller's content write. The next number is `max + 1`; the PG partial
-   * unique index (and serialized writes on MySQL/SQLite) is the race backstop.
+   * using `db` (the transaction context) so the insert commits atomically with
+   * the caller's content write. The next number is `max + 1`; this allocation
+   * read does not itself run inside the transaction (the tx context's `select`
+   * delegates to the adapter's main connection pool, not the transaction's own
+   * connection, on Postgres/MySQL), so a duplicate version_no is possible under
+   * concurrent capture. The PG partial unique index guards against it there; a
+   * MySQL/SQLite serialization or unique guard is required in a later stage
+   * before capture is wired into concurrent writes.
    */
   async capture(
     db: VersionsDbApi,

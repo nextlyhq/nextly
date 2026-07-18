@@ -1,10 +1,16 @@
 /**
  * Repository for `nextly_versions`, the global content-version store.
  *
- * Built on the adapter DB API (VersionsDbApi) so the same code serves both
- * non-transactional reads (constructed with the adapter) and in-transaction
- * capture (constructed with the transaction context). Column names are the
- * Drizzle property names (camelCase); the adapter maps them to snake_case.
+ * Built on the adapter DB API (VersionsDbApi) so the same class can be
+ * constructed with either the adapter or a transaction context, but the two
+ * are not interchangeable for every method. `insertVersion` and
+ * `getMaxVersionNo` return plain integers/strings and are safe via either;
+ * `listByDoc` and `findByVersionNo` decode `createdAt`/`snapshot` through the
+ * Drizzle-backed adapter select (JSON columns are parsed, timestamps become
+ * `Date`), so they must be issued via the adapter, not a raw transaction
+ * context, which would return the undecoded driver values instead. Column
+ * names are the Drizzle property names (camelCase); the adapter maps them to
+ * snake_case.
  *
  * @module domains/versions/versions-repository
  */
@@ -95,7 +101,16 @@ export class VersionsRepository {
       versionNo: input.versionNo,
       status: input.status,
       isAutosave: input.isAutosave,
-      snapshot: input.snapshot,
+      // Pre-stringify: the raw-SQL transaction insert path binds this value
+      // straight into a driver query with no column-type awareness, and
+      // mysql2 turns a plain object into invalid `key = value` SQL for a
+      // query parameter (it is not stringified for us the way SQLite
+      // stringifies a bound object). The non-transactional Drizzle path
+      // re-parses a stringified value for JSON columns before handing it to
+      // the query builder (mapDataToColumnNames), so this is correct on
+      // both paths and matches the JSON-field convention used by the
+      // collection mutation service.
+      snapshot: JSON.stringify(input.snapshot),
       label: input.label ?? null,
       locale: input.locale ?? null,
       sourceVersionNo: input.sourceVersionNo ?? null,
@@ -107,9 +122,13 @@ export class VersionsRepository {
 
   /**
    * Highest durable (non-autosave) version_no for a document, or 0 if none.
-   * The caller allocates the next number as `getMaxVersionNo(ref) + 1` inside
-   * its write transaction; the partial unique index (PG) / serialized write
-   * (MySQL/SQLite) is the race backstop.
+   * The caller allocates the next number as `getMaxVersionNo(ref) + 1`.
+   * Note this read does not run inside the caller's write transaction: the
+   * transaction context's `select` delegates to the adapter's main
+   * connection pool, not the transaction's own connection, on Postgres and
+   * MySQL. Duplicate version_no is guarded by the partial unique index on
+   * Postgres; a MySQL/SQLite serialization or unique guard is needed in a
+   * later stage before capture is wired into concurrent writes.
    */
   async getMaxVersionNo(ref: VersionRef): Promise<number> {
     const rows = await this.db.select<VersionRow>(TABLE, {
