@@ -236,13 +236,17 @@ export function buildLocalizedOrderExpr(args: {
   column: string;
   localeChain: string[];
 }): SQL {
-  const { companionTableName, mainIdColumn, column: columnName, localeChain } =
-    args;
+  const {
+    companionTableName,
+    mainIdColumn,
+    column: columnName,
+    localeChain,
+  } = args;
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const perLocale = localeChain.map(
     code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${code}), '')`
+      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}), '')`
   );
   return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }
@@ -259,10 +263,11 @@ export function buildCompanionExists(args: {
   valueCondition: SQL;
 }): SQL {
   const { companionTableName, mainIdColumn, locale, valueCondition } = args;
+  const t = sql.identifier(companionTableName);
   return sql`EXISTS (
-    SELECT 1 FROM ${sql.identifier(companionTableName)}
-    WHERE ${sql.identifier(companionTableName)}."_parent" = ${mainIdColumn}
-    AND ${sql.identifier(companionTableName)}."_locale" = ${locale}
+    SELECT 1 FROM ${t}
+    WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn}
+    AND ${t}.${sql.identifier("_locale")} = ${locale}
     AND ${valueCondition}
   )`;
 }
@@ -323,7 +328,7 @@ export function buildTranslationStatusCondition(args: {
       : sql`1=0`;
 
   const rowFor = (cond: SQL) =>
-    sql`SELECT 1 FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${locale} AND (${cond})`;
+    sql`SELECT 1 FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${locale} AND (${cond})`;
 
   switch (state) {
     case "translated":
@@ -335,7 +340,7 @@ export function buildTranslationStatusCondition(args: {
     case "draft":
     case "published":
       if (!hasStatus) return undefined;
-      return sql`EXISTS (${rowFor(sql`${t}."_status" = ${state}`)})`;
+      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state}`)})`;
     default:
       return undefined;
   }

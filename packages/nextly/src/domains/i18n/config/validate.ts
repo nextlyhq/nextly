@@ -13,8 +13,16 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
     throw new Error("localization.locales must contain at least one locale.");
   }
 
+  // The companion `_locale` column is VARCHAR(20); a longer code would fail or
+  // truncate on insert (a truncation could even collide with another locale).
+  const MAX_LOCALE_CODE_LENGTH = 20;
   const codes = new Set<string>();
   for (const l of locales) {
+    if (l.code.length > MAX_LOCALE_CODE_LENGTH) {
+      throw new Error(
+        `Locale code '${l.code}' exceeds the ${MAX_LOCALE_CODE_LENGTH}-character limit for companion _locale storage.`
+      );
+    }
     if (codes.has(l.code)) {
       throw new Error(
         `Duplicate locale code '${l.code}' in localization.locales.`
