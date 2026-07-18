@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { selectDeliveryTargets } from "../fan-out";
+import {
+  fanOutDueEvents,
+  selectDeliveryTargets,
+  type FanOutDatabase,
+  type FanOutTx,
+} from "../fan-out";
 import type { WebhookEndpoint, WebhookEvent } from "../types";
 
 function endpoint(over: Partial<WebhookEndpoint>): WebhookEndpoint {
@@ -79,5 +84,36 @@ describe("selectDeliveryTargets", () => {
       event({ resource: { kind: "entry", collection: "posts", id: "p1" } })
     );
     expect(targets.map(t => t.id)).toEqual(["posts-only"]);
+  });
+});
+
+describe("fanOutDueEvents (invalid payload)", () => {
+  it("skips an unparseable event without marking it fanned out", async () => {
+    const marked: string[] = [];
+    const warnings: string[] = [];
+    const tx: FanOutTx = {
+      select: async <T>() => [] as T[],
+      insertMany: async <T>() => [] as T[],
+      update: async <T>() => {
+        marked.push("update");
+        return [] as T[];
+      },
+    };
+    const db: FanOutDatabase = {
+      select: async <T>() =>
+        [{ id: "evt_bad", payload: "{not valid json" }] as T[],
+      transaction: async fn => fn(tx),
+    };
+
+    const result = await fanOutDueEvents({
+      db,
+      loadEndpoints: async () => [],
+      logger: { warn: m => warnings.push(m) },
+    });
+
+    // Not counted, never marked, and surfaced via the logger.
+    expect(result).toEqual({ eventsProcessed: 0, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(0);
+    expect(warnings.some(w => w.includes("evt_bad"))).toBe(true);
   });
 });

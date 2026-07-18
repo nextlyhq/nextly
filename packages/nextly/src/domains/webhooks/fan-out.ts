@@ -159,7 +159,18 @@ export async function fanOutDueEvents(deps: FanOutDeps): Promise<FanOutResult> {
 
   for (const event of events) {
     const envelope = parseEnvelope(event.payload);
-    const targets = envelope ? selectDeliveryTargets(endpoints, envelope) : [];
+    if (!envelope) {
+      // An unparseable payload is a data-integrity anomaly (recordEvent always
+      // writes a valid envelope). Surface it and skip rather than fabricate a
+      // successful fan-out via the zero-target marker path; the event stays
+      // un-fanned for investigation. A durable poison-event/dead-letter policy
+      // is a follow-up.
+      deps.logger?.warn(
+        `webhook fan-out skipped event ${event.id} with an unparseable payload`
+      );
+      continue;
+    }
+    const targets = selectDeliveryTargets(endpoints, envelope);
 
     try {
       const created = await deps.db.transaction(async tx => {
