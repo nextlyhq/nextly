@@ -91,6 +91,7 @@ const POST_045_TABLES = [
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
+  "nextly_versions",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the
