@@ -8,11 +8,16 @@
  * @module domains/versions/db-api
  */
 
+import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
+
 /** A single AND-ed filter condition (subset of the adapter WhereClause). */
 export interface VersionsWhereCondition {
   column: string;
   op: "=" | "!=";
-  value?: unknown;
+  // Matches the adapter's WhereCondition.value so the adapter and the
+  // transaction context both structurally satisfy VersionsDbApi (a looser
+  // `unknown` here breaks that assignability under method-parameter variance).
+  value?: SqlParam | SqlParam[];
 }
 
 /** Conjunction-only where (all versions queries are simple AND filters). */

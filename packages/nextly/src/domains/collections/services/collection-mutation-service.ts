@@ -35,6 +35,7 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
   CollectionRelationshipService,
@@ -58,6 +59,8 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -198,6 +201,13 @@ export class CollectionMutationService extends BaseService {
   ) {
     super(adapter, logger);
   }
+
+  /**
+   * Stateless version-capture service. Records a durable version snapshot
+   * inside the write transaction when the collection opts into versioning, so
+   * the version commits atomically with the content write.
+   */
+  private readonly versionCapture = new VersionCaptureService();
 
   /**
    * Serialize hasMany relationship arrays to JSON strings before insert/update.
@@ -922,6 +932,11 @@ export class CollectionMutationService extends BaseService {
 
       // Wrap entry insert and component data save in a transaction so that
       // a component save failure rolls back the entry — no partial state.
+      // Resolved versioning config persisted on the collection (or null when
+      // unversioned); read once so the in-tx capture below can skip cheaply.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+
       const entry: Record<string, unknown> = {};
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
@@ -964,6 +979,27 @@ export class CollectionMutationService extends BaseService {
               txExecutor
             );
           }
+        }
+
+        // Record a durable version snapshot atomically with the write when the
+        // collection opts into versioning. Runs after components + m2m so the
+        // snapshot is the full assembled document (the read-shape). History-only
+        // here: the entry's status maps to a VersionStatus inside captureInTx.
+        if (versionsConfig?.enabled) {
+          await captureInTx(tx, this.versionCapture, {
+            ref: {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: entry.id as string,
+            },
+            contentStatus: (entry as { status?: unknown }).status,
+            parts: {
+              parentRow: entry,
+              components: componentFieldData,
+              manyToMany: manyToManyData,
+            },
+            createdBy: params.user?.id ?? null,
+          });
         }
       });
 
