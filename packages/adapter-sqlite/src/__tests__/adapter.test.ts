@@ -618,9 +618,12 @@ describe("SqliteAdapter", () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
 
+      // getDrizzle must be exposed from the ACTIVE transaction context so
+      // callers can run Drizzle queries on the transaction's connection rather
+      // than the pool; assert it is present and returns a handle.
       await adapter.transaction(async tx => {
         expect(typeof tx.getDrizzle).toBe("function");
-        const db = tx.getDrizzle!();
+        const db = tx.getDrizzle();
         expect(db).toBeDefined();
       });
     });

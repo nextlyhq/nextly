@@ -560,10 +560,15 @@ function normalizeToIdArray(value: unknown): string[] {
 // (from `tx.getDrizzle()`) satisfy it, so junction writes can run either on the
 // pool (default) or inside a caller's transaction (when an executor is passed),
 // keeping the junction write atomic with the entry write.
+// Each method is optional because a given dialect's Drizzle handle exposes only
+// a subset: SQLite's better-sqlite3 handle has `all`/`run` (no `execute`),
+// while the Postgres/MySQL handles have `execute` (no `all`/`run`). The
+// junction raw-SQL helpers below are dialect-gated, so the method they call is
+// always present for the current dialect.
 export type RelationshipDbExecutor = {
-  all(query: unknown): unknown[];
-  run(query: unknown): unknown;
-  execute(query: unknown): Promise<unknown>;
+  all?(query: unknown): unknown[];
+  run?(query: unknown): unknown;
+  execute?(query: unknown): Promise<unknown>;
 };
 
 export class CollectionRelationshipService extends BaseService {
@@ -597,10 +602,12 @@ export class CollectionRelationshipService extends BaseService {
     db: RelationshipDbExecutor = this.db
   ): Promise<{ rows: unknown[] }> {
     if (this.dialect === "sqlite") {
-      const rows = db.all(query);
+      // SQLite's handle exposes all(); the dialect gate guarantees it here.
+      const rows = db.all!(query);
       return { rows };
     }
-    const result: unknown = await db.execute(query);
+    // Postgres/MySQL handles expose execute().
+    const result: unknown = await db.execute!(query);
     if (this.dialect === "mysql" && Array.isArray(result)) {
       // Tuple form `[rows, fieldPackets]` -> take rows; a flat rows array (first
       // element is a row object, not an array) is already the rows.
@@ -621,10 +628,12 @@ export class CollectionRelationshipService extends BaseService {
     db: RelationshipDbExecutor = this.db
   ): Promise<void> {
     if (this.dialect === "sqlite") {
-      db.run(query);
+      // SQLite's handle exposes run(); the dialect gate guarantees it here.
+      db.run!(query);
       return;
     }
-    await db.execute(query);
+    // Postgres/MySQL handles expose execute().
+    await db.execute!(query);
   }
 
   /**
@@ -1946,69 +1955,43 @@ export class CollectionRelationshipService extends BaseService {
     const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
     const targetIdCol = sql.identifier(targetCollectionName + "_id");
 
-    // Track errors
-    const errors: string[] = [];
-
-    // Insert each relationship individually for reliability
-    // Modern databases handle this efficiently with proper indexes
+    // Insert each relationship. A genuine failure (for example a foreign-key
+    // violation from a bad target id) is allowed to propagate: junction writes
+    // run inside the caller's transaction via `executor`, so throwing rolls the
+    // whole write back instead of committing a partial set of junction rows.
+    // Duplicate (source,target) pairs never throw here (the dialect conflict
+    // clause below ignores them).
     for (const targetId of relatedIds) {
-      try {
-        const id = this.collectionService.generateId();
-        // This raw sql`` template binds straight to the driver, bypassing
-        // Drizzle's per-column serialization. better-sqlite3 only accepts
-        // numbers/strings/bigints/buffers/null, so a Date throws; the junction
-        // created_at column is `integer` epoch-seconds on SQLite (see
-        // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
-        const createdAt =
-          this.dialect === "sqlite"
-            ? Math.floor(Date.now() / 1000)
-            : new Date();
+      const id = this.collectionService.generateId();
+      // This raw sql`` template binds straight to the driver, bypassing
+      // Drizzle's per-column serialization. better-sqlite3 only accepts
+      // numbers/strings/bigints/buffers/null, so a Date throws; the junction
+      // created_at column is `integer` epoch-seconds on SQLite (see
+      // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
+      const createdAt =
+        this.dialect === "sqlite" ? Math.floor(Date.now() / 1000) : new Date();
 
-        // "Insert, ignore an existing (source,target) pair" is spelled
-        // differently per dialect: MySQL has no ON CONFLICT (it errors with
-        // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
-        // rather than INSERT IGNORE, so only a duplicate-key conflict is
-        // swallowed while other errors (e.g. a foreign-key violation from a
-        // bad target id) still surface, matching the Postgres/SQLite
-        // ON CONFLICT DO NOTHING behaviour against the unique pair index.
-        const idCol = sql.identifier("id");
-        const conflictClause =
-          this.dialect === "mysql"
-            ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
-            : sql`ON CONFLICT DO NOTHING`;
+      // "Insert, ignore an existing (source,target) pair" is spelled
+      // differently per dialect: MySQL has no ON CONFLICT (it errors with
+      // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
+      // rather than INSERT IGNORE, so only a duplicate-key conflict is
+      // swallowed while other errors (e.g. a foreign-key violation from a
+      // bad target id) still surface, matching the Postgres/SQLite
+      // ON CONFLICT DO NOTHING behaviour against the unique pair index.
+      const idCol = sql.identifier("id");
+      const conflictClause =
+        this.dialect === "mysql"
+          ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
+          : sql`ON CONFLICT DO NOTHING`;
 
-        const query = sql`
-          INSERT INTO ${sql.identifier(junctionTableName)}
-          (id, ${sourceIdCol}, ${targetIdCol}, created_at)
-          VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
-          ${conflictClause}
-        `;
+      const query = sql`
+        INSERT INTO ${sql.identifier(junctionTableName)}
+        (id, ${sourceIdCol}, ${targetIdCol}, created_at)
+        VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
+        ${conflictClause}
+      `;
 
-        console.log(`[ManyToMany] Executing insert for targetId: ${targetId}`);
-        await this.mutateRawSql(query, executor);
-        console.log(
-          `[ManyToMany] ✓ Insert successful for targetId: ${targetId}`
-        );
-      } catch (error: unknown) {
-        const errorMsg = `Failed to insert junction record for ${targetId}: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(`[ManyToMany] ✗ ${errorMsg}`);
-        console.error(`[ManyToMany] Full error:`, error);
-        errors.push(errorMsg);
-      }
-    }
-
-    // If all inserts failed, throw error
-    if (errors.length === relatedIds.length && relatedIds.length > 0) {
-      throw new Error(
-        `Failed to insert all manyToMany relations for field "${field.name}". Errors: ${errors.join("; ")}`
-      );
-    }
-
-    // If some failed, log warning
-    if (errors.length > 0) {
-      console.warn(
-        `[ManyToMany] Partial failure: ${errors.length}/${relatedIds.length} inserts failed`
-      );
+      await this.mutateRawSql(query, executor);
     }
   }
 

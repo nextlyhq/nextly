@@ -468,6 +468,33 @@ describe("SingleEntryService", () => {
       expect(result.data?.siteName).toBe("Set");
     });
 
+    it("preserves a component validation error (400) the adapter wraps in the transaction", async () => {
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "Old",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      // The real adapter classifies a callback error (a component NextlyError)
+      // as a database error, preserving the original on `.cause`. Simulate that
+      // wrapping so the service must recover the 400 instead of reporting 500.
+      const validationError = new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: "bad component field",
+        statusCode: 400,
+      });
+      ctx.adapter.transaction.mockRejectedValueOnce(
+        Object.assign(new Error("database error"), { cause: validationError })
+      );
+
+      const result = await ctx.service.update("site-settings", {
+        siteName: "New",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(400);
+      expect(result.message).toBe("bad component field");
+    });
+
     it("removes id and createdAt from the update payload", async () => {
       ctx.adapter.selectOne.mockResolvedValue({
         id: "doc-1",

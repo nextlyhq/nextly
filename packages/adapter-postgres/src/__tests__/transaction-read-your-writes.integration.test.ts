@@ -5,6 +5,9 @@
 //
 // Self-skips when TEST_POSTGRES_URL is unset.
 
+// `sql` builds the tagged-template query run through the transaction-bound
+// Drizzle handle (tx.getDrizzle()); the getDrizzle test below uses it to prove
+// a write on that handle is visible in-transaction and rolls back.
 import { sql } from "drizzle-orm";
 import { pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
@@ -106,7 +109,7 @@ describe("PostgreSQL transaction read-your-writes", async () => {
     const id = "tx-drizzle-1";
     await expect(
       adapter.transaction(async tx => {
-        const db = tx.getDrizzle!<{
+        const db = tx.getDrizzle<{
           execute: (q: unknown) => Promise<{ rows: unknown[] }>;
         }>();
         await db.execute(

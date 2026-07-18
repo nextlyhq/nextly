@@ -908,7 +908,7 @@ export class CollectionMutationService extends BaseService {
         // Write many-to-many junction rows inside the transaction so a junction
         // failure rolls back the entry (atomic write). The tx-scoped Drizzle
         // handle binds the junction writes to this transaction's connection.
-        const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+        const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
         for (const field of manyToManyFields) {
           const relatedIds = manyToManyData[field.name];
           if (relatedIds && relatedIds.length > 0) {
@@ -1510,7 +1510,7 @@ export class CollectionMutationService extends BaseService {
         // junction failure rolls back the update (atomic write). The entry is
         // already known to exist (validated before the transaction). The
         // tx-scoped Drizzle handle binds the junction writes to this tx.
-        const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+        const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
         for (const field of manyToManyFields) {
           if (manyToManyData[field.name] !== undefined) {
             await this.relationshipService.deleteManyToManyRelations(
@@ -2151,7 +2151,7 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the entry.
-      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -2497,7 +2497,7 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
-      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           await this.relationshipService.deleteManyToManyRelations(
@@ -3027,7 +3027,7 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the entry.
-      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -3426,7 +3426,7 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
-      const txExecutor = tx.getDrizzle?.<RelationshipDbExecutor>();
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           // Delete existing relations
