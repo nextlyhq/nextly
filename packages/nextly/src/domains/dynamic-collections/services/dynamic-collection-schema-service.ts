@@ -405,6 +405,21 @@ ${allColumnDefs.join(",\n")}
     }
     indexStatements.push(createdAtIndex);
 
+    // Index the owner column on collections. Owner-only reads/lists/counts and
+    // bulk-by-query enumeration all filter on `created_by`, so without an index
+    // a large owner-scoped collection would full-scan the primary access-control
+    // predicate. Collections only — singles/components never carry the column,
+    // mirroring the column gate above. Plain (non-unique) index; users cannot
+    // request one on this reserved field, so it is injected here.
+    if (!isSingleTable) {
+      const ownerIndexName = `idx_${tableName}_created_by`;
+      const ownerIndex =
+        this.dialect === "mysql"
+          ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
+          : `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`;
+      indexStatements.push(ownerIndex);
+    }
+
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
     if (this.dialect === "sqlite") {

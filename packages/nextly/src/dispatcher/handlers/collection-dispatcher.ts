@@ -83,6 +83,7 @@ import {
   parseWhereParam,
   requireBody,
   requireParam,
+  stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -1035,7 +1036,13 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
-          where: b.where as WhereFilter,
+          // Strip owner-column conditions from the request body so a caller
+          // cannot target rows by the system owner column via `body.where`
+          // (mirrors parseWhereParam on the query-string path). The service's
+          // own owner constraint is added separately and is unaffected; a where
+          // that was only an owner filter becomes {} and stays bounded by the
+          // collection's access rules.
+          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)

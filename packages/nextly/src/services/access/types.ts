@@ -305,11 +305,24 @@ export const ACCESS_OPERATIONS: readonly AccessOperation[] = [
 ] as const;
 
 /**
- * Default owner field name for owner-only access rules.
+ * Default owner field for owner-only rules on COLLECTIONS.
  *
- * Used when `ownerField` is not specified in an `owner-only` rule. This is the
- * physical column name of the auto-stamped system owner column (snake_case,
- * matching the runtime Drizzle schema and raw rows), so zero-config owner-only
- * rules query and compare against the column the create path actually stamps.
+ * Used when `ownerField` is not specified in a collection `owner-only` rule.
+ * This is the physical column name of the auto-stamped system owner column
+ * (snake_case, matching the runtime Drizzle schema and raw rows), so zero-config
+ * owner-only rules query and compare against the column the create path actually
+ * stamps. Collections only: singles/components do not get this system column.
  */
 export const DEFAULT_OWNER_FIELD = "created_by";
+
+/**
+ * Default owner field for owner-only rules on entities WITHOUT the system owner
+ * column (singles, components, and any generic caller of the access service).
+ *
+ * These entities never get the auto-stamped `created_by` column — a single is
+ * one global row and components embed in JSON — so their owner-only default
+ * stays the historical camelCase `createdBy` a schema author would define by
+ * hand. The shared AccessControlService falls back to this unless a
+ * collection-specific caller passes {@link DEFAULT_OWNER_FIELD} explicitly.
+ */
+export const GENERIC_DEFAULT_OWNER_FIELD = "createdBy";

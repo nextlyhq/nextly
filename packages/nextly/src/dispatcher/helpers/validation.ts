@@ -119,7 +119,11 @@ const stripOwnerFromWhere = (node: unknown): unknown => {
     for (const [key, value] of Object.entries(
       node as Record<string, unknown>
     )) {
-      if (OWNER_QUERY_COLUMNS.has(key)) continue; // drop an owner-column filter
+      // Drop an owner-column filter. A dotted key like `created_by.any` still
+      // targets the owner column because the query builder keys on the first
+      // path segment (`column.split(".")[0]`), so match on that segment — not
+      // just the exact key — or the dotted form would slip through.
+      if (OWNER_QUERY_COLUMNS.has(key.split(".")[0])) continue;
       if (key === "and" || key === "or") {
         const arr = stripOwnerFromWhere(value);
         if (Array.isArray(arr) && arr.length > 0) out[key] = arr;
@@ -151,6 +155,18 @@ export const parseWhereParam = (
     return undefined;
   }
 };
+
+/**
+ * Strip owner-column conditions from an already-parsed client `where` object.
+ * The JSON query-string path goes through {@link parseWhereParam}; this covers
+ * the request-body path (e.g. the bulk-update-by-query handler reads
+ * `body.where` directly) so a client cannot target rows by the system owner
+ * column via the body either. Returns `undefined` unchanged.
+ */
+export const stripOwnerColumnsFromWhere = (
+  where: WhereFilter | undefined
+): WhereFilter | undefined =>
+  where === undefined ? undefined : (stripOwnerFromWhere(where) as WhereFilter);
 
 // ============================================================
 // Rich text format validation

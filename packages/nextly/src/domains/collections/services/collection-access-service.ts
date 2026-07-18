@@ -86,21 +86,49 @@ export class CollectionAccessService extends BaseService {
   ): CollectionAccessRules | undefined {
     const collectionRecord = collection;
 
-    // Try direct property first (new format)
-    if (collectionRecord.accessRules) {
-      return collectionRecord.accessRules;
-    }
+    // Direct property first (new format), then schemaDefinition (legacy format).
+    const raw = (collectionRecord.accessRules ??
+      (collectionRecord.schemaDefinition as Record<string, unknown> | undefined)
+        ?.accessRules) as CollectionAccessRules | undefined;
 
-    // Fall back to schemaDefinition (legacy format)
-    const schemaDef = collectionRecord.schemaDefinition as
-      | Record<string, unknown>
-      | undefined;
-    if (schemaDef?.accessRules) {
-      return schemaDef.accessRules;
-    }
+    // No access rules defined - will default to public access.
+    return this.normalizeCollectionOwnerFields(raw);
+  }
 
-    // No access rules defined - will default to public access
-    return undefined;
+  /**
+   * Point owner-only rules at the collection system owner column.
+   *
+   * A collection stores the owner in the auto-stamped `created_by` column, and
+   * both `created_by` and its camelCase alias `createdBy` are reserved as field
+   * names — so a rule naming `createdBy` (the old documented default) can only
+   * mean that column. Rewrite either spelling to DEFAULT_OWNER_FIELD so every
+   * downstream owner check (read query filter, document compare, tx safety net)
+   * targets the column the create path actually stamps; any other `ownerField`
+   * is a genuine custom field and is left untouched. Returns a shallow clone
+   * only when a rewrite is needed, so the stored collection is never mutated.
+   */
+  private normalizeCollectionOwnerFields(
+    rules: CollectionAccessRules | undefined
+  ): CollectionAccessRules | undefined {
+    if (!rules) return rules;
+    const ops: (keyof CollectionAccessRules)[] = [
+      "create",
+      "read",
+      "update",
+      "delete",
+    ];
+    let cloned: CollectionAccessRules | undefined;
+    for (const op of ops) {
+      const rule = rules[op];
+      if (
+        rule?.type === "owner-only" &&
+        (rule.ownerField === "createdBy" || rule.ownerField === "created_by")
+      ) {
+        cloned ??= { ...rules };
+        cloned[op] = { ...rule, ownerField: DEFAULT_OWNER_FIELD };
+      }
+    }
+    return cloned ?? rules;
   }
 
   /**
@@ -205,13 +233,16 @@ export class CollectionAccessService extends BaseService {
       // Build request context from user
       const requestContext = this.buildRequestContext(user);
 
-      // Evaluate access
+      // Evaluate access. Collections carry the auto-stamped `created_by` system
+      // column, so pass it as the owner-only default (the shared service
+      // otherwise falls back to the generic `createdBy` used by singles).
       const result = await this.accessControlService.evaluateAccess(
         accessRules,
         operation,
         requestContext,
         documentId,
-        document
+        document,
+        DEFAULT_OWNER_FIELD
       );
 
       if (!result.allowed) {
@@ -278,7 +309,11 @@ export class CollectionAccessService extends BaseService {
       const result = await this.accessControlService.evaluateAccess(
         accessRules,
         "read",
-        requestContext
+        requestContext,
+        undefined,
+        undefined,
+        // Collection owner-only reads filter on the `created_by` system column.
+        DEFAULT_OWNER_FIELD
       );
 
       // Return query constraint if present
