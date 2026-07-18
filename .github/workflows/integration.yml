@@ -115,7 +115,7 @@ jobs:
       - name: Run integration tests (postgres)
         if: matrix.dialect == 'postgres'
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
           pnpm turbo test:integration --filter=@nextlyhq/adapter-postgres --filter=nextly
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
@@ -124,7 +124,7 @@ jobs:
       - name: Run integration tests (mysql)
         if: matrix.dialect == 'mysql'
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
           pnpm turbo test:integration --filter=@nextlyhq/adapter-mysql --filter=nextly
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
@@ -133,7 +133,7 @@ jobs:
       - name: Run integration tests (sqlite)
         if: matrix.dialect == 'sqlite'
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
           pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly
         env:
           TURBO_CACHE_DIR: .turbo
