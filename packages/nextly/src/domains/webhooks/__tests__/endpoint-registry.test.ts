@@ -61,6 +61,21 @@ describe("WebhookEndpointRegistry", () => {
     expect(reader.calls).toBe(1);
   });
 
+  it("starts a fresh load for callers arriving after invalidate(), not the stale in-flight one", async () => {
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader);
+
+    const before = registry.getEnabledEndpoints(); // load 1, in flight
+    registry.invalidate();
+    const after = registry.getEnabledEndpoints(); // must NOT reuse load 1
+    expect(reader.calls).toBe(2);
+
+    reader.resolveNext([row("stale")]); // resolves load 1 (the pre-invalidation caller)
+    reader.resolveNext([row("fresh")]); // resolves load 2
+    expect((await before).map(e => e.id)).toEqual(["stale"]);
+    expect((await after).map(e => e.id)).toEqual(["fresh"]);
+  });
+
   it("does not let a load that finishes after invalidate() repopulate the cache", async () => {
     const reader = new FakeReader();
     const registry = new WebhookEndpointRegistry(reader);

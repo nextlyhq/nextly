@@ -49,10 +49,11 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
 
 export class WebhookEndpointRegistry {
   private cache: readonly WebhookEndpoint[] | null = null;
-  // A single in-flight load shared by concurrent callers (no stampede), plus a
-  // generation counter so a load that resolves after an `invalidate()` cannot
-  // repopulate the cache with data that is already stale.
+  // A single in-flight load shared by concurrent callers (no stampede), tagged
+  // with the generation it was started at. `invalidate()` bumps the generation
+  // so a load started before it is neither cached nor reused by later callers.
   private inFlight: Promise<readonly WebhookEndpoint[]> | null = null;
+  private inFlightGeneration = -1;
   private generation = 0;
 
   constructor(private readonly reader: WebhookEndpointReader) {}
@@ -60,22 +61,28 @@ export class WebhookEndpointRegistry {
   /** Enabled endpoints, loaded once and cached until `invalidate()`. */
   async getEnabledEndpoints(): Promise<readonly WebhookEndpoint[]> {
     if (this.cache !== null) return this.cache;
-    if (this.inFlight !== null) return this.inFlight;
+    // Join an in-flight load only if it was started under the current
+    // generation; a load from before an invalidation must not be reused.
+    if (this.inFlight !== null && this.inFlightGeneration === this.generation) {
+      return this.inFlight;
+    }
 
     const gen = this.generation;
-    this.inFlight = this.load().then(
+    const load = this.load().then(
       rows => {
         // Commit to the cache only if no invalidation happened while loading.
         if (gen === this.generation) this.cache = rows;
-        this.inFlight = null;
+        if (this.inFlight === load) this.inFlight = null;
         return rows;
       },
       err => {
-        this.inFlight = null;
+        if (this.inFlight === load) this.inFlight = null;
         throw err;
       }
     );
-    return this.inFlight;
+    this.inFlight = load;
+    this.inFlightGeneration = gen;
+    return load;
   }
 
   /** Drop the cache so the next read reloads from the database. */

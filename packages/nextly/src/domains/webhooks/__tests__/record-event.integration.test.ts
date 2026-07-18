@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
@@ -209,10 +210,13 @@ describe("webhook outbox capture (real SQLite)", () => {
     await expect(
       adapter.transaction(async tx => {
         await recordEvent(tx, { envelope, endpoints });
-        // Force a rollback after the outbox writes.
-        throw new Error("boom");
+        // Force a rollback after the outbox writes (NextlyError per the
+        // packages/nextly error convention).
+        throw NextlyError.internal({
+          logContext: { reason: "forced-rollback" },
+        });
       })
-    ).rejects.toThrow("boom");
+    ).rejects.toThrow();
 
     expect(await countRows("nextly_events")).toBe(0);
     expect(await countRows("nextly_webhook_deliveries")).toBe(0);
