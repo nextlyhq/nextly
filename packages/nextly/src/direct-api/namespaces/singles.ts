@@ -33,7 +33,7 @@ export async function findSingle<TSlug extends SingleSlug>(
     depth: config.depth,
     locale: config.locale,
     user: config.user
-      ? { id: config.user.id, email: config.user.role }
+      ? { id: config.user.id, role: config.user.role }
       : undefined,
     overrideAccess: config.overrideAccess,
     context: config.context,
@@ -79,7 +79,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
   const result = await ctx.singleEntryService.update(args.slug, args.data, {
     locale: config.locale,
     user: config.user
-      ? { id: config.user.id, email: config.user.role }
+      ? { id: config.user.id, role: config.user.role }
       : undefined,
     overrideAccess: config.overrideAccess,
     context: config.context,
@@ -116,7 +116,7 @@ export async function findSingles(
         depth: config.depth,
         locale: config.locale,
         user: config.user
-          ? { id: config.user.id, email: config.user.role }
+          ? { id: config.user.id, role: config.user.role }
           : undefined,
         overrideAccess: config.overrideAccess,
         context: config.context,

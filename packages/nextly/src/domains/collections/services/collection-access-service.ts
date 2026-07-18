@@ -21,6 +21,7 @@ import type {
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
+import { isSuperAdminContext } from "../../../services/access";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -36,6 +37,18 @@ export class CollectionAccessService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Whether the caller's authorized role set makes them a super-admin.
+   *
+   * Public wrapper over the module predicate so other services (e.g. the
+   * transaction owner-only safety nets) can honor the same "bypass stored
+   * rules on every transport" contract without re-deriving super-admin
+   * status. Keyed on authorized scope (`role`/`roles`), never the account id.
+   */
+  isSuperAdmin(user?: UserContext): boolean {
+    return isSuperAdminContext(user);
   }
 
   /**
@@ -93,7 +106,15 @@ export class CollectionAccessService extends BaseService {
    * Called FIRST before any other security checks (hooks).
    * Returns early with 403 if access is denied.
    *
-   * When `overrideAccess` is true, access control is bypassed entirely (returns null).
+   * When `overrideAccess` is true (a trusted-server / system write), access
+   * control is bypassed entirely (returns null).
+   *
+   * When `routeAuthorized` is true, the route middleware already ran the coarse
+   * RBAC / code-access gate, so only THAT gate is skipped here — the stored
+   * collection access rules (owner-only / role-based / authenticated / custom)
+   * are still evaluated with the real user. This is why a route write cannot
+   * skip owner-only enforcement: `overrideAccess` stays false, only the
+   * redundant RBAC re-check is elided.
    */
   async checkCollectionAccess<T>(
     collectionName: string,
@@ -101,15 +122,42 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     documentId?: string,
     document?: Record<string, unknown>,
-    overrideAccess?: boolean
+    overrideAccess?: boolean,
+    routeAuthorized?: boolean
   ): Promise<CollectionServiceResult<T> | null> {
-    // When overrideAccess is true, bypass all access control checks
+    // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
       return null;
     }
 
-    // RBAC check: super-admin bypass → code-defined access → DB permissions.
-    if (this.rbacAccessControlService && user) {
+    // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
+    // owner-only) so an admin can act on any record on every transport. Keyed
+    // on the authorized role set (see isSuperAdminContext), so a scoped API key
+    // cannot inherit its owner's super-admin bypass.
+    if (isSuperAdminContext(user)) {
+      return null;
+    }
+
+    // `routeAuthorized` asserts the route middleware already authenticated AND
+    // gated THIS user, so it may skip only the redundant RBAC re-check. Without
+    // a user that assertion is invalid: a bare flag on an exported surface
+    // (e.g. bulkUpdateByQuery) must not skip the gate and fall through to the
+    // public default for a rule-less collection. Fail closed, mirroring the
+    // Single helper's `routeAuthorized && user` guard.
+    if (routeAuthorized && !user) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
+        data: null as unknown as T,
+      };
+    }
+
+    // RBAC coarse gate: super-admin bypass → code-defined access → DB
+    // permissions. Skipped when routeAuthorized, because the route middleware
+    // (requireCollectionAccess) already performed this exact check; the stored
+    // rules below still run.
+    if (!routeAuthorized && this.rbacAccessControlService && user) {
       try {
         const allowed = await this.rbacAccessControlService.checkAccess({
           userId: user.id,
@@ -210,7 +258,9 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     overrideAccess?: boolean
   ): Promise<Record<string, unknown> | null> {
-    if (overrideAccess || !user) {
+    // Super-admin reads are unfiltered too, matching the write-side bypass so
+    // "super-admins bypass stored rules on every transport" holds for reads.
+    if (overrideAccess || !user || isSuperAdminContext(user)) {
       return null;
     }
 
@@ -260,7 +310,8 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     overrideAccess?: boolean
   ): Promise<{ field: string; value: string } | null> {
-    if (overrideAccess || !user) return null;
+    // Super-admin bypasses the owner predicate on the transactional paths too.
+    if (overrideAccess || !user || isSuperAdminContext(user)) return null;
 
     try {
       const collection =

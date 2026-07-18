@@ -459,6 +459,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
       if (!body) throw new Error("Update data is required");
+      const roles = readAuthenticatedRoles(p);
       const user = p._authenticatedUserId
         ? {
             id: String(p._authenticatedUserId),
@@ -471,7 +472,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Forward decoded role slugs so field-level `access.read` redaction
             // evaluates against the caller's roles, matching the collection and
             // standalone-single paths.
-            roles: readAuthenticatedRoles(p),
+            roles,
+            // Also expose a representative singular `role` so field-level
+            // `access.update`/`access.read` callbacks reading `req.user.role`
+            // see an authorized value instead of stripping fields.
+            role: roles?.[0],
           }
         : undefined;
       const result = await svc.entry.update(
@@ -480,9 +485,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           locale: p.locale,
           user,
-          overrideAccess: !!user,
-          // Route auth already ran; the response is still redacted for this
-          // user (see UpdateSingleOptions.routeAuthorized).
+          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
+          // that re-check while field-level write access + response redaction
+          // still run for this user (overrideAccess stays false).
+          overrideAccess: false,
           routeAuthorized: !!user,
         }
       );

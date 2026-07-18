@@ -203,6 +203,14 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "relationship":
     case "upload": {
+      // A many-to-many relationship stores its links in a dedicated junction
+      // table, not on the parent row, so the parent needs no column (mirrors
+      // component fields, which return "skip"). Emitting an fkSingle column
+      // here produced a phantom parent column the junction-only physical
+      // schema never has, so the runtime table object disagreed with the DB.
+      const relationType = (field as { options?: { relationType?: string } })
+        .options?.relationType;
+      if (relationType === "manyToMany") return "skip";
       // hasMany or array-target relationships are stored as JSON
       // arrays of FK ids. Single-target -> plain FK column.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
