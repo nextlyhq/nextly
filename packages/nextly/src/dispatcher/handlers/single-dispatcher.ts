@@ -480,9 +480,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           locale: p.locale,
           user,
-          overrideAccess: !!user,
-          // Route auth already ran; the response is still redacted for this
-          // user (see UpdateSingleOptions.routeAuthorized).
+          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
+          // that re-check while field-level write access + response redaction
+          // still run for this user (overrideAccess stays false).
+          overrideAccess: false,
           routeAuthorized: !!user,
         }
       );

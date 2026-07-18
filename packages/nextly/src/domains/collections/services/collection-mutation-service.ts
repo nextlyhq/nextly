@@ -528,7 +528,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -1093,7 +1094,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         existingEntry,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -1692,6 +1694,9 @@ export class CollectionMutationService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** When true, the route middleware already ran the RBAC gate; stored rules
+     * are still enforced. See CollectionAccessService.checkCollectionAccess. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1726,7 +1731,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         entry,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;

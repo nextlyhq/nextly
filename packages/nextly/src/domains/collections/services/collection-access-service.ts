@@ -21,6 +21,7 @@ import type {
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
+import { isSuperAdmin } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -93,7 +94,15 @@ export class CollectionAccessService extends BaseService {
    * Called FIRST before any other security checks (hooks).
    * Returns early with 403 if access is denied.
    *
-   * When `overrideAccess` is true, access control is bypassed entirely (returns null).
+   * When `overrideAccess` is true (a trusted-server / system write), access
+   * control is bypassed entirely (returns null).
+   *
+   * When `routeAuthorized` is true, the route middleware already ran the coarse
+   * RBAC / code-access gate, so only THAT gate is skipped here — the stored
+   * collection access rules (owner-only / role-based / authenticated / custom)
+   * are still evaluated with the real user. This is why a route write cannot
+   * skip owner-only enforcement: `overrideAccess` stays false, only the
+   * redundant RBAC re-check is elided.
    */
   async checkCollectionAccess<T>(
     collectionName: string,
@@ -101,15 +110,37 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     documentId?: string,
     document?: Record<string, unknown>,
-    overrideAccess?: boolean
+    overrideAccess?: boolean,
+    routeAuthorized?: boolean
   ): Promise<CollectionServiceResult<T> | null> {
-    // When overrideAccess is true, bypass all access control checks
+    // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
       return null;
     }
 
-    // RBAC check: super-admin bypass → code-defined access → DB permissions.
-    if (this.rbacAccessControlService && user) {
+    // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
+    // owner-only), matching the RBAC service's super-admin short-circuit so an
+    // admin can act on any record on every transport. This is a BYPASS (grants
+    // more access), so a lookup failure must fail SAFE — treat as not-super-admin
+    // and fall through to the normal RBAC + stored-rule checks, never grant the
+    // bypass on error.
+    if (user) {
+      let superAdmin = false;
+      try {
+        superAdmin = await isSuperAdmin(user.id);
+      } catch {
+        superAdmin = false;
+      }
+      if (superAdmin) {
+        return null;
+      }
+    }
+
+    // RBAC coarse gate: super-admin bypass → code-defined access → DB
+    // permissions. Skipped when routeAuthorized, because the route middleware
+    // (requireCollectionAccess) already performed this exact check; the stored
+    // rules below still run.
+    if (!routeAuthorized && this.rbacAccessControlService && user) {
       try {
         const allowed = await this.rbacAccessControlService.checkAccess({
           userId: user.id,

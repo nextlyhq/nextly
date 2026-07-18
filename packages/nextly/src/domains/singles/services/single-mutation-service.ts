@@ -125,6 +125,7 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
         logger: this.logger,
       });

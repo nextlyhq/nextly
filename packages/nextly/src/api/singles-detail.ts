@@ -189,10 +189,12 @@ export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     const { slug } = await context.params;
     // Capture the authorized identity so the update runs as this user. Route
-    // auth has already gated the operation, so `overrideAccess` skips the RBAC
-    // re-check; `routeAuthorized` keeps the response redacted to what this user
-    // may read. Without forwarding the user, the standalone route ran the
-    // update anonymously and diverged from the dispatcher's updateSingleDocument.
+    // auth already ran the coarse RBAC gate, so `routeAuthorized` skips only
+    // that re-check; `overrideAccess` stays false so stored single access rules
+    // and field-level write access are still enforced with this user, and the
+    // response stays redacted to what they may read. Without forwarding the
+    // user, the standalone route ran the update anonymously and diverged from
+    // the dispatcher's updateSingleDocument.
     const auth = await requireRouteCollectionAccess(request, "update", slug);
 
     const service = await getSingleEntryService();
@@ -216,7 +218,7 @@ export const PATCH = withErrorHandler(
     const result = await service.update(slug, body, {
       locale,
       user,
-      overrideAccess: true,
+      overrideAccess: false,
       routeAuthorized: true,
     });
 

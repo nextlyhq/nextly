@@ -477,7 +477,8 @@ export class CollectionBulkService extends BaseService {
       accessUser,
       undefined,
       undefined,
-      params.overrideAccess
+      params.overrideAccess,
+      params.routeAuthorized
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -608,6 +609,9 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** When true, the route middleware already ran the RBAC gate; stored
+       * rules are still enforced. */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -633,7 +637,8 @@ export class CollectionBulkService extends BaseService {
       accessUser,
       undefined,
       undefined,
-      params.overrideAccess
+      params.overrideAccess,
+      params.routeAuthorized
     );
     if (accessDenied) {
       throw NextlyError.forbidden({

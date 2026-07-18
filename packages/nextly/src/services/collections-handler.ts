@@ -152,12 +152,15 @@ export class CollectionsHandler {
    * the entry service expects `user: { id }`. This bridges the gap so that
    * activity-log hooks receive a valid user and are not silently skipped.
    *
-   * We also set `overrideAccess: true` because the routeHandler has already
-   * performed collection-level auth/authorization. `routeAuthorized` marks
-   * that this override came from route auth (not a trusted server context),
-   * so the entry service still redacts the response to what this user may
-   * read — the route pre-check authorizes the operation, not access to every
-   * field.
+   * `routeAuthorized: true` marks that the route middleware
+   * (`requireCollectionAccess`) already performed the coarse RBAC / code-access
+   * gate, so the entry service skips re-running only THAT check. It is NOT a
+   * trusted-server context: `overrideAccess` stays `false` so the stored
+   * collection access rules (owner-only / role-based / authenticated / custom)
+   * and field-level write access are still enforced with the real user — the
+   * route pre-check authorizes the operation, not access to every record or
+   * field. Trusted-server bypass is a separate, explicit `overrideAccess: true`
+   * (seeds, plugin `as:'system'`), never inferred from route auth.
    */
   private resolveUserParam<
     T extends {
@@ -182,7 +185,7 @@ export class CollectionsHandler {
           // field-level access.read evaluate against the real user.
           roles: userRoles,
         },
-        overrideAccess: true,
+        overrideAccess: false,
         routeAuthorized: true,
       };
     }

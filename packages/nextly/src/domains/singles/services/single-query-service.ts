@@ -121,6 +121,7 @@ export async function checkSingleAccess(params: {
   operation: "read" | "update";
   user?: UserContext;
   overrideAccess?: boolean;
+  routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
   logger: Logger;
 }): Promise<SingleResult | null> {
@@ -129,11 +130,19 @@ export async function checkSingleAccess(params: {
     operation,
     user,
     overrideAccess,
+    routeAuthorized,
     rbacAccessControlService,
     logger,
   } = params;
 
   if (overrideAccess) {
+    return null;
+  }
+
+  // The route middleware already ran this exact RBAC gate; skip the redundant
+  // re-check. Singles have no per-row stored rules, so nothing else runs here —
+  // field-level write access still applies downstream (overrideAccess is false).
+  if (routeAuthorized) {
     return null;
   }
 
