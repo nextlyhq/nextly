@@ -503,9 +503,19 @@ export class CollectionQueryService extends BaseService {
 
         const sortFieldSnake = toSnakeCase(sortField);
 
+        // The system owner column is stripped from responses, so it must not be
+        // sortable either — sorting by it would let a caller order/target rows
+        // by creator. Ignore an owner-column sort instead of resolving it.
+        const ownerSort =
+          sortField === "created_by" ||
+          sortField === "createdBy" ||
+          sortFieldSnake === "created_by";
+
         // Try both camelCase and snake_case versions of the field name
         // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-        const column = schema[sortField] || schema[sortFieldSnake];
+        const column = ownerSort
+          ? undefined
+          : schema[sortField] || schema[sortFieldSnake];
 
         if (column) {
           query = query.orderBy(sortDesc ? desc(column) : asc(column));

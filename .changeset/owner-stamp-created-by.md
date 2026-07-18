@@ -30,7 +30,7 @@ The owner column is wired end to end:
 - `owner-only` rules with no `ownerField` now default to the `created_by` column (snake_case), so zero-config owner-only reads/updates/deletes actually match the stamped rows.
 - On MySQL the column is `varchar(191)` (sized to the Auth.js-compatible `users.id`), since it stores a user id, not the row id.
 - Updates cannot rewrite it: `created_by` (and `id` / `created_at`) are stripped from update payloads, so an authorized updater can't transfer a row to another user.
-- It is stripped from list, get, and mutation responses so a collection readable by non-creators does not leak the creator's user id.
+- It is stripped from list, get, and mutation responses (including populated relationship rows at every depth) so a collection readable by non-creators does not leak the creator's user id, and it is rejected from client-supplied `where` filters and `sort` so a caller can't target or order rows by creator either.
 - Reserved as a field name in the collection and ui-schema validators; scoped to collections only (singles/components don't get the column).
 
 This also repairs a latent bug in the bulk create transaction path, which passed camelCase `createdAt` / `updatedAt` keys the database driver rejected; the batch create paths now use the real snake_case column names.

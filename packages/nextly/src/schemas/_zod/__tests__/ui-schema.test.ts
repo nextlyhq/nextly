@@ -173,3 +173,30 @@ describe("ui-schema field types (widened set)", () => {
     ).toBe(true);
   });
 });
+
+describe("ui-schema manifest owner-column reservation (collections only)", () => {
+  const withField = (kind: "collections" | "singles" | "components") => ({
+    version: 1 as const,
+    [kind]: [
+      {
+        slug: "x",
+        fields: [{ name: "created_by", type: "text" }],
+      },
+    ],
+  });
+
+  it("rejects a created_by field on a collection", () => {
+    const r = uiSchemaManifest.safeParse(withField("collections"));
+    expect(r.success).toBe(false);
+  });
+
+  it("allows a created_by field on a single (no owner column there)", () => {
+    expect(uiSchemaManifest.safeParse(withField("singles")).success).toBe(true);
+  });
+
+  it("allows a created_by field on a component", () => {
+    expect(uiSchemaManifest.safeParse(withField("components")).success).toBe(
+      true
+    );
+  });
+});

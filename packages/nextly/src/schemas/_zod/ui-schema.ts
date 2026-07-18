@@ -340,7 +340,7 @@ const admin = z.object({
   group: z.string().optional(),
 });
 
-function entity() {
+function entity(kind?: "collection" | "single" | "component") {
   return z
     .object({
       slug,
@@ -350,6 +350,21 @@ function entity() {
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
+      // The owner column (`created_by`, plus the camelCase alias that
+      // snake-cases to it) is injected only on collection tables, so a manifest
+      // collection must not define it as a field — singles/components have no
+      // owner column, so it stays a legal field name there.
+      if (kind === "collection") {
+        for (const f of e.fields) {
+          if (f.name === "created_by" || f.name === "createdBy") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `field name '${f.name}' is reserved`,
+              path: ["fields"],
+            });
+          }
+        }
+      }
       // Duplicate field names.
       const seen = new Set<string>();
       for (const f of e.fields) {
@@ -413,9 +428,9 @@ export const uiSchemaManifest = z
   .object({
     $schema: z.string().optional(),
     version: z.literal(1).default(1),
-    collections: z.array(entity()).default([]),
-    singles: z.array(entity()).default([]),
-    components: z.array(entity()).default([]),
+    collections: z.array(entity("collection")).default([]),
+    singles: z.array(entity("single")).default([]),
+    components: z.array(entity("component")).default([]),
   })
   .superRefine((m, ctx) => {
     uniqueSlugs(m.collections, ctx, "collections");

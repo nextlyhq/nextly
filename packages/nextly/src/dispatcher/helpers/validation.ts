@@ -92,6 +92,46 @@ export const parseSelectParam = (
  * The key[op]=value query-param format is parsed elsewhere via
  * `parseWhereQuery` -- this helper handles the JSON form.
  */
+/**
+ * System owner column (both the snake_case name and the camelCase alias). It is
+ * stripped from response payloads, so a client must not be able to filter, sort,
+ * or otherwise address rows by it either — otherwise a caller who knows/guesses
+ * a user id could learn or target rows by creator through the query controls.
+ */
+export const OWNER_QUERY_COLUMNS = new Set(["created_by", "createdBy"]);
+
+/**
+ * Remove any owner-column condition from a client-supplied `where` tree
+ * (recursing through `and`/`or`), so a REST caller cannot filter/count by the
+ * system owner column. The service's own owner-only constraint is added
+ * separately, downstream of this, and is unaffected.
+ */
+const stripOwnerFromWhere = (node: unknown): unknown => {
+  if (Array.isArray(node)) {
+    return node
+      .map(stripOwnerFromWhere)
+      .filter(
+        n => n != null && (typeof n !== "object" || Object.keys(n).length > 0)
+      );
+  }
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      node as Record<string, unknown>
+    )) {
+      if (OWNER_QUERY_COLUMNS.has(key)) continue; // drop an owner-column filter
+      if (key === "and" || key === "or") {
+        const arr = stripOwnerFromWhere(value);
+        if (Array.isArray(arr) && arr.length > 0) out[key] = arr;
+      } else {
+        out[key] = value; // a field condition — its op object is not a field
+      }
+    }
+    return out;
+  }
+  return node;
+};
+
 export const parseWhereParam = (
   whereParam?: string
 ): WhereFilter | undefined => {
@@ -106,7 +146,7 @@ export const parseWhereParam = (
     ) {
       return undefined;
     }
-    return parsed as WhereFilter;
+    return stripOwnerFromWhere(parsed) as WhereFilter;
   } catch {
     return undefined;
   }
