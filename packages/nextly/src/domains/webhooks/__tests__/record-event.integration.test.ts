@@ -7,14 +7,11 @@
  * leaves nothing behind (atomic, never fired for a rolled-back change). Fan-out
  * to endpoints happens in the drain, not here.
  *
- * Uses SQLite (cheapest live DB, no container) via the production table
- * definition turned into DDL by drizzle-kit — never hand-copied CREATE TABLE
+ * Uses an in-memory SQLite database (filesystem-free; better-sqlite3 is
+ * single-connection so the transaction sees the same DB) built from the
+ * production table definition via drizzle-kit — never hand-copied CREATE TABLE
  * (see .claude/rules/integration-tests.md).
  */
-
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -28,14 +25,7 @@ import { buildEnvelope } from "../envelope";
 import { recordEvent } from "../record-event";
 import type { WebhookEvent } from "../types";
 
-const TEST_DB_DIR = join(
-  tmpdir(),
-  `nextly-webhook-capture-${process.pid}-${Date.now()}`
-);
-const TEST_DB_URL = `file:${join(TEST_DB_DIR, "test.db")}`;
-
 process.env.DB_DIALECT = "sqlite";
-process.env.DATABASE_URL = TEST_DB_URL;
 
 // Production DDL for the one table this suite touches.
 async function schemaDdl(): Promise<string[]> {
@@ -62,8 +52,7 @@ describe("webhook outbox capture (real SQLite)", () => {
   let adapter: ReturnType<typeof createSqliteAdapter>;
 
   beforeAll(async () => {
-    if (!existsSync(TEST_DB_DIR)) mkdirSync(TEST_DB_DIR, { recursive: true });
-    adapter = createSqliteAdapter({ url: TEST_DB_URL });
+    adapter = createSqliteAdapter({ memory: true });
     await adapter.connect();
     for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
 
@@ -78,7 +67,6 @@ describe("webhook outbox capture (real SQLite)", () => {
     } catch {
       // ignore teardown errors
     }
-    rmSync(TEST_DB_DIR, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
