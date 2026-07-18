@@ -1,8 +1,8 @@
-// Verifies that the TransactionContext's Drizzle-path CRUD (select/selectOne)
-// runs inside the open transaction and observes rows written earlier in the
-// same uncommitted transaction. SQLite is single-connection, so this has always
-// worked here; the test locks that in and mirrors the pooled-adapter suites
-// (Postgres/MySQL) where the same guarantee is the actual bug fix.
+// The TransactionContext's Drizzle-path CRUD (select/selectOne) runs inside the
+// open transaction and observes rows written earlier in the same uncommitted
+// transaction. SQLite is single-connection, so the delegated reads share the
+// transaction's connection; this locks that guarantee in and mirrors the
+// pooled-adapter suites (Postgres/MySQL).
 
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

@@ -1,8 +1,7 @@
-// Verifies that the TransactionContext's Drizzle-path CRUD (select/selectOne)
-// runs inside the open transaction and observes rows written earlier in the
-// same uncommitted transaction. Postgres is pool-based: before the fix the
-// delegated select/selectOne ran on the pool (a different connection) and could
-// NOT see the transaction's uncommitted rows, so these assertions failed.
+// The TransactionContext's Drizzle-path CRUD (select/selectOne) runs inside the
+// open transaction and observes rows written earlier in the same uncommitted
+// transaction. On the pool-based Postgres adapter this requires the delegated
+// reads to run on the transaction's checked-out connection, not the pool.
 //
 // Self-skips when TEST_POSTGRES_URL is unset.
 
@@ -23,7 +22,11 @@ const posts = pgTable(TABLE, {
 });
 
 const canConnect = async (url: string): Promise<boolean> => {
-  const client = new pg.Client({ connectionString: url });
+  // Bounded connect so an unreachable TEST_POSTGRES_URL cannot hang the suite.
+  const client = new pg.Client({
+    connectionString: url,
+    connectionTimeoutMillis: 5000,
+  });
   try {
     await client.connect();
     await client.query("SELECT 1");

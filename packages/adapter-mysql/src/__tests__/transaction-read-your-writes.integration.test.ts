@@ -1,8 +1,7 @@
-// Verifies that the TransactionContext's Drizzle-path CRUD (select/selectOne)
-// runs inside the open transaction and observes rows written earlier in the
-// same uncommitted transaction. MySQL is pool-based: before the fix the
-// delegated select/selectOne ran on the pool (a different connection) and could
-// NOT see the transaction's uncommitted rows, so these assertions failed.
+// The TransactionContext's Drizzle-path CRUD (select/selectOne) runs inside the
+// open transaction and observes rows written earlier in the same uncommitted
+// transaction. On the pool-based MySQL adapter this requires the delegated
+// reads to run on the transaction's checked-out connection, not the pool.
 //
 // Self-skips when TEST_MYSQL_URL is unset.
 
@@ -24,15 +23,24 @@ const posts = mysqlTable(TABLE, {
 
 const canConnect = async (url: string): Promise<boolean> => {
   let conn: mysql.Connection | undefined;
-  try {
-    conn = await mysql.createConnection(url);
-    await conn.query("SELECT 1");
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await conn?.end().catch(() => {});
-  }
+  // Bound the probe so an unreachable TEST_MYSQL_URL cannot hang the suite for
+  // the OS-level connect timeout (often minutes); mysql2 has no simple connect
+  // timeout when given a URL string, so race the attempt against a short timer.
+  const attempt = (async () => {
+    try {
+      conn = await mysql.createConnection(url);
+      await conn.query("SELECT 1");
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const timeout = new Promise<boolean>(resolve =>
+    setTimeout(() => resolve(false), 5000)
+  );
+  const ok = await Promise.race([attempt, timeout]);
+  await conn?.end().catch(() => {});
+  return ok;
 };
 
 describe("MySQL transaction read-your-writes", async () => {
