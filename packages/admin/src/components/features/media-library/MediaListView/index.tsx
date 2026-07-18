@@ -321,7 +321,7 @@ export function MediaListView({
         role="status"
         aria-label="No media files"
       >
-        <Folder className="w-16 h-16 text-muted-foreground/20 mb-6" />
+        <Folder className="w-16 h-16 text-muted-foreground mb-6" />
         <h2 className="text-xl font-semibold text-foreground mb-2">
           No media files found
         </h2>

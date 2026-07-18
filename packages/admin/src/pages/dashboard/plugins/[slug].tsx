@@ -157,7 +157,8 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
               )}
             </div>
             {plugin.description && (
-              <p className="text-sm font-normal text-primary/50">
+              // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
+              <p className="text-sm font-normal text-muted-foreground">
                 {plugin.description}
               </p>
             )}

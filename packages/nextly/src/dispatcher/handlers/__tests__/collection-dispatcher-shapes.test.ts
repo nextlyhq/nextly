@@ -478,6 +478,71 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     });
   });
 
+  it("createEntry decodes and forwards the authenticated roles", async () => {
+    const spy = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e1" },
+    });
+    const container = makeContainer({ createEntry: spy });
+
+    await dispatchCollections(
+      container,
+      "createEntry",
+      {
+        collectionName: "posts",
+        _authenticatedUserId: "u1",
+        // Route params are strings; roles arrive JSON-encoded.
+        _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
+      },
+      { title: "Hello" }
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        userId: "u1",
+        userRoles: ["editor", "author"],
+      }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["non-JSON string", "not-json"],
+    ["a mixed-type array", JSON.stringify(["editor", 123])],
+    ["a non-array value", JSON.stringify({ role: "editor" })],
+    ["an empty array", JSON.stringify([])],
+  ])(
+    "createEntry degrades %s roles param to undefined",
+    async (_label, raw) => {
+      const spy = vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 201,
+        message: "ok",
+        data: { id: "e1" },
+      });
+      const container = makeContainer({ createEntry: spy });
+
+      await dispatchCollections(
+        container,
+        "createEntry",
+        {
+          collectionName: "posts",
+          _authenticatedUserId: "u1",
+          _authenticatedUserRoles: raw,
+        },
+        { title: "Hello" }
+      );
+
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ userRoles: undefined }),
+        expect.anything()
+      );
+    }
+  );
+
   it("updateEntry returns { message, item } body and 200 status", async () => {
     const fakeEntry = { id: "e1", title: "Hello (updated)" };
     const fakeServiceResult = {
@@ -709,7 +774,10 @@ describe("dispatchCollections, bulk ops respondBulk envelope", () => {
   });
 
   it("bulkUpdateByQuery returns respondBulk envelope", async () => {
-    const fakeServiceResult: BulkOperationResult<{ id: string; status: string }> = {
+    const fakeServiceResult: BulkOperationResult<{
+      id: string;
+      status: string;
+    }> = {
       successes: [
         { id: "e1", status: "published" },
         { id: "e2", status: "published" },
@@ -737,6 +805,42 @@ describe("dispatchCollections, bulk ops respondBulk envelope", () => {
     expect(body.message).toBe("Updated 2 entries.");
     expect(body.items).toHaveLength(2);
     expect(body.errors).toEqual([]);
+  });
+
+  it("bulkUpdateByQuery forwards the authenticated user to the service", async () => {
+    // Regression guard: the query-based bulk update must run as the
+    // authenticated caller (not anonymously), so per-entry access control,
+    // hooks, and response redaction resolve against the real user.
+    const spy = vi.fn().mockResolvedValue({
+      successes: [{ id: "e1" }],
+      failures: [],
+      total: 1,
+      successCount: 1,
+      failedCount: 0,
+    });
+    const container = makeContainer({ bulkUpdateByQuery: spy });
+
+    await dispatchCollections(
+      container,
+      "bulkUpdateByQuery",
+      {
+        collectionName: "posts",
+        _authenticatedUserId: "user-1",
+        _authenticatedUserName: "Ada",
+        _authenticatedUserEmail: "ada@example.com",
+      },
+      { where: { status: { equals: "draft" } }, data: { status: "published" } }
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        userId: "user-1",
+        userName: "Ada",
+        userEmail: "ada@example.com",
+      }),
+      expect.anything()
+    );
   });
 });
 

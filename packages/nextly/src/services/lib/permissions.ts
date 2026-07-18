@@ -809,3 +809,21 @@ export async function listRoleSlugsForUser(userId: string): Promise<string[]> {
     return [];
   }
 }
+
+/**
+ * Resolve an authenticated caller's role SLUGS for access-rule evaluation.
+ *
+ * Session auth carries role IDs on the auth context, so they are resolved to
+ * slugs; API-key auth already carries key-scoped slugs, so those are returned
+ * as-is (no extra query). Shared by the REST route handler and the standalone
+ * Single route so both forward slugs consistently.
+ */
+export function resolveRoleSlugs(auth: {
+  userId: string;
+  roles: string[];
+  authMethod: "session" | "api-key";
+}): Promise<string[]> {
+  return auth.authMethod === "api-key"
+    ? Promise.resolve(auth.roles)
+    : listRoleSlugsForUser(auth.userId);
+}

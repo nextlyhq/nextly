@@ -72,9 +72,8 @@ function makePipeline(
         db: unknown,
         tablesFilter?: string[]
       ) => Promise<{
-        statementsToExecute: string[];
-        warnings: string[];
-        hasDataLoss: boolean;
+        sqlStatements: string[];
+        hints: Array<{ hint: string; statement?: string }>;
       }>
     >;
     // Phase C: surface buildDrizzleSchema override so tests can populate
@@ -147,15 +146,13 @@ function makePipeline(
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
   const dbTransactionImpl =
@@ -451,18 +448,16 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [
+        sqlStatements: [
           `ALTER TABLE "dc_posts" ADD COLUMN "x" text`,
           `ALTER TABLE "dc_posts" ADD COLUMN "y" text`,
         ],
-        warnings: [],
-        hasDataLoss: false,
+        hints: [],
       });
 
     // Phase 4 (Task 8): force the drizzle-kit fallback path. With
@@ -513,18 +508,16 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [
+        sqlStatements: [
           `DROP TABLE "user_orders"`, // unmanaged - should be filtered
           `ALTER TABLE "dc_posts" ADD COLUMN "x" text`, // safe - executed
         ],
-        warnings: [],
-        hasDataLoss: false,
+        hints: [],
       });
 
     // Phase 4 (Task 8): force the drizzle-kit fallback path. With
@@ -583,13 +576,12 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [
+        sqlStatements: [
           // dc_jobs is an admin-UI table not in this pipeline's desired
           // schema. Pre-Phase-C the filter would have allowed this (dc_*
           // prefix matched isManagedTable). Now it must be blocked.
@@ -598,8 +590,7 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           `DROP TABLE "comp_legacy_button"`,
           `ALTER TABLE "dc_posts" ADD COLUMN "y" text`,
         ],
-        warnings: [],
-        hasDataLoss: false,
+        hints: [],
       });
 
     // Phase 4 (Task 8): force the drizzle-kit fallback path. With
@@ -664,15 +655,13 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     const { pipeline } = makePipeline({
@@ -731,13 +720,12 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [
+        sqlStatements: [
           // SQLite rebuild sequence — all 4 statements should pass
           // through because dc_posts IS in desired.
           `CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY NOT NULL)`,
@@ -747,8 +735,7 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           // dc_jobs NOT in desired → still blocked (Phase C behavior).
           `DROP TABLE "dc_jobs"`,
         ],
-        warnings: [],
-        hasDataLoss: false,
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({
@@ -770,6 +757,17 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           toColumn: "x",
           fromType: "text",
           toType: "text",
+        },
+        // The scanner only trusts a rebuild block when OUR diff approved a
+        // rebuild-justifying change for that table (an unapproved rebuild is
+        // the kit encoding a column drop) — model the approved type change
+        // that makes this dc_posts rebuild legitimate.
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "title",
+          fromType: "text",
+          toType: "integer",
         },
       ],
     });
@@ -814,15 +812,13 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -902,15 +898,13 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     // Phase 4 (Task 8): force drizzle-kit fallback (see notes above).
@@ -975,9 +969,8 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockRejectedValue(new Error("simulated drizzle-kit failure"));
@@ -1021,15 +1014,13 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [`ALTER TABLE "dc_posts" ADD COLUMN "x" text`],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [`ALTER TABLE "dc_posts" ADD COLUMN "x" text`],
+        hints: [],
       });
     const executor = {
       executeStatements: vi
@@ -1102,9 +1093,8 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
           schema: Record<string, unknown>,
           db: unknown
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockRejectedValue(new Error("boom"));
@@ -1234,15 +1224,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     // buildDrizzleSchemaImpl returns all three tables — before Task 6 the
@@ -1355,15 +1343,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     const { pipeline } = makePipeline({
@@ -1398,7 +1384,7 @@ describe("scoped pushSchema (Task 6)", () => {
     //   - desired snapshot has tables: []
     //   - live cache returns { tables: [] }
     //   - diffSnapshots(live, desired) produces zero ops
-    //   - pushSchema gets zero ops → reports statementsToExecute: []
+    //   - pushSchema gets zero ops → reports sqlStatements: [],
     //
     // NO _introspectSnapshotOverride is set. If the cache misses for any
     // reason, the pipeline falls through to the real introspectLiveSnapshot
@@ -1424,15 +1410,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     // Construct pipeline the same way other Task 6 tests do — with
@@ -1487,15 +1471,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     // buildDrizzleSchemaImpl reflects patchedDesired — the desired snapshot
@@ -1548,15 +1530,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: [],
+        hints: [],
       });
 
     const buildDrizzleSchemaImpl = () => ({
@@ -1620,12 +1600,16 @@ describe("scoped pushSchema (Task 6)", () => {
   // Regression: rext-site-v2 / dc_case_studies (May 2026).
   // drizzle-kit's pushSchema returns successfully even when it has
   // declined to apply some changes — the skipped statements appear in
-  // `warnings`, NOT in `statementsToExecute`, and `success` is still
+  // `warnings`, NOT in the executable statements list, and `success` is still
   // true. Older Nextly versions wrote `status='success'` to the journal
   // and the same drift re-appeared on every subsequent preview. The
   // safety net now throws so the journal correctly records a failed
   // apply with the warning text attached.
-  it("fails loudly when drizzle-kit pushSchema declined to apply some changes", async () => {
+  it("fails loudly when drizzle-kit emits an unexpected destructive statement", async () => {
+    // v1 semantics (observed rc.4): destructive statements arrive INSIDE
+    // sqlStatements with EMPTY hints. Approved drops already ran in the
+    // pre-resolution phase, so anything destructive here means the kit's
+    // differ disagrees with ours — never execute, journal a failure.
     const pushSchemaImpl = vi
       .fn<
         (
@@ -1633,17 +1617,13 @@ describe("scoped pushSchema (Task 6)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: [],
-        warnings: [
-          "· You're about to change body column type from text to jsonb data type. This statement may fail and you will have to manually migrate the data.",
-        ],
-        hasDataLoss: true,
+        sqlStatements: ["ALTER TABLE `dc_posts` DROP COLUMN `body`;"],
+        hints: [],
       });
 
     const { pipeline } = makePipeline({
@@ -1651,7 +1631,7 @@ describe("scoped pushSchema (Task 6)", () => {
       buildDrizzleSchemaImpl: () => ({
         dc_posts: { _sentinel: "dc_posts" },
       }),
-      // MySQL forces the slow path so the safety net branch executes.
+      // MySQL forces the kit path so the guard branch executes.
       // (On PG the same op would route to the fast in-memory emitter.)
       resolvedOpsOverride: [
         {
@@ -1680,14 +1660,76 @@ describe("scoped pushSchema (Task 6)", () => {
       dialect: "mysql",
       source: "ui",
       promptChannel: "browser",
+      databaseName: "test_db",
     });
 
     expect(result.success).toBe(false);
-    // The journal records the failure with the drizzle-kit warning text
-    // attached, so operators see why nothing was applied.
-    expect(result.error?.message ?? "").toMatch(
-      /drizzle-kit pushSchema declined to apply/
-    );
+    expect(result.error?.message ?? "").toMatch(/destructive statement/);
+    expect(result.error?.message ?? "").toContain("DROP COLUMN");
+  });
+
+  it("fails loudly when drizzle-kit returns hints on the additive remainder", async () => {
+    // hints were empty in every observed rc.4 scenario — an appearing hint
+    // means upstream semantics changed; refuse rather than ignore (the
+    // May 2026 silent-drift incident is the standing lesson).
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
+        }>
+      >()
+      .mockResolvedValue({
+        sqlStatements: [],
+        hints: [
+          {
+            hint: "You're about to change body column type from text to jsonb",
+            statement: "ALTER TABLE `dc_posts` MODIFY `body` json;",
+          },
+        ],
+      });
+
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({
+        dc_posts: { _sentinel: "dc_posts" },
+      }),
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "body",
+          fromType: "text",
+          toType: "jsonb",
+        },
+      ],
+    });
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          posts: {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "json" }] as never,
+          },
+        },
+        singles: {},
+        components: {},
+      },
+      db: {},
+      dialect: "mysql",
+      source: "ui",
+      promptChannel: "browser",
+      databaseName: "test_db",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message ?? "").toMatch(/hint/);
     expect(result.error?.message ?? "").toContain("body column type");
   });
 });
@@ -1740,15 +1782,13 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: ['DROP SEQUENCE "public"."accounts_id_seq";'],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: ['DROP SEQUENCE "public"."accounts_id_seq";'],
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({
@@ -1805,15 +1845,13 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: ['DROP SEQUENCE "public"."dc_posts_id_seq";'],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: ['DROP SEQUENCE "public"."dc_posts_id_seq";'],
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({
@@ -1885,15 +1923,13 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: ['DROP INDEX "public"."accounts_user_id_idx";'],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: ['DROP INDEX "public"."accounts_user_id_idx";'],
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({
@@ -1946,15 +1982,13 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: ['DROP INDEX "public"."dc_posts_title_idx";'],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: ['DROP INDEX "public"."dc_posts_title_idx";'],
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({
@@ -2010,15 +2044,13 @@ describe("fast DDL emitter routing (Phase 4 Task 3)", () => {
           db: unknown,
           tablesFilter?: string[]
         ) => Promise<{
-          statementsToExecute: string[];
-          warnings: string[];
-          hasDataLoss: boolean;
+          sqlStatements: string[];
+          hints: Array<{ hint: string; statement?: string }>;
         }>
       >()
       .mockResolvedValue({
-        statementsToExecute: ["SHOULD_NOT_RUN"],
-        warnings: [],
-        hasDataLoss: false,
+        sqlStatements: ["SHOULD_NOT_RUN"],
+        hints: [],
       });
 
     const { pipeline, mocks } = makePipeline({

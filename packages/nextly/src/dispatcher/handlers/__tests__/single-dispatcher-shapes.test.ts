@@ -289,11 +289,7 @@ describe("dispatchSingles getSingleDocument — status forwarding (Task 7 PR-5)"
     });
     wireDi(makeRegistry(), makeEntry({ get: entryGet }));
 
-    await dispatchSingles(
-      "getSingleDocument",
-      { slug: "site" },
-      undefined
-    );
+    await dispatchSingles("getSingleDocument", { slug: "site" }, undefined);
 
     expect(entryGet).toHaveBeenCalledWith(
       "site",
@@ -376,6 +372,39 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
       item: fakeDoc,
     });
     expect(body).not.toHaveProperty("data");
+  });
+
+  it("updateSingleDocument forwards decoded roles into the user context", async () => {
+    const registry = makeRegistry();
+    const updateSpy = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      message: "ok",
+      data: { id: "doc1" },
+    });
+    wireDi(registry, makeEntry({ update: updateSpy }));
+
+    await dispatchSingles(
+      "updateSingleDocument",
+      {
+        slug: "site",
+        _authenticatedUserId: "u1",
+        _authenticatedUserRoles: JSON.stringify(["editor"]),
+      },
+      { title: "Updated" }
+    );
+
+    // Field-level access.read redaction on the response must see the caller's
+    // roles, so role-allowed fields are not stripped for an authorized editor.
+    expect(updateSpy).toHaveBeenCalledWith(
+      "site",
+      { title: "Updated" },
+      expect.objectContaining({
+        user: expect.objectContaining({ id: "u1", roles: ["editor"] }),
+        overrideAccess: true,
+        routeAuthorized: true,
+      })
+    );
   });
 
   it("updateSingleSchema returns { message, item } body and 200 status", async () => {

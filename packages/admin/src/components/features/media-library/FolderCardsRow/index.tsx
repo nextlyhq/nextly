@@ -77,7 +77,7 @@ export function FolderCardsRow({
                   "h-4 w-4 shrink-0 transition-colors",
                   isActive
                     ? "text-primary"
-                    : "text-muted-foreground/70 group-hover:text-foreground"
+                    : "text-muted-foreground group-hover:text-foreground"
                 )}
               />
               <div className="min-w-0 flex-1">
@@ -114,7 +114,7 @@ export function FolderCardsRow({
                     className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors cursor-pointer!"
                     onClick={e => e.stopPropagation()}
                   >
-                    <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
+                    <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent

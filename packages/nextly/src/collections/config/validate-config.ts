@@ -24,13 +24,14 @@
  * ```
  */
 
-import { hasFieldType } from "../../domains/schema/field-types/field-type-registry";
+import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateFieldNameShared,
   validateFieldTypeShared,
+  validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -88,6 +89,9 @@ export type ValidationErrorCode =
   | "RELATIONSHIP_TARGET_UNKNOWN"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
+  | "DECIMAL_PRECISION_INVALID"
+  | "DECIMAL_SCALE_INVALID"
+  | "DECIMAL_SCALE_EXCEEDS_PRECISION"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -330,7 +334,13 @@ function validateField(
   const f = field as Record<string, unknown>;
   const errsBase = errors as unknown as BaseValidationError[];
 
-  if (!validateFieldTypeShared(f.type, path, errsBase, hasFieldType)) {
+  // Plugin types are accepted only when they opted into the entries surface —
+  // registration alone is not authorization for a collection field.
+  if (
+    !validateFieldTypeShared(f.type, path, errsBase, type =>
+      isPluginFieldTypeOnSurface(type, "entries")
+    )
+  ) {
     return;
   }
   const fieldType = f.type as string;
@@ -396,6 +406,10 @@ function validateField(
 
     case "component":
       validateComponentFieldRefShared(f, path, errsBase);
+      break;
+
+    case "number":
+      validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
   }
 }

@@ -18,8 +18,8 @@ description: Use when writing or debugging Nextly integration tests (*.integrati
    - `pnpm test:integration:postgres15` -> localhost:5434
    - `pnpm test:integration:mysql` -> localhost:3307
    - `pnpm test:integration:sqlite` -> no URL needed
-   Start the throwaway containers with `pnpm docker:test`. NEVER point a
-   TEST_* URL at a database you did not create for the run.
+     Start the throwaway containers with `pnpm docker:test`. NEVER point a
+     TEST\_\* URL at a database you did not create for the run.
 3. **Isolation is per-file prefixes, not parallelism.** Use the canonical
    helper (`packages/nextly/src/database/__tests__/integration/helpers/test-db.ts`)
    which generates a random per-file table/schema prefix. In packages/nextly

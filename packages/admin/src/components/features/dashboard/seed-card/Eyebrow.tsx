@@ -72,7 +72,7 @@ export function Eyebrow({
         {c.primary}
       </span>
       {sub ? (
-        <span className="text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground/50">
+        <span className="text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground">
           {sub}
         </span>
       ) : null}

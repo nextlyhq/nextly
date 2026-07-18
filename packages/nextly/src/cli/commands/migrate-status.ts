@@ -32,7 +32,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
@@ -43,6 +42,7 @@ import {
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
+  type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";

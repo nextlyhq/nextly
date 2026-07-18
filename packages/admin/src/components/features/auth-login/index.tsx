@@ -267,7 +267,7 @@ export function Login() {
                   className="space-y-6"
                 >
                   {emailNotVerified && (
-                    <div className="flex items-start gap-3 rounded-none border border-warning/30 bg-warning/10 p-4 mb-6">
+                    <div className="flex items-start gap-3 rounded-none border border-warning bg-warning/10 p-4 mb-6">
                       <Mail className="h-5 w-5 text-warning mt-0.5 shrink-0" />
                       <div className="flex-1 text-sm">
                         <p className="font-medium text-foreground">

@@ -115,7 +115,7 @@ export const ProjectStatsGrid: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
+          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground">
             Resource Inventory
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-none" />
@@ -131,7 +131,7 @@ export const ProjectStatsGrid: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-none">
             <AlertCircle className="h-4 w-4" />
             <span>Resource index synchronization failed</span>
           </div>

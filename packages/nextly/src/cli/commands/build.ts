@@ -20,7 +20,7 @@
  * nextly build --skip-migrations-check
  *
  * # Skip specific generation steps
- * nextly build --no-types --no-schemas
+ * nextly build --no-types --no-zod
  *
  * # Combine options
  * nextly build --strict --skip-migrations-check
@@ -37,10 +37,6 @@ import type { Command } from "commander";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
 import {
-  SchemaGenerator,
-  type SupportedDialect,
-} from "../../domains/schema/services/schema-generator";
-import {
   TypeGenerator,
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
@@ -53,6 +49,7 @@ import {
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
+  type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
@@ -89,12 +86,6 @@ export interface BuildCommandOptions {
   types?: boolean;
 
   /**
-   * Skip Drizzle schema generation
-   * @default false (schemas are generated)
-   */
-  schemas?: boolean;
-
-  /**
    * Skip Zod validation schema generation
    * @default false (Zod schemas are generated)
    */
@@ -126,9 +117,6 @@ interface BuildResult {
 
   /** Validation warnings encountered */
   warnings: string[];
-
-  /** Generated Drizzle schema files */
-  generatedSchemas: string[];
 
   /** Generated Zod schema files */
   generatedZodSchemas: string[];
@@ -219,7 +207,6 @@ export async function runBuild(
     collectionCount: 0,
     errors: [],
     warnings: [],
-    generatedSchemas: [],
     generatedZodSchemas: [],
     durationMs: 0,
   };
@@ -310,19 +297,11 @@ export async function runBuild(
         context
       );
 
-      result.generatedSchemas = generationResult.schemas;
       result.generatedZodSchemas = generationResult.zodSchemas;
       result.generatedTypesFile = generationResult.typesFile;
       result.warnings.push(...generationResult.warnings);
 
       // Display generation results
-      if (generationResult.schemas.length > 0) {
-        const dir = getCommonDirectory(generationResult.schemas);
-        logger.success(
-          `Generated ${formatCount(generationResult.schemas.length, "Drizzle schema")} → ${dir}/`
-        );
-      }
-
       if (generationResult.zodSchemas.length > 0) {
         const dir = getCommonDirectory(generationResult.zodSchemas);
         logger.success(
@@ -421,9 +400,6 @@ export async function runBuild(
     // Summary stats
     const stats: string[] = [];
     stats.push(`${result.collectionCount} collection(s)`);
-    if (result.generatedSchemas.length > 0) {
-      stats.push(`${result.generatedSchemas.length} schema(s)`);
-    }
     if (result.generatedZodSchemas.length > 0) {
       stats.push(`${result.generatedZodSchemas.length} Zod schema(s)`);
     }
@@ -587,7 +563,6 @@ async function generateAllFiles(
   options: ResolvedBuildOptions,
   context: CommandContext
 ): Promise<{
-  schemas: string[];
   zodSchemas: string[];
   typesFile?: string;
   warnings: string[];
@@ -597,7 +572,6 @@ async function generateAllFiles(
   const cwd = options.cwd ?? process.cwd();
 
   const result = {
-    schemas: [] as string[],
     zodSchemas: [] as string[],
     typesFile: undefined as string | undefined,
     warnings: [] as string[],
@@ -605,38 +579,6 @@ async function generateAllFiles(
 
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
-
-  // Determine dialect from environment
-  const dbValidation = validateDatabaseEnv();
-  const dialect: SupportedDialect = dbValidation.dialect ?? "postgresql";
-
-  // Generate Drizzle schemas
-  if (options.schemas !== false) {
-    logger.debug("Generating Drizzle schemas...");
-
-    const schemaGenerator = new SchemaGenerator({
-      dialect,
-      includeRelations: true,
-    });
-
-    const schemas = schemaGenerator.generateAllSchemas(records);
-    const schemasDir = resolve(cwd, config.db.schemasDir, "collections");
-    await ensureDir(schemasDir);
-
-    for (const schema of schemas) {
-      const schemaPath = resolve(schemasDir, schema.filename);
-      await writeFile(schemaPath, schema.code, "utf-8");
-      result.schemas.push(schemaPath);
-      logger.debug(`Written schema: ${schemaPath}`);
-    }
-
-    // Generate index file
-    const indexFile = schemaGenerator.generateIndexFile(records);
-    const indexPath = resolve(schemasDir, indexFile.filename);
-    await writeFile(indexPath, indexFile.code, "utf-8");
-    result.schemas.push(indexPath);
-    logger.debug(`Written index: ${indexPath}`);
-  }
 
   // Generate Zod schemas
   if (options.zod !== false) {
@@ -915,7 +857,6 @@ export function registerBuildCommand(program: Command): void {
       false
     )
     .option("--no-types", "Skip TypeScript type generation")
-    .option("--no-schemas", "Skip Drizzle schema generation")
     .option("--no-zod", "Skip Zod validation schema generation")
     .action(async (cmdOptions: BuildCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();

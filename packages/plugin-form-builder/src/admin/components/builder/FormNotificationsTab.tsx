@@ -271,7 +271,7 @@ function NotificationCard({
         <button
           type="button"
           onClick={onEdit}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label={`Edit notification ${notification.name}`}
         >
           <span className="min-w-0 flex-1">
@@ -295,11 +295,11 @@ function NotificationCard({
               </span>
               {ccCount > 0 && (
                 <span>
-                  <span className="mx-1.5 text-muted-foreground/40">·</span>+
+                  <span className="mx-1.5 text-muted-foreground">·</span>+
                   {ccCount} cc/bcc
                 </span>
               )}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               {providerName}
             </span>
           </span>
@@ -417,7 +417,7 @@ function AddressChipList({
               <span>{email}</span>
               <button
                 type="button"
-                className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
+                className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                 onClick={() =>
                   onChange(addresses.filter((_, i) => i !== index))
                 }

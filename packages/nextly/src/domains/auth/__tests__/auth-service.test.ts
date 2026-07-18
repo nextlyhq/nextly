@@ -56,7 +56,7 @@ describe("AuthService", () => {
 
       // Verify user was actually created in database
       const dbUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, "newuser@test.com"),
+        where: { email: "newuser@test.com" },
       });
       expect(dbUser).toBeDefined();
       expect(dbUser!.passwordHash).toBeDefined(); // But should be stored
@@ -80,7 +80,7 @@ describe("AuthService", () => {
 
       // Verify user was NOT created
       const dbUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, "user@test.com"),
+        where: { email: "user@test.com" },
       });
       expect(dbUser).toBeUndefined();
     });
@@ -260,7 +260,7 @@ describe("AuthService", () => {
 
       // Verify password was actually changed
       const updatedUser = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.id, userId),
+        where: { id: userId },
       });
       expect(updatedUser!.passwordHash).not.toBe(passwordHash);
       expect(updatedUser!.passwordUpdatedAt).toBeDefined();
@@ -299,7 +299,7 @@ describe("AuthService", () => {
 
       // Verify password was NOT changed
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.id, userId),
+        where: { id: userId },
       });
       expect(user!.passwordHash).toBe(passwordHash);
     });
@@ -364,7 +364,7 @@ describe("AuthService", () => {
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.passwordResetTokens.findMany({
-        where: eq(testDb.schema.passwordResetTokens.identifier, email),
+        where: { identifier: email },
       });
       expect(tokens).toHaveLength(1);
       expect(tokens[0].expires).toBeInstanceOf(Date);
@@ -406,7 +406,7 @@ describe("AuthService", () => {
 
       // Assert: Should only have one token (new one replaces old)
       const tokens = await testDb.db.query.passwordResetTokens.findMany({
-        where: eq(testDb.schema.passwordResetTokens.identifier, email),
+        where: { identifier: email },
       });
       expect(tokens).toHaveLength(1);
     });
@@ -429,7 +429,7 @@ describe("AuthService", () => {
 
       // Assert
       const token = await testDb.db.query.passwordResetTokens.findFirst({
-        where: eq(testDb.schema.passwordResetTokens.identifier, email),
+        where: { identifier: email },
       });
 
       const expectedExpiryMin =
@@ -623,7 +623,7 @@ describe("AuthService", () => {
         .digest("hex");
 
       const tokenRecord = await testDb.db.query.passwordResetTokens.findFirst({
-        where: eq(testDb.schema.passwordResetTokens.tokenHash, tokenHash),
+        where: { tokenHash: tokenHash },
       });
 
       // Token should still exist and not be marked as used
@@ -648,7 +648,7 @@ describe("AuthService", () => {
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.emailVerificationTokens.findMany({
-        where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+        where: { identifier: email },
       });
       expect(tokens).toHaveLength(1);
       expect(tokens[0].expires).toBeInstanceOf(Date);
@@ -667,7 +667,7 @@ describe("AuthService", () => {
 
       // Assert: Should only have one token (new one replaces old)
       const tokens = await testDb.db.query.emailVerificationTokens.findMany({
-        where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+        where: { identifier: email },
       });
       expect(tokens).toHaveLength(1);
     });
@@ -685,7 +685,7 @@ describe("AuthService", () => {
 
       // Assert
       const token = await testDb.db.query.emailVerificationTokens.findFirst({
-        where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+        where: { identifier: email },
       });
 
       const expectedExpiryMin =
@@ -728,14 +728,14 @@ describe("AuthService", () => {
 
       // Verify user's email is now verified
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, email),
+        where: { email: email },
       });
       expect(user!.emailVerified).toBeDefined();
       expect(user!.emailVerified).toBeInstanceOf(Date);
 
       // Verify token was deleted after use
       const tokens = await testDb.db.query.emailVerificationTokens.findMany({
-        where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+        where: { identifier: email },
       });
       expect(tokens).toHaveLength(0);
     });
@@ -791,7 +791,7 @@ describe("AuthService", () => {
 
       // Verify user's email is still not verified
       const user = await testDb.db.query.users.findFirst({
-        where: eq(testDb.schema.users.email, email),
+        where: { email: email },
       });
       expect(user!.emailVerified).toBeNull();
     });
@@ -812,7 +812,7 @@ describe("AuthService", () => {
       // Verify token exists before verification
       const tokensBefore =
         await testDb.db.query.emailVerificationTokens.findMany({
-          where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+          where: { identifier: email },
         });
       expect(tokensBefore).toHaveLength(1);
 
@@ -822,7 +822,7 @@ describe("AuthService", () => {
       // Assert: Token should be deleted
       const tokensAfter =
         await testDb.db.query.emailVerificationTokens.findMany({
-          where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+          where: { identifier: email },
         });
       expect(tokensAfter).toHaveLength(0);
     });
@@ -844,7 +844,7 @@ describe("AuthService", () => {
       // Store original token count
       const tokensBefore =
         await testDb.db.query.emailVerificationTokens.findMany({
-          where: eq(testDb.schema.emailVerificationTokens.identifier, email),
+          where: { identifier: email },
         });
       expect(tokensBefore).toHaveLength(1);
 

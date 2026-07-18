@@ -5,6 +5,7 @@ import {
   clearFieldTypes,
   getFieldType,
   hasFieldType,
+  isPluginFieldTypeOnSurface,
   registerFieldType,
 } from "./field-type-registry";
 
@@ -40,5 +41,31 @@ describe("field-type registry (C7)", () => {
     clearFieldTypes();
     expect(hasFieldType("rating")).toBe(false);
     expect(allFieldTypes()).toEqual([]);
+  });
+});
+
+describe("isPluginFieldTypeOnSurface", () => {
+  it("is false for a built-in type and an unregistered type", () => {
+    expect(isPluginFieldTypeOnSurface("text", "entries")).toBe(false);
+    expect(isPluginFieldTypeOnSurface("nope", "entries")).toBe(false);
+  });
+
+  it("honors a type's declared surfaces", () => {
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "c",
+      surfaces: ["users", "forms"],
+    });
+    expect(isPluginFieldTypeOnSurface("rating", "users")).toBe(true);
+    expect(isPluginFieldTypeOnSurface("rating", "forms")).toBe(true);
+    expect(isPluginFieldTypeOnSurface("rating", "entries")).toBe(false);
+  });
+
+  it("defaults an omitted surfaces list to the entries surface only", () => {
+    registerFieldType({ type: "rating", storage: "number", component: "c" });
+    expect(isPluginFieldTypeOnSurface("rating", "entries")).toBe(true);
+    expect(isPluginFieldTypeOnSurface("rating", "users")).toBe(false);
+    expect(isPluginFieldTypeOnSurface("rating", "forms")).toBe(false);
   });
 });

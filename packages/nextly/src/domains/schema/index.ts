@@ -35,15 +35,10 @@ export {
 //   - pipeline/preview.ts (read-only Phase A + B for admin preview)
 //   - applyDesiredSchema (full pipeline for HMR + UI applies)
 
-// Schema generator for creating Drizzle ORM schemas (Collections and Singles)
-export {
-  SchemaGenerator,
-  type SupportedDialect,
-  type GeneratedSchema,
-  type GeneratedSingleSchema,
-  type GeneratedIndexFile,
-  type SchemaGeneratorOptions,
-} from "./services/schema-generator";
+// Drizzle-v1 D-6.1: SchemaGenerator (file-emitting Drizzle codegen) deleted —
+// runtime tables come from RuntimeSchemaGenerator + SchemaRegistry; nothing
+// consumed the emitted files. SupportedDialect lives in cli/utils/adapter
+// and types/database.
 
 // F11 PR 3: MigrationGenerator class deleted — superseded by the
 // `pipeline/sql-templates/` module + `migrate-create/generate.ts`

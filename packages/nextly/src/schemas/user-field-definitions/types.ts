@@ -60,10 +60,12 @@ export interface UserFieldDefinitionInsert {
   label: string;
 
   /**
-   * Field type determining the input component and column type.
-   * Limited to scalar types: text, textarea, number, email, select, radio, checkbox, date.
+   * Field type determining the input component and column type. A built-in
+   * scalar (text, textarea, number, email, url, phone, select, radio, checkbox,
+   * date) or a plugin-contributed type that opted into the users surface; the
+   * `(string & {})` arm admits the latter while keeping built-in autocomplete.
    */
-  type: UserFieldType;
+  type: UserFieldType | (string & {});
 
   /**
    * Whether this field is required when creating/updating a user.

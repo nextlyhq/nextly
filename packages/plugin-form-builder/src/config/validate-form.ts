@@ -22,6 +22,9 @@
  * ```
  */
 
+import { isPluginFieldTypeOnSurface } from "nextly";
+
+import { BUILT_IN_FORM_FIELD_TYPES } from "../types";
 import type { FormConfig, FormField, FormFieldType } from "../types";
 
 // ============================================================
@@ -159,23 +162,9 @@ const SLUG_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const FIELD_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 /**
- * All valid form field types.
+ * All valid built-in form field types (plugin types validate via the registry).
  */
-const VALID_FIELD_TYPES: FormFieldType[] = [
-  "text",
-  "email",
-  "number",
-  "phone",
-  "url",
-  "textarea",
-  "select",
-  "checkbox",
-  "radio",
-  "file",
-  "date",
-  "time",
-  "hidden",
-];
+const VALID_FIELD_TYPES: readonly FormFieldType[] = BUILT_IN_FORM_FIELD_TYPES;
 
 const VALID_FIELD_TYPES_SET = new Set<string>(VALID_FIELD_TYPES);
 
@@ -490,7 +479,15 @@ function validateField(
     return;
   }
 
-  if (typeof fieldType !== "string" || !VALID_FIELD_TYPES_SET.has(fieldType)) {
+  // A plugin may contribute a field type that opted into the forms surface; it
+  // is as valid here as a built-in. Built-ins keep the fast allowlist; other
+  // strings fall through to the registry, surface-gated.
+  const isValidType =
+    typeof fieldType === "string" &&
+    (VALID_FIELD_TYPES_SET.has(fieldType) ||
+      isPluginFieldTypeOnSurface(fieldType, "forms"));
+
+  if (!isValidType) {
     let fieldTypeRepr: string;
     if (typeof fieldType === "object" && fieldType !== null) {
       fieldTypeRepr = JSON.stringify(fieldType);

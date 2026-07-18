@@ -377,7 +377,7 @@ export function ComponentSelector({
               ))
             ) : (
               <div className="text-center py-8">
-                <Puzzle className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                <Puzzle className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground">
                   {searchQuery
                     ? "No components match your search."

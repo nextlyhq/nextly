@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` (apiKeysRelations) lives in `./sqlite-relations.ts`
+ * Cross-table `relations()` (apiKeysRelations) lives in `../_dialect-bundles/sqlite.relations.ts`
  * and is re-exported at the bottom of this file. See `./postgres.ts` for the
  * rationale.
  *

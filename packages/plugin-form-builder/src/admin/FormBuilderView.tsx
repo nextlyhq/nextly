@@ -30,7 +30,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { FormField } from "../types";
+import type { FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -138,6 +138,13 @@ function FormBuilderViewInner({
     FormFieldCatalogType[] | null
   >(null);
 
+  // Type ids the host explicitly disabled (`config.fields[type] === false`),
+  // including plugin type ids — so the host exclude layer applies to
+  // contributed field types too, not just built-ins.
+  const [disabledFieldTypes, setDisabledFieldTypes] = useState<Set<string>>(
+    () => new Set()
+  );
+
   // The host's notification defaults (plugin options). `null` until the
   // config request settles; `{}` when the request failed or nothing is
   // configured, so consumers can distinguish "loading" from "no defaults".
@@ -169,6 +176,13 @@ function FormBuilderViewInner({
             config?.fields
               ? allTypes.filter(type => config.fields?.[type] !== false)
               : allTypes
+          );
+          setDisabledFieldTypes(
+            new Set(
+              Object.entries(config?.fields ?? {})
+                .filter(([, enabled]) => enabled === false)
+                .map(([type]) => type)
+            )
           );
           setNotificationDefaults(config?.notifications ?? {});
           setSpamDefaults(config?.spamProtection ?? {});
@@ -204,7 +218,7 @@ function FormBuilderViewInner({
   }, [isCreating, notificationDefaults, seedNotifications]);
 
   const handleAddField = useCallback(
-    (type: FormFieldCatalogType) => {
+    (type: FormFieldTypeId) => {
       const newField = createFieldFromType(
         type,
         fields.map(f => f.name)
@@ -352,7 +366,8 @@ function FormBuilderViewInner({
         {/* Action buttons — same variant/size as Collection Builder */}
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
-            <span className="text-xs font-medium text-warning bg-warning/10 border border-warning/20 px-2.5 py-1 rounded-none whitespace-nowrap">
+            // Full-strength warning border so the unsaved-changes badge boundary is perceivable over its tinted fill.
+            <span className="text-xs font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
           )}
@@ -452,7 +467,7 @@ function FormBuilderViewInner({
                     value={formData.slug || ""}
                     onChange={e => updateFormData({ slug: e.target.value })}
                     placeholder="e.g., contact-form"
-                    className="bg-transparent placeholder:text-muted-foreground/50"
+                    className="bg-transparent placeholder:text-muted-foreground"
                   />
                 </div>
 
@@ -500,7 +515,7 @@ function FormBuilderViewInner({
                             ? "var(--nx-primary)"
                             : "transparent",
                       }}
-                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       {tab.label}
                       {tab.count !== null && (
@@ -526,6 +541,7 @@ function FormBuilderViewInner({
             {activeTab === "builder" && (
               <FieldCards
                 enabledTypes={enabledTypes}
+                disabledFieldTypes={disabledFieldTypes}
                 onAddField={handleAddField}
               />
             )}
@@ -551,7 +567,8 @@ function FormBuilderViewInner({
 
             {/* Save error */}
             {saveError && (
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-none">
+              // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
+              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
                 {saveError}
               </div>
             )}

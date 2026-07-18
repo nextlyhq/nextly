@@ -26,7 +26,7 @@ import {
 import { useCallback, useMemo } from "react";
 
 import type {
-  FormField,
+  AnyFormField,
   ConditionalLogic,
   ConditionalLogicCondition,
 } from "../../../types";
@@ -36,12 +36,12 @@ import type {
 // ============================================================================
 
 export interface ConditionalLogicEditorProps {
-  /** The field being edited */
-  field: FormField;
+  /** The field being edited (built-in or plugin-contributed). */
+  field: AnyFormField;
   /** All fields in the form (for field references) */
-  allFields: FormField[];
+  allFields: AnyFormField[];
   /** Callback when conditional logic is updated */
-  onUpdate: (updates: Partial<FormField>) => void;
+  onUpdate: (updates: Partial<AnyFormField>) => void;
 }
 
 // ============================================================================
@@ -192,7 +192,8 @@ export function ConditionalLogicEditor({
       </div>
 
       {logic.enabled && (
-        <div className="space-y-4 pt-4 border-t border-primary/5">
+        // Semantic border token so this top divider is visible at the 3:1 UI minimum.
+        <div className="space-y-4 pt-4 border-t border-border">
           {/* Action and operator row */}
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <Select
@@ -230,14 +231,16 @@ export function ConditionalLogicEditor({
           {/* Conditions list */}
           <div className="space-y-3 pt-4">
             {logic.conditions.length === 0 ? (
-              <div className="p-4 bg-muted rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
+              // Semantic border token so this empty-state boundary is visible at the 3:1 UI minimum.
+              <div className="p-4 bg-muted rounded-none border border-dashed border-border text-center text-xs text-muted-foreground">
                 No conditions defined. Add a condition to get started.
               </div>
             ) : (
               logic.conditions.map((condition, index) => (
+                // Semantic border token so this condition card boundary is visible at the 3:1 UI minimum.
                 <div
                   key={index}
-                  className="flex flex-col gap-2 p-3 rounded-none bg-muted border border-primary/5 relative group"
+                  className="flex flex-col gap-2 p-3 rounded-none bg-muted border border-border relative group"
                 >
                   <div className="grid grid-cols-1 gap-2">
                     {/* Field selector */}
@@ -305,7 +308,8 @@ export function ConditionalLogicEditor({
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => handleRemoveCondition(index)}
-                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border border-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    // Semantic border token so the remove button's boundary is visible at the 3:1 UI minimum.
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border border-border opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Remove condition"
                   >
                     <span className="text-xs">×</span>
@@ -327,7 +331,8 @@ export function ConditionalLogicEditor({
               + Add Condition
             </Button>
           ) : (
-            <p className="mt-4 text-center text-xs text-warning font-medium bg-warning/10 p-2 rounded-none border border-warning/20">
+            // Full-strength warning border so this notice boundary is perceivable over its tinted fill.
+            <p className="mt-4 text-center text-xs text-warning font-medium bg-warning/10 p-2 rounded-none border border-warning">
               Add more fields to the form to create conditions.
             </p>
           )}

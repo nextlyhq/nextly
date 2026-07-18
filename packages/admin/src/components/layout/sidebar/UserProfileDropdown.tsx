@@ -34,7 +34,7 @@ export function UserProfileDropdown({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary/20 focus:outline-none hover-subtle-row group"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary focus:outline-none hover-subtle-row group"
             aria-label="User profile menu"
           >
             <Avatar className="h-11 w-11 rounded-none bg-primary/5  border border-border group-hover:border-border transition-colors">
@@ -43,7 +43,7 @@ export function UserProfileDropdown({
                 alt={user?.name || "User"}
                 className="rounded-none"
               />
-              <AvatarFallback className="bg-transparent text-sidebar-foreground/50 text-xs font-bold rounded-none">
+              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold rounded-none">
                 {user?.name?.charAt(0)?.toUpperCase() || "U"}
               </AvatarFallback>
             </Avatar>
@@ -68,20 +68,22 @@ export function UserProfileDropdown({
               </p>
             )}
           </div>
+          {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={() => {
               if (!user?.id) return;
               navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
             }}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-primary/50"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <UserIcon className="h-4 w-4 transition-colors" />
             <span>My Account</span>
           </DropdownMenuItem>
 
+          {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={onLogout}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-primary/50"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <LogOut className="h-4 w-4 transition-colors" />
             <span>Sign out</span>

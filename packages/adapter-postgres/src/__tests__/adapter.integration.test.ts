@@ -112,7 +112,7 @@ describe("PostgreSQL Adapter Integration (Real Postgres 16)", async () => {
 
     // Create a pool for the Drizzle ORM client used in tests.
     pool = new pg.Pool({ connectionString: TEST_DB_URL });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Drop and recreate test tables to ensure a clean slate.
     // Each column maps 1:1 to the Drizzle table definition above.

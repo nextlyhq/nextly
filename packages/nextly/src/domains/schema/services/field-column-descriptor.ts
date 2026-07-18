@@ -64,9 +64,17 @@ export interface ColumnDescriptor {
   name: string;
   dialectType: string;
   length?: number;
+  /** Total digits for the `decimal` kind (DECIMAL/NUMERIC precision). */
+  precision?: number;
+  /** Fractional digits for the `decimal` kind (DECIMAL/NUMERIC scale). */
+  scale?: number;
   nullable: boolean;
   kind: ColumnKind;
 }
+
+/** Default DECIMAL(precision, scale) when a decimal number field omits them. */
+export const DEFAULT_DECIMAL_PRECISION = 10;
+export const DEFAULT_DECIMAL_SCALE = 2;
 
 /**
  * Logical column kind — used by `runtime-schema-generator.ts` to
@@ -84,6 +92,7 @@ export type ColumnKind =
   | "boolean" // PG: bool, MySQL: tinyint(1), SQLite: integer(boolean mode)
   | "integer" // PG: int4, MySQL: int, SQLite: integer
   | "double" // PG: float8, MySQL: double, SQLite: real
+  | "decimal" // exact DECIMAL/NUMERIC(precision, scale); PG/SQLite: numeric, MySQL: decimal
   | "timestamp" // PG/MySQL: timestamp, SQLite: integer(timestamp mode)
   | "json" // PG: jsonb, MySQL: json, SQLite: text
   | "fkSingle" // single-target foreign key — text/varchar(36)
@@ -124,13 +133,28 @@ export function getColumnDescriptor(
 
   if (kind === "skip") return null;
 
-  const dialectType = renderDialectType(kind, dialect, /* length */ undefined);
+  // Decimal fields carry precision/scale (author-set or the DECIMAL(10,2)
+  // default); every other kind ignores them.
+  const decimal =
+    kind === "decimal"
+      ? {
+          precision: field.precision ?? DEFAULT_DECIMAL_PRECISION,
+          scale: field.scale ?? DEFAULT_DECIMAL_SCALE,
+        }
+      : undefined;
+
+  const dialectType = renderDialectType(kind, dialect, {
+    length: undefined,
+    precision: decimal?.precision,
+    scale: decimal?.scale,
+  });
   const length = lengthForKind(kind);
 
   return {
     name,
     dialectType,
     ...(length !== undefined ? { length } : {}),
+    ...(decimal ? { precision: decimal.precision, scale: decimal.scale } : {}),
     nullable,
     kind,
   };
@@ -158,11 +182,17 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       return "longText";
 
     case "number": {
-      // UI-created fields carry options.format === "float" for decimal storage;
-      // code-first fields have no options, defaulting to integer — matching
-      // the DDL emitted by dynamic-collection-schema-service.ts.
-      const fmt = (field as { options?: { format?: string } }).options?.format;
-      return fmt === "float" ? "double" : "integer";
+      // A hasMany number is written as a JSON array (the mutation path
+      // stringifies it), so it must be stored as JSON, not a scalar numeric
+      // column, regardless of dbType.
+      if (field.hasMany) return "json";
+      // Code-first fields opt into exact fractional storage via
+      // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
+      if (field.dbType === "decimal") return "decimal";
+      // UI-created fields carry options.format === "float" for float storage;
+      // code-first without dbType defaults to integer, matching the DDL emitted
+      // by dynamic-collection-schema-service.ts.
+      return field.options?.format === "float" ? "double" : "integer";
     }
 
     case "checkbox":
@@ -183,10 +213,15 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "repeater":
     case "group":
-    case "component":
     case "json":
     case "chips":
       return "json";
+
+    case "component":
+      // Component values live in their own comp_{slug} tables and are stripped
+      // from the parent row on write, so the parent needs no column. Emitting
+      // one (NOT NULL when required) produced an orphan that broke every insert.
+      return "skip";
 
     default: {
       // Plugin-contributed custom field type maps to its declared storage
@@ -211,8 +246,23 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 function renderDialectType(
   kind: ColumnKind,
   dialect: SupportedDialect,
-  length: number | undefined
+  opts: { length?: number; precision?: number; scale?: number }
 ): string {
+  const { length } = opts;
+  if (kind === "decimal") {
+    // The diff normalizes precision away (numeric(10,2) -> "numeric"), so a
+    // decimal column never triggers a phantom type change; precision is carried
+    // for the emitter. Trade-off: a later precision/scale change on an existing
+    // column (e.g. 10,2 -> 12,4) is NOT detected as a diff, because the live
+    // introspector reports only the base type. Resizing a decimal column needs
+    // a manual migration until the introspector captures numeric_precision/
+    // numeric_scale on the live side.
+    const p = opts.precision ?? DEFAULT_DECIMAL_PRECISION;
+    const s = opts.scale ?? DEFAULT_DECIMAL_SCALE;
+    if (dialect === "postgresql") return `numeric(${p}, ${s})`;
+    if (dialect === "mysql") return `decimal(${p},${s})`;
+    return "numeric"; // sqlite stores as NUMERIC affinity
+  }
   if (kind === "text") {
     if (dialect === "postgresql") return "text";
     if (dialect === "mysql") return `varchar(${length ?? 255})`;

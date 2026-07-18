@@ -30,6 +30,7 @@ import type { ComponentDataService } from "../../../services/components/componen
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
+  applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
@@ -366,9 +367,19 @@ export class SingleMutationService extends BaseService {
 
       this.logger.info("Single document updated", { slug, id: updatedDoc.id });
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path), so a
+      // mutation response can never echo a value the reader is denied. A
+      // route-authorized REST caller isn't a trusted-server read, so its
+      // override does not skip redaction (mirrors the collection path).
       stripPasswordFieldValues(updatedDoc, fieldConfigs);
+      await applyFieldReadAccess({
+        kind: "single",
+        slug,
+        entry: updatedDoc,
+        user: options.user,
+        overrideAccess: options.overrideAccess && !options.routeAuthorized,
+      });
 
       return {
         success: true,

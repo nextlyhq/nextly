@@ -1,8 +1,9 @@
 /**
  * Number Field Type
  *
- * A numeric input field that stores integer or decimal values.
- * Supports single or multiple values (hasMany), min/max validation,
+ * A numeric input field. Stores whole numbers by default; opt into an exact
+ * decimal column with `dbType: "decimal"` for money and other fractional
+ * values. Supports single or multiple values (hasMany), min/max validation,
  * and customizable step increments.
  *
  * @module collections/fields/types/number
@@ -78,13 +79,15 @@ export interface NumberFieldAdminOptions extends FieldAdminOptions {
  *
  * @example
  * ```typescript
- * // Basic number field
+ * // Price field: exact decimal storage (integer is the default and truncates)
  * const priceField: NumberFieldConfig = {
  *   name: 'price',
  *   type: 'number',
  *   label: 'Price',
  *   required: true,
  *   min: 0,
+ *   dbType: 'decimal',
+ *   scale: 2,
  *   admin: {
  *     step: 0.01,
  *     placeholder: '0.00',
@@ -164,6 +167,45 @@ export interface NumberFieldConfig
    * Use for range constraints like percentages (max: 100) or ratings (max: 5).
    */
   max?: number;
+
+  /**
+   * Database storage type for the value.
+   *
+   * - `"integer"` (default) - whole numbers only; a fractional value is not
+   *   preserved (the database rounds or truncates it). Use for counts,
+   *   quantities, ratings, and IDs.
+   * - `"decimal"` - a fixed-point `DECIMAL`/`NUMERIC` column for money and other
+   *   fractional values, sized with `precision` and `scale` (default
+   *   `DECIMAL(10, 2)`). Exact at rest on Postgres and MySQL; on SQLite it maps
+   *   to NUMERIC affinity (best-effort, since SQLite has no fixed-precision
+   *   decimal type). Values are read back as JavaScript numbers, so a precision
+   *   beyond what a double can represent (~15 significant digits) is not fully
+   *   round-tripped.
+   *
+   * @default "integer"
+   * @example
+   * ```typescript
+   * // Store a price, e.g. 1234.56
+   * { name: 'price', type: 'number', dbType: 'decimal', precision: 10, scale: 2 }
+   * ```
+   */
+  dbType?: "integer" | "decimal";
+
+  /**
+   * Total number of significant digits for a `dbType: "decimal"` column.
+   * Ignored for integer fields.
+   *
+   * @default 10
+   */
+  precision?: number;
+
+  /**
+   * Number of digits to the right of the decimal point for a
+   * `dbType: "decimal"` column. Ignored for integer fields.
+   *
+   * @default 2
+   */
+  scale?: number;
 
   /**
    * Allow multiple numeric values.

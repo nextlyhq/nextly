@@ -42,6 +42,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
+  applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
@@ -190,6 +191,60 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /**
+   * Redact a persisted entry before it is returned to the client. Drops
+   * write-only password hashes and any field the caller may write but not
+   * read (`access.read`). The query path already applies both, so every
+   * mutation response must run the same redaction or a create/update could
+   * echo back a value the reader is denied — the write and read rules are
+   * independent, so a field can be writable yet read-denied.
+   *
+   * `overrideAccess` normally skips read redaction (a trusted server-context
+   * caller asked for the full document). The REST dispatcher, however, sets
+   * `overrideAccess` only to skip the collection-level re-check after route
+   * auth — it is NOT a trusted read context, so `routeAuthorized` forces the
+   * response to still be redacted to what the authenticated user may read,
+   * matching the query path for the same caller.
+   */
+  private async redactResponseFields(
+    entry: Record<string, unknown>,
+    fields: FieldDefinition[],
+    params: {
+      user?: Record<string, unknown>;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+    },
+    slug: string
+  ): Promise<void> {
+    // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
+    // before redaction so the read-access walker descends into them — SQLite
+    // returns these as JSON strings, and a read-denied field nested in a
+    // still-serialized container would otherwise be echoed. The single
+    // create/update paths already deserialize upstream; this makes the
+    // transaction/bulk variants safe too (a second pass is a no-op).
+    for (const field of fields) {
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof entry[field.name] === "string" &&
+        entry[field.name]
+      ) {
+        try {
+          entry[field.name] = JSON.parse(entry[field.name] as string);
+        } catch {
+          // If parsing fails, keep the raw string.
+        }
+      }
+    }
+    stripPasswordFieldValues(entry, fields);
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug,
+      entry,
+      user: params.user,
+      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+    });
+  }
+
   /** Resolve the physical table for a collection, honoring `dbName` overrides. */
   private resolveTableName(collection: unknown, slug: string): string {
     return (
@@ -310,6 +365,74 @@ export class CollectionMutationService extends BaseService {
   // ============================================================
 
   /**
+   * Fill the auto-injected `slug` and `title` columns on a create payload.
+   *
+   * defineCollection injects a required, unique `slug` and a NOT NULL `title`
+   * into every collection. When the caller omits them we derive them here: the
+   * slug from the title (or name, or a unique fallback token), the title from
+   * the name or the slug.
+   *
+   * A GENERATED slug is deduped so a repeated title auto-increments (`hello`,
+   * `hello-2`, …) — the WordPress/Ghost convention. An EXPLICITLY provided slug
+   * is only sanitized and kept as-is: the caller asserted a canonical value, so
+   * a collision surfaces as the normal unique-constraint conflict rather than a
+   * silent rename. `isSlugTaken` is supplied by the caller so the uniqueness
+   * check runs on the correct executor — the shared connection for a plain
+   * create, or the enclosing transaction (which sees its own pending rows) for
+   * a transactional create. Runs before field-level write access so a caller
+   * denied `title`/`slug` write does not have them reintroduced. Mutates
+   * `finalData`.
+   */
+  private async applyGeneratedSlugAndTitle(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<void> {
+    const provided =
+      typeof finalData.slug === "string" && finalData.slug.trim() !== "";
+    if (provided) {
+      // Explicit slug: sanitize only, never dedupe — respect the caller's value.
+      finalData.slug = generateSlug(finalData.slug as string);
+    } else {
+      const titleValue = finalData.title ?? finalData.name ?? "";
+      const baseSlug =
+        typeof titleValue === "string" && titleValue.trim()
+          ? generateSlug(titleValue)
+          : `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      finalData.slug = await this.dedupeSlug(baseSlug, isSlugTaken);
+    }
+
+    // The `title` column is NOT NULL: fall back to the name, then the slug.
+    if (typeof finalData.title !== "string" || finalData.title.trim() === "") {
+      const nameValue = finalData.name;
+      finalData.title =
+        typeof nameValue === "string" && nameValue.trim()
+          ? nameValue.trim()
+          : finalData.slug;
+    }
+  }
+
+  /**
+   * Return a slug that is free, appending `-2`, `-3`, … until `isSlugTaken`
+   * reports it available. Bounded so a pathological data set can't spin
+   * forever; the final fallback appends a timestamp that is effectively
+   * collision-proof. The unique constraint on the column remains the ultimate
+   * guard against a concurrent race between the check and the insert.
+   */
+  private async dedupeSlug(
+    baseSlug: string,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<string> {
+    let candidate = baseSlug;
+    for (let suffix = 2; suffix <= 51; suffix++) {
+      if (!(await isSlugTaken(candidate))) return candidate;
+      candidate = `${baseSlug}-${suffix}`;
+    }
+    // Check the last generated candidate (`baseSlug-51`) before the fallback.
+    if (!(await isSlugTaken(candidate))) return candidate;
+    return `${baseSlug}-${Date.now()}`;
+  }
+
+  /**
    * Create a new entry.
    * Applies collection-level access control and hooks.
    *
@@ -325,6 +448,10 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -434,6 +561,17 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+      // Generate the auto-injected `slug`/`title` BEFORE field-level write
+      // access and validation. defineCollection injects a required, unique
+      // `slug` and a NOT NULL `title`; deriving them here (slug from title,
+      // deduped for uniqueness) lets `create({ data: { title } })` succeed
+      // without a manual slug. Running before write access means a field the
+      // caller may not create is not reintroduced; the uniqueness check uses
+      // the shared connection (a plain, non-transactional create).
+      await this.applyGeneratedSlugAndTitle(finalData, slug =>
+        this.checkFieldUniqueness(params.collectionName, "slug", slug)
+      );
+
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
       await applyFieldWriteAccess({
@@ -620,46 +758,7 @@ export class CollectionMutationService extends BaseService {
       // failure mode this guards against.
       coerceDateFieldsToDate(finalData, fields);
 
-      // Generate or validate slug
-      // All collections have a slug column in their database table,
-      // so we always need to generate a slug value for new entries.
-      const shouldGenerateSlug = true;
-
-      if (shouldGenerateSlug) {
-        if (
-          !finalData.slug ||
-          typeof finalData.slug !== "string" ||
-          finalData.slug.trim() === ""
-        ) {
-          // Try to generate slug from title field first
-          const titleValue = finalData.title || finalData.name || "";
-          if (typeof titleValue === "string" && titleValue.trim()) {
-            finalData.slug = generateSlug(titleValue);
-          } else {
-            // Generate a unique slug using timestamp + random string
-            finalData.slug = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-          }
-        } else {
-          // Sanitize user-provided slug
-          finalData.slug = generateSlug(finalData.slug);
-        }
-      }
-
-      // All collections have a title column (NOT NULL) in their database table,
-      // so ensure we always have a title value — fall back to the name field or
-      // the generated slug if the caller didn't provide one.
-      if (
-        !finalData.title ||
-        typeof finalData.title !== "string" ||
-        finalData.title.trim() === ""
-      ) {
-        const nameValue = finalData.name;
-        if (typeof nameValue === "string" && nameValue.trim()) {
-          finalData.title = nameValue.trim();
-        } else {
-          finalData.title = finalData.slug;
-        }
-      }
+      // slug/title are generated before validation (applyGeneratedSlugAndTitle).
 
       // Final safety pass: ensure upload field values are IDs, not populated objects.
       fields.forEach(field => {
@@ -834,9 +933,18 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(responseEntry, fields);
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
+        responseEntry,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -876,6 +984,10 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // Set by the REST dispatcher: route-level authorization already ran, so
+      // the collection re-check is skipped, but the response is still redacted
+      // to what this user may read (this is not a trusted-server read).
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -1464,11 +1576,17 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      stripPasswordFieldValues(
+      // Redact the response: drop write-only password hashes and any field
+      // the caller may write but not read (parity with the query path).
+      await this.redactResponseFields(
         responseEntry as Record<string, unknown>,
-        fields
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
       );
 
       return {
@@ -1709,6 +1827,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -1806,6 +1926,21 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). The uniqueness check runs on the
+      // transaction so same-title creates within one uncommitted tx still
+      // dedupe — the tx sees its own pending rows.
+      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      });
+
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses.
@@ -1977,7 +2112,16 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2011,6 +2155,8 @@ export class CollectionMutationService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -2318,7 +2464,16 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2529,6 +2684,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -2626,6 +2783,22 @@ export class CollectionMutationService extends BaseService {
       // so this is where required/min/max/pattern/options are guaranteed;
       // runs on the post-hook data and before hashing so password rules
       // see the plaintext length, not the hash's.
+
+      // Generate the auto-injected `slug`/`title` before write access +
+      // validation (see createEntry). This path backs bulk create, so an
+      // entry that omits slug/title must still receive them. The uniqueness
+      // check runs on the transaction so entries created earlier in the same
+      // bulk batch are seen.
+      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+        const existing = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          {
+            where: this.whereEq("slug", slug),
+          }
+        );
+        return existing != null;
+      });
+
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses.
@@ -2809,7 +2982,16 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(entry as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        entry as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,
@@ -2848,6 +3030,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // See createEntry: route-authorized REST responses stay redacted.
+      routeAuthorized?: boolean;
     },
     entryId: string,
     body: Record<string, unknown>,
@@ -3205,7 +3389,16 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      stripPasswordFieldValues(updated as Record<string, unknown>, fields);
+      await this.redactResponseFields(
+        updated as Record<string, unknown>,
+        fields,
+        {
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+        },
+        params.collectionName
+      );
 
       return {
         success: true,

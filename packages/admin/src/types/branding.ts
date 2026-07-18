@@ -1,3 +1,5 @@
+import type { FieldSurface, FieldTypeCategory } from "nextly/field-catalog";
+
 export interface ResolvedBrandingColors {
   primary?: string;
   primaryForeground?: string;
@@ -116,9 +118,21 @@ export interface PluginMetadata {
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
-   * to just that field + its condition controller (see takeoverLayout).
+   * to just that field + its condition controller (see takeoverLayout). The
+   * picker presentation (label/description/icon/category) and the `surfaces`
+   * the type opted into let each surface offer only the types meant for it
+   * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
+  fieldTypes?: Array<{
+    type: string;
+    component: string;
+    layout?: "takeover";
+    label?: string;
+    description?: string;
+    icon?: string;
+    category?: FieldTypeCategory;
+    surfaces?: readonly FieldSurface[];
+  }>;
 }
 
 export interface AdminBranding {

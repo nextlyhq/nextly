@@ -6,6 +6,7 @@
  * @module plugins/admin-meta
  */
 
+import type { FieldTypeCategory } from "../collections/fields/catalog";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -14,6 +15,7 @@ import type {
   PluginAdminWidget,
   PluginMenuItem,
 } from "./admin-contributions";
+import type { FieldSurface } from "./contributions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -98,11 +100,23 @@ export interface PluginAdminMeta {
   /** Entry/single form toolbar slot component path — present only for enabled plugins. */
   entryFormToolbarSlot?: string;
   /**
-   * Custom field types — `type` → admin editor component path, so the
-   * admin renders fields of these types. Serialized regardless of enabled state
-   * (a disabled plugin's collections + their fields are retained, D14/D49).
+   * Custom field types — `type` → admin editor component path (so the admin
+   * renders fields of these types) plus the picker presentation (label, hint,
+   * icon, category) and the `surfaces` the type opted into (so each surface's
+   * picker can offer only the types meant for it). Serialized regardless of
+   * enabled state (a disabled plugin's collections + their fields are
+   * retained, D14/D49).
    */
-  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
+  fieldTypes?: Array<{
+    type: string;
+    component: string;
+    layout?: "takeover";
+    label?: string;
+    description?: string;
+    icon?: string;
+    category?: FieldTypeCategory;
+    surfaces?: readonly FieldSurface[];
+  }>;
 }
 
 /**
@@ -228,6 +242,11 @@ export function buildPluginAdminMeta(
         type: ft.type,
         component: ft.component,
         ...(ft.layout ? { layout: ft.layout } : {}),
+        ...(ft.label ? { label: ft.label } : {}),
+        ...(ft.description ? { description: ft.description } : {}),
+        ...(ft.icon ? { icon: ft.icon } : {}),
+        ...(ft.category ? { category: ft.category } : {}),
+        ...(ft.surfaces ? { surfaces: ft.surfaces } : {}),
       }));
     }
 

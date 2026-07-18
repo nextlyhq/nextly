@@ -36,11 +36,12 @@ export function ThemeToggle(): React.ReactElement {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
           aria-label="Choose theme"
           title="Choose theme"
         >
-          <TriggerIcon className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+          {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
+          <TriggerIcon className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">

@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getDialectTables } from "../database/index";
+import { resolveRelations } from "../database/resolve-relations";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
 import { AuthService } from "../domains/auth/services/auth-service";
@@ -10,6 +11,7 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
 import type { EmailService } from "./email/email-service";
@@ -94,7 +96,10 @@ export {
   DynamicCollectionRegistryService,
 } from "../domains/dynamic-collections";
 
-export { RoleQueryService, RoleMutationService } from "../domains/auth/services/role/index";
+export {
+  RoleQueryService,
+  RoleMutationService,
+} from "../domains/auth/services/role/index";
 
 export { RoleService } from "../domains/auth/services/role-service";
 export { PermissionService } from "../domains/auth/services/permission-service";
@@ -159,18 +164,27 @@ export class ServiceContainer {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly tables: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly db: any;
-
   constructor(private readonly adapter: DrizzleAdapter) {
-    this.tables = getDialectTables(adapter.getCapabilities().dialect);
-    this.db = adapter.getDrizzle(this.tables as Record<string, unknown>);
+    const dialect = adapter.getCapabilities().dialect;
+    this.tables = getDialectTables(dialect);
+  }
+
+  // v1: db.query is powered by the relations config (defineRelations).
+  // Resolved lazily and on EVERY access via resolveRelations — never
+  // captured at construction — so (a) containers built for a single
+  // transaction or upload never pay drizzle construction they don't use,
+  // and (b) a SchemaRegistry invalidation propagates instead of freezing
+  // whichever snapshot existed when the container was built. The adapter
+  // memoizes per relations object, so this is two map lookups when
+  // nothing changed. Typed as DatabaseInstance — the shape its one
+  // consumer (CollectionsHandler) declares.
+  private get db(): DatabaseInstance {
+    const dialect = this.adapter.getCapabilities().dialect;
+    return this.adapter.getDrizzle<DatabaseInstance>(resolveRelations(dialect));
   }
 
   private getLogger(): Logger {
-    return container.has("logger")
-      ? container.get<Logger>("logger")
-      : console;
+    return container.has("logger") ? container.get<Logger>("logger") : console;
   }
 
   /**
@@ -239,7 +253,9 @@ export class ServiceContainer {
       // First, try to get from DI container (ensures dynamic schemas are shared)
       try {
         if (container.has("collectionsHandler")) {
-          const handler = container.get<CollectionsHandler | undefined>("collectionsHandler");
+          const handler = container.get<CollectionsHandler | undefined>(
+            "collectionsHandler"
+          );
           if (handler) {
             this._collections = handler;
             return this._collections;

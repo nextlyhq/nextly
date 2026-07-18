@@ -566,7 +566,8 @@ function VariableChip({
       type="button"
       onClick={() => onInsert(name)}
       title={`Insert {{${name}}}`}
-      className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground/40 hover:bg-muted"
+      // Full-strength foreground on hover so the border state change is perceivable.
+      className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground hover:bg-muted"
     >
       <Plus className="h-3 w-3 text-muted-foreground" />
       {`{{${name}}}`}
@@ -770,7 +771,8 @@ function DataRail({
           Variable check
         </h4>
         {unknownVariables.length > 0 ? (
-          <div className="rounded-none border border-warning/30 bg-warning/10 p-3">
+          // Full-strength status border so the boundary is perceivable.
+          <div className="rounded-none border border-warning bg-warning/10 p-3">
             <p className="text-xs text-foreground">
               Used but not declared or sampled (renders blank):
             </p>
@@ -1556,7 +1558,7 @@ export function EmailTemplateForm({
                   disabled={isPending}
                   placeholder="Untitled template"
                   aria-label="Template name"
-                  className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
+                  className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground"
                 />
               )}
             />
@@ -1697,7 +1699,7 @@ export function EmailTemplateForm({
                           {...field}
                           disabled={isPending}
                           placeholder="Welcome to {{appName}}"
-                          className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+                          className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                         />
                       </FormControl>
                     </div>
@@ -1795,7 +1797,7 @@ export function EmailTemplateForm({
                       value={field.value ?? ""}
                       disabled={isPending}
                       placeholder="Plain-text fallback sent alongside the HTML…"
-                      className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50 xl:min-h-full"
+                      className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground xl:min-h-full"
                     />
                   )}
                 />

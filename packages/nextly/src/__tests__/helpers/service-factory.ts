@@ -39,7 +39,7 @@ import { vi } from "vitest";
 import * as schema from "../fixtures/sqlite-schema";
 
 import type { Logger } from "../../services/shared";
-import { createTestDb, type TestDb } from "../fixtures/db";
+import { createTestDb, type TestDb, type TestDrizzleDb } from "../fixtures/db";
 
 // ============================================================
 // Types
@@ -95,7 +95,7 @@ export interface TestServiceContext<T> {
   /** The instantiated service under test */
   service: T;
   /** Drizzle database instance for direct assertions */
-  db: BetterSQLite3Database<typeof schema>;
+  db: TestDrizzleDb;
   /** The full test database context (includes reset and raw sqlite) */
   testDb: TestDb;
   /** Mock adapter passed to the service */
@@ -257,7 +257,6 @@ function createMockLogger(overrides?: Partial<Logger>): MockLogger {
  * ```
  */
 export async function createTestService<T>(
-   
   ServiceClass: new (adapter: any, logger: any) => T,
   overrides?: {
     adapter?: Partial<MockAdapter>;

@@ -65,7 +65,7 @@ export class UserRoleService extends BaseService {
         this.db as RBACDatabaseInstance
       ).query.users.findFirst({
         columns: { id: true },
-        where: eq(this.tables.users.id, userId),
+        where: { id: userId },
       });
 
       if (!user) {
@@ -85,10 +85,7 @@ export class UserRoleService extends BaseService {
       const existingUserRole = await (
         this.db as RBACDatabaseInstance
       ).query.userRoles.findFirst({
-        where: and(
-          eq(this.tables.userRoles.userId, userId),
-          eq(this.tables.userRoles.roleId, roleId)
-        ),
+        where: { userId: userId, roleId: roleId },
         columns: { id: true },
       });
 
@@ -156,10 +153,7 @@ export class UserRoleService extends BaseService {
       const existingUserRole = await (
         this.db as RBACDatabaseInstance
       ).query.userRoles.findFirst({
-        where: and(
-          eq(this.tables.userRoles.userId, userId),
-          eq(this.tables.userRoles.roleId, roleId)
-        ),
+        where: { userId: userId, roleId: roleId },
         columns: { id: true },
       });
 
@@ -214,7 +208,7 @@ export class UserRoleService extends BaseService {
     const userRoles = await (
       this.db as RBACDatabaseInstance
     ).query.userRoles.findMany({
-      where: eq(this.tables.userRoles.userId, userId),
+      where: { userId: userId },
       columns: {
         roleId: true,
       },
@@ -232,7 +226,7 @@ export class UserRoleService extends BaseService {
     const userRoles = await (
       this.db as RBACDatabaseInstance
     ).query.userRoles.findMany({
-      where: eq(this.tables.userRoles.userId, userId),
+      where: { userId: userId },
       with: {
         role: {
           columns: {

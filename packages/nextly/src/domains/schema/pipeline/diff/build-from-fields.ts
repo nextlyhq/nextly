@@ -88,11 +88,22 @@ export function buildDesiredTableFromFields(
 ): TableSpec {
   const columns: ColumnSpec[] = [];
 
+  // A field materializes a parent column unless the descriptor skips it (a
+  // component field stores its data in its own table). Column-less fields must
+  // not suppress the system title/slug column nor receive an index.
+  const producesColumn = (f: (typeof fields)[number]): boolean =>
+    getColumnDescriptor(
+      f as unknown as Parameters<typeof getColumnDescriptor>[0],
+      dialect
+    ) !== null;
+
   // Inject reserved system columns first - mirrors runtime-schema-generator's
-  // behavior. title/slug only when not user-defined (user wins). status only
-  // when the collection/single has Draft/Published enabled.
-  const hasTitleField = fields.some(f => f.name === "title");
-  const hasSlugField = fields.some(f => f.name === "slug");
+  // behavior. title/slug only when a column-producing user field replaces them
+  // (user wins). status only when Draft/Published is enabled.
+  const hasTitleField = fields.some(
+    f => f.name === "title" && producesColumn(f)
+  );
+  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
@@ -148,6 +159,11 @@ export function buildDesiredTableFromFields(
   }
   for (const field of fields) {
     const col = toSnakeCase(field.name);
+    // Skip fields that materialize no column (e.g. component fields): a unique
+    // or plain index on a nonexistent column is invalid DDL. Check the field
+    // directly (not column presence) so a component named after a system column
+    // like `title` does not index the system-injected column instead.
+    if (!producesColumn(field)) continue;
     const isSingleRelation =
       (field.type === "relationship" || field.type === "upload") &&
       field.hasMany !== true &&

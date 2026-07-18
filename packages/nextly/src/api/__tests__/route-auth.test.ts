@@ -29,7 +29,11 @@ const AUTH_CONTEXT: AuthContext = {
   authMethod: "session",
 };
 
-function errorResponse(statusCode: number, code?: string): ErrorResponse {
+function errorResponse(
+  statusCode: number,
+  code?: string,
+  headers?: Record<string, string>
+): ErrorResponse {
   return {
     success: false,
     statusCode,
@@ -37,6 +41,7 @@ function errorResponse(statusCode: number, code?: string): ErrorResponse {
     error: "nope",
     data: null,
     ...(code && { code }),
+    ...(headers && { headers }),
   };
 }
 
@@ -84,17 +89,43 @@ describe("route-auth wrappers", () => {
     ).rejects.toMatchObject({ code: "RATE_LIMITED" });
   });
 
-  it("authentication wrapper passes through and maps expired-session 401s", async () => {
+  it("forwards the middleware's Retry-After backoff on a 429", async () => {
+    // Without this the client loses the backoff the middleware already
+    // computed, because withErrorHandler only emits the Retry-After header
+    // when retryAfterSeconds is present on the error.
+    middleware.requireCollectionAccess.mockResolvedValue(
+      errorResponse(429, "RATE_LIMITED", { "Retry-After": "42" })
+    );
+    const failure = requireRouteCollectionAccess(request, "read", "posts");
+    await expect(failure).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    await failure.catch((err: NextlyError) => {
+      expect(
+        (err.publicData as { retryAfterSeconds?: number }).retryAfterSeconds
+      ).toBe(42);
+    });
+  });
+
+  it("authentication wrapper passes through and preserves TOKEN_EXPIRED", async () => {
     middleware.requireAuthentication.mockResolvedValue(AUTH_CONTEXT);
     await expect(requireRouteAuthentication(request)).resolves.toBe(
       AUTH_CONTEXT
     );
 
+    // TOKEN_EXPIRED must survive so the admin refresh interceptor can silently
+    // refresh instead of hard-logging-out; a bare 401 still maps to
+    // AUTH_REQUIRED.
     middleware.requireAuthentication.mockResolvedValue(
       errorResponse(401, "TOKEN_EXPIRED")
     );
-    const failure = requireRouteAuthentication(request);
-    await expect(failure).rejects.toBeInstanceOf(NextlyError);
-    await expect(failure).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
+    const expired = requireRouteAuthentication(request);
+    await expect(expired).rejects.toBeInstanceOf(NextlyError);
+    await expect(expired).rejects.toMatchObject({ code: "TOKEN_EXPIRED" });
+
+    middleware.requireAuthentication.mockResolvedValue(
+      errorResponse(401, "AUTH_REQUIRED")
+    );
+    await expect(requireRouteAuthentication(request)).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+    });
   });
 });

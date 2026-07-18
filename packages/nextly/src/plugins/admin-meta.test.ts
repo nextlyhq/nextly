@@ -41,6 +41,60 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("serializes a field type's picker presentation and surfaces", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "rating",
+                storage: "number",
+                component: "@acme/p/admin#Rating",
+                label: "Star Rating",
+                description: "A 1-5 star rating",
+                icon: "Star",
+                category: "Advanced",
+                surfaces: ["entries", "users"],
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0]).toEqual({
+      type: "rating",
+      component: "@acme/p/admin#Rating",
+      label: "Star Rating",
+      description: "A 1-5 star rating",
+      icon: "Star",
+      category: "Advanced",
+      surfaces: ["entries", "users"],
+    });
+  });
+
+  it("omits presentation and surfaces keys a field type does not declare", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              { type: "rating", storage: "number", component: "@p#R" },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0]).toEqual({
+      type: "rating",
+      component: "@p#R",
+    });
+  });
+
   it("serializes schemaBuilderSlot for an enabled plugin only", () => {
     const enabled = buildPluginAdminMeta(
       asPlugins([

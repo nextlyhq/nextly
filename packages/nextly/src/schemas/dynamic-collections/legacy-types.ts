@@ -69,6 +69,14 @@ export type FieldDefinition = {
   default?: unknown;
   length?: number;
 
+  /** Storage type for number fields: whole-number `integer` (default) or exact
+   * fixed-point `decimal` (sized by `precision`/`scale`). */
+  dbType?: "integer" | "decimal";
+  /** Total significant digits for a `decimal` number field (default 10). */
+  precision?: number;
+  /** Fractional digits for a `decimal` number field (default 2). */
+  scale?: number;
+
   options?: {
     variant?: "short" | "long";
     format?: "float" | "integer" | "datetime" | "date" | "time";

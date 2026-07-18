@@ -145,8 +145,8 @@ importers:
         specifier: workspace:^
         version: link:../../packages/plugin-page-builder
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
       mysql2:
         specifier: ^3.15.0
         version: 3.15.0
@@ -251,8 +251,8 @@ importers:
   packages/adapter-drizzle:
     dependencies:
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
     devDependencies:
       '@nextlyhq/eslint-config':
         specifier: workspace:*
@@ -291,8 +291,8 @@ importers:
         specifier: workspace:*
         version: link:../adapter-drizzle
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
       mysql2:
         specifier: ^3.15.0
         version: 3.15.0
@@ -331,8 +331,8 @@ importers:
         specifier: workspace:*
         version: link:../adapter-drizzle
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -377,8 +377,8 @@ importers:
         specifier: ^12.5.0
         version: 12.5.0
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
     devDependencies:
       '@nextlyhq/eslint-config':
         specifier: workspace:*
@@ -830,11 +830,11 @@ importers:
         specifier: ^17.2.2
         version: 17.2.2
       drizzle-kit:
-        specifier: 0.31.10
-        version: 0.31.10
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4
       drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3)
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
       esbuild:
         specifier: '>=0.25.0'
         version: 0.28.1
@@ -945,6 +945,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.6.1)
+      mysql2:
+        specifier: ^3.15.0
+        version: 3.15.0
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -1386,6 +1389,9 @@ importers:
       '@tailwindcss/cli':
         specifier: ^4.3.2
         version: 4.3.2
+      '@types/culori':
+        specifier: ^4.0.1
+        version: 4.0.1
       '@types/react':
         specifier: 19.2.0
         version: 19.2.0
@@ -1401,6 +1407,9 @@ importers:
       '@vitest/ui':
         specifier: ^4.0.8
         version: 4.0.8(vitest@4.0.8)
+      culori:
+        specifier: ^4.0.2
+        version: 4.0.2
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
@@ -1410,6 +1419,9 @@ importers:
       lucide-react:
         specifier: ^0.544.0
         version: 0.544.0(react@19.2.0)
+      postcss:
+        specifier: ^8.5.10
+        version: 8.5.14
       react:
         specifier: 19.2.0
         version: 19.2.0
@@ -2081,8 +2093,8 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
-  '@drizzle-team/brocli@0.10.2':
-    resolution: {integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==}
+  '@drizzle-team/brocli@0.12.0':
+    resolution: {integrity: sha512-mlUE+rZ8CatQekLhnaiN91Iemdd+e2gFKooGlnRB3oPTL3VghLfX24dx7HrzMNeC1JrIB/0kpsfyty3f5HNfxQ==}
 
   '@effect/platform@0.90.3':
     resolution: {integrity: sha512-XvQ37yzWQKih4Du2CYladd1i/MzqtgkTPNCaN6Ku6No4CK83hDtXIV/rP03nEoBg2R3Pqgz6gGWmE2id2G81HA==}
@@ -2100,14 +2112,6 @@ packages:
 
   '@emnapi/wasi-threads@1.1.0':
     resolution: {integrity: sha512-WI0DdZ8xFSbgMjR1sFsKABJ/C5OnRrjT06JXbZKexJGrDuPTzZdDYfFlsgcCXCyf+suG5QU2e/y1Wo2V/OapLQ==}
-
-  '@esbuild-kit/core-utils@3.3.2':
-    resolution: {integrity: sha512-sPRAnw9CdSsRmEtnsl2WXWdyquogVpB3yZ3dgwJfe8zrOzTsV7cJvmwrKVa+0ma5BoiGJ+BoqkMvawbayKUsqQ==}
-    deprecated: 'Merged into tsx: https://tsx.is'
-
-  '@esbuild-kit/esm-loader@2.6.5':
-    resolution: {integrity: sha512-FxEMIkJKnodyA1OaCUoEvbYRkoZlLZ4d/eXFu9Fh8CbBBgP5EmZxrfTRyN0qpXZ4vOvqnE5YdRdcrmUUXuU+dA==}
-    deprecated: 'Merged into tsx: https://tsx.is'
 
   '@esbuild/aix-ppc64@0.25.12':
     resolution: {integrity: sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==}
@@ -2935,6 +2939,10 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@js-temporal/polyfill@0.5.1':
+    resolution: {integrity: sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ==}
+    engines: {node: '>=12'}
 
   '@lexical/a11y@0.47.0':
     resolution: {integrity: sha512-MlAL25PxThTYQuFn2aOwyfY9+/wKloAd8fbf4a1GeFATVgvirC8xACBmERpqpf4A06OdLIoIZ5J/qtgJXsdn1g==}
@@ -4573,6 +4581,9 @@ packages:
   '@types/css-tree@2.3.11':
     resolution: {integrity: sha512-aEokibJOI77uIlqoBOkVbaQGC9zII0A+JH1kcTNKW2CwyYWD8KM6qdo+4c77wD3wZOQfJuNWAr9M4hdk+YhDIg==}
 
+  '@types/culori@4.0.1':
+    resolution: {integrity: sha512-43M51r/22CjhbOXyGT361GZ9vncSVQ39u62x5eJdBQFviI8zWp2X5jzqg7k4M6PVgDQAClpy2bUe2dtwEgEDVQ==}
+
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -5344,6 +5355,10 @@ packages:
   csstype@3.1.3:
     resolution: {integrity: sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw==}
 
+  culori@4.0.2:
+    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
   damerau-levenshtein@1.0.8:
     resolution: {integrity: sha512-sdQSFB7+llfUcQHUQO3+B8ERRj0Oa4w9POWMI/puGtuf7gFywGmkaLCElnudfTiKZV+NvHqL0ifzdrI8Ro7ESA==}
 
@@ -5482,15 +5497,24 @@ packages:
     resolution: {integrity: sha512-IrPdXQsk2BbzvCBGBOTmmSH5SodmqZNt4ERAZDmW4CT+tL8VtvinqywuANaFu4bOMWki16nqf0e4oC0QIaDr/g==}
     engines: {node: '>=10'}
 
-  drizzle-kit@0.31.10:
-    resolution: {integrity: sha512-7OZcmQUrdGI+DUNNsKBn1aW8qSoKuTH7d0mYgSP8bAzdFzKoovxEFnoGQp2dVs82EOJeYycqRtciopszwUf8bw==}
+  drizzle-kit@1.0.0-rc.4:
+    resolution: {integrity: sha512-KZCpjRyu+oYHLj/UJogfFlOkWhHVkaEI2EOT1U3NDVXUzLoTyPjqwFxwOrlQxsY6jzRyxcz4EacqboGfhEeYrA==}
     hasBin: true
 
-  drizzle-orm@0.45.2:
-    resolution: {integrity: sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==}
+  drizzle-orm@1.0.0-rc.4:
+    resolution: {integrity: sha512-BT+pf+qoiYHqltoA88Jmf6ilGMXPlpfE0hEJKc2adRtMCAl25Swk/t5gXcWxZNAwdtf3F5gCd2FpeOyP/pT0Hw==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
       '@cloudflare/workers-types': '>=4'
+      '@effect/sql-d1': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-libsql': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-mysql2': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-pg': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-pglite': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-sqlite-bun': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-sqlite-do': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-sqlite-node': '>=4.0.0-beta.83 || >=4.0.0'
+      '@effect/sql-sqlite-wasm': '>=4.0.0-beta.83 || >=4.0.0'
       '@electric-sql/pglite': '>=0.2.0'
       '@libsql/client': '>=0.10.0'
       '@libsql/client-wasm': '>=0.10.0'
@@ -5498,30 +5522,57 @@ packages:
       '@op-engineering/op-sqlite': '>=2'
       '@opentelemetry/api': ^1.4.1
       '@planetscale/database': '>=1.13'
-      '@prisma/client': '*'
+      '@sinclair/typebox': '>=0.34.8'
+      '@sqlitecloud/drivers': '>=1.0.653'
       '@tidbcloud/serverless': '*'
+      '@tursodatabase/database': '>=0.6.0-pre.28 || >=0.6.0'
+      '@tursodatabase/database-common': '>=0.6.0-pre.28 || >=0.6.0'
+      '@tursodatabase/database-wasm': '>=0.6.0-pre.28 || >=0.6.0'
+      '@tursodatabase/serverless': '>=1.1.3'
+      '@tursodatabase/sync': '>=0.6.0-pre.28 || >=0.6.0'
       '@types/better-sqlite3': '*'
+      '@types/mssql': ^9.1.4
       '@types/pg': '*'
       '@types/sql.js': '*'
       '@upstash/redis': '>=1.34.7'
       '@vercel/postgres': '>=0.8.0'
       '@xata.io/client': '*'
-      better-sqlite3: '>=7'
+      arktype: '>=2.0.0'
+      better-sqlite3: '>=9.3.0'
       bun-types: '*'
+      effect: ^3.20.0
       expo-sqlite: '>=14.0.0'
-      gel: '>=2'
-      knex: '*'
-      kysely: '*'
+      mssql: ^11.0.1
       mysql2: '>=2'
       pg: '>=8'
       postgres: '>=3'
-      prisma: '*'
       sql.js: '>=1'
       sqlite3: '>=5'
+      typebox: '>=1.0.0'
+      valibot: '>=1.0.0-beta.7'
+      zod: ^3.25.0 || ^4.0.0
     peerDependenciesMeta:
       '@aws-sdk/client-rds-data':
         optional: true
       '@cloudflare/workers-types':
+        optional: true
+      '@effect/sql-d1':
+        optional: true
+      '@effect/sql-libsql':
+        optional: true
+      '@effect/sql-mysql2':
+        optional: true
+      '@effect/sql-pg':
+        optional: true
+      '@effect/sql-pglite':
+        optional: true
+      '@effect/sql-sqlite-bun':
+        optional: true
+      '@effect/sql-sqlite-do':
+        optional: true
+      '@effect/sql-sqlite-node':
+        optional: true
+      '@effect/sql-sqlite-wasm':
         optional: true
       '@electric-sql/pglite':
         optional: true
@@ -5537,11 +5588,25 @@ packages:
         optional: true
       '@planetscale/database':
         optional: true
-      '@prisma/client':
+      '@sinclair/typebox':
+        optional: true
+      '@sqlitecloud/drivers':
         optional: true
       '@tidbcloud/serverless':
         optional: true
+      '@tursodatabase/database':
+        optional: true
+      '@tursodatabase/database-common':
+        optional: true
+      '@tursodatabase/database-wasm':
+        optional: true
+      '@tursodatabase/serverless':
+        optional: true
+      '@tursodatabase/sync':
+        optional: true
       '@types/better-sqlite3':
+        optional: true
+      '@types/mssql':
         optional: true
       '@types/pg':
         optional: true
@@ -5553,17 +5618,17 @@ packages:
         optional: true
       '@xata.io/client':
         optional: true
+      arktype:
+        optional: true
       better-sqlite3:
         optional: true
       bun-types:
         optional: true
+      effect:
+        optional: true
       expo-sqlite:
         optional: true
-      gel:
-        optional: true
-      knex:
-        optional: true
-      kysely:
+      mssql:
         optional: true
       mysql2:
         optional: true
@@ -5571,11 +5636,15 @@ packages:
         optional: true
       postgres:
         optional: true
-      prisma:
-        optional: true
       sql.js:
         optional: true
       sqlite3:
+        optional: true
+      typebox:
+        optional: true
+      valibot:
+        optional: true
+      zod:
         optional: true
 
   dunder-proto@1.0.1:
@@ -6056,6 +6125,9 @@ packages:
   get-tsconfig@4.13.0:
     resolution: {integrity: sha512-1VKTZJCwBrvbd+Wn3AOgQP/2Av+TfTCOlE4AcRJE72W1ksZXbAx8PPBR9RzgTeSPzlPMHrbANMH3LbltH73wxQ==}
 
+  get-tsconfig@4.14.0:
+    resolution: {integrity: sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA==}
+
   git-raw-commits@4.0.0:
     resolution: {integrity: sha512-ICsMM1Wk8xSGMowkOmPrzo2Fgmfo4bMHLNX6ytHjajRJUqvHOw/TFapQ+QG75c3X/tTDDhOSRPGC52dDbNM8FQ==}
     engines: {node: '>=16'}
@@ -6458,6 +6530,9 @@ packages:
   js-yaml@4.1.1:
     resolution: {integrity: sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA==}
     hasBin: true
+
+  jsbi@4.3.2:
+    resolution: {integrity: sha512-9fqMSQbhJykSeii05nxKl4m6Eqn2P6rOlYiS+C5Dr/HPIU/7yZxu5qzbs40tgaFORiw2Amd0mirjxatXYMkIew==}
 
   jsdom@27.1.0:
     resolution: {integrity: sha512-Pcfm3eZ+eO4JdZCXthW9tCDT3nF4K+9dmeZ+5X39n+Kqz0DDIABRP5CAEOHRFZk8RGuC2efksTJxrjp8EXCunQ==}
@@ -9722,7 +9797,7 @@ snapshots:
       react: 19.2.0
       tslib: 2.8.1
 
-  '@drizzle-team/brocli@0.10.2': {}
+  '@drizzle-team/brocli@0.12.0': {}
 
   '@effect/platform@0.90.3(effect@3.21.2)':
     dependencies:
@@ -9752,16 +9827,6 @@ snapshots:
     dependencies:
       tslib: 2.8.1
     optional: true
-
-  '@esbuild-kit/core-utils@3.3.2':
-    dependencies:
-      esbuild: 0.28.1
-      source-map-support: 0.5.21
-
-  '@esbuild-kit/esm-loader@2.6.5':
-    dependencies:
-      '@esbuild-kit/core-utils': 3.3.2
-      get-tsconfig: 4.13.0
 
   '@esbuild/aix-ppc64@0.25.12':
     optional: true
@@ -10374,6 +10439,10 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@js-temporal/polyfill@0.5.1':
+    dependencies:
+      jsbi: 4.3.2
 
   '@lexical/a11y@0.47.0(typescript@5.9.3)':
     dependencies:
@@ -12049,6 +12118,8 @@ snapshots:
 
   '@types/css-tree@2.3.11': {}
 
+  '@types/culori@4.0.1': {}
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.8': {}
@@ -12745,11 +12816,6 @@ snapshots:
       esbuild: 0.25.12
       load-tsconfig: 0.2.5
 
-  bundle-require@5.1.0(esbuild@0.28.1):
-    dependencies:
-      esbuild: 0.28.1
-      load-tsconfig: 0.2.5
-
   cac@6.7.14: {}
 
   call-bind-apply-helpers@1.0.2:
@@ -12944,7 +13010,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.0
       cosmiconfig: 9.0.0(typescript@5.9.3)
-      jiti: 2.6.1
+      jiti: 2.7.0
       typescript: 5.9.3
 
   cosmiconfig@9.0.0(typescript@5.9.3):
@@ -12990,6 +13056,8 @@ snapshots:
       lru-cache: 11.3.5
 
   csstype@3.1.3: {}
+
+  culori@4.0.2: {}
 
   damerau-levenshtein@1.0.8: {}
 
@@ -13105,20 +13173,23 @@ snapshots:
 
   dotenv@8.6.0: {}
 
-  drizzle-kit@0.31.10:
+  drizzle-kit@1.0.0-rc.4:
     dependencies:
-      '@drizzle-team/brocli': 0.10.2
-      '@esbuild-kit/esm-loader': 2.6.5
+      '@drizzle-team/brocli': 0.12.0
+      '@js-temporal/polyfill': 0.5.1
       esbuild: 0.28.1
-      tsx: 4.21.0
+      get-tsconfig: 4.14.0
+      jiti: 2.7.0
 
-  drizzle-orm@0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(mysql2@3.15.0)(pg@8.16.3):
+  drizzle-orm@1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12):
     optionalDependencies:
       '@types/better-sqlite3': 7.6.13
       '@types/pg': 8.15.5
       better-sqlite3: 12.5.0
+      effect: 3.21.2
       mysql2: 3.15.0
       pg: 8.16.3
+      zod: 4.1.12
 
   dunder-proto@1.0.1:
     dependencies:
@@ -13857,6 +13928,10 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
+  get-tsconfig@4.14.0:
+    dependencies:
+      resolve-pkg-maps: 1.0.0
+
   git-raw-commits@4.0.0:
     dependencies:
       dargs: 8.1.0
@@ -14245,6 +14320,8 @@ snapshots:
   js-yaml@4.1.1:
     dependencies:
       argparse: 2.0.1
+
+  jsbi@4.3.2: {}
 
   jsdom@27.1.0:
     dependencies:
@@ -14665,7 +14742,7 @@ snapshots:
       '@swc/helpers': 0.5.15
       baseline-browser-mapping: 2.10.23
       caniuse-lite: 1.0.30001754
-      postcss: 8.5.12
+      postcss: 8.5.14
       react: 19.2.0
       react-dom: 19.2.0(react@19.2.0)
       styled-jsx: 5.1.6(@babel/core@7.28.5)(react@19.2.0)
@@ -15850,12 +15927,12 @@ snapshots:
 
   tsup@8.5.0(jiti@2.6.1)(postcss@8.5.14)(tsx@4.20.5)(typescript@5.9.3)(yaml@2.8.3):
     dependencies:
-      bundle-require: 5.1.0(esbuild@0.28.1)
+      bundle-require: 5.1.0(esbuild@0.25.12)
       cac: 6.7.14
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3
-      esbuild: 0.28.1
+      esbuild: 0.25.12
       fix-dts-default-cjs-exports: 1.0.1
       joycon: 3.1.1
       picocolors: 1.1.1
@@ -15878,12 +15955,12 @@ snapshots:
 
   tsup@8.5.0(jiti@2.7.0)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3):
     dependencies:
-      bundle-require: 5.1.0(esbuild@0.28.1)
+      bundle-require: 5.1.0(esbuild@0.25.12)
       cac: 6.7.14
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3
-      esbuild: 0.28.1
+      esbuild: 0.25.12
       fix-dts-default-cjs-exports: 1.0.1
       joycon: 3.1.1
       picocolors: 1.1.1
@@ -15942,9 +16019,10 @@ snapshots:
   tsx@4.21.0:
     dependencies:
       esbuild: 0.28.1
-      get-tsconfig: 4.13.0
+      get-tsconfig: 4.14.0
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   tunnel-agent@0.6.0:
     dependencies:

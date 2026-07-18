@@ -118,6 +118,21 @@ export function SchemaChangeDialog({
     setRenameSelections(prev => ({ ...prev, [dropKey]: target }));
   };
 
+  // Attach an explicit confirm_drop for every removed field the user just
+  // reviewed above. Removing a field drops its column and destroys the data
+  // in it, and the server's schema pipeline now refuses any destructive drop
+  // it was not told to make. Renames (a drop paired with an add) are carried
+  // by the rename resolutions and filtered server-side, so a confirm_drop for
+  // one of those is a harmless no-op. Interactive resolutions (NOT NULL /
+  // default) win on a name collision.
+  const buildResolutions = (): Record<string, FieldResolution> => {
+    const confirmed: Record<string, FieldResolution> = {};
+    for (const field of changes.removed) {
+      confirmed[field.name] = { action: "confirm_drop" };
+    }
+    return { ...confirmed, ...resolutions };
+  };
+
   // Translate per-drop selections into one resolution per candidate (the
   // shape the apply endpoint expects). For each candidate, "rename" only
   // when its target matches the drop's selection; otherwise "drop_and_add".
@@ -366,12 +381,13 @@ export function SchemaChangeDialog({
             onClick={e => {
               // Prevent auto-close so we show the overlay during apply
               e.preventDefault();
-              onConfirm(resolutions, buildRenameResolutions());
+              onConfirm(buildResolutions(), buildRenameResolutions());
             }}
             disabled={isApplying || !canApply}
             className={
+              // Solid emphasis fill so white on-color text stays AA in dark mode.
               hasDestructiveChanges
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
                 : ""
             }
           >

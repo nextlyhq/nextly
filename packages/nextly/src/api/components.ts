@@ -89,12 +89,17 @@ const createComponentSchema = z.object({
  * ```
  */
 export const GET = withErrorHandler(async (request: Request) => {
+  // Boot services before the permission check: the RBAC/API-key path resolves
+  // through the DI adapter, which is registered lazily on the first request.
+  // Gating first would make the permission lookup fail closed (403/503) before
+  // init runs, breaking the documented auto-initialization on first request.
+  const registry = await getComponentRegistry();
+
   await requireRouteAnyPermission(request, [
     { action: "read", resource: "settings" },
     { action: "manage", resource: "settings" },
   ]);
 
-  const registry = await getComponentRegistry();
   const { searchParams } = new URL(request.url);
 
   const source = searchParams.get("source") as "code" | "ui" | null;
@@ -156,12 +161,15 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Schema DDL: refuse when the builder is disabled for this environment.
   requireBuilderEnabled("create-component");
 
+  // Boot services before the permission check (see GET) so lazy DI init does
+  // not turn a valid caller's first request into a 403/503.
+  const registry = await getComponentRegistry();
+
   await requireRouteAnyPermission(request, [
     { action: "create", resource: "settings" },
     { action: "manage", resource: "settings" },
   ]);
 
-  const registry = await getComponentRegistry();
   const body = await request.json();
 
   const parsed = createComponentSchema.safeParse(body);

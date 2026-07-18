@@ -1170,7 +1170,7 @@ describe("RoleService", () => {
 
       // Verify role exists in database
       const role = await testDb.db.query.roles.findFirst({
-        where: (roles, { eq }) => eq(roles.slug, "super-admin"),
+        where: { slug: "super-admin" },
       });
 
       expect(role).toBeTruthy();
@@ -1192,7 +1192,7 @@ describe("RoleService", () => {
 
       // Verify only one super admin exists
       const roles = await testDb.db.query.roles.findMany({
-        where: (roles, { eq }) => eq(roles.slug, "super-admin"),
+        where: { slug: "super-admin" },
       });
 
       expectArrayLength(roles, 1);

@@ -29,6 +29,7 @@
  */
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
+import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 
 import type { UserConfig } from "./types";
 
@@ -227,7 +228,14 @@ export function checkUserFieldName(
  * @returns a reason the type is unusable, or `null` if it is fine
  */
 export function checkUserFieldType(
-  type: unknown
+  type: unknown,
+  /**
+   * Plugin field type ids the surrounding config declares for the users surface.
+   * Lets `defineConfig()` validation accept a code-defined plugin user field
+   * whose plugin has not been registered into the global registry yet (config is
+   * validated at definition time, before boot registers `contributes.fieldTypes`).
+   */
+  configUsersTypes?: ReadonlySet<string>
 ): UserFieldNameRejection | null {
   if (!type) {
     return {
@@ -240,10 +248,20 @@ export function checkUserFieldType(
   // is arbitrary caller data and must not be stringified into a message.
   const described = typeof type === "string" ? type : typeof type;
 
-  if (typeof type !== "string" || !ALLOWED_TYPES_SET.has(type)) {
+  // A plugin may contribute a field type that opts into the users surface; it
+  // persists as its declared storage primitive, so it is as usable here as a
+  // built-in scalar. Built-ins keep the fast allowlist; plugin types fall
+  // through to the registry (surface-gated) or the config's own declarations.
+  const isAllowed =
+    typeof type === "string" &&
+    (ALLOWED_TYPES_SET.has(type) ||
+      isPluginFieldTypeOnSurface(type, "users") ||
+      (configUsersTypes?.has(type) ?? false));
+
+  if (!isAllowed) {
     return {
       code: "USER_FIELD_TYPE_NOT_ALLOWED",
-      message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}`,
+      message: `User custom fields do not support type '${described}'. Allowed types: ${ALLOWED_USER_FIELD_TYPES.join(", ")}. A plugin-contributed field type is also accepted when it declares the "users" surface.`,
     };
   }
 
@@ -286,9 +304,10 @@ function validateUserFieldName(
 function validateUserFieldType(
   field: Record<string, unknown>,
   path: string,
-  errors: UserValidationError[]
+  errors: UserValidationError[],
+  configUsersTypes?: ReadonlySet<string>
 ): void {
-  const rejection = checkUserFieldType(field.type);
+  const rejection = checkUserFieldType(field.type, configUsersTypes);
   if (rejection) {
     errors.push({ path: `${path}.type`, ...rejection });
   }
@@ -346,7 +365,8 @@ function validateUserSelectOptions(
  */
 function validateUserFields(
   fields: unknown,
-  errors: UserValidationError[]
+  errors: UserValidationError[],
+  configUsersTypes?: ReadonlySet<string>
 ): Set<string> {
   const fieldNames = new Set<string>();
 
@@ -374,7 +394,7 @@ function validateUserFields(
 
     const f = field as Record<string, unknown>;
 
-    validateUserFieldType(f, fieldPath, errors);
+    validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
 
     // Field-specific validation
@@ -496,11 +516,18 @@ function validateAdminOptions(
  * }
  * ```
  */
-export function validateUserConfig(config: UserConfig): UserValidationResult {
+export function validateUserConfig(
+  config: UserConfig,
+  configUsersTypes?: ReadonlySet<string>
+): UserValidationResult {
   const errors: UserValidationError[] = [];
 
   // Validate fields (returns set of valid field names for admin validation)
-  const fieldNames = validateUserFields(config.fields, errors);
+  const fieldNames = validateUserFields(
+    config.fields,
+    errors,
+    configUsersTypes
+  );
 
   // Validate admin options
   validateAdminOptions(config.admin, fieldNames, errors);
@@ -532,8 +559,11 @@ export function validateUserConfig(config: UserConfig): UserValidationResult {
  * });
  * ```
  */
-export function assertValidUserConfig(config: UserConfig): void {
-  const result = validateUserConfig(config);
+export function assertValidUserConfig(
+  config: UserConfig,
+  configUsersTypes?: ReadonlySet<string>
+): void {
+  const result = validateUserConfig(config, configUsersTypes);
 
   if (!result.valid) {
     const errorMessages = result.errors

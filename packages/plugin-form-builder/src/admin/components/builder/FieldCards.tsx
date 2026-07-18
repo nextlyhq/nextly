@@ -32,6 +32,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { usePluginFieldTypeEntries } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   DropdownMenu,
@@ -51,7 +52,7 @@ import type {
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useCallback, useMemo, useState } from "react";
 
-import type { FormField } from "../../../types";
+import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
@@ -85,14 +86,14 @@ function CatalogIcon({
 // ---------------------------------------------------------------------------
 
 interface FieldCardProps {
-  field: FormField;
+  field: AnyFormField;
   index: number;
   total: number;
   expanded: boolean;
   onToggle: () => void;
-  allFields: FormField[];
+  allFields: AnyFormField[];
   deleteBlockers: string[];
-  onUpdate: (updates: Partial<FormField>) => void;
+  onUpdate: (updates: Partial<AnyFormField>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -131,8 +132,9 @@ function FieldCard({
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={
+        // Dragging uses full-strength border-primary so the lifted card stands out; the resting state uses border-border, keeping the two distinct.
         isDragging
-          ? "border border-primary/40 bg-card opacity-80 relative z-10"
+          ? "border border-primary bg-card opacity-80 relative z-10"
           : "border border-border bg-card"
       }
     >
@@ -144,7 +146,7 @@ function FieldCard({
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none text-muted-foreground/60 hover:text-foreground hover:bg-primary/5 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none text-muted-foreground hover:text-foreground hover:bg-primary/5 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label={`Reorder ${field.label || field.name}. Press Space to lift, arrow keys to move, Space to drop.`}
         >
           <Lucide.GripVertical className="h-4 w-4" aria-hidden="true" />
@@ -156,7 +158,7 @@ function FieldCard({
           aria-expanded={expanded}
           aria-controls={bodyId}
           id={headerId}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-primary/5 text-primary">
             <CatalogIcon name={entry?.icon} className="h-3.5 w-3.5" />
@@ -167,7 +169,7 @@ function FieldCard({
             </span>
             <span className="block truncate text-xs text-muted-foreground">
               {entry?.label ?? field.type}
-              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              <span className="mx-1.5 text-muted-foreground">·</span>
               <span className="font-mono">{field.name}</span>
             </span>
           </span>
@@ -285,11 +287,21 @@ export interface FieldCardsProps {
    * added.
    */
   enabledTypes: readonly FormFieldCatalogType[] | null;
+  /**
+   * Type ids the host disabled (`config.fields[type] === false`). Applied to
+   * plugin field types too, so the host exclude layer is not bypassed for
+   * contributed types.
+   */
+  disabledFieldTypes?: ReadonlySet<string>;
   /** Creates a field of the given type and returns it (context helper). */
-  onAddField: (type: FormFieldCatalogType) => void;
+  onAddField: (type: FormFieldTypeId) => void;
 }
 
-export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
+export function FieldCards({
+  enabledTypes,
+  disabledFieldTypes,
+  onAddField,
+}: FieldCardsProps) {
   const {
     fields,
     notifications,
@@ -308,11 +320,27 @@ export function FieldCards({ enabledTypes, onAddField }: FieldCardsProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
+  // Plugin field types that opted into the forms surface, offered alongside the
+  // enabled built-ins. A plugin reusing a built-in id never shadows it.
+  const pluginEntries = usePluginFieldTypeEntries("forms");
+
   const entries = useMemo(() => {
     if (enabledTypes === null) return null;
     const allowed = new Set<string>(enabledTypes);
-    return FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
-  }, [enabledTypes]);
+    const builtinTypes = new Set<string>(
+      FORM_FIELD_TYPE_CATALOG.map(entry => entry.type)
+    );
+    const builtins: FieldTypeCatalogEntry<FormFieldTypeId>[] =
+      FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
+    return [
+      ...builtins,
+      // A plugin type a built-in shadows, or one the host disabled, is excluded.
+      ...pluginEntries.filter(
+        entry =>
+          !builtinTypes.has(entry.type) && !disabledFieldTypes?.has(entry.type)
+      ),
+    ];
+  }, [enabledTypes, pluginEntries, disabledFieldTypes]);
 
   // One O(N^2) pass per fields/notifications change; each card then looks
   // its blockers up in O(1) instead of re-walking everything per render.

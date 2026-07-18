@@ -123,7 +123,7 @@ describe("SQLite Adapter Integration (Real File-Based SQLite)", () => {
     `);
 
     // Create the Drizzle client wrapping the raw better-sqlite3 connection.
-    db = drizzle(sqlite);
+    db = drizzle({ client: sqlite });
   });
 
   afterAll(() => {

@@ -62,7 +62,6 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
@@ -70,7 +69,7 @@ import {
   mergeUiEntities,
 } from "../../domains/schema/ui-schema/merge";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv } from "../utils/adapter";
+import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 
 // ============================================================================
@@ -389,6 +388,9 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        dbType?: "integer" | "decimal";
+        precision?: number;
+        scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
@@ -404,6 +406,11 @@ function toMinimalEntities(
         relationTo: f.relationTo,
         unique: f.unique,
         index: f.index,
+        // Forward decimal storage so drift detection compares a decimal column
+        // against the decimal desired state, not the integer default.
+        dbType: f.dbType,
+        precision: f.precision,
+        scale: f.scale,
       })),
       // Why: forward the Draft/Published flag so migrate:check's drift
       // detection compares status correctly. Components don't carry

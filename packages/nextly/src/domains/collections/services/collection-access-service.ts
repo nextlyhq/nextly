@@ -50,6 +50,9 @@ export class CollectionAccessService extends BaseService {
       user: {
         id: user.id,
         role: user.role,
+        // Forward the full role set so role-based rules match on ANY role,
+        // not just a single primary role (the user/role model is many-to-many).
+        roles: user.roles,
         email: user.email,
       },
     };
