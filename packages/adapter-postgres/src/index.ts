@@ -951,19 +951,16 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(
-                  this.getTableObject(table),
-                  options.returning
-                )
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const result = await client.query(sql, values);
@@ -1000,19 +997,16 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(
-                  this.getTableObject(table),
-                  options.returning
-                )
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const result = await client.query(sql, params);

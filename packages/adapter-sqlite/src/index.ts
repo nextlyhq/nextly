@@ -751,22 +751,25 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(
-                  this.getTableObject(table),
-                  options.returning
-                )
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
+        if (returningEmpty) {
+          // No RETURNING clause: better-sqlite3's .all() rejects a statement
+          // that returns no columns, so run it and return nothing.
+          stmt.run(...values);
+          return undefined as T;
+        }
         const rows = stmt.all(...values) as T[];
         // Return JS property-named keys to match the non-transactional insert.
         return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
@@ -799,22 +802,23 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(
-                  this.getTableObject(table),
-                  options.returning
-                )
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
+        if (returningEmpty) {
+          stmt.run(...allValues);
+          return [];
+        }
         return (stmt.all(...allValues) as T[]).map(r =>
           this.mapRowKeysToJs(tableObj, r)
         );

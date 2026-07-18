@@ -409,9 +409,14 @@ export abstract class DrizzleAdapter {
    */
   protected buildColumnProjection(
     tableObj: unknown,
-    names: string[] | "*"
+    names: string[] | "*" | undefined
   ): Record<string, unknown> | undefined {
-    if (names === "*" || !tableObj || typeof tableObj !== "object") {
+    if (
+      names == null ||
+      names === "*" ||
+      !tableObj ||
+      typeof tableObj !== "object"
+    ) {
       return undefined;
     }
     const cols = getColumns(tableObj as never);
@@ -744,14 +749,17 @@ export abstract class DrizzleAdapter {
         const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
 
-        if (caps.supportsReturning && options?.returning) {
-          // Honor a specific returning list by projecting only those columns, so
-          // the insert does not transfer unrequested columns (e.g. a large JSON
-          // snapshot) back. `"*"` (and an empty/unresolved list) returns all.
-          const projection = this.buildColumnProjection(
-            tableObj,
-            options.returning
-          );
+        const returning = options?.returning;
+        // An empty array means "no columns back": skip RETURNING entirely and,
+        // on MySQL, skip the select-back reread. Useful for callers that ignore
+        // the insert result and don't want a large row (e.g. a JSON snapshot)
+        // materialized. `"*"` returns all; a specific list is projected.
+        const wantsReturning =
+          returning != null &&
+          !(Array.isArray(returning) && returning.length === 0);
+
+        if (caps.supportsReturning && wantsReturning) {
+          const projection = this.buildColumnProjection(tableObj, returning);
           const insertQuery = db.insert(tableObj).values(mappedData);
           const result = await (projection
             ? insertQuery.returning(projection)
@@ -761,15 +769,20 @@ export abstract class DrizzleAdapter {
 
         const result = await db.insert(tableObj).values(mappedData);
 
-        // For databases without RETURNING (MySQL): select back the inserted record
-        if (!caps.supportsReturning && options?.returning) {
-          if (data.id !== undefined) {
-            return (await this.selectOne<T>(table, {
-              where: {
-                and: [{ column: "id", op: "=", value: data.id as SqlParam }],
-              },
-            })) as T;
-          }
+        // For databases without RETURNING (MySQL): select back the inserted
+        // record, projecting only the requested columns so unrequested ones
+        // (a large JSON snapshot) are not read and decoded.
+        if (
+          !caps.supportsReturning &&
+          wantsReturning &&
+          data.id !== undefined
+        ) {
+          return (await this.selectOne<T>(table, {
+            columns: returning === "*" ? undefined : returning,
+            where: {
+              and: [{ column: "id", op: "=", value: data.id as SqlParam }],
+            },
+          })) as T;
         }
 
         return (Array.isArray(result) ? result[0] : result) as T;

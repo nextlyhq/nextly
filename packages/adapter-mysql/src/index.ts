@@ -783,7 +783,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
-        _options?: InsertOptions
+        options?: InsertOptions
       ): Promise<T> => {
         const mapped = this.mapKeysToSqlColumns(
           this.getTableObject(table),
@@ -797,23 +797,39 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         const [result] = await connection.query<ResultSetHeader>(sql, values);
 
-        // MySQL doesn't have RETURNING, so we need to SELECT the inserted row
-        // Use insertId if available (auto-increment), otherwise use all inserted values
-        if (result.insertId) {
+        const ret = options?.returning;
+        // No columns requested: skip the select-back reread entirely.
+        if (Array.isArray(ret) && ret.length === 0) {
+          return undefined as T;
+        }
+
+        // MySQL has no RETURNING; select the inserted row back. Project only the
+        // requested columns so a large JSON snapshot is not read unless asked.
+        const selectList =
+          !ret || ret === "*"
+            ? "*"
+            : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+                .map(c => this.escapeIdentifier(c))
+                .join(", ");
+
+        // Prefer the primary key: auto-increment via insertId, otherwise a
+        // supplied id (manually-keyed tables like nextly_versions). Matching by
+        // all values is a last resort because `col = NULL` never matches, so a
+        // row with nullable columns would not be found by that path.
+        const idValue = result.insertId ? result.insertId : mapped.id;
+        if (idValue !== undefined) {
           const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
-            [result.insertId]
+            `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
+            [idValue]
           );
-          // Return JS property-named keys to match the non-transactional insert.
           return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
         }
 
-        // Fallback: SELECT by all inserted values
         const whereClauses = columns.map(
           c => `${this.escapeIdentifier(c)} = ?`
         );
         const [rows] = await connection.query<RowDataPacket[]>(
-          `SELECT * FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
+          `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
         return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
@@ -822,9 +838,11 @@ export class MySqlAdapter extends DrizzleAdapter {
       insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
-        _options?: InsertOptions
+        options?: InsertOptions
       ): Promise<T[]> => {
         if (data.length === 0) return [];
+        const retMany = options?.returning;
+        const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
         const tableObj = this.getTableObject(table);
         const mappedRecords = data.map(r =>
@@ -852,7 +870,7 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // For bulk insert, we need to SELECT the inserted rows
         // MySQL's insertId gives the first auto-increment ID
-        if (result.insertId && result.affectedRows > 0) {
+        if (!skipReread && result.insertId && result.affectedRows > 0) {
           const ids: number[] = [];
           for (let i = 0; i < result.affectedRows; i++) {
             ids.push(result.insertId + i);
