@@ -22,13 +22,14 @@ const posts = mysqlTable(TABLE, {
 });
 
 const canConnect = async (url: string): Promise<boolean> => {
-  let conn: mysql.Connection | undefined;
   // Bound the probe so an unreachable TEST_MYSQL_URL cannot hang the suite for
   // the OS-level connect timeout (often minutes); mysql2 has no simple connect
   // timeout when given a URL string, so race the attempt against a short timer.
+  const connPromise = mysql.createConnection(url).catch(() => undefined);
   const attempt = (async () => {
+    const conn = await connPromise;
+    if (!conn) return false;
     try {
-      conn = await mysql.createConnection(url);
       await conn.query("SELECT 1");
       return true;
     } catch {
@@ -39,7 +40,9 @@ const canConnect = async (url: string): Promise<boolean> => {
     setTimeout(() => resolve(false), 5000)
   );
   const ok = await Promise.race([attempt, timeout]);
-  await conn?.end().catch(() => {});
+  // Close the connection whenever it resolves, even if the timeout won the race
+  // while createConnection was still pending — otherwise it would leak.
+  void connPromise.then(conn => conn?.end().catch(() => {}));
   return ok;
 };
 
