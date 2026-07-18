@@ -47,6 +47,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
@@ -240,6 +241,10 @@ export async function runChecks(args: {
   // Check 1+2: hash + missing snapshot per .sql file.
   for (const sqlName of sqlFiles) {
     const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
+    // Localization/companion migrations are snapshot-less by design (they carry
+    // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
+    // rather than flagging them MISSING_SNAPSHOT.
+    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
     let result;
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
@@ -388,12 +393,14 @@ function toMinimalEntities(
         relationTo?: string | string[];
         unique?: boolean;
         index?: boolean;
+        localized?: boolean;
         dbType?: "integer" | "decimal";
         precision?: number;
         scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
+      localized?: boolean;
     };
     return {
       slug: e.slug,
@@ -406,6 +413,7 @@ function toMinimalEntities(
         relationTo: f.relationTo,
         unique: f.unique,
         index: f.index,
+        localized: f.localized,
         // Forward decimal storage so drift detection compares a decimal column
         // against the decimal desired state, not the integer default.
         dbType: f.dbType,
@@ -417,6 +425,10 @@ function toMinimalEntities(
       // status — leaving the field unset (undefined) defaults to off
       // inside buildDesiredSnapshotFromConfig.
       status: e.status === true,
+      // Forward localization so the drift check's desired snapshot omits
+      // localized columns — matching the live main table after the companion
+      // migration relocated them (no false drift).
+      localized: e.localized === true,
     };
   });
 }

@@ -159,6 +159,18 @@ export interface AdminBranding {
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;
 
+  /** Content localization config (present only when the app enables i18n). */
+  locales?: {
+    defaultLocale: string;
+    fallback: boolean;
+    locales: Array<{
+      code: string;
+      label: string;
+      rtl: boolean;
+      fallbackLocale: string[];
+    }>;
+  };
+
   /**
    * Plugin placement overrides mapping plugin slugs to sidebar group names.
    * @deprecated Placement is now author-defined via `PluginMetadata.placement`.

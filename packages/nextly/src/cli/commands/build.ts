@@ -647,6 +647,7 @@ function convertToRecords(
     // defineCollection() input explicitly opts in. The structurally-typed
     // collection object may carry a status flag from the user's config.
     status: (collection as { status?: boolean }).status === true,
+    localized: (collection as { localized?: boolean }).localized === true,
     description: collection.admin?.description ?? collection.description,
     source: "code" as const,
     locked: true,

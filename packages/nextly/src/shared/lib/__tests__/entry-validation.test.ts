@@ -399,4 +399,84 @@ describe("validateEntryData", () => {
       ]);
     });
   });
+
+  // i18n M5b: `required` on a localized field is enforced only for the default-locale write
+  // (enforceLocalizedRequired). Other locales may leave it blank because the value falls back to
+  // the default language. Shared (non-localized) required fields are always enforced.
+  describe("language-aware required (localized fields)", () => {
+    const LOCALIZED_FIELDS: ValidatableField[] = [
+      { name: "code", type: "text", required: true }, // shared, always required
+      { name: "heading", type: "text", required: true }, // localized, default-locale only
+    ];
+
+    it("enforces a localized required field when localized-required is enforced (default locale)", async () => {
+      const issues = await validateEntryData({ code: "C" }, LOCALIZED_FIELDS, {
+        mode: "create",
+        localizedFieldNames: new Set(["heading"]),
+        enforceLocalizedRequired: true,
+      });
+      expect(issues).toEqual([
+        { path: "heading", code: "REQUIRED", message: "heading is required." },
+      ]);
+    });
+
+    it("allows a blank localized required field when not enforced (non-default locale)", async () => {
+      const issues = await validateEntryData({ code: "C" }, LOCALIZED_FIELDS, {
+        mode: "create",
+        localizedFieldNames: new Set(["heading"]),
+        enforceLocalizedRequired: false,
+      });
+      expect(issues).toEqual([]);
+    });
+
+    it("still enforces a SHARED required field when localized-required is off", async () => {
+      const issues = await validateEntryData(
+        { heading: "H" },
+        LOCALIZED_FIELDS,
+        {
+          mode: "create",
+          localizedFieldNames: new Set(["heading"]),
+          enforceLocalizedRequired: false,
+        }
+      );
+      expect(issues).toEqual([
+        { path: "code", code: "REQUIRED", message: "code is required." },
+      ]);
+    });
+
+    it("enforces every required field when no localization context is supplied (default)", async () => {
+      const issues = await validateEntryData({}, LOCALIZED_FIELDS, {
+        mode: "create",
+      });
+      expect(issues.map(i => i.path).sort()).toEqual(["code", "heading"]);
+    });
+
+    it("does not relax a nested sub-field that shares a top-level localized field's name", async () => {
+      // `enforceLocalizedRequired: false` must only relax the TOP-LEVEL localized field, matched by
+      // `path === field.name`; a same-named required field nested in a row still errors.
+      const nestedFields: ValidatableField[] = [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "heading", type: "text", required: true }],
+        },
+      ];
+      const issues = await validateEntryData(
+        { rows: [{ heading: "" }] },
+        nestedFields,
+        {
+          mode: "create",
+          localizedFieldNames: new Set(["heading"]),
+          enforceLocalizedRequired: false,
+        }
+      );
+      expect(issues).toEqual([
+        {
+          path: "rows[0].heading",
+          code: "REQUIRED",
+          message: "heading is required.",
+        },
+      ]);
+    });
+  });
 });

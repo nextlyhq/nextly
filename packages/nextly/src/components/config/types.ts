@@ -253,6 +253,16 @@ export interface ComponentConfig {
   description?: string;
 
   /**
+   * Enable multilingual content for this Component. When `true`, translatable
+   * fields inside it store a value per configured locale (text-like fields
+   * localize by default; override per field with the field's `localized` flag).
+   * Requires a `localization` block in the app config.
+   *
+   * @default false
+   */
+  localized?: boolean;
+
+  /**
    * Custom metadata for plugins and extensions.
    *
    * Store arbitrary data that can be accessed by hooks, plugins,

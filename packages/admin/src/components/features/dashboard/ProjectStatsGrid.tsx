@@ -37,6 +37,7 @@ import { useMemo } from "react";
 import { StatsCard } from "@admin/components/features/dashboard/StatsCard";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardStats } from "@admin/hooks/queries/useDashboardStats";
 import type { StatsCardProps } from "@admin/types/dashboard/stats";
 
@@ -53,6 +54,8 @@ function LoadingSkeleton() {
 
 export const ProjectStatsGrid: React.FC = () => {
   const { data, isLoading, error } = useDashboardStats();
+  const branding = useBranding();
+  const localeCount = branding.locales?.locales.length ?? 1;
 
   const stats: Pick<StatsCardProps, "title" | "value" | "icon" | "href">[] =
     useMemo(() => {
@@ -102,11 +105,11 @@ export const ProjectStatsGrid: React.FC = () => {
         },
         {
           title: "Locales",
-          value: 1,
+          value: localeCount,
           icon: <Languages className="h-5 w-5" />,
         },
       ];
-    }, [data]);
+    }, [data, localeCount]);
 
   return (
     <Card className="border-border bg-card/80 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">

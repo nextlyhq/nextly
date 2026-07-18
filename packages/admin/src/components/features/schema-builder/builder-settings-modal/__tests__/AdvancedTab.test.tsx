@@ -50,11 +50,15 @@ describe("AdvancedTab", () => {
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
   });
 
-  it("renders i18n as a disabled switch with a Coming Soon chip", () => {
-    render(<Controlled fields={["i18n"]} />);
+  it("toggles i18n when the Internationalization switch is clicked", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled fields={["i18n"]} onChange={onChange} />);
     const sw = screen.getByRole("switch", { name: /internationalization/i });
-    expect(sw).toBeDisabled();
-    expect(screen.getByText("Coming Soon")).toBeInTheDocument();
+    expect(sw).not.toBeDisabled();
+    await user.click(sw);
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.i18n).toBe(true);
   });
 
   it("toggles status when the status switch is clicked", async () => {

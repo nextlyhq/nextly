@@ -58,6 +58,8 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -194,9 +196,179 @@ export class CollectionMutationService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService
+    private readonly componentDataService?: ComponentDataService,
+    /**
+     * Normalized localization config (i18n M5). When set and a collection is localized, writes
+     * route translatable field values to the companion `_locales` row for the write's locale.
+     * Absent → non-localized behavior (unchanged).
+     */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Build the locale-aware inputs for {@link validateEntryData} on a localized-collection write
+   * (i18n M5b). `required` on a localized field is enforced only for the default-language row so the
+   * "publish default now, translate later" workflow proceeds; shared required fields are always
+   * enforced. For a non-localized collection this yields an empty set and enforce=true, so the
+   * canonical validator behaves exactly as it does elsewhere. Localized field names come from the
+   * companion schema, so a localized collection that has not been migrated yet (localized columns
+   * still on the main table) treats no field as localized, matching the pre-migration behavior.
+   */
+  private async localizedRequiredContext(
+    collectionName: string,
+    locale: string | undefined
+  ): Promise<{
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+  }> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    const localizedFieldNames = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
+    );
+    const enforceLocalizedRequired =
+      !this.localization ||
+      resolveRequestedLocale(this.localization, locale) ===
+        this.localization.defaultLocale;
+    return { localizedFieldNames, enforceLocalizedRequired };
+  }
+
+  /**
+   * Upsert the companion `_locales` row for `(parentId, locale)` with the provided localized
+   * columns (i18n M5, updateEntry). Only the provided columns are written — an existing row for
+   * another locale, or other localized fields on this locale's row, are left untouched. Uses the
+   * PK `(_parent, _locale)` conflict target. Runs inside the caller's transaction via `tx.execute`.
+   */
+  private async upsertCompanionRow(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter tx surface
+    tx: any,
+    companionTableName: string,
+    parentId: string,
+    locale: string,
+    companionData: Record<string, unknown>
+  ): Promise<void> {
+    const cols = Object.keys(companionData);
+    if (cols.length === 0) return;
+    const isMysql = this.dialect === "mysql";
+    const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+    const params: unknown[] = [];
+    const ph = () =>
+      this.dialect === "postgresql" ? `$${params.length}` : "?";
+
+    const allCols = ["_parent", "_locale", ...cols];
+    const valuePlaceholders = allCols
+      .map(c => {
+        params.push(
+          c === "_parent"
+            ? parentId
+            : c === "_locale"
+              ? locale
+              : companionData[c]
+        );
+        return ph();
+      })
+      .join(", ");
+
+    const conflict = isMysql
+      ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
+      : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
+          .map(c => `${q(c)} = excluded.${q(c)}`)
+          .join(", ")}`;
+
+    await tx.execute(
+      `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
+        `VALUES (${valuePlaceholders}) ${conflict}`,
+      params
+    );
+  }
+
+  /** Whether the companion `_locales` table physically exists (migration has run). */
+  private async companionTableExists(
+    companionTableName: string
+  ): Promise<boolean> {
+    const q =
+      this.adapter.dialect === "mysql"
+        ? `\`${companionTableName}\``
+        : `"${companionTableName}"`;
+    try {
+      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Split `entryData` (snake_case keys) into main-table data and companion data for a localized
+   * collection: localized columns move to `companionData` and are removed from `mainData` (the
+   * migrated main table no longer has them). Returns `null` when the collection isn't localized
+   * or the companion table doesn't exist yet (dev/unmigrated → localized cols stay on main).
+   */
+  private async splitLocalizedWriteData(
+    collectionName: string,
+    entryData: Record<string, unknown>,
+    locale: string | undefined,
+    isCreate: boolean
+  ): Promise<{
+    companionTableName: string;
+    writeLocale: string;
+    companionData: Record<string, unknown>;
+  } | null> {
+    if (!this.localization) return null;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return null;
+
+    // Route to the companion ONLY when it physically exists (the migration has run). Before
+    // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
+    // writes must go there — return null and let the localized values flow to main as today.
+    if (!(await this.companionTableExists(companion.companionTableName))) {
+      return null;
+    }
+
+    const writeLocale = resolveRequestedLocale(this.localization, locale);
+    const companionData: Record<string, unknown> = {};
+    for (const field of companion.localizedFields) {
+      // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
+      // field names. Accept either; always store under the snake_case companion column.
+      const key = Object.prototype.hasOwnProperty.call(entryData, field.column)
+        ? field.column
+        : Object.prototype.hasOwnProperty.call(entryData, field.name)
+          ? field.name
+          : null;
+      if (key !== null) {
+        companionData[field.column] = entryData[key];
+        delete entryData[key]; // migrated main table has no localized columns
+      }
+    }
+
+    // i18n M6: per-locale draft/publish. The companion `_status` for the write's locale comes
+    // from the write's status value. On create it defaults to 'draft'; on update it changes
+    // ONLY when `status` is explicitly in the patch (so editing German content doesn't
+    // un-publish German). The main table keeps its own `status` column unchanged.
+    if (companion.hasStatus) {
+      const statusVal = entryData.status;
+      if (typeof statusVal === "string") {
+        companionData._status = statusVal;
+      } else if (isCreate) {
+        companionData._status = "draft";
+      }
+      if (!isCreate) {
+        // Per-locale draft/publish lives on the companion row's `_status`; a
+        // single-locale update must not rewrite the main table's own status
+        // column (that global publish is publishAllLocales' job), so drop the
+        // status from the main update payload. Create still seeds the main row.
+        delete entryData.status;
+      }
+    }
+
+    return {
+      companionTableName: companion.companionTableName,
+      writeLocale,
+      companionData,
+    };
   }
 
   /**
@@ -548,6 +720,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5): translatable values are stored for this language. */
+      locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
       // the collection re-check is skipped, but the response is still redacted
       // to what this user may read (this is not a trusted-server read).
@@ -700,12 +874,20 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       {
+        // i18n M5b: `required` on a localized field is enforced only for the default-locale write;
+        // other locales fall back, so the canonical validator gets the localized-field set and
+        // whether this write's locale must enforce them.
+        const localeCtx = await this.localizedRequiredContext(
+          params.collectionName,
+          params.locale
+        );
         const validationIssues = await validateEntryData(
           finalData,
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
             req: params.user ? { user: params.user } : {},
+            ...localeCtx,
           }
         );
         if (validationIssues.length > 0) {
@@ -901,6 +1083,7 @@ export class CollectionMutationService extends BaseService {
       // - SQLite: integer (unix timestamp via mode:"timestamp")
       // Using Date objects (not ISO strings) because SQLite's integer mode
       // calls .getTime() which fails on strings.
+
       const now = new Date();
       const rawEntryData = {
         id: this.collectionService.generateId(),
@@ -920,6 +1103,17 @@ export class CollectionMutationService extends BaseService {
         entryData[toSnakeCase(key)] = value;
       }
 
+      // i18n M5: for a localized collection, pull translatable columns out of the main insert
+      // (the migrated main table no longer has them) so they can be written to the companion
+      // row for the write's locale, inside the same transaction. `null` = not localized /
+      // companion not migrated yet (localized cols stay on main — dev path, unchanged).
+      const localizedWrite = await this.splitLocalizedWriteData(
+        params.collectionName,
+        entryData,
+        params.locale,
+        true
+      );
+
       // Wrap entry insert and component data save in a transaction so that
       // a component save failure rolls back the entry — no partial state.
       const entry: Record<string, unknown> = {};
@@ -934,6 +1128,30 @@ export class CollectionMutationService extends BaseService {
           rawEntry as Record<string, unknown>
         )) {
           entry[toCamelCase(key)] = value;
+        }
+
+        // i18n M5: write the translatable values to the companion `_locales` row for the
+        // write's locale (same transaction → rolls back with the main insert).
+        if (localizedWrite) {
+          await tx.insert(
+            localizedWrite.companionTableName,
+            {
+              _parent: entry.id,
+              _locale: localizedWrite.writeLocale,
+              ...localizedWrite.companionData,
+            },
+            {}
+          );
+          // The localized values were split out of the main insert, so the
+          // returned main row lacks them. Merge them back (camelCase keys) so
+          // afterCreate hooks, events, and the response include them. `_status`
+          // is a companion-only column, not an entry field.
+          for (const [column, value] of Object.entries(
+            localizedWrite.companionData
+          )) {
+            if (column === "_status") continue;
+            entry[toCamelCase(column)] = value;
+          }
         }
 
         // Save component field data to separate comp_{slug} tables
@@ -1098,12 +1316,124 @@ export class CollectionMutationService extends BaseService {
    * @param body - Update data
    * @returns Updated entry or error
    */
+  /**
+   * Publish ALL languages of an entry at once (i18n M7, spec §10). Atomically sets the main
+   * `status` to 'published' and — when the collection has per-locale status (M6) — every companion
+   * row's `_status` to 'published', in a single transaction. For a non-localized / no-status
+   * collection it is a plain publish of the single row. Only touches status columns (no field
+   * values), so it needs none of the localized-write machinery.
+   */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }): Promise<CollectionServiceResult> {
+    try {
+      const accessUser = params.overrideAccess ? undefined : params.user;
+      const schema = await this.fileManager.loadDynamicSchema(
+        params.collectionName
+      );
+
+      const [existingEntry] = await this.db
+        .select()
+        .from(schema)
+        .where(eq(schema.id, params.entryId))
+        .limit(1);
+      if (!existingEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+
+      const accessDenied = await this.accessService.checkCollectionAccess(
+        params.collectionName,
+        "update",
+        accessUser,
+        params.entryId,
+        existingEntry,
+        params.overrideAccess
+      );
+      if (accessDenied) return accessDenied;
+
+      const hasMainStatus = "status" in schema;
+      const companion = await this.fileManager.loadCompanionSchema(
+        params.collectionName
+      );
+      const companionPublishable =
+        !!companion &&
+        companion.hasStatus &&
+        (await this.companionTableExists(companion.companionTableName));
+
+      if (!hasMainStatus && !companionPublishable) {
+        // Nothing to publish — the collection has no status concept.
+        return {
+          success: true,
+          statusCode: 200,
+          message: "Nothing to publish (collection has no status).",
+          data: { id: params.entryId },
+        };
+      }
+
+      const isMysql = this.dialect === "mysql";
+      const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+      const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
+      // Resolve through the collection so a custom tableName/dbName override is
+      // honored, matching every other mutation; getTableName would hardcode the
+      // default dc_<slug> and target the wrong table for a renamed collection.
+      const publishCollection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const tableName = this.resolveTableName(
+        publishCollection,
+        params.collectionName
+      );
+
+      await this.adapter.transaction(async tx => {
+        if (hasMainStatus) {
+          await tx.execute(
+            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
+            ["published", params.entryId]
+          );
+        }
+        if (companion && companionPublishable) {
+          await tx.execute(
+            `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
+            ["published", params.entryId]
+          );
+        }
+      });
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "All languages published.",
+        data: { id: params.entryId, status: "published" },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        statusCode: 500,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to publish all languages",
+        data: null,
+      };
+    }
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5): translatable values are updated for this language only. */
+      locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
       // the collection re-check is skipped, but the response is still redacted
       // to what this user may read (this is not a trusted-server read).
@@ -1262,12 +1592,20 @@ export class CollectionMutationService extends BaseService {
       });
 
       {
+        // i18n M5b: on update only fields present in the patch are checked (required cannot be
+        // blanked). `required` on a localized field is enforced only for the default-locale write;
+        // other locales fall back, so the canonical validator gets the localized-field context.
+        const localeCtx = await this.localizedRequiredContext(
+          params.collectionName,
+          params.locale
+        );
         const validationIssues = await validateEntryData(
           finalData,
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
             req: params.user ? { user: params.user } : {},
+            ...localeCtx,
           }
         );
         if (validationIssues.length > 0) {
@@ -1509,6 +1847,16 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
+      // keys) so they update the companion `_locales` row for the write's locale instead. `null` =
+      // not localized / companion not migrated yet (values stay on main — dev path, unchanged).
+      const localizedUpdate = await this.splitLocalizedWriteData(
+        params.collectionName,
+        finalData,
+        params.locale,
+        false
+      );
+
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
       // tx.execute() is used for the UPDATE so it runs on the same DB client
@@ -1540,6 +1888,21 @@ export class CollectionMutationService extends BaseService {
           `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
           sqlParams as (string | number | boolean | Date | null | undefined)[]
         );
+
+        // i18n M5: upsert the translatable values into the companion row for the write's locale
+        // (same transaction). Only the provided localized columns are touched.
+        if (
+          localizedUpdate &&
+          Object.keys(localizedUpdate.companionData).length > 0
+        ) {
+          await this.upsertCompanionRow(
+            tx,
+            localizedUpdate.companionTableName,
+            params.entryId,
+            localizedUpdate.writeLocale,
+            localizedUpdate.companionData
+          );
+        }
 
         // Save component field data to separate comp_{slug} tables
         if (
@@ -1595,6 +1958,20 @@ export class CollectionMutationService extends BaseService {
           message: "Entry not found",
           data: null,
         };
+      }
+
+      // The localized values were split out of the main update, so the re-fetched
+      // main row lacks them. Merge the written values back (camelCase keys) so
+      // afterUpdate hooks, events, and the response reflect them. `_status` is a
+      // companion-only column, not an entry field.
+      if (localizedUpdate) {
+        const updatedRow = updated as Record<string, unknown>;
+        for (const [column, value] of Object.entries(
+          localizedUpdate.companionData
+        )) {
+          if (column === "_status") continue;
+          updatedRow[toCamelCase(column)] = value;
+        }
       }
 
       // Execute afterUpdate hooks (code-registered)

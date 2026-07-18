@@ -346,6 +346,7 @@ function convertToRecords(
     timestamps: collection.timestamps ?? true,
     // Why: status from defineCollection() input if present, otherwise false.
     status: (collection as { status?: boolean }).status === true,
+    localized: (collection as { localized?: boolean }).localized === true,
     description: collection.admin?.description,
     source: "code" as const,
     locked: true, // Code-first collections are locked
@@ -378,6 +379,7 @@ function convertToSingleRecords(
     locked: true, // Code-first singles are locked
     // Why: same as collections — opt-in via defineSingle({ status: true }).
     status: (single as { status?: boolean }).status === true,
+    localized: (single as { localized?: boolean }).localized === true,
     schemaHash: "", // Not needed for type generation
     schemaVersion: 1,
     migrationStatus: "synced" as const,

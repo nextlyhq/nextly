@@ -13,6 +13,11 @@
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { ComponentConfig } from "../../components/config/types";
+import { normalizeLocalization } from "../../domains/i18n/config/normalize";
+import type {
+  LocalizationConfig,
+  SanitizedLocalizationConfig,
+} from "../../domains/i18n/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
@@ -624,6 +629,12 @@ export interface NextlyConfig {
 
   /** Admin UI customization. */
   admin?: AdminConfig;
+
+  /**
+   * Multilingual content configuration. Omit to keep the CMS single-language.
+   * See docs/superpowers/specs/2026-07-08-multilingual-i18n-design.md.
+   */
+  localization?: LocalizationConfig;
 }
 
 /**
@@ -690,6 +701,9 @@ export interface SanitizedNextlyConfig {
 
   /** Admin UI customization config. */
   admin?: AdminConfig;
+
+  /** Normalized multilingual content configuration (undefined when i18n is off). */
+  localization?: SanitizedLocalizationConfig;
 }
 
 // ============================================================
@@ -854,5 +868,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     permissions: config.permissions,
     security: config.security,
     admin: config.admin,
+    localization: config.localization
+      ? normalizeLocalization(config.localization)
+      : undefined,
   };
 }

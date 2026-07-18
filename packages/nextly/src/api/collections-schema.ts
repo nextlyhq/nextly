@@ -77,6 +77,9 @@ const createCollectionSchema = z.object({
   // contract — collections without the flag continue to ship a single
   // Save/Create button.
   status: z.boolean().optional(),
+  // i18n opt-in. Default false keeps non-localized behavior. Enabling adds the
+  // companion `_locales` table on the next migrate (migration-gated).
+  localized: z.boolean().optional(),
   admin: z
     .object({
       group: z.string().optional(),
@@ -265,6 +268,9 @@ export const POST = withErrorHandler(async (request: Request) => {
     // Forward Draft/Published flag so the schema-level POST honours the
     // user's status opt-in just like the dispatcher path does.
     status: validated.status === true,
+    // i18n: forward the localization opt-in so the registry stores it (companion
+    // table is provisioned on the next migrate).
+    localized: validated.localized === true,
     schemaHash,
     hooks: validated.hooks,
   });

@@ -198,6 +198,9 @@ export default function CollectionBuilderEditPage({
       // collection.status is the Draft/Published flag; default false for
       // collections written before the column existed.
       status: collection.status === true,
+      // i18n: reflect the saved localization flag so the Internationalization
+      // toggle shows the true state and the dirty-check is accurate.
+      i18n: (collection as { localized?: boolean }).localized === true,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
@@ -244,7 +247,8 @@ export default function CollectionBuilderEditPage({
       originalSettings.slug !== settings.slug ||
       originalSettings.description !== settings.description ||
       originalSettings.icon !== settings.icon ||
-      originalSettings.status !== settings.status
+      originalSettings.status !== settings.status ||
+      originalSettings.i18n !== settings.i18n
     );
   }, [originalSettings, settings]);
 
@@ -363,6 +367,9 @@ export default function CollectionBuilderEditPage({
             // here so existing values set via code-first config aren't
             // wiped by a settings save.
             status: settings.status === true,
+            // i18n: the collection-level Internationalization toggle. Toggling on
+            // (migration-gated) provisions the companion `_locales` table.
+            localized: settings.i18n === true,
             // Why: useAsTitle + timestamps were removed from the modal in
             // PR B (system title is always the display; timestamps always
             // emitted). Backend defaults take over -- code-first config can

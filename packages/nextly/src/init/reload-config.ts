@@ -92,6 +92,8 @@ type CollectionDef = {
   admin?: unknown;
   dbName?: string;
   status?: boolean;
+  /** i18n: localized collections omit translatable cols from main + register a companion. */
+  localized?: boolean;
 };
 
 type SingleDef = {
@@ -810,15 +812,37 @@ export async function reloadNextlyConfig(opts?: {
     const collectionFreshTables = new Map<string, unknown>();
     const singleFreshTables = new Map<string, unknown>();
     const componentFreshTables = new Map<string, unknown>();
+    // Companion `_locales` tables for localized collections (i18n M3b-2), keyed
+    // by companion table name — registered alongside the main tables below.
+    const companionFreshTables = new Map<string, unknown>();
     try {
+      const { buildCompanionRuntimeTable } = await import(
+        "../domains/i18n/runtime/companion-registration"
+      );
       for (const c of Object.values(desiredCollections)) {
+        const localized = (c as CollectionDef).localized === true;
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
           dialect,
-          { status: c.status === true }
+          { status: c.status === true, localized }
         );
         collectionFreshTables.set(c.tableName, table);
+        if (localized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: (c as CollectionDef).slug ?? c.tableName,
+            tableName: c.tableName,
+            fields: c.fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+          });
+          if (companion) {
+            companionFreshTables.set(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
       for (const s of Object.values(desiredSingles)) {
         const { table } = generateRuntimeSchema(
@@ -861,6 +885,11 @@ export async function reloadNextlyConfig(opts?: {
         schemaReg.registerDynamicSchema(tableName, table);
       }
       for (const [tableName, table] of componentFreshTables) {
+        schemaReg.registerDynamicSchema(tableName, table);
+      }
+      // Localized companion `_locales` tables (i18n M3b-2) — same resolver so
+      // the adapter can reach them for reads/writes once M4 wires the joins.
+      for (const [tableName, table] of companionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
     } catch {

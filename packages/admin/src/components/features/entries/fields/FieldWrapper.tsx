@@ -11,11 +11,14 @@
  */
 
 import { Label } from "@nextlyhq/ui";
-import type { FieldConfig } from "nextly/config";
+import { Globe } from "lucide-react";
+import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
 import { useId } from "react";
 
 import { cn } from "@admin/lib/utils";
+
+import { useEntryLocale } from "../EntryLocaleContext";
 
 // ============================================================
 // Types
@@ -112,6 +115,8 @@ export function FieldWrapper({
   fieldPath,
   horizontal = false,
 }: FieldWrapperProps) {
+  // i18n M7: active content-language direction (RTL for Arabic/Hebrew/…).
+  const entryLocale = useEntryLocale();
   // Generate unique IDs for accessibility
   const generatedId = useId();
   // Use type guard to safely access name property (not all fields have it, e.g., TabsFieldConfig)
@@ -123,6 +128,7 @@ export function FieldWrapper({
   const fieldWithCommonProps = field as {
     label?: string;
     required?: boolean;
+    localized?: boolean;
     admin?: {
       description?: string;
       width?: string;
@@ -138,6 +144,59 @@ export function FieldWrapper({
   const width = fieldWithCommonProps.admin?.width || "100%";
   const isHidden = fieldWithCommonProps.admin?.hidden;
   const _fieldType = field.type as string;
+
+  // i18n M7: is this field translatable (a per-language value) or shared across all languages?
+  // Uses the same classifier as storage generation (nextly/config) so the editor and the DB
+  // agree. For non-localized collections this is always false and everything below is inert.
+  const isLocalizedField = isFieldLocalized(
+    {
+      type: _fieldType,
+      name: fieldName ?? "",
+      localized: fieldWithCommonProps.localized,
+    },
+    entryLocale.collectionLocalized
+  );
+  // Flip inputs right-to-left only for translatable fields in an RTL language — a shared field's
+  // value is language-neutral and stays LTR.
+  const rtlField = entryLocale.rtl && isLocalizedField;
+  // Subtle marker on shared fields in a multilingual collection: their value applies to every
+  // language and has no per-language draft state (spec §7), so editing one changes all — surface
+  // it so editors aren't surprised. Only meaningful for real (named) data fields.
+  const sharedHint =
+    entryLocale.collectionLocalized &&
+    !isLocalizedField &&
+    fieldName != null ? (
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground"
+        title="Shared across languages — editing this field changes it for every language."
+      >
+        <Globe className="size-3" aria-hidden="true" />
+        Shared
+      </span>
+    ) : null;
+
+  // i18n M7: while translating a non-default language, show the default-language value inline on
+  // a translatable field so the translator always has the source text (spec §10 — the validated,
+  // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
+  // structural values (relationships, richText objects) are skipped.
+  const rawSource =
+    isLocalizedField && entryLocale.isNonDefaultLocale && fieldName != null
+      ? entryLocale.sourceValues?.[fieldName]
+      : undefined;
+  const sourceText =
+    typeof rawSource === "string" && rawSource.trim() !== ""
+      ? rawSource
+      : typeof rawSource === "number"
+        ? String(rawSource)
+        : null;
+  const sourceHint = sourceText ? (
+    <p
+      dir="auto"
+      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
+    >
+      <span className="font-medium">Default:</span> {sourceText}
+    </p>
+  ) : null;
 
   // Don't render if hidden
   if (isHidden) {
@@ -160,13 +219,15 @@ export function FieldWrapper({
         style={fieldWithCommonProps.admin?.style}
         data-field={fieldName}
         data-field-type={field.type}
+        // i18n M7: render the field right-to-left when a translatable field is edited in an RTL language.
+        {...(rtlField ? { dir: "rtl" as const } : {})}
       >
         <div className="pt-0.5">{children}</div>
         <div className="grid gap-1.5 leading-none">
           <Label
             htmlFor={fieldId}
             className={cn(
-              "text-[11px] font-bold tracking-[0.08em] text-muted-foreground",
+              "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground",
               error && "text-destructive"
             )}
           >
@@ -176,6 +237,7 @@ export function FieldWrapper({
                 *
               </span>
             )}
+            {sharedHint}
           </Label>
           {description && (
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -208,12 +270,15 @@ export function FieldWrapper({
       style={fieldWithCommonProps.admin?.style}
       data-field={fieldName}
       data-field-type={field.type}
+      // i18n M7: render the field right-to-left when a translatable field is edited in an RTL
+      // language (Arabic, Hebrew, …). Shared / non-localized editors are unaffected.
+      {...(rtlField ? { dir: "rtl" as const } : {})}
     >
       {/* Label */}
       <Label
         htmlFor={fieldId}
         className={cn(
-          "text-[11px] font-bold tracking-[0.08em] text-muted-foreground mb-1",
+          "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground mb-1",
           error && "text-destructive"
         )}
       >
@@ -223,10 +288,14 @@ export function FieldWrapper({
             *
           </span>
         )}
+        {sharedHint}
       </Label>
 
       {/* Input (children) */}
       {children}
+
+      {/* i18n M7: default-language source text, shown while translating another language. */}
+      {sourceHint}
 
       {/* Description / helper text — always visible below the input. Replaces
           the previous tooltip-on-info-icon pattern (Task 5 PR 5 design D3). */}

@@ -26,6 +26,8 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { LanguageSwitcher } from "../LanguageSwitcher";
+
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -59,6 +61,11 @@ export interface EntrySystemHeaderProps {
   entry?: EntryData | null;
   /** Collection slug for the Show JSON dialog. */
   collectionSlug: string;
+  /** Active content locale (i18n M7). Shown/selected in the language switcher. */
+  locale?: string;
+  /** Called when the user switches the active content language (i18n M7). When omitted, the
+   *  language switcher is not rendered. */
+  onLocaleChange?: (locale: string) => void;
 
   /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
    *  Used in create mode and when editing a draft entry. */
@@ -132,6 +139,8 @@ export function EntrySystemHeader({
   formId = "entry-form",
   entry,
   collectionSlug,
+  locale,
+  onLocaleChange,
   onSaveDraft,
   onPublish,
   onSaveChanges,
@@ -184,7 +193,25 @@ export function EntrySystemHeader({
   //   no dirty edits — there's nothing to save in that state, so the
   //   button greys out and Unpublish becomes the only enabled action.
   // - !hasStatus → single Save button (collections without drafts).
-  const isPublishedEdit = mode === "edit" && entry?.status === "published";
+  // On a localized draft collection each language has its own lifecycle, so the
+  // active locale's status — not the main/default row's — decides which submit
+  // affordances to show. A non-default locale with no companion status is not
+  // yet published; only fall back to the row status when there is no per-locale
+  // map (non-localized entries), so it never inherits the default's published state.
+  const localeStatus =
+    locale !== undefined
+      ? (
+          entry?._translations as
+            | Record<string, { status?: string }>
+            | undefined
+        )?.[locale]?.status
+      : undefined;
+  const hasTranslations =
+    locale !== undefined && entry?._translations !== undefined;
+  const effectiveStatus = hasTranslations
+    ? localeStatus
+    : (entry?.status as string | undefined);
+  const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -217,6 +244,11 @@ export function EntrySystemHeader({
       {/* Action cluster — right-aligned */}
       <div className="flex items-center gap-1.5 shrink-0">
         {toolbarSlot}
+        {/* i18n M7: content-language switcher. Renders only when a change handler is wired AND
+            localization is configured (the component self-hides otherwise). */}
+        {onLocaleChange && (
+          <LanguageSwitcher value={locale} onChange={onLocaleChange} />
+        )}
         {hasStatus && isPublishedEdit ? (
           <>
             <Button
