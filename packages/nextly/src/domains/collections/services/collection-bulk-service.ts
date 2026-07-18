@@ -191,14 +191,16 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
     try {
-      // 1. Fetch the source entry (with read permission check). Only a trusted
-      // (overrideAccess) or route-authenticated duplicate sees drafts via
-      // status "all" — matching the regular authenticated getEntry dispatcher,
-      // which defaults authenticated reads to "all". An untrusted Direct API
-      // caller keeps the default published-only visibility, so it can't
-      // duplicate a draft by id that a plain findByID would 404.
-      const sourceStatus =
-        params.overrideAccess || params.routeAuthorized ? "all" : undefined;
+      // 1. Fetch the source entry with a REAL read check. Duplicating a row is
+      // reading it plus creating a copy, and the route only authorized the
+      // create — so the caller must genuinely be able to READ the source under
+      // its own (key-scoped) access. `overrideAccess` stays as passed (false
+      // for route/untrusted callers), so a create-only caller without read is
+      // correctly denied rather than silently duplicating a row it can't see.
+      // Draft visibility is limited to trusted (overrideAccess) callers: route
+      // auth attested create, not the right to read unpublished rows, so a
+      // route/untrusted duplicate keeps the default published-only visibility.
+      const sourceStatus = params.overrideAccess ? "all" : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
@@ -509,16 +511,37 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Enumerate the target rows. The collection-level UPDATE access was
-    // already checked above, so this enumeration runs with overrideAccess so it
-    // is NOT scoped by the READ rules: a role allowed to update but not read (or
-    // read is owner-only while update is broader) must still see its update
-    // targets. `status: "all"` likewise keeps draft rows enumerable on a
-    // Draft/Published collection. Each row is still gated by the per-row UPDATE
-    // access check in bulkUpdateEntries below.
+    // 2. Enumerate the target rows under the UPDATE rule. The collection-level
+    // UPDATE access was already checked above, so this runs with overrideAccess
+    // to skip the READ rules (a role allowed to update but not read must still
+    // see its targets) and `status: "all"` to keep drafts enumerable — but it
+    // is constrained to rows the caller may actually UPDATE via the update
+    // owner constraint. That means an owner-only update enumerates only owned
+    // rows, so non-updatable ids are never surfaced as per-id failures or
+    // counted against the limit. getOwnerConstraint returns null for trusted /
+    // super-admin callers and for non-owner-only rules, so those enumerate all
+    // matching rows. Each row is still gated per-row in bulkUpdateEntries.
+    const updateOwnerConstraint = await this.accessService.getOwnerConstraint(
+      params.collectionName,
+      "update",
+      params.user,
+      params.overrideAccess
+    );
+    const updateEnumerationWhere: WhereFilter = updateOwnerConstraint
+      ? {
+          and: [
+            params.where,
+            {
+              [updateOwnerConstraint.field]: {
+                equals: updateOwnerConstraint.value,
+              },
+            },
+          ],
+        }
+      : params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
-      where: params.where,
+      where: updateEnumerationWhere,
       overrideAccess: true,
       status: "all",
       context: params.context,
@@ -674,15 +697,34 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Enumerate the target rows. The collection-level DELETE access was
-    // already checked above, so this enumeration runs with overrideAccess so it
-    // is NOT scoped by the READ rules (a role allowed to delete but not read,
-    // or read owner-only while delete is broader), and `status: "all"` keeps
-    // draft rows enumerable. Each row is still gated by the per-row DELETE
-    // access check in bulkDeleteEntries below.
+    // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
+    // the READ rules (a role allowed to delete but not read must still see its
+    // targets) and `status: "all"` keeps drafts enumerable, but the delete
+    // owner constraint scopes it to rows the caller may actually DELETE, so an
+    // owner-only delete enumerates only owned rows and never surfaces
+    // non-deletable ids. Null for trusted / super-admin / non-owner-only rules
+    // (enumerate all). Each row is still gated per-row in bulkDeleteEntries.
+    const deleteOwnerConstraint = await this.accessService.getOwnerConstraint(
+      params.collectionName,
+      "delete",
+      params.user,
+      params.overrideAccess
+    );
+    const deleteEnumerationWhere: WhereFilter = deleteOwnerConstraint
+      ? {
+          and: [
+            params.where,
+            {
+              [deleteOwnerConstraint.field]: {
+                equals: deleteOwnerConstraint.value,
+              },
+            },
+          ],
+        }
+      : params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
-      where: params.where,
+      where: deleteEnumerationWhere,
       overrideAccess: true,
       status: "all",
       context: params.context,
