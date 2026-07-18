@@ -54,6 +54,7 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { webhookTables } from "./webhooks";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -84,6 +85,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     // drizzle-kit 0.31.10 can't round-trip one, drizzle-team/drizzle-orm#4688),
     // so declaring it here is a no-op when the on-disk table already matches.
     ...Object.values(schemaEventsTables(dialect)),
+    ...Object.values(webhookTables(dialect)),
   ];
 
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
@@ -162,6 +164,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "nextly_schema_events",
+  "nextly_events",
+  "nextly_webhooks",
+  "nextly_webhook_deliveries",
 ] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */
@@ -219,4 +224,12 @@ export * from "./dynamic-components"; // kept; unchanged
 // schemas/_zod/api-keys.ts and are re-exported via `export * from "./_zod"`
 // at the top of this file.
 export { apiKeys } from "./api-keys/postgres";
+// Webhook + event system tables. PG re-exports for direct-query callers who
+// want to inspect the event/webhook/delivery ledger via the `nextly/schemas`
+// subpath; other dialects are reachable through getCoreSchema(dialect).
+export {
+  nextlyEvents,
+  nextlyWebhooks,
+  nextlyWebhookDeliveries,
+} from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19

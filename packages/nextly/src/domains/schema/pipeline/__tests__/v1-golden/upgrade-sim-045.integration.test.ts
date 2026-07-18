@@ -81,6 +81,56 @@ function onlyTables(bundle: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+// Core tables that did not exist when fixtures-045 was captured, so an
+// existing user upgrading legitimately gets them created. Their creation is
+// additive/non-destructive; every OTHER table must still diff to zero. After
+// applying the additive statements, a second pass must be zero too, which is
+// what proves these new tables themselves round-trip cleanly (no phantom diffs
+// forever, the same contract the pre-existing tables are held to).
+const POST_045_TABLES = [
+  "nextly_events",
+  "nextly_webhooks",
+  "nextly_webhook_deliveries",
+];
+
+// The post-045 names are static identifiers, but escape defensively so the
+// generated RegExp can never carry a metacharacter (also silences the
+// variable-in-regex lint).
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Whole-identifier match tolerant of the per-dialect quoting drizzle-kit emits
+// ("pg" / `mysql` / bare), so a table whose name merely contains an allowlisted
+// name cannot slip through on a substring.
+const namesPost045Table = (stmt: string): boolean =>
+  POST_045_TABLES.some(t =>
+    new RegExp(`[\`"\\s(]${escapeRegExp(t)}[\`"\\s)(]`).test(stmt)
+  );
+
+// Only additive DDL is acceptable in the upgrade sim: CREATE TABLE, CREATE
+// [UNIQUE] INDEX, or ALTER TABLE ... ADD (the shape drizzle-kit emits for a
+// new table's FK constraints). A destructive statement (DROP/RENAME/ALTER
+// COLUMN) never starts with one of these prefixes, so the positive allowlist
+// rejects it without a separate blocklist -- which also avoids false-flagging
+// the word DELETE inside a legitimate `... ADD CONSTRAINT ... ON DELETE ...`.
+const ADDITIVE_STATEMENT =
+  /^(CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE .+ ADD\b)/i;
+
+const isPost045TableStatement = (stmt: string): boolean =>
+  ADDITIVE_STATEMENT.test(stmt.trim()) && namesPost045Table(stmt);
+
+// Positive guard: the sim must actually create each new table (an empty first
+// pass would otherwise satisfy the additive-only check vacuously).
+const hasCreateTableFor = (stmts: string[], table: string): boolean =>
+  stmts.some(s =>
+    // Trailing `[\s(]` requires a real identifier boundary after the name, so
+    // `nextly_webhooks` does not match `CREATE TABLE nextly_webhooks_archive`.
+    new RegExp(
+      `^CREATE TABLE\\s+(IF NOT EXISTS\\s+)?[\`"]?${escapeRegExp(table)}[\`"]?[\\s(]`,
+      "i"
+    ).test(s.trim())
+  );
+
 describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
   it("sqlite: one data-preserving reconcile, then zero", async () => {
     const fixture = loadFixture("sqlite");
@@ -140,7 +190,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
   });
 
   it.skipIf(!process.env.TEST_POSTGRES_URL)(
-    "postgres: strict zero — v1 proposes nothing over a 0.31-created schema",
+    "postgres: only additive new-table creates, then zero",
     async () => {
       const fixture = loadFixture("postgres");
       const admin = new Pool({
@@ -160,13 +210,33 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           fixture.dynamicFields,
           "postgresql"
         );
-        const result = await kit.pushSchema(
-          { ...onlyTables(pgTables as never), ...schemaRecord },
-          db,
-          { schemas: ["public"] }
-        );
-        expect(result.sqlStatements).toEqual([]);
-        expect(result.hints).toEqual([]);
+        const desired = { ...onlyTables(pgTables as never), ...schemaRecord };
+
+        // Pass 1: v1 proposes NOTHING for the pre-existing 0.31 schema — the
+        // only statements are the additive creates for tables added after the
+        // fixture was captured. Any statement touching an untouched table is a
+        // phantom diff and fails here.
+        const first = await kit.pushSchema(desired, db, {
+          schemas: ["public"],
+        });
+        for (const s of first.sqlStatements) {
+          expect(isPost045TableStatement(s), `phantom diff: ${s}`).toBe(true);
+        }
+        for (const t of POST_045_TABLES) {
+          expect(
+            hasCreateTableFor(first.sqlStatements, t),
+            `missing CREATE TABLE for ${t}`
+          ).toBe(true);
+        }
+        expect(first.hints).toEqual([]);
+        await first.apply();
+
+        // Pass 2: silence — the new tables round-trip with no phantom diffs.
+        const second = await kit.pushSchema(desired, db, {
+          schemas: ["public"],
+        });
+        expect(second.sqlStatements).toEqual([]);
+        expect(second.hints).toEqual([]);
       } finally {
         await pool.end();
         await admin.query("DROP DATABASE IF EXISTS nextly_upgrade_v1");
@@ -207,14 +277,26 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           ...schemaRecord,
         };
 
-        // Pass 1: ONLY the literal-default → CURRENT_TIMESTAMP MODIFYs
-        // (metadata-only; instant; non-destructive).
+        // Pass 1: the literal-default → CURRENT_TIMESTAMP MODIFYs (metadata
+        // only; instant; non-destructive), plus the additive creates for
+        // tables added after the fixture was captured. Nothing else.
         const first = await kit.pushSchema(desired, db, "nextly_upgrade_v1");
         expect(first.hints).toEqual([]);
         for (const s of first.sqlStatements) {
-          expect(s, "unexpected reconcile statement shape").toMatch(
-            /^ALTER TABLE `[^`]+` MODIFY COLUMN `[^`]+` datetime DEFAULT \(?CURRENT_TIMESTAMP\)? NOT NULL;?$/
-          );
+          const isDefaultReconcile =
+            /^ALTER TABLE `[^`]+` MODIFY COLUMN `[^`]+` datetime DEFAULT \(?CURRENT_TIMESTAMP\)? NOT NULL;?$/.test(
+              s
+            );
+          expect(
+            isDefaultReconcile || isPost045TableStatement(s),
+            `unexpected reconcile statement shape: ${s}`
+          ).toBe(true);
+        }
+        for (const t of POST_045_TABLES) {
+          expect(
+            hasCreateTableFor(first.sqlStatements, t),
+            `missing CREATE TABLE for ${t}`
+          ).toBe(true);
         }
         await first.apply();
 
