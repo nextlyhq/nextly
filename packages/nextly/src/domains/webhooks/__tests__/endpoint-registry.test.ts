@@ -76,6 +76,42 @@ describe("WebhookEndpointRegistry", () => {
     expect((await after).map(e => e.id)).toEqual(["fresh"]);
   });
 
+  it("normalizes a malformed array column to an array (no throw during matching)", async () => {
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader);
+    const p = registry.getEnabledEndpoints();
+    // A legacy/manual write stored event_types as a bare string.
+    reader.resolveNext([{ ...row("wh_bad"), eventTypes: "entry.updated" }]);
+    const [endpoint] = await p;
+    expect(Array.isArray(endpoint.eventTypes)).toBe(true);
+    expect(endpoint.eventTypes).toEqual([]);
+  });
+
+  it("reloads after the TTL elapses (bounds cross-process staleness)", async () => {
+    let clock = 1000;
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader, {
+      ttlMs: 500,
+      now: () => clock,
+    });
+
+    const first = registry.getEnabledEndpoints();
+    reader.resolveNext([row("v1")]);
+    expect((await first).map(e => e.id)).toEqual(["v1"]);
+
+    // Within the TTL: cache hit, no reload.
+    clock = 1400;
+    await registry.getEnabledEndpoints();
+    expect(reader.calls).toBe(1);
+
+    // Past the TTL: reload.
+    clock = 1600;
+    const stale = registry.getEnabledEndpoints();
+    expect(reader.calls).toBe(2);
+    reader.resolveNext([row("v2")]);
+    expect((await stale).map(e => e.id)).toEqual(["v2"]);
+  });
+
   it("does not let a load that finishes after invalidate() repopulate the cache", async () => {
     const reader = new FakeReader();
     const registry = new WebhookEndpointRegistry(reader);

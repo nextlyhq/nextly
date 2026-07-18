@@ -149,4 +149,45 @@ describe("fanOutDueEvents (invalid payload)", () => {
     expect(marked).toHaveLength(1);
     expect(warnings.some(w => w.includes("evt_noresource"))).toBe(true);
   });
+
+  it("treats a non-array changedFields as invalid (would throw in matchesFilter)", async () => {
+    const marked: string[] = [];
+    const warnings: string[] = [];
+    const tx: FanOutTx = {
+      select: async <T>() => [] as T[],
+      insertMany: async <T>() => [] as T[],
+      update: async <T>() => {
+        marked.push("update");
+        return [] as T[];
+      },
+    };
+    const db: FanOutDatabase = {
+      // Valid type + resource, but changedFields is not an array; a
+      // changedFields-filter endpoint would make matchesFilter throw.
+      select: async <T>() =>
+        [
+          {
+            id: "evt_badchanged",
+            payload: {
+              type: "entry.updated",
+              resource: { kind: "entry", collection: "posts", id: "p1" },
+              changedFields: "title",
+            },
+          },
+        ] as T[],
+      transaction: async fn => fn(tx),
+    };
+
+    const result = await fanOutDueEvents({
+      db,
+      loadEndpoints: async () => [
+        endpoint({ id: "f", filter: { version: 1, changedFields: ["title"] } }),
+      ],
+      logger: { warn: m => warnings.push(m) },
+    });
+
+    expect(result).toEqual({ eventsProcessed: 1, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(1);
+    expect(warnings.some(w => w.includes("evt_badchanged"))).toBe(true);
+  });
 });

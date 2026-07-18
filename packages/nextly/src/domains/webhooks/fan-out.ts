@@ -99,9 +99,11 @@ interface EventRow {
 
 /**
  * Parse the stored envelope, tolerating both a JSON string and a parsed object,
- * and structurally validate the fields matching relies on. An object missing
- * `type` or `resource` would otherwise throw inside `matchesFilter`; returning
- * null routes it through the same skip-and-log path as an unparseable payload.
+ * and structurally validate every field matching relies on. An object missing
+ * `type`/`resource`, or whose `changedFields` is not an array, would otherwise
+ * throw inside `matchesFilter` (which does `new Set(envelope.changedFields)`);
+ * returning null routes it through the same skip-and-log path so a corrupt row
+ * can never throw and stall the batch.
  */
 function parseEnvelope(payload: unknown): WebhookEvent | null {
   let value: unknown = payload;
@@ -118,6 +120,7 @@ function parseEnvelope(payload: unknown): WebhookEvent | null {
   if (typeof record.resource !== "object" || record.resource === null) {
     return null;
   }
+  if (!Array.isArray(record.changedFields)) return null;
   return value as WebhookEvent;
 }
 
