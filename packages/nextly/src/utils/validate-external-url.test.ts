@@ -243,6 +243,23 @@ describe("safeFetch", () => {
     });
   });
 
+  it("reports an over-cap deflate body as response-too-large (not decode-failed)", async () => {
+    const { deflateSync } = await import("node:zlib");
+    // zlib-wrapped deflate that inflates past the cap: the size signal must
+    // survive the raw-deflate fallback.
+    const wire = deflateSync(Buffer.alloc(4000, 0x61));
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "deflate" });
+      res.end(wire);
+    });
+    await expect(
+      safeFetch(`${h.base}/`, { ...local, maxResponseBytes: 1000 })
+    ).rejects.toMatchObject({
+      name: "SafeFetchError",
+      reason: "response-too-large",
+    });
+  });
+
   it("does not fail an empty body that carries a content-encoding", async () => {
     // Inflating zero bytes throws; an empty encoded 2xx must stay a success.
     const h = await startServer((_req, res) => {

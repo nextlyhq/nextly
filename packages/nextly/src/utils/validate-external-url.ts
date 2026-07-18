@@ -647,7 +647,12 @@ function decodeBody(
         // `deflate` is zlib-wrapped per spec, but some servers send raw deflate.
         try {
           current = zlib.inflateSync(current, opts);
-        } catch {
+        } catch (inflateErr) {
+          // Only a zlib-wrapped/raw mismatch warrants the raw retry; a size-cap
+          // overflow must keep its ERR_BUFFER_TOO_LARGE signal so it classifies
+          // as response-too-large rather than decode-failed.
+          if (errorCode(inflateErr) === "ERR_BUFFER_TOO_LARGE")
+            throw inflateErr;
           current = zlib.inflateRawSync(current, opts);
         }
       } else {
