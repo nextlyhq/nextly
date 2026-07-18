@@ -289,9 +289,8 @@ async function registerCollection(
   collection: SnapshotCollection
 ): Promise<boolean> {
   const schema = getDynamicCollectionsSchema(dialect);
-  const db = adapter.getDrizzle<DrizzleDatabase>({
-    dynamicCollections: schema,
-  });
+  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
+  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if collection already exists using Drizzle
   const existing = await db
@@ -342,9 +341,8 @@ async function registerSingle(
   single: SnapshotSingle
 ): Promise<boolean> {
   const schema = getDynamicSinglesSchema(dialect);
-  const db = adapter.getDrizzle<DrizzleDatabase>({
-    dynamicSingles: schema,
-  });
+  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
+  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if single already exists using Drizzle
   const existing = await db
