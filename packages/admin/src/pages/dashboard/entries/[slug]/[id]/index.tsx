@@ -248,6 +248,12 @@ export default function EditEntryPage({
     entryId: id,
     depth: 2,
     locale,
+    // Load the editable entry as this locale's raw translation. Disabling
+    // fallback yields empty fields for an untranslated language instead of the
+    // default-locale text, which a save would otherwise persist as this locale's
+    // translation. sourceEntry (below) supplies the default-language hint. For
+    // the default locale the chain is just itself, so this is a no-op there.
+    fallbackLocale: "none",
     translationStatus: localizationEnabled,
   });
 

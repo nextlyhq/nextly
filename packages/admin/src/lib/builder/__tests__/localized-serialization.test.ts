@@ -27,8 +27,18 @@ describe("localized flag serialization", () => {
     expect(def.localized).toBe(true);
   });
 
-  it("convertToFieldDefinition defaults localized to false when unset", () => {
+  it("convertToFieldDefinition omits localized when unset, so the backend default applies", () => {
+    // An untouched switch must not serialize `false`: that would override the
+    // backend's per-type default (text-like fields localize when the collection
+    // opts in). Omission means "use the default".
     const def = convertToFieldDefinition(field());
+    expect(def.localized).toBeUndefined();
+  });
+
+  it("convertToFieldDefinition carries an explicit localized:false", () => {
+    const def = convertToFieldDefinition(
+      field({ advanced: { localized: false } })
+    );
     expect(def.localized).toBe(false);
   });
 
@@ -42,7 +52,10 @@ describe("localized flag serialization", () => {
   });
 
   it("mapBuilderFieldToManifest omits localized when not set", () => {
-    const manifest = mapBuilderFieldToManifest({ name: "heading", type: "text" });
+    const manifest = mapBuilderFieldToManifest({
+      name: "heading",
+      type: "text",
+    });
     expect(manifest.localized).toBeUndefined();
   });
 

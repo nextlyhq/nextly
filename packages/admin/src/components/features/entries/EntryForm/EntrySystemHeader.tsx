@@ -193,7 +193,25 @@ export function EntrySystemHeader({
   //   no dirty edits — there's nothing to save in that state, so the
   //   button greys out and Unpublish becomes the only enabled action.
   // - !hasStatus → single Save button (collections without drafts).
-  const isPublishedEdit = mode === "edit" && entry?.status === "published";
+  // On a localized draft collection each language has its own lifecycle, so the
+  // active locale's status — not the main/default row's — decides which submit
+  // affordances to show. A non-default locale with no companion status is not
+  // yet published; only fall back to the row status when there is no per-locale
+  // map (non-localized entries), so it never inherits the default's published state.
+  const localeStatus =
+    locale !== undefined
+      ? (
+          entry?._translations as
+            | Record<string, { status?: string }>
+            | undefined
+        )?.[locale]?.status
+      : undefined;
+  const hasTranslations =
+    locale !== undefined && entry?._translations !== undefined;
+  const effectiveStatus = hasTranslations
+    ? localeStatus
+    : (entry?.status as string | undefined);
+  const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
