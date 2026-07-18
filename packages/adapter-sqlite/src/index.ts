@@ -699,6 +699,15 @@ export class SqliteAdapter extends DrizzleAdapter {
   private createTransactionContext(db: Database.Database): TransactionContext {
     // better-sqlite3 is synchronous; the methods below are async to satisfy
     // the TransactionContext contract shared with truly-async dialect adapters.
+    // Bind a Drizzle instance to the transaction's connection so the delegated
+    // CRUD methods run inside it. better-sqlite3 is single-connection, so this
+    // is the same connection getDrizzle() would use, but binding explicitly
+    // keeps the three adapters consistent and correct if that ever changes.
+    // Built lazily and memoized: transactions that use only raw execute/insert
+    // never construct it.
+    const buildTxExecutor = () => drizzle({ client: db });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
@@ -794,20 +803,21 @@ export class SqliteAdapter extends DrizzleAdapter {
         return stmt.all(...allValues) as T[];
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -816,15 +826,15 @@ export class SqliteAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -832,7 +842,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
