@@ -58,6 +58,10 @@ describe("buildSignatureHeaders", () => {
     expect(headers[WEBHOOK_SIGNATURE_HEADER]).toBe(`v1,${hmac(KEY)}`);
   });
 
+  it("throws rather than emitting a blank signature for an empty secret list", () => {
+    expect(() => buildSignatureHeaders({ ...base, secrets: [] })).toThrow();
+  });
+
   it("emits one space-delimited signature per active secret during rotation", () => {
     const oldKey = Buffer.from("old-secret-key-material-zzzzzzzz");
     const headers = buildSignatureHeaders({

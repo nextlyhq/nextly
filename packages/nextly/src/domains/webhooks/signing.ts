@@ -24,6 +24,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { NextlyError } from "../../errors";
+
 export const WEBHOOK_ID_HEADER = "webhook-id";
 export const WEBHOOK_TIMESTAMP_HEADER = "webhook-timestamp";
 export const WEBHOOK_SIGNATURE_HEADER = "webhook-signature";
@@ -103,6 +105,14 @@ export interface SignHeadersInput {
 export function buildSignatureHeaders(
   input: SignHeadersInput
 ): Record<string, string> {
+  // A delivery must be signed. An empty secret list would otherwise produce a
+  // blank webhook-signature header that every conformant receiver rejects, with
+  // no signal to the caller — fail loudly instead.
+  if (input.secrets.length === 0) {
+    throw NextlyError.internal({
+      logContext: { reason: "no-signing-secrets", webhookEventId: input.id },
+    });
+  }
   const signatures = input.secrets.map(
     secret =>
       `v1,${computeSignature(secret, input.id, input.timestamp, input.body)}`
