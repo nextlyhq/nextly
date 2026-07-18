@@ -41,7 +41,7 @@ export function createSilentLogger(): Logger {
  * Override any method via the `overrides` parameter.
  */
 export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
-  return {
+  const adapter: MockRecord = {
     dialect: "postgresql",
     getCapabilities: vi.fn().mockReturnValue({
       dialect: "postgresql",
@@ -64,6 +64,18 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     getDialect: vi.fn().mockReturnValue("postgresql"),
     ...overrides,
   };
+  // Run a transaction callback with the adapter itself as the tx context, so
+  // `tx.update`/`tx.insert` resolve to the same mocks the tests assert on and
+  // callers that write inside `adapter.transaction(...)` behave like the real
+  // adapter. Only default it when an override did not provide one.
+  if (!adapter.transaction) {
+    adapter.transaction = vi
+      .fn()
+      .mockImplementation(async (cb: (tx: MockRecord) => Promise<unknown>) =>
+        cb(adapter)
+      );
+  }
+  return adapter;
 }
 
 // ── Mock SingleRegistryService ──────────────────────────────────────────
@@ -134,6 +146,7 @@ export function createMockComponentDataService(): MockRecord {
         async ({ entry }: { entry: Record<string, unknown> }) => entry
       ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
+    saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
   };
 }

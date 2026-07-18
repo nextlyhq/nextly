@@ -232,7 +232,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   const validated = parseResult.data;
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
-  assertValidFieldsPayload(validated.fields);
+  assertValidFieldsPayload(validated.fields, { kind: "collection" });
 
   const tableName = validated.slug
     .toLowerCase()

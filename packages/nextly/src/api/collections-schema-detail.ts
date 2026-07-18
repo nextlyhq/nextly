@@ -179,7 +179,7 @@ export const PATCH = withErrorHandler(
 
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields);
+      assertValidFieldsPayload(body.fields, { kind: "collection" });
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.

@@ -299,12 +299,53 @@ export class SingleMutationService extends BaseService {
         updated_at: new Date(),
       };
 
-      const updatedRows = await this.adapter.update<SingleDocument>(
-        singleMeta.tableName,
-        updatePayload,
-        this.whereEq("id", existingDoc.id),
-        { returning: "*" }
-      );
+      // Commit the scalar update and the component subtree writes atomically so
+      // a component-save failure rolls back the scalar update (no partial single
+      // state). The scalar row and comp_ tables both write on the same tx. The
+      // rows are RETURNED from the callback (not assigned to an outer variable),
+      // so the value read below is only ever the committed result.
+      let updatedRows: SingleDocument[];
+      try {
+        updatedRows = await this.adapter.transaction(async tx => {
+          const rows = await tx.update<SingleDocument>(
+            singleMeta.tableName,
+            updatePayload,
+            this.whereEq("id", existingDoc.id),
+            { returning: "*" }
+          );
+
+          // Nothing updated: return the empty result; the 500 is surfaced after
+          // the (empty) transaction, and the component write is skipped.
+          if (rows.length === 0) {
+            return rows;
+          }
+
+          // 9.5. Save component field data to separate comp_{slug} tables
+          if (
+            this.componentDataService &&
+            Object.keys(componentFieldData).length > 0
+          ) {
+            await this.componentDataService.saveComponentDataInTransaction(tx, {
+              parentId: existingDoc.id,
+              parentTable: singleMeta.tableName,
+              fields: fieldConfigs,
+              data: componentFieldData,
+            });
+          }
+
+          return rows;
+        });
+      } catch (error) {
+        // A component validation failure (NextlyError) thrown inside the
+        // transaction callback is re-wrapped as a database error by the adapter;
+        // recover it from the cause so an invalid component update still yields
+        // the original validation response (400) instead of a generic 500.
+        const cause = (error as { cause?: unknown } | null)?.cause;
+        if (cause instanceof NextlyError) {
+          throw cause;
+        }
+        throw error;
+      }
 
       if (updatedRows.length === 0) {
         return {
@@ -312,19 +353,6 @@ export class SingleMutationService extends BaseService {
           statusCode: 500,
           message: "Failed to update Single document",
         };
-      }
-
-      // 9.5. Save component field data to separate comp_{slug} tables
-      if (
-        this.componentDataService &&
-        Object.keys(componentFieldData).length > 0
-      ) {
-        await this.componentDataService.saveComponentData({
-          parentId: existingDoc.id,
-          parentTable: singleMeta.tableName,
-          fields: fieldConfigs,
-          data: componentFieldData,
-        });
       }
 
       let updatedDoc = updatedRows[0];

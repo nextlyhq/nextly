@@ -262,3 +262,31 @@ describe("CollectionAccessService.isSuperAdmin", () => {
     expect(service.isSuperAdmin(undefined)).toBe(false);
   });
 });
+
+describe("getAccessRules normalizes collection owner fields", () => {
+  it("rewrites the createdBy/created_by alias to the system column, leaving custom fields", () => {
+    const { service } = buildAccessService();
+    const rules = service.getAccessRules({
+      accessRules: {
+        read: { type: "owner-only", ownerField: "createdBy" },
+        update: { type: "owner-only", ownerField: "created_by" },
+        delete: { type: "owner-only", ownerField: "authorId" },
+        create: { type: "authenticated" },
+      },
+    });
+    // Both spellings of the reserved owner name resolve to the stamped column.
+    expect(rules?.read?.ownerField).toBe("created_by");
+    expect(rules?.update?.ownerField).toBe("created_by");
+    // A genuine custom owner field is left untouched.
+    expect(rules?.delete?.ownerField).toBe("authorId");
+    expect(rules?.create?.type).toBe("authenticated");
+  });
+
+  it("leaves a rule-less owner-only rule alone (default resolved downstream)", () => {
+    const { service } = buildAccessService();
+    const rules = service.getAccessRules({
+      accessRules: { read: { type: "owner-only" } },
+    });
+    expect(rules?.read?.ownerField).toBeUndefined();
+  });
+});

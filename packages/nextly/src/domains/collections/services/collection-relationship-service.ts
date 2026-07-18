@@ -15,6 +15,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
@@ -555,6 +556,22 @@ function normalizeToIdArray(value: unknown): string[] {
  * const expanded = await relationshipService.expandRelationships(entry, 'posts', fields);
  * ```
  */
+// The minimal raw-SQL surface the junction-table code needs from a database
+// handle. Both the pooled `this.db` and a transaction-scoped Drizzle instance
+// (from `tx.getDrizzle()`) satisfy it, so junction writes can run either on the
+// pool (default) or inside a caller's transaction (when an executor is passed),
+// keeping the junction write atomic with the entry write.
+// Each method is optional because a given dialect's Drizzle handle exposes only
+// a subset: SQLite's better-sqlite3 handle has `all`/`run` (no `execute`),
+// while the Postgres/MySQL handles have `execute` (no `all`/`run`). The
+// junction raw-SQL helpers below are dialect-gated, so the method they call is
+// always present for the current dialect.
+export type RelationshipDbExecutor = {
+  all?(query: unknown): unknown[];
+  run?(query: unknown): unknown;
+  execute?(query: unknown): Promise<unknown>;
+};
+
 export class CollectionRelationshipService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -580,12 +597,18 @@ export class CollectionRelationshipService extends BaseService {
    * `.rows` off the tuple yields undefined). The MySQL normalization mirrors
    * the defensive handling in schema/pipeline/classifier/count-helpers.ts.
    */
-  private async selectRawSql(query: unknown): Promise<{ rows: unknown[] }> {
+  private async selectRawSql(
+    query: unknown,
+    // Run on the caller's transaction handle when provided, else the pool.
+    db: RelationshipDbExecutor = this.db
+  ): Promise<{ rows: unknown[] }> {
     if (this.dialect === "sqlite") {
-      const rows = this.db.all(query) as unknown[];
+      // SQLite's handle exposes all(); the dialect gate guarantees it here.
+      const rows = db.all!(query);
       return { rows };
     }
-    const result: unknown = await this.db.execute(query);
+    // Postgres/MySQL handles expose execute().
+    const result: unknown = await db.execute!(query);
     if (this.dialect === "mysql" && Array.isArray(result)) {
       // Tuple form `[rows, fieldPackets]` -> take rows; a flat rows array (first
       // element is a row object, not an array) is already the rows.
@@ -598,14 +621,20 @@ export class CollectionRelationshipService extends BaseService {
   /**
    * Run an INSERT / UPDATE / DELETE / DDL raw SQL tag, dialect-aware.
    * Same rationale as `selectRawSql`. Returns void since callers don't
-   * inspect the mutation result here.
+   * inspect the mutation result here. Accepts an optional handle for the same
+   * reason as `selectRawSql` (defaults to the pool).
    */
-  private async mutateRawSql(query: unknown): Promise<void> {
+  private async mutateRawSql(
+    query: unknown,
+    db: RelationshipDbExecutor = this.db
+  ): Promise<void> {
     if (this.dialect === "sqlite") {
-      this.db.run(query);
+      // SQLite's handle exposes run(); the dialect gate guarantees it here.
+      db.run!(query);
       return;
     }
-    await this.db.execute(query);
+    // Postgres/MySQL handles expose execute().
+    await db.execute!(query);
   }
 
   /**
@@ -1643,6 +1672,15 @@ export class CollectionRelationshipService extends BaseService {
     rows: Record<string, unknown>[]
   ): Promise<void> {
     if (rows.length === 0) return;
+    // The system owner column must never ride along a populated relationship:
+    // a collection readable by non-creators would otherwise leak a related
+    // row's creator user id through the nested payload. Strip it from every
+    // related row up front (it's a reserved system column, so this can't touch
+    // a user field) — this runs at each expansion level, so nested relations
+    // are covered too.
+    for (const row of rows) {
+      stripSystemOwnerField(row);
+    }
     // System entities expose secret columns that are not schema fields, so
     // strip them by name.
     if (isSystemEntity(targetCollection)) {
@@ -1837,12 +1875,17 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
    * @param relatedIds - Array of related entry IDs to link
+   * @param executor - Optional transaction-scoped Drizzle handle (from
+   *   `tx.getDrizzle()`); when provided, the junction existence check and
+   *   inserts run inside the caller's transaction so they commit atomically
+   *   with the entry write instead of always hitting the pool.
    */
   async insertManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
     field: FieldDefinition,
-    relatedIds: string[]
+    relatedIds: string[],
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     if (relatedIds.length === 0) return;
 
@@ -1901,7 +1944,7 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       }
-      const result = (await this.selectRawSql(checkQuery)) as {
+      const result = (await this.selectRawSql(checkQuery, executor)) as {
         rows: Array<{ table_exists: boolean | number }>;
       };
       const exists = Boolean(result.rows[0]?.table_exists);
@@ -1922,69 +1965,43 @@ export class CollectionRelationshipService extends BaseService {
     const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
     const targetIdCol = sql.identifier(targetCollectionName + "_id");
 
-    // Track errors
-    const errors: string[] = [];
-
-    // Insert each relationship individually for reliability
-    // Modern databases handle this efficiently with proper indexes
+    // Insert each relationship. A genuine failure (for example a foreign-key
+    // violation from a bad target id) is allowed to propagate: junction writes
+    // run inside the caller's transaction via `executor`, so throwing rolls the
+    // whole write back instead of committing a partial set of junction rows.
+    // Duplicate (source,target) pairs never throw here (the dialect conflict
+    // clause below ignores them).
     for (const targetId of relatedIds) {
-      try {
-        const id = this.collectionService.generateId();
-        // This raw sql`` template binds straight to the driver, bypassing
-        // Drizzle's per-column serialization. better-sqlite3 only accepts
-        // numbers/strings/bigints/buffers/null, so a Date throws; the junction
-        // created_at column is `integer` epoch-seconds on SQLite (see
-        // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
-        const createdAt =
-          this.dialect === "sqlite"
-            ? Math.floor(Date.now() / 1000)
-            : new Date();
+      const id = this.collectionService.generateId();
+      // This raw sql`` template binds straight to the driver, bypassing
+      // Drizzle's per-column serialization. better-sqlite3 only accepts
+      // numbers/strings/bigints/buffers/null, so a Date throws; the junction
+      // created_at column is `integer` epoch-seconds on SQLite (see
+      // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
+      const createdAt =
+        this.dialect === "sqlite" ? Math.floor(Date.now() / 1000) : new Date();
 
-        // "Insert, ignore an existing (source,target) pair" is spelled
-        // differently per dialect: MySQL has no ON CONFLICT (it errors with
-        // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
-        // rather than INSERT IGNORE, so only a duplicate-key conflict is
-        // swallowed while other errors (e.g. a foreign-key violation from a
-        // bad target id) still surface, matching the Postgres/SQLite
-        // ON CONFLICT DO NOTHING behaviour against the unique pair index.
-        const idCol = sql.identifier("id");
-        const conflictClause =
-          this.dialect === "mysql"
-            ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
-            : sql`ON CONFLICT DO NOTHING`;
+      // "Insert, ignore an existing (source,target) pair" is spelled
+      // differently per dialect: MySQL has no ON CONFLICT (it errors with
+      // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
+      // rather than INSERT IGNORE, so only a duplicate-key conflict is
+      // swallowed while other errors (e.g. a foreign-key violation from a
+      // bad target id) still surface, matching the Postgres/SQLite
+      // ON CONFLICT DO NOTHING behaviour against the unique pair index.
+      const idCol = sql.identifier("id");
+      const conflictClause =
+        this.dialect === "mysql"
+          ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
+          : sql`ON CONFLICT DO NOTHING`;
 
-        const query = sql`
-          INSERT INTO ${sql.identifier(junctionTableName)}
-          (id, ${sourceIdCol}, ${targetIdCol}, created_at)
-          VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
-          ${conflictClause}
-        `;
+      const query = sql`
+        INSERT INTO ${sql.identifier(junctionTableName)}
+        (id, ${sourceIdCol}, ${targetIdCol}, created_at)
+        VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
+        ${conflictClause}
+      `;
 
-        console.log(`[ManyToMany] Executing insert for targetId: ${targetId}`);
-        await this.mutateRawSql(query);
-        console.log(
-          `[ManyToMany] ✓ Insert successful for targetId: ${targetId}`
-        );
-      } catch (error: unknown) {
-        const errorMsg = `Failed to insert junction record for ${targetId}: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(`[ManyToMany] ✗ ${errorMsg}`);
-        console.error(`[ManyToMany] Full error:`, error);
-        errors.push(errorMsg);
-      }
-    }
-
-    // If all inserts failed, throw error
-    if (errors.length === relatedIds.length && relatedIds.length > 0) {
-      throw new Error(
-        `Failed to insert all manyToMany relations for field "${field.name}". Errors: ${errors.join("; ")}`
-      );
-    }
-
-    // If some failed, log warning
-    if (errors.length > 0) {
-      console.warn(
-        `[ManyToMany] Partial failure: ${errors.length}/${relatedIds.length} inserts failed`
-      );
+      await this.mutateRawSql(query, executor);
     }
   }
 
@@ -1995,11 +2012,15 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceCollectionName - Name of the source collection
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
+   * @param executor - Optional transaction-scoped Drizzle handle; when
+   *   provided, the delete runs inside the caller's transaction instead of the
+   *   pool (see `insertManyToManyRelations` for the rationale).
    */
   async deleteManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
@@ -2022,7 +2043,7 @@ export class CollectionRelationshipService extends BaseService {
       WHERE ${sourceIdCol} = ${sourceEntryId}
     `;
 
-    await this.mutateRawSql(query);
+    await this.mutateRawSql(query, executor);
   }
 
   /**

@@ -125,6 +125,9 @@ export function buildDesiredTableFromFields(
     hasTitleField,
     hasSlugField,
     hasStatus: options.hasStatus,
+    // Singles (`single_` prefix) get no owner column; collections (`dc_`) do.
+    // Keeps the diff input in lockstep with the runtime schema and DDL.
+    isSingle: tableName.startsWith("single_"),
   })) {
     columns.push({
       name: reserved.name,
