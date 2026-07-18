@@ -71,6 +71,19 @@ export interface ValidateEntryOptions {
   mode: "create" | "update";
   /** Request context forwarded to custom `validate` functions. */
   req?: Record<string, unknown>;
+  /**
+   * Names of the localized (companion-owned) fields for a localized-collection write. A localized
+   * field stores its value per language in the `_locales` companion row, so its `required` rule is
+   * enforced only for the default-locale write (see `enforceLocalizedRequired`); other locales may
+   * be blank and fall back to the default language. Absent → no field is treated as localized.
+   */
+  localizedFieldNames?: ReadonlySet<string>;
+  /**
+   * Whether localized-`required` fields are enforced on this write. `true` (the default, i.e. when
+   * omitted) for the default-locale write or a non-localized collection; `false` lets a blank
+   * required LOCALIZED field pass because it falls back to the default language.
+   */
+  enforceLocalizedRequired?: boolean;
 }
 
 /** Flat-or-nested rule lookup (builder writes `validation.*`, code-first is flat). */
@@ -88,6 +101,29 @@ function numberRule(field: ValidatableField, key: string): number | undefined {
 
 function isRequired(field: ValidatableField): boolean {
   return Boolean(field.required) || Boolean(rule(field, "required"));
+}
+
+/**
+ * Whether a field's `required` rule applies to THIS write (i18n M5b). A top-level localized field
+ * is required only for the default-locale write; other locales fall back to the default language,
+ * so a blank value is allowed. Non-localized fields, nested fields, and non-localized collections
+ * always enforce. Gated on `path === field.name` so a nested sub-field that happens to share a
+ * top-level localized field's name is never relaxed.
+ */
+function requiredIsEnforced(
+  field: ValidatableField,
+  path: string,
+  options: ValidateEntryOptions
+): boolean {
+  if (
+    options.enforceLocalizedRequired === false &&
+    field.name != null &&
+    path === field.name &&
+    options.localizedFieldNames?.has(field.name)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isEmpty(value: unknown): boolean {
@@ -171,7 +207,7 @@ async function validateFieldValue(
     !field.hasMany &&
     (field.type === "select" || field.type === "radio");
   if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
-    if (isRequired(field)) {
+    if (isRequired(field) && requiredIsEnforced(field, path, options)) {
       issues.push({
         path,
         code: "REQUIRED",

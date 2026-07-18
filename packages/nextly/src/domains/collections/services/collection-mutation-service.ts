@@ -52,12 +52,10 @@ import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
 } from "../../../shared/lib/password-fields";
-import type { RequestContext } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
-import { validateFields, type FieldError } from "../validation/validate-fields";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -175,19 +173,21 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Run server-side per-field validation (i18n M5b) for a write. Returns field errors (empty =
-   * valid). `required` on a localized field is enforced only for the default-language row so the
+   * Build the locale-aware inputs for {@link validateEntryData} on a localized-collection write
+   * (i18n M5b). `required` on a localized field is enforced only for the default-language row so the
    * "publish default now, translate later" workflow proceeds; shared required fields are always
-   * enforced. See {@link validateFields}.
+   * enforced. For a non-localized collection this yields an empty set and enforce=true, so the
+   * canonical validator behaves exactly as it does elsewhere. Localized field names come from the
+   * companion schema, so a localized collection that has not been migrated yet (localized columns
+   * still on the main table) treats no field as localized, matching the pre-migration behavior.
    */
-  private async validateWrite(
+  private async localizedRequiredContext(
     collectionName: string,
-    fields: FieldDefinition[],
-    data: Record<string, unknown>,
-    isCreate: boolean,
-    locale: string | undefined,
-    user?: UserContext
-  ): Promise<FieldError[]> {
+    locale: string | undefined
+  ): Promise<{
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+  }> {
     const companion =
       await this.fileManager.loadCompanionSchema(collectionName);
     const localizedFieldNames = new Set(
@@ -197,22 +197,7 @@ export class CollectionMutationService extends BaseService {
       !this.localization ||
       resolveRequestedLocale(this.localization, locale) ===
         this.localization.defaultLocale;
-    return validateFields(fields, data, {
-      isCreate,
-      localizedFieldNames,
-      enforceLocalizedRequired,
-      req: { user } as unknown as RequestContext,
-    });
-  }
-
-  /** Build a 400 validation-failure result from field errors. */
-  private validationFailure(errors: FieldError[]): CollectionServiceResult {
-    return {
-      success: false,
-      statusCode: 400,
-      message: `Validation failed: ${errors.map(e => e.message).join("; ")}`,
-      data: { errors },
-    };
+    return { localizedFieldNames, enforceLocalizedRequired };
   }
 
   /**
@@ -842,12 +827,20 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       {
+        // i18n M5b: `required` on a localized field is enforced only for the default-locale write;
+        // other locales fall back, so the canonical validator gets the localized-field set and
+        // whether this write's locale must enforce them.
+        const localeCtx = await this.localizedRequiredContext(
+          params.collectionName,
+          params.locale
+        );
         const validationIssues = await validateEntryData(
           finalData,
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
             req: params.user ? { user: params.user } : {},
+            ...localeCtx,
           }
         );
         if (validationIssues.length > 0) {
@@ -1043,19 +1036,6 @@ export class CollectionMutationService extends BaseService {
       // - SQLite: integer (unix timestamp via mode:"timestamp")
       // Using Date objects (not ISO strings) because SQLite's integer mode
       // calls .getTime() which fails on strings.
-      // i18n M5b: server-side per-field validation (runs after hooks/defaults/slug-gen, before
-      // the DB write). `required` on a localized field is enforced only for the default-locale row.
-      const createErrors = await this.validateWrite(
-        params.collectionName,
-        fields,
-        finalData,
-        true,
-        params.locale,
-        params.user
-      );
-      if (createErrors.length > 0) {
-        return this.validationFailure(createErrors);
-      }
 
       const now = new Date();
       const rawEntryData = {
@@ -1534,12 +1514,20 @@ export class CollectionMutationService extends BaseService {
       });
 
       {
+        // i18n M5b: on update only fields present in the patch are checked (required cannot be
+        // blanked). `required` on a localized field is enforced only for the default-locale write;
+        // other locales fall back, so the canonical validator gets the localized-field context.
+        const localeCtx = await this.localizedRequiredContext(
+          params.collectionName,
+          params.locale
+        );
         const validationIssues = await validateEntryData(
           finalData,
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
             req: params.user ? { user: params.user } : {},
+            ...localeCtx,
           }
         );
         if (validationIssues.length > 0) {
@@ -1781,19 +1769,6 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
-      // i18n M5b: server-side per-field validation for the update (only fields present in the
-      // patch are checked; required cannot be blanked).
-      const updateErrors = await this.validateWrite(
-        params.collectionName,
-        fields,
-        finalData,
-        false,
-        params.locale,
-        params.user
-      );
-      if (updateErrors.length > 0) {
-        return this.validationFailure(updateErrors);
-      }
       // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
       // keys) so they update the companion `_locales` row for the write's locale instead. `null` =
       // not localized / companion not migrated yet (values stay on main — dev path, unchanged).
