@@ -224,6 +224,10 @@ export { auditLog, activityLog } from "./audit/postgres";
 export { nextlyMeta } from "./nextly-meta/postgres";
 // Plan B — schema-events bookkeeping table. PG re-export for direct-query callers.
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "./schema-events/postgres";
+
+// Content-versioning store. PG re-export for direct-query callers, matching the
+// other managed core tables listed in CORE_TABLE_NAMES.
+export { nextlyVersionsPg as nextlyVersions } from "./versions/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 // Plan A Task 11 — apiKeys (Drizzle). PG re-exports for direct-query callers.

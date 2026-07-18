@@ -15,6 +15,7 @@
  * @module domains/versions/versions-repository
  */
 
+import { NextlyError } from "../../errors";
 import type {
   VersionScopeKind,
   VersionStatus,
@@ -93,6 +94,16 @@ export class VersionsRepository {
     // defaults, so id and timestamps are set explicitly here (mirrors how the
     // collection mutation service seeds dc_ rows).
     const now = new Date();
+    // `snapshot` is `unknown`; guard against values that do not serialize to a
+    // JSON string (undefined, a function, a symbol) before writing them into
+    // the NOT NULL snapshot column, where they would otherwise land as an
+    // invalid/absent value.
+    const serializedSnapshot = JSON.stringify(input.snapshot);
+    if (typeof serializedSnapshot !== "string") {
+      throw NextlyError.internal({
+        logContext: { reason: "version-snapshot-not-serializable" },
+      });
+    }
     await this.db.insert(TABLE, {
       id: crypto.randomUUID(),
       scopeKind: input.ref.scopeKind,
@@ -110,7 +121,7 @@ export class VersionsRepository {
       // the query builder (mapDataToColumnNames), so this is correct on
       // both paths and matches the JSON-field convention used by the
       // collection mutation service.
-      snapshot: JSON.stringify(input.snapshot),
+      snapshot: serializedSnapshot,
       label: input.label ?? null,
       locale: input.locale ?? null,
       sourceVersionNo: input.sourceVersionNo ?? null,
@@ -131,6 +142,10 @@ export class VersionsRepository {
    * later stage before capture is wired into concurrent writes.
    */
   async getMaxVersionNo(ref: VersionRef): Promise<number> {
+    // Order by version_no desc and take a single row so this reads at most one
+    // record instead of scanning every durable version (whose rows carry the
+    // full snapshot). The adapter select does not project columns, so limiting
+    // the row count is how the snapshot payload is kept off this hot path.
     const rows = await this.db.select<VersionRow>(TABLE, {
       where: {
         and: [
@@ -138,14 +153,11 @@ export class VersionsRepository {
           { column: "isAutosave", op: "=", value: false },
         ],
       },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: 1,
     });
-    let max = 0;
-    for (const r of rows) {
-      if (typeof r.versionNo === "number" && r.versionNo > max) {
-        max = r.versionNo;
-      }
-    }
-    return max;
+    const top = rows[0]?.versionNo;
+    return typeof top === "number" ? top : 0;
   }
 
   /** Fetch one durable version by its number, snapshot included. */

@@ -43,7 +43,9 @@ export const nextlyVersionsMysql = mysqlTable(
     locale: varchar("locale", { length: 32 }),
     sourceVersionNo: int("source_version_no"),
 
-    createdBy: varchar("created_by", { length: 36 }),
+    // 191 to match users.id (varchar(191)); created_by holds a user id, which
+    // is wider than the 36-char UUID used for this table's own id.
+    createdBy: varchar("created_by", { length: 191 }),
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())
       .notNull(),

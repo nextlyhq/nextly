@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 
 import { assembleDocument } from "../assemble-document";
 
+// Verifies the snapshot builder's two contract points: (1) parent columns,
+// component subtrees, and m2m id arrays merge into one object keyed by field
+// name; (2) it is pure - missing inputs are treated as empty and the inputs are
+// never mutated.
 describe("assembleDocument", () => {
   it("merges parent columns, component subtrees, and m2m ids", () => {
     const snapshot = assembleDocument({

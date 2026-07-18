@@ -47,6 +47,8 @@ export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql"
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
 
+// Content-version store; in the bundle so the adapter table resolver can
+// resolve `nextly_versions` (a managed core table) for runtime CRUD.
 export { nextlyVersionsMysql as nextlyVersions } from "../versions/mysql";
 
 // Webhook + event system tables. Must be in this flat bundle (not just

@@ -9,6 +9,8 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../errors";
+
 import * as my from "./mysql";
 import * as pg from "./postgres";
 import * as sl from "./sqlite";
@@ -26,7 +28,12 @@ export function versionsTables(dialect: SupportedDialect) {
       return { nextlyVersions: sl.nextlyVersionsSqlite };
     default: {
       const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+      // NextlyError (not bare Error) per the packages/nextly convention. This
+      // branch is unreachable given the SupportedDialect union; the `never`
+      // assignment is the compile-time exhaustiveness guard.
+      throw NextlyError.internal({
+        logContext: { dialect: String(_exhaustive) },
+      });
     }
   }
 }

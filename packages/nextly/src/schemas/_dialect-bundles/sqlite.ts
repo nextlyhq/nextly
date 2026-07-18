@@ -47,6 +47,8 @@ export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlit
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
 
+// Content-version store; in the bundle so the adapter table resolver can
+// resolve `nextly_versions` (a managed core table) for runtime CRUD.
 export { nextlyVersionsSqlite as nextlyVersions } from "../versions/sqlite";
 
 // Webhook + event system tables. Must be in this flat bundle (not just
