@@ -27,8 +27,10 @@ export const nextlyEvents = sqliteTable(
     resourceKind: text("resource_kind").notNull(),
     resourceCollection: text("resource_collection"),
     resourceId: text("resource_id"),
-    // JSON stored as text on SQLite.
-    payload: text("payload").notNull(),
+    // JSON stored as TEXT on SQLite; `mode: "json"` gives Drizzle the same
+    // object-in/object-out interface as the PG jsonb / MySQL json columns, so
+    // delivery code never special-cases SQLite. Same TEXT DDL either way.
+    payload: text("payload", { mode: "json" }).notNull(),
     actorType: text("actor_type"),
     actorId: text("actor_id"),
     createdAt: integer("created_at", { mode: "timestamp" })
@@ -45,12 +47,14 @@ export const nextlyWebhooks = sqliteTable(
     name: text("name").notNull(),
     url: text("url").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    eventTypes: text("event_types").notNull(),
-    filter: text("filter"),
-    headers: text("headers"),
-    secretHash: text("secret_hash").notNull(),
+    // JSON columns use `mode: "json"` for parity with the PG/MySQL
+    // jsonb/json columns (same TEXT DDL on SQLite).
+    eventTypes: text("event_types", { mode: "json" }).notNull(),
+    filter: text("filter", { mode: "json" }),
+    headers: text("headers", { mode: "json" }),
+    secretHash: text("secret_hash", { mode: "json" }).notNull(),
     secretPrefix: text("secret_prefix").notNull(),
-    fieldAllowlist: text("field_allowlist"),
+    fieldAllowlist: text("field_allowlist", { mode: "json" }),
     createdBy: text("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -83,7 +87,8 @@ export const nextlyWebhookDeliveries = sqliteTable(
     lastLatencyMs: integer("last_latency_ms"),
     lastError: text("last_error"),
     lastResponseSnippet: text("last_response_snippet"),
-    attempts: text("attempts"),
+    // JSON array of per-attempt records; `mode: "json"` matches PG/MySQL.
+    attempts: text("attempts", { mode: "json" }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

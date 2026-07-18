@@ -224,4 +224,12 @@ export * from "./dynamic-components"; // kept; unchanged
 // schemas/_zod/api-keys.ts and are re-exported via `export * from "./_zod"`
 // at the top of this file.
 export { apiKeys } from "./api-keys/postgres";
+// Webhook + event system tables. PG re-exports for direct-query callers who
+// want to inspect the event/webhook/delivery ledger via the `nextly/schemas`
+// subpath; other dialects are reachable through getCoreSchema(dialect).
+export {
+  nextlyEvents,
+  nextlyWebhooks,
+  nextlyWebhookDeliveries,
+} from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19

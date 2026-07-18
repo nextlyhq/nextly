@@ -92,8 +92,34 @@ const POST_045_TABLES = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
 ];
+
+// Whole-identifier match tolerant of the per-dialect quoting drizzle-kit emits
+// ("pg" / `mysql` / bare), so a table whose name merely contains an allowlisted
+// name cannot slip through on a substring.
+const namesPost045Table = (stmt: string): boolean =>
+  POST_045_TABLES.some(t => new RegExp(`[\`"\\s(]${t}[\`"\\s)(]`).test(stmt));
+
+// Only additive DDL is acceptable in the upgrade sim: CREATE TABLE, CREATE
+// [UNIQUE] INDEX, or ALTER TABLE ... ADD (the shape drizzle-kit emits for a
+// new table's FK constraints). A destructive statement (DROP/RENAME/ALTER
+// COLUMN) never starts with one of these prefixes, so the positive allowlist
+// rejects it without a separate blocklist -- which also avoids false-flagging
+// the word DELETE inside a legitimate `... ADD CONSTRAINT ... ON DELETE ...`.
+const ADDITIVE_STATEMENT =
+  /^(CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE .+ ADD\b)/i;
+
 const isPost045TableStatement = (stmt: string): boolean =>
-  POST_045_TABLES.some(t => stmt.includes(t));
+  ADDITIVE_STATEMENT.test(stmt.trim()) && namesPost045Table(stmt);
+
+// Positive guard: the sim must actually create each new table (an empty first
+// pass would otherwise satisfy the additive-only check vacuously).
+const hasCreateTableFor = (stmts: string[], table: string): boolean =>
+  stmts.some(s =>
+    new RegExp(
+      `^CREATE TABLE\\s+(IF NOT EXISTS\\s+)?[\`"]?${table}[\`"]?`,
+      "i"
+    ).test(s.trim())
+  );
 
 describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
   it("sqlite: one data-preserving reconcile, then zero", async () => {
@@ -186,6 +212,12 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
         for (const s of first.sqlStatements) {
           expect(isPost045TableStatement(s), `phantom diff: ${s}`).toBe(true);
         }
+        for (const t of POST_045_TABLES) {
+          expect(
+            hasCreateTableFor(first.sqlStatements, t),
+            `missing CREATE TABLE for ${t}`
+          ).toBe(true);
+        }
         expect(first.hints).toEqual([]);
         await first.apply();
 
@@ -248,6 +280,12 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           expect(
             isDefaultReconcile || isPost045TableStatement(s),
             `unexpected reconcile statement shape: ${s}`
+          ).toBe(true);
+        }
+        for (const t of POST_045_TABLES) {
+          expect(
+            hasCreateTableFor(first.sqlStatements, t),
+            `missing CREATE TABLE for ${t}`
           ).toBe(true);
         }
         await first.apply();

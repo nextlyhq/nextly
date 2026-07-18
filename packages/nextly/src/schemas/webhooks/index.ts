@@ -10,6 +10,8 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../errors";
+
 import * as my from "./mysql";
 import * as pg from "./postgres";
 import * as sl from "./sqlite";
@@ -40,9 +42,13 @@ export function webhookTables(dialect: SupportedDialect) {
         nextlyWebhookDeliveries: sl.nextlyWebhookDeliveries,
       };
     default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect.
+      // `never` gives a compile-time exhaustiveness guarantee for typed
+      // callers; the throw handles an invalid dialect reaching here at runtime
+      // from an untyped/JS caller (e.g. a string from config).
       const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+      throw NextlyError.internal({
+        logContext: { dialect: String(_exhaustive) },
+      });
     }
   }
 }
