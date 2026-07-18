@@ -320,6 +320,13 @@ export class CollectionMutationService extends BaseService {
       } else if (isCreate) {
         companionData._status = "draft";
       }
+      if (!isCreate) {
+        // Per-locale draft/publish lives on the companion row's `_status`; a
+        // single-locale update must not rewrite the main table's own status
+        // column (that global publish is publishAllLocales' job), so drop the
+        // status from the main update payload. Create still seeds the main row.
+        delete entryData.status;
+      }
     }
 
     return {
@@ -1089,6 +1096,16 @@ export class CollectionMutationService extends BaseService {
             },
             {}
           );
+          // The localized values were split out of the main insert, so the
+          // returned main row lacks them. Merge them back (camelCase keys) so
+          // afterCreate hooks, events, and the response include them. `_status`
+          // is a companion-only column, not an entry field.
+          for (const [column, value] of Object.entries(
+            localizedWrite.companionData
+          )) {
+            if (column === "_status") continue;
+            entry[toCamelCase(column)] = value;
+          }
         }
 
         // Save component field data to separate comp_{slug} tables
@@ -1314,7 +1331,16 @@ export class CollectionMutationService extends BaseService {
       const isMysql = this.dialect === "mysql";
       const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
       const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
-      const tableName = getTableName(params.collectionName);
+      // Resolve through the collection so a custom tableName/dbName override is
+      // honored, matching every other mutation; getTableName would hardcode the
+      // default dc_<slug> and target the wrong table for a renamed collection.
+      const publishCollection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const tableName = this.resolveTableName(
+        publishCollection,
+        params.collectionName
+      );
 
       await this.adapter.transaction(async tx => {
         if (hasMainStatus) {
@@ -1853,6 +1879,20 @@ export class CollectionMutationService extends BaseService {
           message: "Entry not found",
           data: null,
         };
+      }
+
+      // The localized values were split out of the main update, so the re-fetched
+      // main row lacks them. Merge the written values back (camelCase keys) so
+      // afterUpdate hooks, events, and the response reflect them. `_status` is a
+      // companion-only column, not an entry field.
+      if (localizedUpdate) {
+        const updatedRow = updated as Record<string, unknown>;
+        for (const [column, value] of Object.entries(
+          localizedUpdate.companionData
+        )) {
+          if (column === "_status") continue;
+          updatedRow[toCamelCase(column)] = value;
+        }
       }
 
       // Handle many-to-many relationships (replace existing relations; outside transaction)
