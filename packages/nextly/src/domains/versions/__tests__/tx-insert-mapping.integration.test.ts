@@ -78,13 +78,14 @@ describe("transaction context insert column mapping (integration)", () => {
           { returning: ["versionNo", "scopeKind"] }
         )
       );
-      // The RETURNING clause projected the mapped SQL columns, so the returned
-      // row actually carries the two requested values (raw-SQL RETURNING keys
-      // are the SQL column names). Asserting the payload - not just truthiness -
-      // fails if `returning` were ignored or returned the wrong fields.
+      // The RETURNING clause projected the mapped SQL columns and the returned
+      // row keys are remapped to the Drizzle property names (mapRowKeysToJs), so
+      // the payload is keyed camelCase like the non-transactional insert.
+      // Asserting the payload - not just truthiness - fails if `returning` were
+      // ignored or returned the wrong fields.
       const returned = inserted as Record<string, unknown>;
-      expect(returned.version_no).toBe(7);
-      expect(returned.scope_kind).toBe("collection");
+      expect(returned.versionNo).toBe(7);
+      expect(returned.scopeKind).toBe("collection");
 
       const rows = await handle.adapter.select("nextly_versions", {
         where: { and: [{ column: "entryId", op: "=", value: "e-ret-1" }] },

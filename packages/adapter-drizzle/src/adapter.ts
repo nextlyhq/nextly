@@ -358,6 +358,47 @@ export abstract class DrizzleAdapter {
     return names.map(n => jsToSql.get(n) ?? n);
   }
 
+  /**
+   * Remap a raw-SQL result row's KEYS from SQL column names to Drizzle property
+   * names, so the raw-SQL transaction insert paths return the same key casing
+   * as the non-transactional (Drizzle) insert. Keys only - values are left
+   * untouched, so this does not change how JSON/date columns are decoded. For
+   * tables whose property names already equal their SQL columns (the dynamic
+   * dc_/single_/comp_ tables) every lookup is identity, so existing callers see
+   * no change.
+   */
+  protected mapRowKeysToJs<T = unknown>(tableObj: unknown, row: T): T {
+    if (
+      !tableObj ||
+      typeof tableObj !== "object" ||
+      !row ||
+      typeof row !== "object"
+    ) {
+      return row;
+    }
+
+    const sqlToJs = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        sqlToJs.set((colDef as { name: string }).name, jsName);
+      }
+    }
+    if (sqlToJs.size === 0) return row;
+
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+      out[sqlToJs.get(key) ?? key] = value;
+    }
+    return out as T;
+  }
+
   // ============================================================
   // Connection Status (Default implementations, can override)
   // ============================================================

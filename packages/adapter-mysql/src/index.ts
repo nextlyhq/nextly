@@ -804,7 +804,8 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
             [result.insertId]
           );
-          return rows[0] as T;
+          // Return JS property-named keys to match the non-transactional insert.
+          return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
         }
 
         // Fallback: SELECT by all inserted values
@@ -815,7 +816,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           `SELECT * FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return rows[0] as T;
+        return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
       },
 
       insertMany: async <T = unknown>(
@@ -861,7 +862,7 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return rows as T[];
+          return (rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
         }
 
         // Fallback: return empty if we can't determine inserted rows

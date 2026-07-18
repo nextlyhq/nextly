@@ -768,7 +768,8 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         const stmt = db.prepare(sql);
         const rows = stmt.all(...values) as T[];
-        return rows[0];
+        // Return JS property-named keys to match the non-transactional insert.
+        return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -814,7 +815,9 @@ export class SqliteAdapter extends DrizzleAdapter {
         }
 
         const stmt = db.prepare(sql);
-        return stmt.all(...allValues) as T[];
+        return (stmt.all(...allValues) as T[]).map(r =>
+          this.mapRowKeysToJs(tableObj, r)
+        );
       },
 
       // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD

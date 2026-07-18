@@ -967,7 +967,11 @@ export class PostgresAdapter extends DrizzleAdapter {
         }
 
         const result = await client.query(sql, values);
-        return result.rows[0] as T;
+        // Return JS property-named keys to match the non-transactional insert.
+        return this.mapRowKeysToJs(
+          this.getTableObject(table),
+          result.rows[0] as T
+        );
       },
 
       insertMany: async <T = unknown>(
@@ -1012,7 +1016,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         }
 
         const result = await client.query(sql, params);
-        return result.rows as T[];
+        return (result.rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
       },
 
       // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
