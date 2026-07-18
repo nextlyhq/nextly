@@ -622,8 +622,10 @@ function decodeBody(
 ): { body: Buffer; decoded: boolean } | SafeFetchError {
   if (!encoding) return { body: buf, decoded: false };
   // An empty body has nothing to decode; inflating zero bytes would throw and
-  // turn a valid empty 2xx/204/304 response into a failure. Pass it through.
-  if (buf.length === 0) return { body: buf, decoded: false };
+  // turn a valid empty 2xx/204/304 response into a failure. Report it as decoded
+  // so the now-meaningless content-encoding/-length headers are stripped, the
+  // same as a normally-decoded body.
+  if (buf.length === 0) return { body: buf, decoded: true };
   // Content-Encoding may stack (e.g. "br, gzip"): the layers are listed in the
   // order applied, so decode from the last (outermost) inward.
   const layers = encoding

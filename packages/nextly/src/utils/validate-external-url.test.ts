@@ -252,6 +252,8 @@ describe("safeFetch", () => {
     const response = await safeFetch(`${h.base}/`, local);
     expect(response.ok).toBe(true);
     expect(await response.text()).toBe("");
+    // The now-meaningless content-encoding header is stripped, like a decoded body.
+    expect(response.headers.get("content-encoding")).toBeNull();
   });
 
   it("strips a caller-supplied Host header (no vhost override)", async () => {

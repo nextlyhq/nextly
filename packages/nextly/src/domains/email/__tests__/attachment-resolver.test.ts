@@ -121,6 +121,27 @@ describe("resolveAttachments", () => {
     });
   });
 
+  it("wraps a non-validation NextlyError from readBytes as STORAGE_READ_FAILED", async () => {
+    // A URL fetch that fails for a non-size reason (SSRF reject, timeout, a
+    // relative-URL/missing-file error) must not leak its code/message to the
+    // caller; only the size-exceeded validation error passes through.
+    const deps = makeDeps({
+      readBytes: vi
+        .fn()
+        .mockRejectedValue(
+          NextlyError.internal({ logContext: { reason: "ssrf-reject" } })
+        ),
+    });
+    await expect(
+      resolveAttachments([{ mediaId: "m1" }], deps)
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: {
+        emailAttachmentCode: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+      },
+    });
+  });
+
   it("throws SIZE_EXCEEDED when total bytes cross the cap", async () => {
     const big = Buffer.alloc(6 * 1024 * 1024); // 6 MiB each
     const deps = makeDeps({
