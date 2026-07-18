@@ -330,6 +330,34 @@ export abstract class DrizzleAdapter {
     return out;
   }
 
+  /**
+   * Map a list of column identifiers (Drizzle property names) to their SQL
+   * column names, for the raw-SQL transaction insert paths that build a
+   * RETURNING clause from `options.returning`. Same identity behavior as
+   * `mapKeysToSqlColumns`: names that are already SQL columns (the dynamic
+   * dc_/single_/comp_ tables) pass through unchanged.
+   */
+  protected mapColumnNamesToSql(tableObj: unknown, names: string[]): string[] {
+    if (!tableObj || typeof tableObj !== "object") return names;
+
+    const jsToSql = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        jsToSql.set(jsName, (colDef as { name: string }).name);
+      }
+    }
+    if (jsToSql.size === 0) return names;
+
+    return names.map(n => jsToSql.get(n) ?? n);
+  }
+
   // ============================================================
   // Connection Status (Default implementations, can override)
   // ============================================================
@@ -514,16 +542,30 @@ export abstract class DrizzleAdapter {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const db = this.getDrizzle<any>();
         // Honor the columns projection when provided: select only the requested
-        // columns (keyed by Drizzle property name) instead of every column, so
-        // callers can avoid transferring large columns (e.g. JSON snapshots)
-        // they do not need. Unknown names are skipped; if nothing resolves, fall
-        // back to a full select so a bad option never yields empty rows.
+        // columns instead of every column, so callers can avoid transferring
+        // large columns (e.g. JSON snapshots) they do not need. A requested name
+        // may be either the Drizzle property name (camelCase) or the SQL column
+        // name (snake_case), matching the tolerance of the insert/where paths;
+        // the projection is always keyed by the property name so the returned
+        // row shape matches a full select. Unknown names are skipped; if nothing
+        // resolves, fall back to a full select so a bad option never yields
+        // empty rows.
         let query;
         if (options?.columns?.length) {
           const cols = getColumns(tableObj as never);
+          const byAnyName: Record<string, { jsName: string; col: unknown }> =
+            {};
+          for (const [jsName, col] of Object.entries(cols)) {
+            byAnyName[jsName] = { jsName, col };
+            const sqlName = (col as { name?: unknown })?.name;
+            if (typeof sqlName === "string") {
+              byAnyName[sqlName] = { jsName, col };
+            }
+          }
           const projection: Record<string, unknown> = {};
           for (const name of options.columns) {
-            if (cols[name]) projection[name] = cols[name];
+            const hit = byAnyName[name];
+            if (hit) projection[hit.jsName] = hit.col;
           }
           query = Object.keys(projection).length
             ? db.select(projection).from(tableObj)

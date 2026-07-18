@@ -746,7 +746,10 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             options.returning === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(
+                  this.getTableObject(table),
+                  options.returning
+                )
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
@@ -790,7 +793,10 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             options.returning === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(
+                  this.getTableObject(table),
+                  options.returning
+                )
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
