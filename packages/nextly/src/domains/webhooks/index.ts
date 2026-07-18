@@ -10,6 +10,13 @@ export { buildEnvelope, type BuildEnvelopeInput } from "./envelope";
 export { matchesFilter } from "./filter";
 export { recordEvent } from "./record-event";
 export {
+  toWebhookActor,
+  buildCollectionEnvelope,
+  type ActorSource,
+  type BuildCollectionEnvelopeInput,
+} from "./capture";
+
+export {
   sensitiveFieldNames,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
