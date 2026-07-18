@@ -90,4 +90,145 @@ describe("slug auto-generation on create", () => {
 
     expect((created.item as { slug?: string }).slug).toBe("custom-slug");
   });
+
+  it("falls back to a generated token when the title has no slug-safe characters", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [text({ name: "title" })],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    // generateSlug strips everything outside [\w-], so a CJK/emoji/punctuation
+    // -only title sanitizes to an empty base. The required, unique slug must
+    // still be populated via the `entry-<ts>-<rand>` fallback instead of "".
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "你好世界" },
+    });
+
+    const slug = (created.item as { slug?: string }).slug;
+    expect(slug).toBeTruthy();
+    expect(slug).toMatch(/^entry-/);
+  });
+
+  it("re-sanitizes a slug set by a field beforeValidate hook", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A field hook runs after slug generation and can set an unsanitized
+          // value; the create path must normalize it before storing.
+          hooks: { beforeValidate: [() => "Hooked Slug Value"] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Ignored" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("hooked-slug-value");
+  });
+
+  it("does not store a beforeValidate hook slug that sanitizes to empty", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A hook returning a CJK/emoji-only value sanitizes to "". It must be
+          // replaced with a derived slug, never stored verbatim.
+          hooks: { beforeValidate: [() => "你好世界"] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Readable Title" },
+    });
+
+    // Derived from the title, not the un-sanitizable hook value.
+    expect((created.item as { slug?: string }).slug).toBe("readable-title");
+  });
+
+  it("re-sanitizes a slug set by a field beforeChange hook", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A beforeChange hook runs after validation, right before storage;
+          // its value must still be normalized.
+          hooks: { beforeChange: [() => "Changed By Hook"] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Ignored" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("changed-by-hook");
+  });
+
+  it("derives a slug when a beforeChange hook blanks it", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A beforeChange hook that clears the slug runs after validation, so
+          // nothing else catches the blank value — it must be re-derived.
+          hooks: { beforeChange: [() => "   "] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Fallback Title" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("fallback-title");
+  });
+
+  it("derives a slug when a beforeChange hook returns a non-string", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A hook returning null (or any non-string) must not leave a
+          // non-string slug on the required column.
+          hooks: { beforeChange: [() => null] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Recovered Title" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("recovered-title");
+  });
 });
