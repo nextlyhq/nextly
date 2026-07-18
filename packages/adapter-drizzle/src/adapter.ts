@@ -292,6 +292,44 @@ export abstract class DrizzleAdapter {
     return mapped;
   }
 
+  /**
+   * Map data keys from Drizzle JS property names to SQL column names for the
+   * raw-SQL transaction insert path. The transaction context builds INSERT
+   * statements from Object.keys(data) used directly as column identifiers, so a
+   * table whose Drizzle property names differ from its SQL column names
+   * (camelCase core tables like nextly_versions) needs its keys translated
+   * first. For tables whose property names already equal their column names
+   * (the dynamic dc_/single_/comp_ tables) every lookup is identity, so
+   * existing callers are unaffected.
+   */
+  protected mapKeysToSqlColumns(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (!tableObj || typeof tableObj !== "object") return data;
+
+    const jsToSql = new Map<string, string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (
+        colDef &&
+        typeof colDef === "object" &&
+        "name" in colDef &&
+        typeof (colDef as { name?: unknown }).name === "string"
+      ) {
+        jsToSql.set(jsName, (colDef as { name: string }).name);
+      }
+    }
+    if (jsToSql.size === 0) return data;
+
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      out[jsToSql.get(key) ?? key] = value;
+    }
+    return out;
+  }
+
   // ============================================================
   // Connection Status (Default implementations, can override)
   // ============================================================

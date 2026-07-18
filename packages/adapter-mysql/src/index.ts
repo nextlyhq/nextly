@@ -767,8 +767,12 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         _options?: InsertOptions
       ): Promise<T> => {
-        const columns = Object.keys(data);
-        const values = Object.values(data);
+        const mapped = this.mapKeysToSqlColumns(
+          this.getTableObject(table),
+          data
+        );
+        const columns = Object.keys(mapped);
+        const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
 
         const sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
@@ -803,11 +807,15 @@ export class MySqlAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const columns = Object.keys(data[0]);
+        const tableObj = this.getTableObject(table);
+        const mappedRecords = data.map(r =>
+          this.mapKeysToSqlColumns(tableObj, r)
+        );
+        const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
 
-        for (const record of data) {
+        for (const record of mappedRecords) {
           const placeholders: string[] = [];
           for (const col of columns) {
             allValues.push(record[col]);
