@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { HookHandler } from "../../hooks/types";
+import type { VersionsConfig } from "../../schemas/versions/types";
 
 // ============================================================
 // Single Labels
@@ -329,6 +330,20 @@ export interface SingleConfig {
    * @default false
    */
   status?: boolean;
+
+  /**
+   * Enable content versioning (revision history) for this Single.
+   *
+   * When enabled, every update records a restorable snapshot of the assembled
+   * document in the global `nextly_versions` table, written inside the same
+   * transaction as the write. `true` turns on history + drafts + autosave;
+   * `{ drafts: false }` is history-only. Omitted = unversioned. `status: true`
+   * is a deprecated alias for `versions: { drafts: true }`; an explicit
+   * `versions` option wins.
+   *
+   * @default undefined (unversioned)
+   */
+  versions?: boolean | VersionsConfig;
 
   /**
    * Admin panel configuration options.

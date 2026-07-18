@@ -34,6 +34,7 @@
 import type { HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { FieldConfig } from "../fields/types";
 
@@ -754,6 +755,20 @@ export interface CollectionConfig {
    * @default false
    */
   status?: boolean;
+
+  /**
+   * Enable content versioning (revision history) for this collection.
+   *
+   * When enabled, every create/update records a restorable snapshot of the
+   * assembled document in the global `nextly_versions` table, written inside
+   * the same transaction as the write. `true` turns on history + drafts +
+   * autosave; `{ drafts: false }` is history-only. Omitted = unversioned
+   * (zero cost). `status: true` is a deprecated alias for
+   * `versions: { drafts: true }`; an explicit `versions` option wins.
+   *
+   * @default undefined (unversioned)
+   */
+  versions?: boolean | VersionsConfig;
 
   /**
    * Admin panel configuration options.
