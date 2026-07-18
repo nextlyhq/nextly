@@ -49,8 +49,11 @@ export function selectDeliveryTargets(
     e =>
       e.enabled &&
       e.eventTypes.includes(envelope.type) &&
-      // Permissive if the timestamp is unparseable (don't silently drop).
-      (!Number.isFinite(eventTime) || e.createdAt.getTime() <= eventTime) &&
+      // Fail closed on an unparseable timestamp: never deliver an event we
+      // can't place relative to the subscription cutoff. (The fan-out path
+      // rejects such events upstream as poison; this guards direct callers.)
+      Number.isFinite(eventTime) &&
+      e.createdAt.getTime() <= eventTime &&
       matchesFilter(e.filter, envelope)
   );
 }
@@ -130,6 +133,14 @@ function parseEnvelope(payload: unknown): WebhookEvent | null {
     return null;
   }
   if (!Array.isArray(record.changedFields)) return null;
+  // timestamp drives the pre-subscription cutoff in selectDeliveryTargets, so a
+  // missing/unparseable one is poison rather than something to silently bypass.
+  if (
+    typeof record.timestamp !== "string" ||
+    !Number.isFinite(Date.parse(record.timestamp))
+  ) {
+    return null;
+  }
   return value as WebhookEvent;
 }
 

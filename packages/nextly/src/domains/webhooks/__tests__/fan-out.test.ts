@@ -87,6 +87,14 @@ describe("selectDeliveryTargets", () => {
     expect(targets.map(t => t.id)).toEqual(["before"]);
   });
 
+  it("fails closed when the event timestamp is unparseable", () => {
+    const targets = selectDeliveryTargets(
+      [endpoint({ id: "a" })],
+      event({ timestamp: "not-a-date" })
+    );
+    expect(targets).toEqual([]);
+  });
+
   it("applies the endpoint filter (collection scope)", () => {
     const targets = selectDeliveryTargets(
       [
@@ -207,5 +215,43 @@ describe("fanOutDueEvents (invalid payload)", () => {
     expect(result).toEqual({ eventsProcessed: 1, deliveriesCreated: 0 });
     expect(marked).toHaveLength(1);
     expect(warnings.some(w => w.includes("evt_badchanged"))).toBe(true);
+  });
+
+  it("treats a missing/unparseable timestamp as invalid (drives the createdAt cutoff)", async () => {
+    const marked: string[] = [];
+    const warnings: string[] = [];
+    const tx: FanOutTx = {
+      select: async <T>() => [] as T[],
+      insertMany: async <T>() => [] as T[],
+      update: async <T>() => {
+        marked.push("update");
+        return [] as T[];
+      },
+    };
+    const db: FanOutDatabase = {
+      select: async <T>() =>
+        [
+          {
+            id: "evt_badts",
+            payload: {
+              type: "entry.updated",
+              resource: { kind: "entry", collection: "posts", id: "p1" },
+              changedFields: [],
+              timestamp: "nonsense",
+            },
+          },
+        ] as T[],
+      transaction: async fn => fn(tx),
+    };
+
+    const result = await fanOutDueEvents({
+      db,
+      loadEndpoints: async () => [endpoint({ id: "f" })],
+      logger: { warn: m => warnings.push(m) },
+    });
+
+    expect(result).toEqual({ eventsProcessed: 1, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(1);
+    expect(warnings.some(w => w.includes("evt_badts"))).toBe(true);
   });
 });
