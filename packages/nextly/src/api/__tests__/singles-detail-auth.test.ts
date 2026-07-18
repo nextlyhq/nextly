@@ -67,9 +67,10 @@ describe("singles-detail PATCH route auth forwarding", () => {
     const response = await PATCH(request, context);
 
     expect(response.status).toBe(200);
-    // The standalone route must run the update as the authorized user (route
-    // auth already ran -> overrideAccess), while keeping the response redacted
-    // to what the user may read (routeAuthorized), matching the dispatcher's
+    // The standalone route runs the update as the authorized user with
+    // overrideAccess:false (stored single access + field-level write access are
+    // still enforced); routeAuthorized skips only the redundant RBAC re-check
+    // and keeps the response redacted, matching the dispatcher's
     // updateSingleDocument path.
     expect(updateSpy).toHaveBeenCalledWith(
       "site-settings",
@@ -82,7 +83,7 @@ describe("singles-detail PATCH route auth forwarding", () => {
           email: "ada@example.com",
           roles: ["editor"],
         },
-        overrideAccess: true,
+        overrideAccess: false,
         routeAuthorized: true,
       }
     );

@@ -12,6 +12,10 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
 "create-nextly-app": patch
 ---
 

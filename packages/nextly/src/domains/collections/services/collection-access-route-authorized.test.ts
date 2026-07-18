@@ -8,7 +8,7 @@
  * early and never evaluated the stored rules — the bug these tests guard.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { CollectionAccessService } from "./collection-access-service";
 
@@ -19,19 +19,6 @@ import {
   createMockCollectionService,
   createMockAccessControlService,
 } from "../__tests__/collection-test-helpers";
-
-// isSuperAdmin does a DB lookup; mock it so we can drive the super-admin path
-// deterministically. Declared via vi.hoisted so it exists when the hoisted
-// vi.mock factory runs. Default: not a super-admin.
-const { isSuperAdminMock } = vi.hoisted(() => ({
-  isSuperAdminMock: vi.fn().mockResolvedValue(false),
-}));
-vi.mock("../../../services/lib/permissions", async importOriginal => ({
-  ...(await importOriginal<
-    typeof import("../../../services/lib/permissions")
-  >()),
-  isSuperAdmin: (userId: string) => isSuperAdminMock(userId),
-}));
 
 function buildAccessService() {
   const accessControlService = createMockAccessControlService();
@@ -47,13 +34,13 @@ function buildAccessService() {
   return { service, accessControlService, rbac };
 }
 
-const user = { id: "user-1" };
+// A caller with no super-admin role. Its `roles` deliberately omit super-admin
+// even though a real super-admin could OWN a scoped API key with these roles —
+// the bypass must key off this authorized set, not the account.
+const user = { id: "user-1", roles: ["editor"] };
+const superAdminUser = { id: "user-1", roles: ["super-admin"] };
 
 describe("checkCollectionAccess — route-authorized decoupling", () => {
-  beforeEach(() => {
-    isSuperAdminMock.mockResolvedValue(false);
-  });
-
   it("still evaluates stored rules when routeAuthorized (denies via stored rule)", async () => {
     const { service, accessControlService, rbac } = buildAccessService();
     accessControlService.evaluateAccess.mockResolvedValue({
@@ -135,9 +122,8 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
-  it("lets a super-admin bypass the stored rules on every transport", async () => {
+  it("lets a super-admin (by authorized role) bypass stored rules on the route path", async () => {
     const { service, accessControlService } = buildAccessService();
-    isSuperAdminMock.mockResolvedValue(true);
     accessControlService.evaluateAccess.mockResolvedValue({
       allowed: false,
       reason: "not the owner",
@@ -146,7 +132,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     const result = await service.checkCollectionAccess(
       "posts",
       "update",
-      user,
+      superAdminUser,
       "doc-1",
       { id: "doc-1", createdBy: "someone-else" },
       false,
@@ -159,19 +145,17 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
   it("lets a super-admin bypass stored rules on the Direct API path too", async () => {
     const { service, accessControlService, rbac } = buildAccessService();
-    isSuperAdminMock.mockResolvedValue(true);
     accessControlService.evaluateAccess.mockResolvedValue({
       allowed: false,
       reason: "not the owner",
     });
 
-    // routeAuthorized: false = Direct API. Before this change a super-admin was
-    // still subject to owner-only stored rules here; now they bypass on every
-    // transport (matching the RBAC super-admin short-circuit).
+    // routeAuthorized: false = Direct API. A super-admin bypasses on every
+    // transport, short-circuiting before the RBAC gate.
     const result = await service.checkCollectionAccess(
       "posts",
       "update",
-      user,
+      superAdminUser,
       "doc-1",
       { id: "doc-1", createdBy: "someone-else" },
       false,
@@ -180,18 +164,20 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     expect(result).toBeNull();
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
-    // Super-admin short-circuits before the RBAC gate too.
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
-  it("fails safe (no bypass) when the super-admin lookup throws", async () => {
+  it("does NOT grant the super-admin bypass to a scoped context (no super-admin role)", async () => {
     const { service, accessControlService } = buildAccessService();
-    isSuperAdminMock.mockRejectedValue(new Error("db down"));
     accessControlService.evaluateAccess.mockResolvedValue({
       allowed: false,
       reason: "not the owner",
     });
 
+    // `user` here has roles ["editor"] — even if this account happens to own a
+    // super-admin key elsewhere, the authorized role set has no super-admin, so
+    // the stored rules must still be evaluated and can deny. Guards the API-key
+    // owner escalation.
     const result = await service.checkCollectionAccess(
       "posts",
       "update",
@@ -202,7 +188,6 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
       true
     );
 
-    // Lookup error must NOT grant the bypass — the stored rule still denies.
     expect(result?.statusCode).toBe(403);
     expect(accessControlService.evaluateAccess).toHaveBeenCalledTimes(1);
   });

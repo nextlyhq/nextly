@@ -21,12 +21,27 @@ import type {
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
-import { isSuperAdmin } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
+
+/** Role slug that grants the full stored-rule bypass. */
+const SUPER_ADMIN_SLUG = "super-admin";
+
+/**
+ * Whether the caller's AUTHORIZED role set makes them a super-admin.
+ *
+ * Keyed on `user.roles` (the resolved session slugs, or the key-scoped slugs
+ * for API-key auth) rather than the account id: a scoped API key owned by a
+ * super-admin must NOT inherit the owner's super-admin bypass — the authorized
+ * scope is what matters. Paths that don't populate roles simply don't get the
+ * bypass (fail-safe), falling through to the normal RBAC + stored-rule checks.
+ */
+function isSuperAdminContext(user?: UserContext): boolean {
+  return Array.isArray(user?.roles) && user.roles.includes(SUPER_ADMIN_SLUG);
+}
 
 export class CollectionAccessService extends BaseService {
   constructor(
@@ -119,21 +134,11 @@ export class CollectionAccessService extends BaseService {
     }
 
     // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
-    // owner-only), matching the RBAC service's super-admin short-circuit so an
-    // admin can act on any record on every transport. This is a BYPASS (grants
-    // more access), so a lookup failure must fail SAFE — treat as not-super-admin
-    // and fall through to the normal RBAC + stored-rule checks, never grant the
-    // bypass on error.
-    if (user) {
-      let superAdmin = false;
-      try {
-        superAdmin = await isSuperAdmin(user.id);
-      } catch {
-        superAdmin = false;
-      }
-      if (superAdmin) {
-        return null;
-      }
+    // owner-only) so an admin can act on any record on every transport. Keyed
+    // on the authorized role set (see isSuperAdminContext), so a scoped API key
+    // cannot inherit its owner's super-admin bypass.
+    if (isSuperAdminContext(user)) {
+      return null;
     }
 
     // RBAC coarse gate: super-admin bypass → code-defined access → DB
@@ -241,7 +246,9 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     overrideAccess?: boolean
   ): Promise<Record<string, unknown> | null> {
-    if (overrideAccess || !user) {
+    // Super-admin reads are unfiltered too, matching the write-side bypass so
+    // "super-admins bypass stored rules on every transport" holds for reads.
+    if (overrideAccess || !user || isSuperAdminContext(user)) {
       return null;
     }
 
@@ -291,7 +298,8 @@ export class CollectionAccessService extends BaseService {
     user?: UserContext,
     overrideAccess?: boolean
   ): Promise<{ field: string; value: string } | null> {
-    if (overrideAccess || !user) return null;
+    // Super-admin bypasses the owner predicate on the transactional paths too.
+    if (overrideAccess || !user || isSuperAdminContext(user)) return null;
 
     try {
       const collection =
