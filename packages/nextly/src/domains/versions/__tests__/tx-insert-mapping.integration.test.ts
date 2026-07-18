@@ -78,7 +78,13 @@ describe("transaction context insert column mapping (integration)", () => {
           { returning: ["versionNo", "scopeKind"] }
         )
       );
-      expect(inserted).toBeTruthy();
+      // The RETURNING clause projected the mapped SQL columns, so the returned
+      // row actually carries the two requested values (raw-SQL RETURNING keys
+      // are the SQL column names). Asserting the payload - not just truthiness -
+      // fails if `returning` were ignored or returned the wrong fields.
+      const returned = inserted as Record<string, unknown>;
+      expect(returned.version_no).toBe(7);
+      expect(returned.scope_kind).toBe("collection");
 
       const rows = await handle.adapter.select("nextly_versions", {
         where: { and: [{ column: "entryId", op: "=", value: "e-ret-1" }] },
@@ -127,7 +133,9 @@ describe("transaction context insert column mapping (integration)", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].scopeKind).toBe("collection");
       expect(rows[0].entryId).toBe("e-proj-1");
-      expect(rows[0].snapshot).toBeUndefined();
+      // The snapshot column was not requested, so the KEY must be absent from
+      // the projected row (not merely present with an undefined value).
+      expect("snapshot" in rows[0]).toBe(false);
     } finally {
       await handle.destroy();
     }
