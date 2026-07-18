@@ -170,14 +170,31 @@ export async function fanOutDueEvents(deps: FanOutDeps): Promise<FanOutResult> {
   for (const event of events) {
     const envelope = parseEnvelope(event.payload);
     if (!envelope) {
-      // An unparseable payload is a data-integrity anomaly (recordEvent always
-      // writes a valid envelope). Surface it and skip rather than fabricate a
-      // successful fan-out via the zero-target marker path; the event stays
-      // un-fanned for investigation. A durable poison-event/dead-letter policy
-      // is a follow-up.
+      // An unparseable/invalid payload is a data-integrity anomaly (recordEvent
+      // always writes a valid envelope). It can never be delivered, so mark it
+      // fanned out to guarantee forward progress: leaving it un-fanned would let
+      // one corrupt row at the head of the queue stall every event behind it
+      // forever. Log loudly so it is not silently dropped; a durable
+      // dead-letter table is a follow-up.
       deps.logger?.warn(
-        `webhook fan-out skipped event ${event.id} with an unparseable payload`
+        `webhook fan-out marking event ${event.id} fanned out (undeliverable: unparseable/invalid payload)`
       );
+      try {
+        await deps.db.transaction(async tx => {
+          await tx.update(
+            "nextly_events",
+            { fanned_out_at: now() },
+            { and: [{ column: "id", op: "=", value: event.id }] }
+          );
+        });
+        eventsProcessed += 1;
+      } catch (err) {
+        // Could not mark it; it will be retried next pass. Do not abort.
+        deps.logger?.warn(
+          `webhook fan-out could not mark poison event ${event.id}`,
+          err
+        );
+      }
       continue;
     }
 

@@ -111,9 +111,10 @@ describe("fanOutDueEvents (invalid payload)", () => {
       logger: { warn: m => warnings.push(m) },
     });
 
-    // Not counted, never marked, and surfaced via the logger.
-    expect(result).toEqual({ eventsProcessed: 0, deliveriesCreated: 0 });
-    expect(marked).toHaveLength(0);
+    // Marked fanned out (forward progress) and surfaced via the logger; no
+    // deliveries created for an undeliverable event.
+    expect(result).toEqual({ eventsProcessed: 1, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(1);
     expect(warnings.some(w => w.includes("evt_bad"))).toBe(true);
   });
 
@@ -144,8 +145,8 @@ describe("fanOutDueEvents (invalid payload)", () => {
       logger: { warn: m => warnings.push(m) },
     });
 
-    expect(result).toEqual({ eventsProcessed: 0, deliveriesCreated: 0 });
-    expect(marked).toHaveLength(0);
+    expect(result).toEqual({ eventsProcessed: 1, deliveriesCreated: 0 });
+    expect(marked).toHaveLength(1);
     expect(warnings.some(w => w.includes("evt_noresource"))).toBe(true);
   });
 });
