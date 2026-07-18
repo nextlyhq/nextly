@@ -55,12 +55,17 @@ export function sensitiveFieldNames(
       if ((field.type === "password" || hidden) && field.name) {
         names.add(field.name);
       }
-      // group/repeater sub-fields are inline on `fields`; blocks carry their
-      // own `fields` on each block definition. Hidden state flows into both.
-      if (Array.isArray(field.fields)) walk(field.fields, hidden);
+      // Only propagate hidden into children for a NAMELESS container: a named
+      // hidden container already drops its whole subtree via its own name
+      // (stripping is by bare key at any depth), so propagating would pollute
+      // the global deny-list with common child names (e.g. "title") and strip
+      // unrelated top-level/sibling fields. group/repeater sub-fields are inline
+      // on `fields`; blocks carry their own `fields` per block definition.
+      const childHidden = hidden && !field.name;
+      if (Array.isArray(field.fields)) walk(field.fields, childHidden);
       if (Array.isArray(field.blocks)) {
         for (const block of field.blocks) {
-          if (Array.isArray(block.fields)) walk(block.fields, hidden);
+          if (Array.isArray(block.fields)) walk(block.fields, childHidden);
         }
       }
     }

@@ -77,6 +77,22 @@ describe("sensitiveFieldNames", () => {
     expect(names.sort()).toEqual(["internalA", "internalB"]);
   });
 
+  it("does not propagate hidden into a NAMED container's children", () => {
+    // A named hidden group is dropped whole by its own name, so its child
+    // names must not join the deny-list (that would strip unrelated fields of
+    // the same name, e.g. a top-level "title").
+    const names = sensitiveFieldNames([
+      {
+        name: "seo",
+        type: "group",
+        admin: { hidden: true },
+        fields: [{ name: "title", type: "text" }],
+      },
+      { name: "title", type: "text" },
+    ]);
+    expect(names).toEqual(["seo"]);
+  });
+
   it("deduplicates repeated field names", () => {
     const names = sensitiveFieldNames([
       { name: "secret", type: "password" },
