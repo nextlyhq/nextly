@@ -14,6 +14,17 @@ export {
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 export {
+  signPayload,
+  buildSignatureHeaders,
+  verifySignature,
+  WEBHOOK_ID_HEADER,
+  WEBHOOK_TIMESTAMP_HEADER,
+  WEBHOOK_SIGNATURE_HEADER,
+  type SignInput,
+  type SignHeadersInput,
+  type VerifyInput,
+} from "./signing";
+export {
   WEBHOOK_EVENT_TYPES,
   type WebhookEventType,
   type WebhookResourceKind,
