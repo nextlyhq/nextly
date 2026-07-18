@@ -47,6 +47,8 @@ export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlit
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
 
+export { nextlyVersionsSqlite as nextlyVersions } from "../versions/sqlite";
+
 // Webhook + event system tables. Must be in this flat bundle (not just
 // getCoreSchema) so freshPushSchema creates them on a fresh database.
 export {

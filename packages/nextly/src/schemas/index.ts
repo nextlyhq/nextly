@@ -54,6 +54,7 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 
 // =============================================================================
@@ -85,6 +86,11 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     // drizzle-kit 0.31.10 can't round-trip one, drizzle-team/drizzle-orm#4688),
     // so declaring it here is a no-op when the on-disk table already matches.
     ...Object.values(schemaEventsTables(dialect)),
+    // `nextly_versions` is a first-class managed system table. It has no
+    // bootstrap-ordering constraint (nothing records into it before it exists,
+    // unlike the migration ledger), so declaring it here is sufficient:
+    // core-reconcile creates it on fresh and existing databases.
+    ...Object.values(versionsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
   ];
 
@@ -164,6 +170,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "nextly_schema_events",
+  "nextly_versions",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",

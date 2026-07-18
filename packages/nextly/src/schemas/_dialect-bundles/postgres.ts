@@ -72,6 +72,8 @@ export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres"
 
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";
 
+export { nextlyVersionsPg as nextlyVersions } from "../versions/postgres";
+
 // Webhook + event system tables. Must be in this flat bundle (not just
 // getCoreSchema) so freshPushSchema creates them on a fresh database.
 export {

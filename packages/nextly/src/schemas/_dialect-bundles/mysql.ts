@@ -47,6 +47,8 @@ export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql"
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
 
+export { nextlyVersionsMysql as nextlyVersions } from "../versions/mysql";
+
 // Webhook + event system tables. Must be in this flat bundle (not just
 // getCoreSchema) so freshPushSchema creates them on a fresh database.
 export {
