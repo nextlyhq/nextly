@@ -8,6 +8,15 @@
 
 export { buildEnvelope, type BuildEnvelopeInput } from "./envelope";
 export { matchesFilter } from "./filter";
+export { recordEvent, selectDeliveryTargets } from "./record-event";
+export {
+  WebhookEndpointRegistry,
+  type WebhookEndpointReader,
+} from "./endpoint-registry";
+export {
+  sensitiveFieldNames,
+  type SensitiveFieldSource,
+} from "./sensitive-fields";
 export {
   WEBHOOK_EVENT_TYPES,
   type WebhookEventType,
