@@ -301,35 +301,89 @@ export async function safeFetch(
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = options;
 
-  const validated = await validateExternalUrl(rawUrl, {
-    allowLocalhost,
-    allowedProtocols,
-  });
+  // One controller bounds the WHOLE operation — DNS validation and the request
+  // alike — so a stalled lookup can't outlive the advertised deadline, and a
+  // caller abort is honored during validation too. Both the deadline timer and
+  // the caller's signal feed it.
+  const controller = new AbortController();
+  const forwardAbort = (): void => controller.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+  }
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new SafeFetchError(`Request exceeded ${timeoutMs}ms`, rawUrl, "timeout")
+      ),
+    timeoutMs
+  );
 
-  return pinnedFetch(validated, {
-    method,
-    headers,
-    body,
-    signal: signal ?? undefined,
-    maxResponseBytes,
-    timeoutMs,
+  try {
+    const validated = await abortable(
+      validateExternalUrl(rawUrl, { allowLocalhost, allowedProtocols }),
+      controller.signal
+    );
+    return await pinnedFetch(validated, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+      maxResponseBytes,
+    });
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", forwardAbort);
+  }
+}
+
+/**
+ * The signal's abort reason as an `Error`. Our own aborts carry a
+ * `SafeFetchError` (timeout); a caller's `AbortController.abort()` carries a
+ * DOMException `AbortError`; anything else (a non-Error reason) is surfaced as
+ * a standard `AbortError` so downstream `name === "AbortError"` checks hold.
+ */
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  return new DOMException("The operation was aborted", "AbortError");
+}
+
+/**
+ * Resolve `promise`, but reject with the signal's reason if it aborts first.
+ * Lets a phase that runs before the request (DNS validation) share the overall
+ * deadline and caller cancellation.
+ */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  let onAbort!: () => void;
+  // Race the work against the abort. `promise`'s own rejection propagates
+  // natively through the race; only the abort path rejects explicitly (with a
+  // typed Error), so the promise's arbitrary reason is never re-wrapped.
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = (): void => reject(abortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
   });
+  return Promise.race([promise, aborted]).finally(() =>
+    signal.removeEventListener("abort", onAbort)
+  );
 }
 
 interface PinnedFetchInit {
   method?: string;
   headers?: HeadersInit;
   body?: string | Uint8Array;
-  signal?: AbortSignal;
+  /** The combined deadline/caller signal built by `safeFetch`. */
+  signal: AbortSignal;
   maxResponseBytes: number;
-  timeoutMs: number;
 }
 
 /**
  * Issue the request over `node:http`/`node:https` with the validated IP pinned
  * via a custom `lookup`, then adapt the Node response into a WHATWG `Response`.
  * `agent: false` forces a fresh socket per call so no pooled connection can
- * reuse a differently-resolved address.
+ * reuse a differently-resolved address. The overall deadline is enforced by the
+ * caller through `init.signal`, so there is no separate timer here.
  */
 async function pinnedFetch(
   validated: ValidatedUrl,
@@ -345,29 +399,40 @@ async function pinnedFetch(
 
   const lookup = createPinnedLookup(pinnedIp, family);
 
+  const outHeaders = toOutgoingHeaders(init.headers);
+  // Send fixed-size bodies with an explicit content-length rather than the
+  // chunked transfer-encoding Node falls back to, which some webhook receivers
+  // (and strict HTTP/1.0 servers) reject.
+  if (init.body != null && !("content-length" in outHeaders)) {
+    outHeaders["content-length"] = String(
+      typeof init.body === "string"
+        ? Buffer.byteLength(init.body)
+        : init.body.byteLength
+    );
+  }
+
   return new Promise<Response>((resolve, reject) => {
     let settled = false;
-    // Holder so the timer id is mutated (not reassigned) after `settle` closes
-    // over it; the request callback needs `settle` before the timer exists.
-    const timer: { id?: ReturnType<typeof setTimeout> } = {};
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
-      if (timer.id) clearTimeout(timer.id);
       fn();
     };
+    // Prefer the abort reason (our timeout SafeFetchError, or the caller's
+    // AbortError) over Node's generic socket error when the signal fired.
+    const failure = (err: Error): Error =>
+      init.signal.aborted ? abortError(init.signal) : err;
 
     const req = httpMod.request(
       url,
       {
         method: init.method ?? "GET",
-        headers: toOutgoingHeaders(init.headers),
+        headers: outHeaders,
         lookup,
         // Fresh socket per request so a pooled connection can't reuse a
         // differently-resolved address, and so the pinned lookup always runs.
         agent: false,
-        // Forward the caller's abort signal so an external timeout surfaces
-        // as a standard AbortError.
+        // The combined deadline/caller signal aborts the request in flight.
         signal: init.signal,
       },
       res => {
@@ -392,28 +457,15 @@ async function pinnedFetch(
           chunks.push(chunk);
         });
         res.on("end", () => {
+          // toWhatwgResponse is total (skips headers the WHATWG layer rejects,
+          // clamps the status), so building the Response cannot throw here.
           settle(() => resolve(toWhatwgResponse(res, Buffer.concat(chunks))));
         });
-        res.on("error", err => settle(() => reject(err)));
+        res.on("error", err => settle(() => reject(failure(err))));
       }
     );
 
-    // Overall deadline. The socket-level `timeout` option only measures
-    // inactivity, so we keep our own clock over the whole request.
-    timer.id = setTimeout(() => {
-      req.destroy();
-      settle(() =>
-        reject(
-          new SafeFetchError(
-            `Request exceeded ${init.timeoutMs}ms`,
-            url.href,
-            "timeout"
-          )
-        )
-      );
-    }, init.timeoutMs);
-
-    req.on("error", err => settle(() => reject(err)));
+    req.on("error", err => settle(() => reject(failure(err))));
 
     // A pre-aborted signal destroys the request synchronously; the `error`
     // handler above then rejects. Otherwise send the body and finish.
@@ -430,36 +482,56 @@ function toOutgoingHeaders(
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   if (!headers) return out;
+  // Repeated keys must accumulate rather than clobber: only the entries-array
+  // form can carry duplicates (a plain object can't, and `Headers` already
+  // merges same-name values on iteration).
+  const add = (key: string, value: string): void => {
+    const existing = out[key];
+    out[key] =
+      existing === undefined ? value : ([] as string[]).concat(existing, value);
+  };
   if (headers instanceof Headers) {
-    headers.forEach((value, key) => {
-      out[key] = value;
-    });
+    headers.forEach((value, key) => add(key, value));
   } else if (Array.isArray(headers)) {
-    for (const [key, value] of headers) out[key] = value;
+    for (const [key, value] of headers) add(key, value);
   } else {
-    for (const [key, value] of Object.entries(headers)) out[key] = value;
+    for (const [key, value] of Object.entries(headers)) add(key, value);
   }
   return out;
 }
 
-/** Adapt a Node `IncomingMessage` + buffered body into a WHATWG `Response`. */
+/**
+ * Adapt a Node `IncomingMessage` + buffered body into a WHATWG `Response`.
+ * Total by construction: a header the WHATWG layer rejects is skipped and the
+ * status is clamped to a constructible range, so this never throws (a throw
+ * would otherwise escape the `end` handler as an uncaught error).
+ */
 function toWhatwgResponse(res: IncomingMessage, body: Buffer): Response {
   const headers = new Headers();
   for (const [key, value] of Object.entries(res.headers)) {
     if (value == null) continue;
-    if (Array.isArray(value)) {
-      // set-cookie and other repeated headers arrive as arrays.
-      for (const v of value) headers.append(key, v);
-    } else {
-      headers.append(key, value);
+    // set-cookie and other repeated headers arrive as arrays.
+    const values = Array.isArray(value) ? value : [value];
+    for (const v of values) {
+      try {
+        headers.append(key, v);
+      } catch {
+        // A header Node accepted but the stricter WHATWG layer rejects is
+        // dropped rather than failing the whole response.
+      }
     }
   }
-  const status = res.statusCode ?? 502;
+  // Received responses are always >= 200; clamp defensively so the Response
+  // constructor (valid range 200-599) can never throw on a malformed status.
+  const raw = res.statusCode ?? 502;
+  const status = raw >= 200 && raw <= 599 ? raw : 502;
   // Null-body statuses cannot carry an entity body in the WHATWG constructor.
   const nullBody = status === 204 || status === 205 || status === 304;
-  // Copy into a fresh ArrayBuffer-backed Uint8Array; Node's Buffer generic
-  // (ArrayBufferLike) does not satisfy the DOM BodyInit type on its own.
-  const bytes = Uint8Array.from(body);
+  // Bulk-copy into a fresh ArrayBuffer-backed Uint8Array: this satisfies the
+  // DOM BodyInit type (Node's Buffer generic does not) without the O(n)
+  // element-by-element copy that `Uint8Array.from` performs.
+  const bytes = new Uint8Array(body.byteLength);
+  bytes.set(body);
   return new Response(nullBody ? null : bytes, {
     status,
     statusText: res.statusMessage ?? "",
@@ -501,14 +573,32 @@ function isPublicIpv4(addr: string, allowLoopback: boolean): boolean {
   return true;
 }
 
+/**
+ * Extract the embedded IPv4 of an IPv4-mapped IPv6 address, or null. Handles
+ * both the dotted form (`::ffff:1.2.3.4`) and the hex form (`::ffff:7f00:1`)
+ * that `URL.hostname` normalizes the dotted literal to — the latter would
+ * otherwise skip the IPv4 denylist and pin, e.g., loopback as public.
+ */
+function mappedIpv4(lower: string): string | null {
+  const dotted = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const hex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join(".");
+  }
+  return null;
+}
+
 function isPublicIpv6(addr: string, allowLoopback: boolean): boolean {
   const lower = addr.toLowerCase();
   if (allowLoopback && lower === "::1") return true;
 
-  // IPv4-mapped IPv6 (::ffff:1.2.3.4) — defer to IPv4 rules
-  const v4mapped = lower.match(/^::ffff:([0-9.]+)$/);
-  if (v4mapped) {
-    return isPublicIpv4(v4mapped[1], allowLoopback);
+  // IPv4-mapped IPv6 — defer to IPv4 rules (both dotted and hex-normalized).
+  const mapped = mappedIpv4(lower);
+  if (mapped) {
+    return isPublicIpv4(mapped, allowLoopback);
   }
 
   // Hard rejects on exact / prefix matches

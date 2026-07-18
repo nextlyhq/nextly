@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -9,6 +9,27 @@ import {
   SafeFetchError,
   validateExternalUrl,
 } from "./validate-external-url";
+
+// Record the options passed to node:http.request so a test can prove safeFetch
+// supplies the pinned `lookup` (the ESM namespace can't be spied directly).
+const { requestCalls } = vi.hoisted(() => ({
+  requestCalls: [] as Array<Record<string, unknown>>,
+}));
+
+vi.mock("node:http", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:http")>();
+  return {
+    ...actual,
+    request(
+      url: string | URL,
+      options: import("node:http").RequestOptions,
+      callback?: (res: import("node:http").IncomingMessage) => void
+    ) {
+      requestCalls.push(options as Record<string, unknown>);
+      return actual.request(url, options, callback);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // createPinnedLookup — the core DNS-rebinding defense. It must always yield the
@@ -92,6 +113,20 @@ describe("validateExternalUrl", () => {
     expect(validated.pinnedIp).toBe("127.0.0.1");
     await expect(
       validateExternalUrl("http://127.0.0.1:8080/")
+    ).rejects.toBeInstanceOf(ExternalUrlError);
+  });
+
+  it("rejects an IPv4-mapped IPv6 loopback literal (URL hex-normalized)", async () => {
+    // new URL normalizes [::ffff:127.0.0.1] to ::ffff:7f00:1; the mapped IPv4
+    // (127.0.0.1) must still be caught by the private-IP denylist.
+    await expect(
+      validateExternalUrl("https://[::ffff:127.0.0.1]/")
+    ).rejects.toBeInstanceOf(ExternalUrlError);
+  });
+
+  it("rejects an IPv4-mapped IPv6 private literal", async () => {
+    await expect(
+      validateExternalUrl("https://[::ffff:10.0.0.1]/")
     ).rejects.toBeInstanceOf(ExternalUrlError);
   });
 });
@@ -213,6 +248,36 @@ describe("safeFetch", () => {
     await expect(
       safeFetch(`${h.base}/slow`, { ...local, timeoutMs: 60 })
     ).rejects.toMatchObject({ name: "SafeFetchError", reason: "timeout" });
+  });
+
+  it("wires the pinned lookup into the underlying request (not global fetch)", async () => {
+    // Directly proves safeFetch supplies a custom lookup that yields the
+    // validated address: the suite would otherwise pass even if safeFetch
+    // reverted to global fetch or dropped the lookup (which reopens rebinding).
+    requestCalls.length = 0;
+    const h = await startServer((_req, res) => {
+      res.writeHead(200);
+      res.end("ok");
+    });
+    const response = await safeFetch(`${h.base}/`, local);
+    expect(response.status).toBe(200);
+    expect(requestCalls).toHaveLength(1);
+    const lookup = requestCalls[0].lookup;
+    expect(typeof lookup).toBe("function");
+    const pinnedLookup = lookup as (
+      hostname: string,
+      options: { all?: boolean },
+      callback: (err: Error | null, address: string, family: number) => void
+    ) => void;
+    const pinned = await new Promise<{ address: string; family: number }>(
+      resolve =>
+        pinnedLookup(
+          "anything.example",
+          { all: false },
+          (_e, address, family) => resolve({ address, family })
+        )
+    );
+    expect(pinned).toEqual({ address: "127.0.0.1", family: 4 });
   });
 
   it("rejects a private IP before connecting (never dials the server)", async () => {
