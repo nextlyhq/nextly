@@ -79,7 +79,7 @@
     "react-dom": "19.2.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "publishConfig": {
     "access": "public",
