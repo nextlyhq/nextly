@@ -54,13 +54,18 @@ export type WebhookResourceKind =
 /** What triggered an event; feeds the audit trail. */
 export type WebhookActorType = "user" | "apiKey" | "system";
 
-/** The resource an event is about. `collection` is omitted for non-entry kinds. */
-export interface WebhookResource {
-  kind: WebhookResourceKind;
-  /** Collection slug; present for entries, omitted for singles/media/user. */
-  collection?: string;
-  id?: string;
-}
+/**
+ * The resource an event is about. Modeled as a discriminated union so the
+ * collection invariant is enforced by the type system: an `entry` always
+ * carries its collection slug, and every other kind forbids one.
+ */
+export type WebhookResource =
+  | { kind: "entry"; collection: string; id?: string }
+  | {
+      kind: "single" | "media" | "user" | "form";
+      collection?: never;
+      id?: string;
+    };
 
 /** Who triggered the event. */
 export interface WebhookActor {
@@ -128,8 +133,9 @@ export type FilterSpec = FilterSpecV1 | FilterSpecExpression;
 
 /**
  * The outbound endpoint registry shape (mirrors `nextly_webhooks`). Secrets are
- * never held raw: `secretHashes` is the list of active-secret hashes (list for
- * zero-downtime rotation) and `secretPrefix` is a display-only prefix.
+ * never held raw: `secretHash` is the list of active-secret hashes (a list for
+ * zero-downtime rotation) and `secretPrefix` is a display-only prefix. The
+ * property name matches the Drizzle column so a hydrated row maps directly.
  */
 export interface WebhookEndpoint {
   id: string;
@@ -142,7 +148,8 @@ export interface WebhookEndpoint {
   filter: FilterSpec | null;
   /** Static request headers merged into every delivery. */
   headers: Record<string, string> | null;
-  secretHashes: string[];
+  /** List of active signing-secret hashes (list-shaped for rotation). */
+  secretHash: string[];
   secretPrefix: string;
   /** Reserved per-endpoint field projection; not applied yet. */
   fieldAllowlist: string[] | null;

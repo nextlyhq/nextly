@@ -5,7 +5,7 @@ import { buildEnvelope, type BuildEnvelopeInput } from "../envelope";
 const base: BuildEnvelopeInput = {
   id: "evt_1",
   type: "entry.updated",
-  timestamp: "2026-07-18T00:00:00.000Z",
+  timestamp: new Date("2026-07-18T00:00:00.000Z"),
   resource: { kind: "entry", collection: "posts", id: "p1" },
   data: { id: "p1", title: "Hello", status: "published" },
 };
@@ -23,15 +23,12 @@ describe("buildEnvelope", () => {
     });
   });
 
-  it("normalizes a Date timestamp to ISO-8601 and passes a string through", () => {
-    const fromDate = buildEnvelope({
+  it("normalizes the Date timestamp to an ISO-8601 string", () => {
+    const env = buildEnvelope({
       ...base,
       timestamp: new Date("2026-07-18T12:34:56.000Z"),
     });
-    expect(fromDate.timestamp).toBe("2026-07-18T12:34:56.000Z");
-
-    const fromString = buildEnvelope({ ...base, timestamp: "not-parsed" });
-    expect(fromString.timestamp).toBe("not-parsed");
+    expect(env.timestamp).toBe("2026-07-18T12:34:56.000Z");
   });
 
   it("on create (no previous) reports previous=null and all keys changed", () => {
@@ -97,6 +94,40 @@ describe("buildEnvelope", () => {
     expect(env.data).not.toHaveProperty("password");
     expect(env.previous).not.toHaveProperty("password");
     expect(env.data).toEqual({ id: "p1", title: "World" });
+  });
+
+  it("strips sensitive fields nested inside groups and arrays, at any depth", () => {
+    const env = buildEnvelope({
+      ...base,
+      previous: null,
+      data: {
+        id: "p1",
+        profile: { name: "A", apiSecret: "s1" },
+        items: [{ label: "x", token: "t1" }],
+      },
+      sensitiveFields: ["apiSecret", "token"],
+    });
+    expect(env.data).toEqual({
+      id: "p1",
+      profile: { name: "A" },
+      items: [{ label: "x" }],
+    });
+  });
+
+  it("detects a Date-only change and treats equal Dates as unchanged", () => {
+    const changed = buildEnvelope({
+      ...base,
+      previous: { publishedAt: new Date("2026-01-01T00:00:00.000Z") },
+      data: { publishedAt: new Date("2026-02-01T00:00:00.000Z") },
+    });
+    expect(changed.changedFields).toEqual(["publishedAt"]);
+
+    const same = buildEnvelope({
+      ...base,
+      previous: { publishedAt: new Date("2026-01-01T00:00:00.000Z") },
+      data: { publishedAt: new Date("2026-01-01T00:00:00.000Z") },
+    });
+    expect(same.changedFields).toEqual([]);
   });
 
   it("strips before diffing, so a secret-only change never appears in changedFields", () => {

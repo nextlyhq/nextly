@@ -55,11 +55,15 @@ describe("matchesFilter", () => {
   });
 
   describe("collections", () => {
-    it("matches all collections when null or absent", () => {
+    it("matches all collections when null, absent, or empty", () => {
       expect(matchesFilter({ version: 1, collections: null }, envelope())).toBe(
         true
       );
       expect(matchesFilter({ version: 1 }, envelope())).toBe(true);
+      // An empty array means "no collection constraint", not "match nothing".
+      expect(matchesFilter({ version: 1, collections: [] }, envelope())).toBe(
+        true
+      );
     });
 
     it("matches only a listed collection", () => {

@@ -41,7 +41,7 @@ export function matchesFilter(
     return false;
   }
 
-  if (collections != null) {
+  if (collections != null && collections.length > 0) {
     const collection = envelope.resource.collection;
     if (collection === undefined || !collections.includes(collection)) {
       return false;

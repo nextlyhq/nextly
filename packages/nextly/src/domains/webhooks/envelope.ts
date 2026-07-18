@@ -27,6 +27,15 @@ function deepEqual(a: unknown, b: unknown): boolean {
   if (a === null || b === null) return false;
   if (typeof a !== "object" || typeof b !== "object") return false;
 
+  // Dates have no enumerable keys, so the object branch below would treat any
+  // two of them as equal; compare by instant instead. A date-only change must
+  // still register in changedFields.
+  if (a instanceof Date || b instanceof Date) {
+    return (
+      a instanceof Date && b instanceof Date && a.getTime() === b.getTime()
+    );
+  }
+
   const aIsArray = Array.isArray(a);
   const bIsArray = Array.isArray(b);
   if (aIsArray !== bIsArray) return false;
@@ -47,21 +56,37 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Return a shallow copy of `doc` without the sensitive field names. A missing
- * field name is a no-op, so callers can pass a superset (e.g. every secret
- * field of the collection) safely.
+ * Recursively drop every key named in `denied` from a value, descending into
+ * nested objects and arrays (Nextly allows secret fields at any depth, e.g. a
+ * password inside a group or repeater). Dates are treated as leaves. Returns a
+ * fresh structure so the caller's objects are never mutated.
+ */
+function stripValue(value: unknown, denied: Set<string>): unknown {
+  if (Array.isArray(value)) {
+    return value.map(v => stripValue(v, denied));
+  }
+  if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (denied.has(k)) continue;
+      out[k] = stripValue(v, denied);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Return a deep copy of `doc` without the sensitive field names, at any depth.
+ * A missing field name is a no-op, so callers can pass a superset (e.g. every
+ * secret field of the collection) safely.
  */
 function stripSensitive(
   doc: Record<string, unknown>,
   sensitiveFields: readonly string[]
 ): Record<string, unknown> {
   if (sensitiveFields.length === 0) return { ...doc };
-  const out: Record<string, unknown> = {};
-  const denied = new Set(sensitiveFields);
-  for (const [k, v] of Object.entries(doc)) {
-    if (!denied.has(k)) out[k] = v;
-  }
-  return out;
+  return stripValue(doc, new Set(sensitiveFields)) as Record<string, unknown>;
 }
 
 /**
@@ -89,8 +114,8 @@ export interface BuildEnvelopeInput {
   /** ULID; caller-generated so the envelope stays deterministic. */
   id: string;
   type: WebhookEventType;
-  /** Event time; a Date is normalized to ISO-8601, a string is passed through. */
-  timestamp: Date | string;
+  /** Event time as a Date; normalized to an ISO-8601 string on the envelope. */
+  timestamp: Date;
   site?: string;
   resource: WebhookResource;
   /** Current state of the resource. */
@@ -119,10 +144,7 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
     id: input.id,
     type: input.type,
     specversion: "1",
-    timestamp:
-      input.timestamp instanceof Date
-        ? input.timestamp.toISOString()
-        : input.timestamp,
+    timestamp: input.timestamp.toISOString(),
     resource: input.resource,
     data,
     previous,
