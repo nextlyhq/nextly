@@ -9,6 +9,16 @@
 export { buildEnvelope, type BuildEnvelopeInput } from "./envelope";
 export { matchesFilter } from "./filter";
 export {
+  signPayload,
+  buildSignatureHeaders,
+  verifySignature,
+  WEBHOOK_ID_HEADER,
+  WEBHOOK_TIMESTAMP_HEADER,
+  WEBHOOK_SIGNATURE_HEADER,
+  type SignInput,
+  type VerifyInput,
+} from "./signing";
+export {
   WEBHOOK_EVENT_TYPES,
   type WebhookEventType,
   type WebhookResourceKind,
