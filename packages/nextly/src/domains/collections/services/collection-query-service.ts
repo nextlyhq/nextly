@@ -123,6 +123,12 @@ interface LocalizedQueryContext {
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
   locale: string;
+  /**
+   * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
+   * single status and the collection has per-locale status, so localized where/search EXISTS
+   * checks only match companion rows in that state. Undefined = no status constraint.
+   */
+  statusValue?: string;
 }
 
 export class CollectionQueryService extends BaseService {
@@ -194,7 +200,8 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     locale: string | undefined,
-    preloaded?: CompanionSchema | null
+    preloaded?: CompanionSchema | null,
+    statusFilterValue?: string | null
   ): Promise<void> {
     if (!this.localization || locale !== "all" || rows.length === 0) return;
     const companion =
@@ -206,6 +213,12 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
+      // Only constrain by status on a status-enabled collection with a resolved
+      // single status, so a published locale=all read drops draft translations.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
     });
   }
 
@@ -218,7 +231,8 @@ export class CollectionQueryService extends BaseService {
   private async populateTranslationMeta(
     collectionName: string,
     rows: Record<string, unknown>[],
-    preloaded?: CompanionSchema | null
+    preloaded?: CompanionSchema | null,
+    statusFilterValue?: string | null
   ): Promise<void> {
     if (!this.localization || rows.length === 0) return;
     const companion =
@@ -232,6 +246,11 @@ export class CollectionQueryService extends BaseService {
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
+      // On a status-scoped read, don't report a draft-only translation as present.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
     });
   }
 
@@ -385,6 +404,7 @@ export class CollectionQueryService extends BaseService {
           mainIdColumn: ctx.mainIdColumn,
           locale: ctx.locale,
           valueCondition: sql`${t}.${col} IS NOT NULL`,
+          statusValue: ctx.statusValue,
         });
         return sql`NOT ${present}`;
       }
@@ -422,6 +442,7 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn: ctx.mainIdColumn,
       locale: ctx.locale,
       valueCondition,
+      statusValue: ctx.statusValue,
     });
   }
 
@@ -433,7 +454,8 @@ export class CollectionQueryService extends BaseService {
     companion: CompanionSchema | null,
     localeChain: string[] | null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any
+    schema: any,
+    statusFilterValue?: string | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
     return {
@@ -441,6 +463,12 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       mainIdColumn: schema.id,
       locale: localeChain[0],
+      // Only constrain by status when the collection has per-locale status and the
+      // read resolved to a single status; otherwise leave it unfiltered.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
     };
   }
 
@@ -649,11 +677,6 @@ export class CollectionQueryService extends BaseService {
         localeChain || params.locale === "all" || params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
-      const localizedCtx = this.buildLocalizedQueryContext(
-        companion,
-        localeChain,
-        schema
-      );
 
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
@@ -750,6 +773,16 @@ export class CollectionQueryService extends BaseService {
       if (statusFilter && schema.status) {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
+
+      // Build the localized-query context AFTER the status filter is resolved so
+      // localized where/search EXISTS checks constrain by the per-locale status too
+      // (a published read must not match a draft translation).
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema,
+        statusFilter?.value
+      );
 
       // Apply search filter if provided
       if (params.search) {
@@ -1034,14 +1067,16 @@ export class CollectionQueryService extends BaseService {
         params.collectionName,
         entries,
         params.locale,
-        companion
+        companion,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
       );
       // i18n M7: per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.populateTranslationMeta(
           params.collectionName,
           entries,
-          companion
+          companion,
+          statusFilter?.value ?? null // i18n M6: per-locale published filter
         );
       }
 
@@ -1411,11 +1446,6 @@ export class CollectionQueryService extends BaseService {
         localeChain || params.locale === "all"
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
-      const localizedCtx = this.buildLocalizedQueryContext(
-        companion,
-        localeChain,
-        schema
-      );
 
       // Build count query using Drizzle
       // Start with a base count query
@@ -1459,6 +1489,16 @@ export class CollectionQueryService extends BaseService {
       if (statusFilter && schema.status) {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
+
+      // Build the localized-query context AFTER the status filter is resolved so
+      // localized where/search EXISTS checks constrain by the per-locale status too
+      // (a published read must not match a draft translation).
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema,
+        statusFilter?.value
+      );
 
       // Apply search filter if provided
       if (params.search) {
@@ -1803,13 +1843,18 @@ export class CollectionQueryService extends BaseService {
       await this.populateLocalizedAll(
         params.collectionName,
         [entry as Record<string, unknown>],
-        params.locale
+        params.locale,
+        undefined,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
       );
       // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
-        await this.populateTranslationMeta(params.collectionName, [
-          entry as Record<string, unknown>,
-        ]);
+        await this.populateTranslationMeta(
+          params.collectionName,
+          [entry as Record<string, unknown>],
+          undefined,
+          statusFilter?.value ?? null // i18n M6: per-locale published filter
+        );
       }
 
       // Get collection metadata to identify relation fields and hooks
@@ -2046,6 +2091,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition,
+            statusValue: localizedCtx.statusValue,
           });
         }
         const column = schema[fieldName];
