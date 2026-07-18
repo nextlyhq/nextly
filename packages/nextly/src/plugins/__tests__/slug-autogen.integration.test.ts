@@ -134,4 +134,53 @@ describe("slug auto-generation on create", () => {
 
     expect((created.item as { slug?: string }).slug).toBe("hooked-slug-value");
   });
+
+  it("does not store a beforeValidate hook slug that sanitizes to empty", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A hook returning a CJK/emoji-only value sanitizes to "". It must be
+          // replaced with a derived slug, never stored verbatim.
+          hooks: { beforeValidate: [() => "你好世界"] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Readable Title" },
+    });
+
+    // Derived from the title, not the un-sanitizable hook value.
+    expect((created.item as { slug?: string }).slug).toBe("readable-title");
+  });
+
+  it("re-sanitizes a slug set by a field beforeChange hook", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A beforeChange hook runs after validation, right before storage;
+          // its value must still be normalized.
+          hooks: { beforeChange: [() => "Changed By Hook"] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Ignored" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("changed-by-hook");
+  });
 });

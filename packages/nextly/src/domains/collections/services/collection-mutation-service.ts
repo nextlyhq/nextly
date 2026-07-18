@@ -441,14 +441,22 @@ export class CollectionMutationService extends BaseService {
    * execute after slug generation, so a hook that sets `slug` (for example from
    * the title) could introduce an unsanitized value that would otherwise be
    * validated and stored verbatim. Normalizing here keeps the stored slug
-   * URL-safe; it is idempotent for an already-clean slug and only overwrites
-   * when sanitization yields a non-empty value, so a hook that clears the slug
-   * still surfaces as the normal required-field validation error.
+   * URL-safe; it is idempotent for an already-clean slug. When the hook value
+   * sanitizes to empty (a CJK/emoji/punctuation-only string), it derives a
+   * valid slug from the title just like `applyGeneratedSlugAndTitle` does for
+   * an explicit slug that sanitizes away, rather than leaving the un-sanitized
+   * value to be stored verbatim.
    */
-  private reSanitizeSlug(finalData: Record<string, unknown>): void {
+  private async reSanitizeSlug(
+    finalData: Record<string, unknown>,
+    isSlugTaken: (slug: string) => Promise<boolean>
+  ): Promise<void> {
     if (typeof finalData.slug === "string" && finalData.slug.trim() !== "") {
       const sanitized = generateSlug(finalData.slug);
-      if (sanitized !== "") finalData.slug = sanitized;
+      finalData.slug =
+        sanitized !== ""
+          ? sanitized
+          : await this.deriveSlug(finalData, isSlugTaken);
     }
   }
 
@@ -609,9 +617,9 @@ export class CollectionMutationService extends BaseService {
       // without a manual slug. Running before write access means a field the
       // caller may not create is not reintroduced; the uniqueness check uses
       // the shared connection (a plain, non-transactional create).
-      await this.applyGeneratedSlugAndTitle(finalData, slug =>
-        this.checkFieldUniqueness(params.collectionName, "slug", slug)
-      );
+      const isSlugTaken = (slug: string) =>
+        this.checkFieldUniqueness(params.collectionName, "slug", slug);
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
 
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
@@ -637,7 +645,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeValidate hook can set `slug` after generation ran; re-sanitize
       // so the validated and stored value stays URL-safe.
-      this.reSanitizeSlug(finalData);
+      await this.reSanitizeSlug(finalData, isSlugTaken);
 
       {
         const validationIssues = await validateEntryData(
@@ -663,6 +671,10 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // A beforeChange hook runs after validation and can also set `slug`;
+      // re-sanitize once more so the stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
 
@@ -1976,7 +1988,7 @@ export class CollectionMutationService extends BaseService {
       // validation (see createEntry). The uniqueness check runs on the
       // transaction so same-title creates within one uncommitted tx still
       // dedupe — the tx sees its own pending rows.
-      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+      const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,
           {
@@ -1984,7 +1996,8 @@ export class CollectionMutationService extends BaseService {
           }
         );
         return existing != null;
-      });
+      };
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
 
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
@@ -2011,7 +2024,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeValidate hook can set `slug` after generation ran; re-sanitize
       // so the validated and stored value stays URL-safe.
-      this.reSanitizeSlug(finalData);
+      await this.reSanitizeSlug(finalData, isSlugTaken);
 
       {
         const validationIssues = await validateEntryData(
@@ -2037,6 +2050,10 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // A beforeChange hook runs after validation and can also set `slug`;
+      // re-sanitize once more so the stored value stays URL-safe.
+      await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
 
@@ -2838,7 +2855,7 @@ export class CollectionMutationService extends BaseService {
       // entry that omits slug/title must still receive them. The uniqueness
       // check runs on the transaction so entries created earlier in the same
       // bulk batch are seen.
-      await this.applyGeneratedSlugAndTitle(finalData, async slug => {
+      const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,
           {
@@ -2846,7 +2863,8 @@ export class CollectionMutationService extends BaseService {
           }
         );
         return existing != null;
-      });
+      };
+      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
 
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
@@ -2861,7 +2879,10 @@ export class CollectionMutationService extends BaseService {
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
+      // validation gate (functions resolved via the field-level registry). A
+      // hook can set `slug`, so re-sanitize after it so the validated and
+      // stored value stays URL-safe. When hooks are skipped the slug is still
+      // the (already-sanitized) generated value, so no pass is needed.
       if (!skipHooks) {
         await runFieldHooks({
           kind: "collection",
@@ -2871,11 +2892,8 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        await this.reSanitizeSlug(finalData, isSlugTaken);
       }
-
-      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
-      // so the validated and stored value stays URL-safe.
-      this.reSanitizeSlug(finalData);
 
       {
         const validationIssues = await validateEntryData(
@@ -2892,7 +2910,8 @@ export class CollectionMutationService extends BaseService {
       }
 
       // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
+      // (runs after validation, before hashing/serialization). This hook can
+      // also set `slug`, so re-sanitize once more before storage.
       if (!skipHooks) {
         await runFieldHooks({
           kind: "collection",
@@ -2902,6 +2921,7 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        await this.reSanitizeSlug(finalData, isSlugTaken);
       }
 
       await hashPasswordFieldValues(finalData, fields);
