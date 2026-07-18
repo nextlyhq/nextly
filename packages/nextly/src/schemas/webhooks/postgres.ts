@@ -55,10 +55,16 @@ export const nextlyEvents = pgTable(
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
+    // Set by the drain's fan-out pass once delivery rows exist for this event;
+    // NULL means the event still needs fan-out. Lets the drain find un-fanned
+    // events cheaply without rescanning the delivery table.
+    fannedOutAt: timestamp("fanned_out_at", { withTimezone: false }),
   },
   t => [
     // Drain/reporting scans by type and recency.
     index("nextly_events_type_created_at_idx").on(t.type, t.createdAt),
+    // The fan-out pass scans for events still needing fan-out, oldest first.
+    index("nextly_events_fanned_out_at_idx").on(t.fannedOutAt, t.createdAt),
   ]
 );
 

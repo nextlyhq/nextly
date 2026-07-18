@@ -10,6 +10,19 @@ export { buildEnvelope, type BuildEnvelopeInput } from "./envelope";
 export { matchesFilter } from "./filter";
 export { recordEvent } from "./record-event";
 export {
+  WebhookEndpointRegistry,
+  type WebhookEndpointReader,
+} from "./endpoint-registry";
+export {
+  selectDeliveryTargets,
+  fanOutDueEvents,
+  type FanOutDeps,
+  type FanOutDatabase,
+  type FanOutTx,
+  type FanOutLogger,
+  type FanOutResult,
+} from "./fan-out";
+export {
   sensitiveFieldNames,
   type SensitiveFieldSource,
 } from "./sensitive-fields";

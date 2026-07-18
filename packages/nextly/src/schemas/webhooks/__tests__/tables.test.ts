@@ -88,4 +88,16 @@ describe("webhook system tables", () => {
       expect(cols).toContain(col);
     }
   });
+
+  for (const dialect of DIALECTS) {
+    it(`gives the event ledger a fanned_out_at drain marker (${dialect})`, () => {
+      // The drain's fan-out pass claims events by fanned_out_at IS NULL, so the
+      // column must exist on every dialect.
+      const events = getCoreSchema(dialect).tables.find(
+        t => t.name === "nextly_events"
+      );
+      const cols = events?.columns.map(c => c.name) ?? [];
+      expect(cols).toContain("fanned_out_at");
+    });
+  }
 });
