@@ -123,7 +123,6 @@ export class ExternalUrlError extends NextlyError {
     super({
       code: "EXTERNAL_URL_BLOCKED",
       publicMessage: message,
-      statusCode: 400,
       logContext: { url },
     });
     this.name = "ExternalUrlError";
@@ -273,8 +272,6 @@ export class SafeFetchError extends NextlyError {
     super({
       code: "EXTERNAL_REQUEST_FAILED",
       publicMessage: message,
-      // Timeout maps to a gateway timeout; the rest to a bad upstream response.
-      statusCode: reason === "timeout" ? 504 : 502,
       logContext: { url, reason },
     });
     this.name = "SafeFetchError";
@@ -624,28 +621,50 @@ function decodeBody(
   url: string
 ): { body: Buffer; decoded: boolean } | SafeFetchError {
   if (!encoding) return { body: buf, decoded: false };
-  const enc = encoding.trim().toLowerCase();
+  // Content-Encoding may stack (e.g. "br, gzip"): the layers are listed in the
+  // order applied, so decode from the last (outermost) inward.
+  const layers = encoding
+    .split(",")
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
   const opts = { maxOutputLength: cap };
+  let current = buf;
+  let decoded = false;
   try {
-    if (enc === "gzip" || enc === "x-gzip")
-      return { body: zlib.gunzipSync(buf, opts), decoded: true };
-    if (enc === "br")
-      return { body: zlib.brotliDecompressSync(buf, opts), decoded: true };
-    if (enc === "deflate") {
-      // `Content-Encoding: deflate` is zlib-wrapped per spec, but some servers
-      // send raw deflate; fall back to raw before giving up.
-      try {
-        return { body: zlib.inflateSync(buf, opts), decoded: true };
-      } catch {
-        return { body: zlib.inflateRawSync(buf, opts), decoded: true };
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const enc = layers[i];
+      if (enc === "identity") continue;
+      if (enc === "gzip" || enc === "x-gzip") {
+        current = zlib.gunzipSync(current, opts);
+      } else if (enc === "br") {
+        current = zlib.brotliDecompressSync(current, opts);
+      } else if (enc === "deflate") {
+        // `deflate` is zlib-wrapped per spec, but some servers send raw deflate.
+        try {
+          current = zlib.inflateSync(current, opts);
+        } catch {
+          current = zlib.inflateRawSync(current, opts);
+        }
+      } else {
+        // An encoding we do not decode. If we have already peeled some layers,
+        // the bytes are partially decoded and can't be labeled honestly, so
+        // fail; otherwise pass the response through untouched (header kept).
+        if (decoded) {
+          return new SafeFetchError(
+            `Cannot fully decode content-encoding "${encoding}"`,
+            url,
+            "decode-failed"
+          );
+        }
+        return { body: buf, decoded: false };
       }
+      decoded = true;
     }
-    // identity or an encoding we do not decode: pass the bytes through.
-    return { body: buf, decoded: false };
+    return { body: current, decoded };
   } catch {
     // Corrupt stream, or the inflated size exceeded the cap (bomb guard).
     return new SafeFetchError(
-      `Failed to decode ${enc} response body`,
+      `Failed to decode ${encoding} response body`,
       url,
       "decode-failed"
     );

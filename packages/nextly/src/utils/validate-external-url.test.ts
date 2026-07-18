@@ -267,6 +267,18 @@ describe("safeFetch", () => {
     expect(transferEncoding).toBeUndefined();
   });
 
+  it("decodes stacked content-encodings (br, gzip)", async () => {
+    const { gzipSync, brotliCompressSync } = await import("node:zlib");
+    // Encodings listed in apply order: br first, then gzip -> wire = gzip(br(x)).
+    const wire = gzipSync(brotliCompressSync(Buffer.from("stacked payload")));
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "br, gzip" });
+      res.end(wire);
+    });
+    const response = await safeFetch(`${h.base}/`, local);
+    expect(await response.text()).toBe("stacked payload");
+  });
+
   it("does not follow redirects (returns the 3xx as-is)", async () => {
     const h = await startServer((req, res) => {
       if (req.url === "/redirect") {

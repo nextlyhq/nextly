@@ -5,6 +5,7 @@
  * so that both direct API callers and the dispatcher can resolve them.
  */
 
+import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
 import { EmailProviderService } from "../../services/email/email-provider-service";
 import { EmailService } from "../../services/email/email-service";
@@ -82,7 +83,12 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           const url = storagePath.startsWith("http")
             ? storagePath
             : storage.getPublicUrl(storagePath);
-          const response = await safeFetch(url);
+          // Cap the fetch at the attachment size limit so a valid large
+          // attachment is not rejected by the default safeFetch cap, which is
+          // smaller than the configured attachment total.
+          const response = await safeFetch(url, {
+            maxResponseBytes: getAttachmentLimits().maxTotalBytes,
+          });
           if (!response.ok) {
             throw new Error(
               `Failed to fetch attachment from ${url}: HTTP ${response.status}`
