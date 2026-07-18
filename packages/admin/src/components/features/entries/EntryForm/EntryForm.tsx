@@ -210,7 +210,10 @@ export function EntryForm({
     const collectionLocalized = collection.localized === true;
     return {
       locale,
-      rtl: getLocale(locale)?.rtl ?? false,
+      // `locale` is undefined while editing the implicit default language, so
+      // resolve the default explicitly — otherwise a default-locale that is RTL
+      // would render its translatable fields left-to-right until explicitly picked.
+      rtl: getLocale(locale ?? defaultLocale)?.rtl ?? false,
       collectionLocalized,
       isNonDefaultLocale:
         !!locale && !!defaultLocale && locale !== defaultLocale,

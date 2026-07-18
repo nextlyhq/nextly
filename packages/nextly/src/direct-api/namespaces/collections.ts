@@ -81,11 +81,14 @@ export async function find<TSlug extends CollectionSlug>(
   // the canonical ListResult envelope (`{ items, meta }`). Default missing
   // pagination fields so this still produces a valid meta block when the
   // service returns a slim payload (some test fixtures omit them).
-  const legacy = result.data as PaginatedResponse<DataFromCollectionSlug<TSlug>>;
+  const legacy = result.data as PaginatedResponse<
+    DataFromCollectionSlug<TSlug>
+  >;
   const total = legacy.totalDocs ?? legacy.docs.length;
   const limit = legacy.limit ?? args.limit ?? legacy.docs.length;
   const page = legacy.page ?? args.page ?? 1;
-  const totalPages = legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
+  const totalPages =
+    legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
 
   return {
     items: legacy.docs,
@@ -162,6 +165,9 @@ export async function create<TSlug extends CollectionSlug>(
       user: config.user
         ? { id: config.user.id, role: config.user.role }
         : undefined,
+      // i18n M5: forward the content locale so a localized write lands in the
+      // requested language's companion row, not the default locale's.
+      locale: config.locale,
       context: config.context,
     },
     args.data
@@ -206,6 +212,9 @@ export async function update<TSlug extends CollectionSlug>(
         user: config.user
           ? { id: config.user.id, role: config.user.role }
           : undefined,
+        // i18n M5: forward the content locale so a localized update targets the
+        // requested language's companion row, not the default locale's.
+        locale: config.locale,
         context: config.context,
       },
       args.data
@@ -282,7 +291,9 @@ export async function update<TSlug extends CollectionSlug>(
  * still returns the legacy `DeleteResult` (`{ deleted, ids }`) because a
  * multi-row delete cannot collapse into a single mutation envelope.
  */
-export async function deleteEntry<TSlug extends CollectionSlug = CollectionSlug>(
+export async function deleteEntry<
+  TSlug extends CollectionSlug = CollectionSlug,
+>(
   ctx: NextlyContext,
   args: DeleteArgs<TSlug>
 ): Promise<MutationResult<{ id: string }> | DeleteResult> {

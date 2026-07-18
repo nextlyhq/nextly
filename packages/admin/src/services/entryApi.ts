@@ -282,7 +282,10 @@ export const buildFindQuery = (params: FindParams): string => {
     query.set("locale", params.locale);
   }
   if (params.fallbackLocale) {
-    query.set("fallbackLocale", params.fallbackLocale);
+    // The dispatcher reads the kebab-case `fallback-locale` query key; sending
+    // `fallbackLocale` would be ignored, so `fallbackLocale: "none"` would still
+    // fall back to the default language.
+    query.set("fallback-locale", params.fallbackLocale);
   }
   // i18n M7: opt into the per-locale translation-status overview map.
   if (params.translationStatus) {
@@ -445,8 +448,11 @@ export const entryApi = {
     const query = new URLSearchParams();
     if (options?.depth !== undefined) query.set("depth", String(options.depth));
     if (options?.locale) query.set("locale", options.locale);
+    // Kebab-case `fallback-locale` is the query key the dispatcher reads; the
+    // camelCase form is silently ignored (so `fallbackLocale: "none"` would not
+    // actually disable fallback).
     if (options?.fallbackLocale)
-      query.set("fallbackLocale", options.fallbackLocale);
+      query.set("fallback-locale", options.fallbackLocale);
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
     // i18n M7: opt into the per-locale translation-status overview map.
     if (options?.translationStatus) query.set("translation-status", "1");

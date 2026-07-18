@@ -458,6 +458,16 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     setPage(1); // Reset to first page on status change
   }, []);
 
+  const handleTranslationFilterChange = useCallback(
+    (value: TranslationListFilter | null) => {
+      setTranslationFilter(value);
+      // Reset to the first page: the filtered result set shrinks, so a later
+      // page could otherwise fall beyond it and show an empty table.
+      setPage(1);
+    },
+    []
+  );
+
   const handleCreatedFromChange = useCallback((value: string) => {
     setCreatedFrom(value);
     setPage(1);
@@ -661,7 +671,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           status={status}
           onStatusChange={handleStatusChange}
           translationFilter={translationFilter}
-          onTranslationFilterChange={setTranslationFilter}
+          onTranslationFilterChange={handleTranslationFilterChange}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}
