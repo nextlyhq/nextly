@@ -118,7 +118,7 @@ function TranslationsRow({
   const { locale, onLocaleChange } = useEntryLocale();
   if (!translations) return null;
   return (
-    <div className="mt-4 pt-4 border-t border-primary/5">
+    <div className="mt-4 pt-4 border-t border-border">
       <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
         Languages
       </p>

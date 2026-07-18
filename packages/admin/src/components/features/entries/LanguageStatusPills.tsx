@@ -45,8 +45,8 @@ function pillState(meta: LocaleTranslationMeta | undefined): PillState {
 // neutral muted, translated-without-status = subtle positive, missing = dashed/outline.
 const PILL_CLASS: Record<PillState, string> = {
   missing:
-    "border border-dashed border-primary/20 text-muted-foreground/70 bg-transparent",
-  draft: "bg-muted text-muted-foreground border border-primary/10",
+    "border border-dashed border-border text-muted-foreground bg-transparent",
+  draft: "bg-muted text-muted-foreground border border-border",
   translated:
     "bg-success-100 text-success-800 border border-success-200 dark:bg-success-950/40 dark:text-success-200 dark:border-success-900",
   published: "bg-foreground text-background",
