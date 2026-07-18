@@ -165,8 +165,8 @@ export async function create<TSlug extends CollectionSlug>(
       user: config.user
         ? { id: config.user.id, role: config.user.role }
         : undefined,
-      // i18n M5: forward the content locale so a localized write lands in the
-      // requested language's companion row, not the default locale's.
+      // Forward the content locale so a localized write lands in the requested
+      // language's companion row, not the default locale's.
       locale: config.locale,
       context: config.context,
     },
@@ -212,8 +212,8 @@ export async function update<TSlug extends CollectionSlug>(
         user: config.user
           ? { id: config.user.id, role: config.user.role }
           : undefined,
-        // i18n M5: forward the content locale so a localized update targets the
-        // requested language's companion row, not the default locale's.
+        // Forward the content locale so a localized update targets the requested
+        // language's companion row, not the default locale's.
         locale: config.locale,
         context: config.context,
       },

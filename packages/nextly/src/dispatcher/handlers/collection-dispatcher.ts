@@ -923,6 +923,14 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        // Forward the authenticated role set so role-based access and stored
+        // rules evaluate against the real user (parity with the update handler);
+        // without it publish-all could be denied for a user the route authorized.
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

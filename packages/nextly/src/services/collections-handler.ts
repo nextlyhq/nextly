@@ -563,8 +563,17 @@ export class CollectionsHandler {
     userId?: string;
     userName?: string;
     userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
     user?: UserContext;
+    /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran the
+     * RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId.
+     */
+    routeAuthorized?: boolean;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
