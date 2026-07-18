@@ -11,9 +11,9 @@
  *
  * The signature covers the EXACT bytes that are sent, so the delivery engine
  * must sign the already-serialized body and transmit that same string. Secrets
- * are handled as a list (one active now) so key rotation is additive: a
- * delivery is signed with the primary secret, and verification accepts a match
- * against any secret in the list.
+ * are handled as a list so key rotation is additive: a delivery is signed with
+ * every active secret (one `v1` token per secret), and verification accepts a
+ * match against any secret in the list.
  *
  * These are pure functions over the plaintext secret. Secrets live encrypted at
  * rest (utils/encryption.ts + NEXTLY_SECRET); the CRUD and delivery slices own
@@ -43,7 +43,14 @@ function secretToKey(secret: string): Buffer {
   const encoded = secret.startsWith(SECRET_PREFIX)
     ? secret.slice(SECRET_PREFIX.length)
     : secret;
-  return Buffer.from(encoded, "base64");
+  const key = Buffer.from(encoded, "base64");
+  // A zero-length key (empty string, or a bare `whsec_`) is a broken secret:
+  // it would still produce a valid-looking HMAC, so reject it rather than sign
+  // or verify with no real key material.
+  if (key.length === 0) {
+    throw NextlyError.internal({ logContext: { reason: "empty-signing-key" } });
+  }
+  return key;
 }
 
 /** The exact content the signature is computed over. */
@@ -161,11 +168,17 @@ export interface VerifyInput {
  * be replayed indefinitely.
  */
 export function verifySignature(input: VerifyInput): boolean {
+  // Fail closed: only an explicit `Infinity` disables freshness. A NaN,
+  // negative, or otherwise non-finite tolerance, or an invalid `now`, must
+  // reject rather than silently accept a possibly-replayed signature.
   const tolerance = input.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS;
-  if (Number.isFinite(tolerance)) {
+  if (tolerance !== Infinity) {
+    if (!Number.isFinite(tolerance) || tolerance < 0) return false;
     const signedAt = Number(input.timestamp);
     if (!Number.isFinite(signedAt)) return false;
-    const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1000);
+    const nowMs = (input.now ?? new Date()).getTime();
+    if (!Number.isFinite(nowMs)) return false;
+    const nowSeconds = Math.floor(nowMs / 1000);
     if (Math.abs(nowSeconds - signedAt) > tolerance) return false;
   }
 

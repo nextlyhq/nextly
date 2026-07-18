@@ -62,6 +62,13 @@ describe("buildSignatureHeaders", () => {
     expect(() => buildSignatureHeaders({ ...base, secrets: [] })).toThrow();
   });
 
+  it("throws on a zero-length signing key (empty or bare whsec_)", () => {
+    expect(() => buildSignatureHeaders({ ...base, secrets: [""] })).toThrow();
+    expect(() =>
+      buildSignatureHeaders({ ...base, secrets: ["whsec_"] })
+    ).toThrow();
+  });
+
   it("emits one space-delimited signature per active secret during rotation", () => {
     const oldKey = Buffer.from("old-secret-key-material-zzzzzzzz");
     const headers = buildSignatureHeaders({
@@ -174,6 +181,36 @@ describe("verifySignature", () => {
         toleranceSeconds: Infinity,
       })
     ).toBe(true);
+  });
+
+  it("fails closed on a malformed tolerance or now (does not skip the check)", () => {
+    // NaN/negative tolerance and an invalid `now` must reject, not accept.
+    expect(
+      verifySignature({
+        ...base,
+        signatureHeader: header,
+        secrets: [secret],
+        now,
+        toleranceSeconds: NaN,
+      })
+    ).toBe(false);
+    expect(
+      verifySignature({
+        ...base,
+        signatureHeader: header,
+        secrets: [secret],
+        now,
+        toleranceSeconds: -1,
+      })
+    ).toBe(false);
+    expect(
+      verifySignature({
+        ...base,
+        signatureHeader: header,
+        secrets: [secret],
+        now: new Date(NaN),
+      })
+    ).toBe(false);
   });
 
   it("rejects a header with no v1 token", () => {
