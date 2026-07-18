@@ -61,6 +61,22 @@ describe("sensitiveFieldNames", () => {
     expect(names).toEqual(["editorMode"]);
   });
 
+  it("strips all children of a hidden (even nameless) group", () => {
+    // A hidden presentational group makes everything under it sensitive, so no
+    // child leaks just because it was not individually marked hidden.
+    const names = sensitiveFieldNames([
+      {
+        type: "group",
+        admin: { hidden: true },
+        fields: [
+          { name: "internalA", type: "text" },
+          { name: "internalB", type: "number" },
+        ],
+      },
+    ]);
+    expect(names.sort()).toEqual(["internalA", "internalB"]);
+  });
+
   it("deduplicates repeated field names", () => {
     const names = sensitiveFieldNames([
       { name: "secret", type: "password" },

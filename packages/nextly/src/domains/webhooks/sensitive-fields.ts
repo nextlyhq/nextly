@@ -18,7 +18,8 @@
 
 /** The minimal field-config shape this policy reads. */
 export interface SensitiveFieldSource {
-  name: string;
+  /** Optional: presentational groups can be nameless and store children inline. */
+  name?: string;
   type?: string;
   /** Top-level hidden flag. */
   hidden?: boolean;
@@ -38,25 +39,32 @@ export function sensitiveFieldNames(
   fields: readonly SensitiveFieldSource[]
 ): string[] {
   const names = new Set<string>();
-  const walk = (list: readonly SensitiveFieldSource[]): void => {
+  // `inheritedHidden` carries a container's hidden state down: a hidden group
+  // (including a nameless presentational one that stores its children inline)
+  // makes everything under it sensitive, so no child value can leak just
+  // because it was not individually marked hidden.
+  const walk = (
+    list: readonly SensitiveFieldSource[],
+    inheritedHidden: boolean
+  ): void => {
     for (const field of list) {
-      if (
-        field.type === "password" ||
+      const hidden =
+        inheritedHidden ||
         field.hidden === true ||
-        field.admin?.hidden === true
-      ) {
+        field.admin?.hidden === true;
+      if ((field.type === "password" || hidden) && field.name) {
         names.add(field.name);
       }
       // group/repeater sub-fields are inline on `fields`; blocks carry their
-      // own `fields` on each block definition.
-      if (Array.isArray(field.fields)) walk(field.fields);
+      // own `fields` on each block definition. Hidden state flows into both.
+      if (Array.isArray(field.fields)) walk(field.fields, hidden);
       if (Array.isArray(field.blocks)) {
         for (const block of field.blocks) {
-          if (Array.isArray(block.fields)) walk(block.fields);
+          if (Array.isArray(block.fields)) walk(block.fields, hidden);
         }
       }
     }
   };
-  walk(fields);
+  walk(fields, false);
   return [...names];
 }

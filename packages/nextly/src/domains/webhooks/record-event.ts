@@ -53,5 +53,10 @@ export async function recordEvent(
   tx: TransactionContext,
   params: { envelope: WebhookEvent }
 ): Promise<void> {
-  await tx.insert("nextly_events", eventRow(params.envelope, new Date()));
+  // Project to `id` only: the result is ignored, and the default insert would
+  // otherwise RETURN * (or select the row back), forcing the large JSON payload
+  // we just wrote to be read and decoded again inside the content transaction.
+  await tx.insert("nextly_events", eventRow(params.envelope, new Date()), {
+    returning: ["id"],
+  });
 }
