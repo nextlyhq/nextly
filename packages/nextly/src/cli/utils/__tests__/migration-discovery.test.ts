@@ -23,11 +23,9 @@ describe("migration-discovery", () => {
   let testDir: string;
 
   beforeEach(async () => {
-    testDir = path.join(
-      os.tmpdir(),
-      `nextly-migration-discovery-test-${Date.now()}`
+    testDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "nextly-migration-discovery-test-")
     );
-    await fs.mkdir(testDir, { recursive: true });
   });
 
   afterEach(async () => {
@@ -36,7 +34,7 @@ describe("migration-discovery", () => {
 
   async function createMigrationFile(
     filename: string,
-    content: string = "-- up\nCREATE TABLE test (id INT);"
+    content: string = "-- test migration"
   ) {
     await fs.writeFile(path.join(testDir, filename), content);
   }

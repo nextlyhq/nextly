@@ -44,6 +44,7 @@ export {
   type SupportedDialect,
 } from "./adapter";
 
+// Shared dialect-variant resolution contract for CLI commands
 export {
   discoverMigrationGroups,
   selectVariant,

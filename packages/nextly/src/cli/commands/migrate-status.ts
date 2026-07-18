@@ -241,7 +241,7 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    const migrationFiles = await discoverMigrations(migrationsDir);
+    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const appliedMigrations = await getAppliedMigrations(
@@ -291,7 +291,8 @@ export async function runMigrateStatus(
 }
 
 async function discoverMigrations(
-  migrationsDir: string
+  migrationsDir: string,
+  dialect?: SupportedDialect
 ): Promise<ParsedMigration[]> {
   // Use shared migration discovery to group dialect variants
   const groups = await discoverMigrationGroups(migrationsDir);
@@ -300,7 +301,7 @@ async function discoverMigrations(
   // Process each migration group in sorted order
   for (const baseName of getSortedBaseNames(groups)) {
     const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants);
+    const selectedFile = selectVariant(group.variants, dialect);
 
     if (!selectedFile) {
       continue;

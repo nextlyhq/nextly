@@ -121,9 +121,9 @@ export function selectVariant(
     if (dialectVariant) {
       return dialectVariant.file;
     }
-    // Fall back to base file (if exists)
+    // Fall back to base file (if exists), otherwise first available
     const baseVariant = variants.find(v => v.dialect === undefined);
-    return baseVariant?.file;
+    return baseVariant?.file || variants[0]?.file;
   }
 
   // No dialect specified, prefer base file

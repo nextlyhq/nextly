@@ -802,7 +802,7 @@ async function checkMigrationStatus(
 
     // Discover migration files
     const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-    const migrationFiles = await discoverMigrations(migrationsDir);
+    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
 
     // Get applied migrations from database
     const appliedMigrations = await getAppliedMigrations(
@@ -839,7 +839,8 @@ async function checkMigrationStatus(
  * Discover migration files from the migrations directory
  */
 async function discoverMigrations(
-  migrationsDir: string
+  migrationsDir: string,
+  dialect?: SupportedDialect
 ): Promise<ParsedMigration[]> {
   // Use shared migration discovery to group dialect variants
   const groups = await discoverMigrationGroups(migrationsDir);
@@ -848,7 +849,7 @@ async function discoverMigrations(
   // Process each migration group in sorted order
   for (const baseName of getSortedBaseNames(groups)) {
     const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants);
+    const selectedFile = selectVariant(group.variants, dialect);
 
     if (!selectedFile) {
       continue;
