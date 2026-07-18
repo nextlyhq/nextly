@@ -176,6 +176,19 @@ export async function checkSingleAccess(params: {
   // caller holding the coarse `update-<single>` permission but failing a
   // stored rule is still denied.
   if (accessControlService && accessRules) {
+    // Owner-only with no loaded document: ownership cannot be evaluated (there
+    // is nothing to compare against), and evaluateOwnerAccess would otherwise
+    // ALLOW the write for lack of a document — letting a caller with only the
+    // coarse permission perform the first PATCH to an owner-only Single without
+    // any ownership check. Fail closed; a legitimate first write goes through a
+    // trusted `overrideAccess` seed.
+    if (accessRules[operation]?.type === "owner-only" && !document) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: ${operation} on single "${slug}" requires an existing owned document`,
+      };
+    }
     // A stored `custom` rule may key on the document id, so forward it (from
     // the loaded document) alongside the document itself.
     const documentId =

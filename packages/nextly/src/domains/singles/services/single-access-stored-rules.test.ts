@@ -38,6 +38,29 @@ const editor = { id: "user-1", roles: ["editor"] };
 const superAdmin = { id: "user-1", roles: ["super-admin"] };
 
 describe("checkSingleAccess — stored rule enforcement", () => {
+  it("fails closed for an owner-only update when no document exists yet", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    // Not consulted — the guard denies before evaluateAccess runs.
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "update",
+      user: editor,
+      routeAuthorized: true,
+      rbacAccessControlService: rbacAccessControlService as never,
+      accessControlService: accessControlService as never,
+      accessRules: { update: { type: "owner-only" } },
+      document: undefined,
+      logger: silentLogger,
+    });
+
+    // Without a document there is no ownership to compare, so the first PATCH
+    // must not slip through with only the coarse permission.
+    expect(result?.statusCode).toBe(403);
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
   it("denies a route-authorized update when the stored rule fails, without RBAC", async () => {
     const { accessControlService, rbacAccessControlService } = makeDeps();
     accessControlService.evaluateAccess.mockResolvedValue({

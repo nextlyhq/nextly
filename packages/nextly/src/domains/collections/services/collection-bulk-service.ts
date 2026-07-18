@@ -191,12 +191,16 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
     try {
-      // 1. Fetch the source entry (with read permission check)
+      // 1. Fetch the source entry (with read permission check). status "all"
+      // so a draft source stays visible to an authorized duplicator — matching
+      // the regular authenticated getEntry, which defaults to "all"; without it
+      // duplicating a draft would 404 before the create runs.
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
         user: params.user,
         overrideAccess: params.overrideAccess,
+        status: "all",
         context: params.context,
       });
 
@@ -501,17 +505,18 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Find matching entries using listEntries (respects access control).
-    // Use a high limit to get all matching entries for bulk update.
+    // 2. Enumerate the target rows. The collection-level UPDATE access was
+    // already checked above, so this enumeration runs with overrideAccess so it
+    // is NOT scoped by the READ rules: a role allowed to update but not read (or
+    // read is owner-only while update is broader) must still see its update
+    // targets. `status: "all"` likewise keeps draft rows enumerable on a
+    // Draft/Published collection. Each row is still gated by the per-row UPDATE
+    // access check in bulkUpdateEntries below.
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
       where: params.where,
-      user: params.user,
-      overrideAccess: params.overrideAccess,
-      // Route auth authorized the update; enumerating the targets must not be
-      // rejected by a redundant read RBAC gate (owner-only read scoping still
-      // applies). Restores the pre-enforcement behavior for update-only keys.
-      routeAuthorized: params.routeAuthorized,
+      overrideAccess: true,
+      status: "all",
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit, // Use limit or max allowed
@@ -665,16 +670,17 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Find matching entries using listEntries (respects access control)
+    // 2. Enumerate the target rows. The collection-level DELETE access was
+    // already checked above, so this enumeration runs with overrideAccess so it
+    // is NOT scoped by the READ rules (a role allowed to delete but not read,
+    // or read owner-only while delete is broader), and `status: "all"` keeps
+    // draft rows enumerable. Each row is still gated by the per-row DELETE
+    // access check in bulkDeleteEntries below.
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
       where: params.where,
-      user: params.user,
-      overrideAccess: params.overrideAccess,
-      // Route auth authorized the delete; enumerating the targets must not be
-      // rejected by a redundant read RBAC gate (owner-only read scoping still
-      // applies). Restores the pre-enforcement behavior for delete-only keys.
-      routeAuthorized: params.routeAuthorized,
+      overrideAccess: true,
+      status: "all",
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit,
