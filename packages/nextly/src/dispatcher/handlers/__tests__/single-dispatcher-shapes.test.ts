@@ -396,12 +396,16 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
 
     // Field-level access.read redaction on the response must see the caller's
     // roles, so role-allowed fields are not stripped for an authorized editor.
+    // The dispatcher runs the update as the real user with overrideAccess:false
+    // (stored single access + field-level write access stay enforced);
+    // routeAuthorized only elides the redundant RBAC re-check the middleware
+    // already performed.
     expect(updateSpy).toHaveBeenCalledWith(
       "site",
       { title: "Updated" },
       expect.objectContaining({
         user: expect.objectContaining({ id: "u1", roles: ["editor"] }),
-        overrideAccess: true,
+        overrideAccess: false,
         routeAuthorized: true,
       })
     );

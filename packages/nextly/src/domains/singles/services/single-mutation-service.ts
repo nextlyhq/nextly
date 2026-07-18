@@ -26,6 +26,7 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -72,15 +73,21 @@ import {
 export class SingleMutationService extends BaseService {
   private readonly queryService: SingleQueryService;
 
+  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
+  private readonly accessControlService: AccessControlService;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
     this.queryService = new SingleQueryService(
       adapter,
       logger,
@@ -119,25 +126,31 @@ export class SingleMutationService extends BaseService {
         };
       }
 
-      // 1.5. RBAC access check (after metadata, before hooks/DB operations)
+      // 1.5. Load the current document first (no auto-create yet) so an
+      // owner-only stored rule can compare ownership, then run the access
+      // check (stored rules + RBAC) before any hooks/DB writes.
+      let existingDoc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "update",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        accessControlService: this.accessControlService,
+        accessRules: singleMeta.accessRules,
+        document: existingDoc ?? undefined,
         logger: this.logger,
       });
       if (accessDenied) {
         return accessDenied;
       }
 
-      // 2. Ensure document exists (auto-create if needed)
-      let existingDoc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
-
+      // 2. Ensure document exists (auto-create if it did not yet exist).
       if (!existingDoc) {
         this.logger.info("Auto-creating Single document before update", {
           slug,

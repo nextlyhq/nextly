@@ -65,3 +65,5 @@ export {
   ACCESS_OPERATIONS,
   DEFAULT_OWNER_FIELD,
 } from "./types";
+
+export { SUPER_ADMIN_SLUG, isSuperAdminContext } from "./super-admin";

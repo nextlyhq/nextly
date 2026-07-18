@@ -528,7 +528,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -1093,7 +1094,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         existingEntry,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -1692,6 +1694,9 @@ export class CollectionMutationService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** When true, the route middleware already ran the RBAC gate; stored rules
+     * are still enforced. See CollectionAccessService.checkCollectionAccess. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1726,7 +1731,8 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         entry,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -3152,7 +3158,10 @@ export class CollectionMutationService extends BaseService {
       const ownerConstraint = await this.accessService.getOwnerConstraint(
         params.collectionName,
         "update",
-        params.user
+        params.user,
+        // A trusted override must not have an owner predicate forced onto its
+        // fetch, or it would 404 rows it is entitled to update.
+        params.overrideAccess
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -3185,7 +3194,16 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
-      if (accessRules?.update?.type === "owner-only" && params.user) {
+      if (
+        accessRules?.update?.type === "owner-only" &&
+        params.user &&
+        // A trusted override (overrideAccess) and super-admins both bypass
+        // stored rules on every transport, including the batch transaction
+        // path — mirror the SQL owner-predicate bypass so this safety net does
+        // not re-impose owner-only on them.
+        !params.overrideAccess &&
+        !this.accessService.isSuperAdmin(params.user)
+      ) {
         const ownerField = accessRules.update.ownerField ?? "createdBy";
         const ownerId = existingEntry[ownerField];
         if (ownerId !== params.user.id) {
@@ -3517,7 +3535,11 @@ export class CollectionMutationService extends BaseService {
    */
   async deleteSingleEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     entryId: string,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
@@ -3539,7 +3561,10 @@ export class CollectionMutationService extends BaseService {
       const ownerConstraint = await this.accessService.getOwnerConstraint(
         params.collectionName,
         "delete",
-        params.user
+        params.user,
+        // A trusted override must not have an owner predicate forced onto its
+        // fetch, or it would 404 rows it is entitled to delete.
+        params.overrideAccess
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -3572,7 +3597,16 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
-      if (accessRules?.delete?.type === "owner-only" && params.user) {
+      if (
+        accessRules?.delete?.type === "owner-only" &&
+        params.user &&
+        // A trusted override (overrideAccess) and super-admins both bypass
+        // stored rules on every transport, including the batch transaction
+        // path — mirror the SQL owner-predicate bypass so this safety net does
+        // not re-impose owner-only on them.
+        !params.overrideAccess &&
+        !this.accessService.isSuperAdmin(params.user)
+      ) {
         const ownerField = accessRules.delete.ownerField ?? "createdBy";
         const ownerId = entry[ownerField];
         if (ownerId !== params.user.id) {
