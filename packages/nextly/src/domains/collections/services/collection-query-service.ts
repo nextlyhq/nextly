@@ -69,6 +69,7 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -663,6 +664,12 @@ export class CollectionQueryService extends BaseService {
         for (const entry of expandedEntries) {
           stripPasswordFieldValues(entry, fields);
         }
+      }
+      // Always strip the system owner column so a list readable by non-creators
+      // never leaks the creator's user id (unconditional — not gated on
+      // password fields).
+      for (const entry of expandedEntries) {
+        stripSystemOwnerField(entry);
       }
 
       // Execute afterRead hooks (code-registered)
@@ -1259,6 +1266,8 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(expandedEntry, fields);
       }
+      // Always strip the system owner column (see listEntries).
+      stripSystemOwnerField(expandedEntry);
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -1310,6 +1319,8 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(finalData, fields);
       }
+      // Same defense in depth for the owner column.
+      stripSystemOwnerField(finalData);
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {

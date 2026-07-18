@@ -21,6 +21,7 @@ import type {
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
+import { DEFAULT_OWNER_FIELD } from "../../../services/access";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -271,7 +272,7 @@ export class CollectionAccessService extends BaseService {
       const rule = accessRules?.[operation];
       if (!rule || rule.type !== "owner-only") return null;
 
-      const field = rule.ownerField ?? "createdBy";
+      const field = rule.ownerField ?? DEFAULT_OWNER_FIELD;
       return { field, value: user.id };
     } catch {
       return null;

@@ -307,6 +307,9 @@ export const ACCESS_OPERATIONS: readonly AccessOperation[] = [
 /**
  * Default owner field name for owner-only access rules.
  *
- * Used when `ownerField` is not specified in an `owner-only` rule.
+ * Used when `ownerField` is not specified in an `owner-only` rule. This is the
+ * physical column name of the auto-stamped system owner column (snake_case,
+ * matching the runtime Drizzle schema and raw rows), so zero-config owner-only
+ * rules query and compare against the column the create path actually stamps.
  */
-export const DEFAULT_OWNER_FIELD = "createdBy";
+export const DEFAULT_OWNER_FIELD = "created_by";

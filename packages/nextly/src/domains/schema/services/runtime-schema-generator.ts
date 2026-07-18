@@ -223,9 +223,10 @@ function buildSystemDrizzleColumn(
     if (sys.name === "status") {
       return mysqlVarchar("status", { length: 20 }).notNull().default("draft");
     }
-    // Row owner — nullable varchar(36) (matches the id column type).
+    // Row owner — nullable varchar(191) sized to the MySQL users.id column
+    // (holds a user id, not the row id).
     if (sys.name === "created_by") {
-      return mysqlVarchar("created_by", { length: 36 });
+      return mysqlVarchar("created_by", { length: 191 });
     }
     return mysqlVarchar(sys.name, { length: 255 }).notNull();
   }

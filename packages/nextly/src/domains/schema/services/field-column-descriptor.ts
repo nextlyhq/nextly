@@ -468,13 +468,14 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
-    // Owner of the row (creating user's id). Nullable; mirrors
-    // runtime-schema-generator's mysqlVarchar("created_by", { length: 36 })
-    // (matching the id column type).
+    // Owner of the row (creating user's id, NOT the row id). Sized to match
+    // the MySQL users.id column (varchar(191), Auth.js-compatible), not the
+    // varchar(36) row id — a longer user id would otherwise be truncated.
+    // Nullable; mirrors runtime-schema-generator's created_by column.
     cols.push({
       name: "created_by",
-      dialectType: "varchar(36)",
-      length: 36,
+      dialectType: "varchar(191)",
+      length: 191,
       nullable: true,
       primaryKey: false,
     });

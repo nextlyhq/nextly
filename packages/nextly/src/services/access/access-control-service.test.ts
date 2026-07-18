@@ -54,3 +54,41 @@ describe("AccessControlService role-based access (OR-membership)", () => {
     expect(result.reason).toBe("Authentication required");
   });
 });
+
+describe("AccessControlService owner-only default field", () => {
+  const service = new AccessControlService();
+
+  // No ownerField configured → must default to the auto-stamped system owner
+  // column name (snake_case), so the generated read filter and update/delete
+  // comparisons target the column the create path actually writes.
+  const ownerOnly: CollectionAccessRules = { read: { type: "owner-only" } };
+
+  it("filters reads on the created_by column", async () => {
+    const result = await service.evaluateAccess(ownerOnly, "read", {
+      user: { id: "u1" },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.query).toEqual({ created_by: { equals: "u1" } });
+  });
+
+  it("compares ownership against created_by on update", async () => {
+    const rules: CollectionAccessRules = { update: { type: "owner-only" } };
+    const mine = await service.evaluateAccess(
+      rules,
+      "update",
+      { user: { id: "u1" } },
+      "doc-1",
+      { id: "doc-1", created_by: "u1" }
+    );
+    expect(mine.allowed).toBe(true);
+
+    const notMine = await service.evaluateAccess(
+      rules,
+      "update",
+      { user: { id: "u1" } },
+      "doc-1",
+      { id: "doc-1", created_by: "someone-else" }
+    );
+    expect(notMine.allowed).toBe(false);
+  });
+});

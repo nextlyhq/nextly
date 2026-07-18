@@ -289,9 +289,7 @@ export class DynamicCollectionSchemaService {
       allColumnDefs.push(c);
     }
 
-    // timestamp columns + owner column. `created_by` is nullable with no
-    // default (matches getSystemColumnDescriptors) so existing rows and system
-    // creates stay null; the type mirrors the id column per dialect.
+    // timestamp columns
     if (this.dialect === "sqlite") {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
@@ -299,7 +297,6 @@ export class DynamicCollectionSchemaService {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
       );
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_by")} text`);
     } else if (this.dialect === "mysql") {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
@@ -307,7 +304,6 @@ export class DynamicCollectionSchemaService {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
       );
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_by")} varchar(36)`);
     } else {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`
@@ -315,7 +311,18 @@ export class DynamicCollectionSchemaService {
       allColumnDefs.push(
         `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`
       );
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_by")} text`);
+    }
+
+    // Owner column — COLLECTIONS ONLY. A single is one global row, so
+    // owner-only ownership is meaningless; singles never stamp or query it.
+    // Nullable with no default (matches getSystemColumnDescriptors) so existing
+    // rows and system creates stay null; sized to the users.id column on MySQL
+    // since it holds a user id, not the row id.
+    if (!_options?.isSingle) {
+      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
+      );
     }
 
     let sql = `-- Create dynamic collection: ${tableName}

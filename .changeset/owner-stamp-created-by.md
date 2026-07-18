@@ -25,4 +25,12 @@ Every collection entry table now carries a nullable `created_by` system column (
 
 Because the column is nullable with no default, existing tables pick it up as a plain additive `ADD COLUMN` on the next schema apply — no backfill and no interactive prompt.
 
+The owner column is wired end to end:
+
+- `owner-only` rules with no `ownerField` now default to the `created_by` column (snake_case), so zero-config owner-only reads/updates/deletes actually match the stamped rows.
+- On MySQL the column is `varchar(191)` (sized to the Auth.js-compatible `users.id`), since it stores a user id, not the row id.
+- Updates cannot rewrite it: `created_by` (and `id` / `created_at`) are stripped from update payloads, so an authorized updater can't transfer a row to another user.
+- It is stripped from list, get, and mutation responses so a collection readable by non-creators does not leak the creator's user id.
+- Reserved as a field name in the collection and ui-schema validators; scoped to collections only (singles/components don't get the column).
+
 This also repairs a latent bug in the bulk create transaction path, which passed camelCase `createdAt` / `updatedAt` keys the database driver rejected; the batch create paths now use the real snake_case column names.

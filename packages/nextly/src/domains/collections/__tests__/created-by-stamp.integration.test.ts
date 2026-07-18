@@ -92,4 +92,45 @@ describe("created_by owner stamping (integration)", () => {
     expect(byTitle.get("bulk-a")).toBe("owner-2");
     expect(byTitle.get("bulk-b")).toBe("owner-2");
   });
+
+  it("does not let an update rewrite created_by, and hides it from responses", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "ownerdocs",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "ownerdocs", userId: "owner-1", overrideAccess: true },
+      { title: "mine" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // The response must not leak the owner id (created_by / createdBy).
+    expect(created.data).not.toHaveProperty("created_by");
+    expect(created.data).not.toHaveProperty("createdBy");
+
+    // An updater trying to transfer ownership by sending created_by must fail:
+    // the immutable field is stripped before the SQL SET.
+    const updated = await handler.updateEntry(
+      { collectionName: "ownerdocs", entryId: id, overrideAccess: true },
+      { title: "edited", created_by: "attacker", createdBy: "attacker" }
+    );
+    expect(updated.data).not.toHaveProperty("created_by");
+
+    // Raw row: title changed, owner unchanged.
+    const rows = await current.adapter.select<{
+      id: string;
+      title: string;
+      created_by: string | null;
+    }>(TABLE);
+    const row = rows.find(r => r.id === id);
+    expect(row?.title).toBe("edited");
+    expect(row?.created_by).toBe("owner-1");
+  });
 });

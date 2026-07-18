@@ -51,6 +51,7 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -150,6 +151,32 @@ function errorToServiceResult<T = unknown>(
   };
 }
 
+/**
+ * System columns a client must never write on update: the primary key, the
+ * creation timestamp, and the owner stamp (both snake_case and camelCase forms
+ * a client might send). They are not declared fields, so field validation
+ * passes them through — without this an authorized updater could transfer a
+ * row to another user by sending `created_by`, defeating owner-only semantics,
+ * or forge `created_at` / reassign `id`.
+ */
+const IMMUTABLE_UPDATE_FIELDS = new Set([
+  "id",
+  "created_at",
+  "createdAt",
+  "created_by",
+  "createdBy",
+]);
+
+function stripImmutableUpdateFields(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (!IMMUTABLE_UPDATE_FIELDS.has(key)) out[key] = value;
+  }
+  return out;
+}
+
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -236,6 +263,10 @@ export class CollectionMutationService extends BaseService {
       }
     }
     stripPasswordFieldValues(entry, fields);
+    // Strip the system owner column so a mutation response (e.g. an admin or
+    // role-based updater) does not echo the row creator's user id. Owner-only
+    // access reads it from SQL, never from the returned row.
+    stripSystemOwnerField(entry);
     await applyFieldReadAccess({
       kind: "collection",
       slug,
@@ -1465,7 +1496,10 @@ export class CollectionMutationService extends BaseService {
       // tx.execute() is used for the UPDATE so it runs on the same DB client
       // as the transaction (unlike tx.update() which delegates to the pool).
       await this.adapter.transaction(async tx => {
-        const updatePayload = { ...finalData, updatedAt: new Date() };
+        const updatePayload = {
+          ...stripImmutableUpdateFields(finalData),
+          updatedAt: new Date(),
+        };
 
         // Dialect-aware identifier quoting and placeholder syntax.
         // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
@@ -2478,7 +2512,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...finalData,
+          ...stripImmutableUpdateFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", params.entryId),
@@ -3207,7 +3241,9 @@ export class CollectionMutationService extends BaseService {
       );
 
       if (accessRules?.update?.type === "owner-only" && params.user) {
-        const ownerField = accessRules.update.ownerField ?? "createdBy";
+        // Default to the auto-stamped system owner column (snake_case, matching
+        // the runtime schema and raw rows) so zero-config owner-only works.
+        const ownerField = accessRules.update.ownerField ?? "created_by";
         const ownerId = existingEntry[ownerField];
         if (ownerId !== params.user.id) {
           return {
@@ -3409,7 +3445,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...finalData,
+          ...stripImmutableUpdateFields(finalData),
           updatedAt: new Date(),
         },
         this.whereEq("id", entryId),
@@ -3594,7 +3630,9 @@ export class CollectionMutationService extends BaseService {
       );
 
       if (accessRules?.delete?.type === "owner-only" && params.user) {
-        const ownerField = accessRules.delete.ownerField ?? "createdBy";
+        // Default to the auto-stamped system owner column (snake_case, matching
+        // the runtime schema and raw rows) so zero-config owner-only works.
+        const ownerField = accessRules.delete.ownerField ?? "created_by";
         const ownerId = entry[ownerField];
         if (ownerId !== params.user.id) {
           return {

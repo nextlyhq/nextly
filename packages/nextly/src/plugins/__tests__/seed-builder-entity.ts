@@ -39,14 +39,11 @@ const silentLogger: Logger = {
 };
 
 /** Reserved fields the schema service auto-adds; never user/plugin-owned. */
-const RESERVED = new Set([
-  "id",
-  "title",
-  "slug",
-  "created_at",
-  "updated_at",
-  "created_by",
-]);
+const RESERVED = new Set(["id", "title", "slug", "created_at", "updated_at"]);
+
+// Collections also auto-add a `created_by` owner column; singles and components
+// do not, so a `created_by` user field is only reserved for collections.
+const RESERVED_COLLECTION = new Set([...RESERVED, "created_by"]);
 
 export interface SeedBuilderCollectionOptions {
   slug: string;
@@ -70,10 +67,10 @@ export async function seedBuilderCollection(
   const tableName = `dc_${slug}`;
 
   // Only non-reserved fields are user-defined; the schema service auto-adds
-  // id/title/slug/timestamps (and status when hasStatus).
+  // id/title/slug/timestamps/created_by (and status when hasStatus).
   const userFields = opts.fields
     .map(f => ({ ...f, name: f.name.toLowerCase() }))
-    .filter(f => !RESERVED.has(f.name))
+    .filter(f => !RESERVED_COLLECTION.has(f.name))
     // Tag as a user field so the reconciler can tell user vs plugin provenance.
     .map(f => ({ source: "ui", ...f })) as unknown as FieldDefinition[];
 
