@@ -38,6 +38,15 @@ describe("sensitiveFieldNames", () => {
     expect(names.sort()).toEqual(["apiKey", "token"]);
   });
 
+  it("treats an admin-scoped hidden flag as sensitive", () => {
+    // Real collection fields carry hidden under admin.hidden, not top-level.
+    const names = sensitiveFieldNames([
+      { name: "editorMode", type: "text", admin: { hidden: true } },
+      { name: "title", type: "text", admin: { hidden: false } },
+    ]);
+    expect(names).toEqual(["editorMode"]);
+  });
+
   it("deduplicates repeated field names", () => {
     const names = sensitiveFieldNames([
       { name: "secret", type: "password" },

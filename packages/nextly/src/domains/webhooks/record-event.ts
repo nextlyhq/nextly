@@ -18,6 +18,9 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { matchesFilter } from "./filter";
 import type { WebhookEndpoint, WebhookEvent } from "./types";
 
+/** Delivery rows inserted per statement; keeps bind-parameter count safe. */
+const DELIVERY_INSERT_CHUNK = 100;
+
 /**
  * The enabled endpoints that should receive `envelope`: subscribed to its type
  * and accepted by their filter. Pure, so fan-out selection is unit-testable
@@ -50,8 +53,12 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
     resource_collection:
       "collection" in envelope.resource ? envelope.resource.collection : null,
     resource_id: envelope.resource.id ?? null,
-    // The full envelope is the durable payload; the JSON column serializes it.
-    payload: envelope,
+    // Serialize the payload here rather than passing the object through: the
+    // transactional insert is a raw INSERT, and only some dialect drivers
+    // stringify an object bound to a JSON column (SQLite does; mysql2 would
+    // mis-format it). A JSON string is accepted by jsonb/json/text alike and
+    // round-trips through the column's json codec on read.
+    payload: JSON.stringify(envelope),
     actor_type: envelope.actor?.type ?? null,
     actor_id: envelope.actor?.id ?? null,
     created_at: now,
@@ -98,10 +105,17 @@ export async function recordEvent(
   const targets = selectDeliveryTargets(endpoints, envelope);
   if (targets.length === 0) return { deliveries: 0 };
 
-  await tx.insertMany(
-    "nextly_webhook_deliveries",
-    targets.map(e => deliveryRow(e, envelope.id, now))
-  );
+  // Chunk the fan-out: a delivery row binds 8 parameters, and SQLite caps a
+  // statement at 999 bind parameters, so a site with many matching endpoints
+  // would otherwise overflow one multi-row INSERT and roll back the content
+  // write. 100 rows/statement stays well under every dialect's limit.
+  const rows = targets.map(e => deliveryRow(e, envelope.id, now));
+  for (let i = 0; i < rows.length; i += DELIVERY_INSERT_CHUNK) {
+    await tx.insertMany(
+      "nextly_webhook_deliveries",
+      rows.slice(i, i + DELIVERY_INSERT_CHUNK)
+    );
+  }
 
   return { deliveries: targets.length };
 }

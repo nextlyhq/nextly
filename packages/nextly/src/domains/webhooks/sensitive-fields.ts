@@ -14,7 +14,10 @@
 export interface SensitiveFieldSource {
   name: string;
   type?: string;
+  /** Top-level hidden flag. */
   hidden?: boolean;
+  /** Admin-scoped options; real collection fields put `hidden` here. */
+  admin?: { hidden?: boolean };
   /** Sub-fields of a group/repeater/blocks field, if any. */
   fields?: SensitiveFieldSource[];
 }
@@ -29,7 +32,11 @@ export function sensitiveFieldNames(
   const names = new Set<string>();
   const walk = (list: readonly SensitiveFieldSource[]): void => {
     for (const field of list) {
-      if (field.type === "password" || field.hidden === true) {
+      if (
+        field.type === "password" ||
+        field.hidden === true ||
+        field.admin?.hidden === true
+      ) {
         names.add(field.name);
       }
       if (Array.isArray(field.fields)) walk(field.fields);

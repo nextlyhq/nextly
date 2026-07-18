@@ -49,18 +49,39 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
 
 export class WebhookEndpointRegistry {
   private cache: readonly WebhookEndpoint[] | null = null;
+  // A single in-flight load shared by concurrent callers (no stampede), plus a
+  // generation counter so a load that resolves after an `invalidate()` cannot
+  // repopulate the cache with data that is already stale.
+  private inFlight: Promise<readonly WebhookEndpoint[]> | null = null;
+  private generation = 0;
 
   constructor(private readonly reader: WebhookEndpointReader) {}
 
   /** Enabled endpoints, loaded once and cached until `invalidate()`. */
   async getEnabledEndpoints(): Promise<readonly WebhookEndpoint[]> {
-    if (this.cache === null) this.cache = await this.load();
-    return this.cache;
+    if (this.cache !== null) return this.cache;
+    if (this.inFlight !== null) return this.inFlight;
+
+    const gen = this.generation;
+    this.inFlight = this.load().then(
+      rows => {
+        // Commit to the cache only if no invalidation happened while loading.
+        if (gen === this.generation) this.cache = rows;
+        this.inFlight = null;
+        return rows;
+      },
+      err => {
+        this.inFlight = null;
+        throw err;
+      }
+    );
+    return this.inFlight;
   }
 
   /** Drop the cache so the next read reloads from the database. */
   invalidate(): void {
     this.cache = null;
+    this.generation++;
   }
 
   private async load(): Promise<WebhookEndpoint[]> {

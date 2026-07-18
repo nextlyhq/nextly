@@ -218,6 +218,21 @@ describe("webhook outbox capture (real SQLite)", () => {
     expect(await countRows("nextly_webhook_deliveries")).toBe(0);
   });
 
+  it("fans out to many endpoints without overflowing the insert", async () => {
+    // More than one chunk (and past SQLite's 999-parameter single-statement
+    // limit at 8 params/row) must not fail the content transaction.
+    const count = 130;
+    for (let i = 0; i < count; i++) await insertWebhook({ id: `wh_${i}` });
+    const endpoints = await registry.getEnabledEndpoints();
+    expect(endpoints).toHaveLength(count);
+
+    const result = await adapter.transaction(async tx =>
+      recordEvent(tx, { envelope: makeEnvelope(), endpoints })
+    );
+    expect(result.deliveries).toBe(count);
+    expect(await countRows("nextly_webhook_deliveries")).toBe(count);
+  });
+
   it("caches enabled endpoints until invalidated", async () => {
     await insertWebhook();
     expect(await registry.getEnabledEndpoints()).toHaveLength(1);
