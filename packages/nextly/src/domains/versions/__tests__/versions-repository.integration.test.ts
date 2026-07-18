@@ -82,4 +82,29 @@ describe("VersionsRepository (integration)", () => {
       await handle.destroy();
     }
   });
+
+  it("rejects an autosave that carries a version number", async () => {
+    const handle = await createTestNextly();
+    try {
+      const repo = new VersionsRepository(handle.adapter);
+      // Autosave rows must have a null version_no (the durable-sequence unique
+      // index treats a non-null version_no as a durable row).
+      await expect(
+        repo.insertVersion({
+          ref: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "entry-bad-autosave",
+          },
+          versionNo: 3,
+          status: "draft",
+          isAutosave: true,
+          snapshot: {},
+          createdBy: "user-1",
+        })
+      ).rejects.toThrow();
+    } finally {
+      await handle.destroy();
+    }
+  });
 });

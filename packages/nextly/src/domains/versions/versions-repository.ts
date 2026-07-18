@@ -109,12 +109,18 @@ export class VersionsRepository {
     // defaults, so id and timestamps are set explicitly here (mirrors how the
     // collection mutation service seeds dc_ rows).
     const now = new Date();
-    // A durable (non-autosave) version must carry a sequence number; only
-    // autosave rows are allowed a null version_no. Reject the invalid
-    // combination the input type cannot express, before it reaches the DB.
+    // Enforce the row-shape invariant the input type cannot express: a durable
+    // version carries a sequence number, an autosave never does. Either
+    // violation would confuse the durable-sequence unique index (which treats a
+    // non-null version_no as durable) and the reads that exclude autosaves.
     if (!input.isAutosave && input.versionNo == null) {
       throw NextlyError.internal({
         logContext: { reason: "durable-version-missing-version-no" },
+      });
+    }
+    if (input.isAutosave && input.versionNo != null) {
+      throw NextlyError.internal({
+        logContext: { reason: "autosave-version-has-version-no" },
       });
     }
     // `snapshot` is `unknown`; serialize defensively. JSON.stringify returns
@@ -161,10 +167,11 @@ export class VersionsRepository {
         createdAt: now,
         updatedAt: now,
       },
-      // The insert result is discarded, so request a minimal RETURNING instead of
-      // the adapter default (RETURNING *), which would transfer the full snapshot
-      // back on every capture.
-      { returning: ["id"] }
+      // The insert result is discarded, so request NO columns back (empty
+      // returning). This skips RETURNING on the transaction path and the
+      // select-back reread on MySQL, so a large snapshot is never transferred
+      // or re-read on a capture.
+      { returning: [] }
     );
   }
 
