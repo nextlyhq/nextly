@@ -49,7 +49,7 @@ describe("slug auto-generation on create", () => {
     expect((second.item as { slug?: string }).slug).toBe("hello-world-2");
   });
 
-  it("does not dedupe an explicit slug on collision", async () => {
+  it("keeps an explicit slug verbatim instead of auto-incrementing it", async () => {
     const posts = defineCollection({
       slug: "posts",
       fields: [text({ name: "title" })],
@@ -65,11 +65,15 @@ describe("slug auto-generation on create", () => {
       data: { title: "Second", slug: "shared" },
     });
 
-    // An explicit slug is respected verbatim — never auto-incremented to
-    // "shared-2". Uniqueness is the column constraint's job, not a silent
-    // rename, so the caller's canonical URL is preserved (or a conflict
-    // surfaces on databases that enforce the constraint).
+    // Isolates the app-level slug decision: a generated slug would dedupe to
+    // "shared-2", but an explicit slug bypasses that path and is kept verbatim.
+    // Enforcing uniqueness on a duplicate is the DB unique index's job (the
+    // production backstop), which surfaces the conflict there rather than
+    // silently renaming the caller's canonical URL. This in-memory harness does
+    // not enforce that index, so the assertion here checks only the no-dedupe
+    // guarantee — never that a duplicate is accepted.
     expect((second.item as { slug?: string }).slug).toBe("shared");
+    expect((second.item as { slug?: string }).slug).not.toBe("shared-2");
   });
 
   it("keeps and sanitizes an explicitly provided slug", async () => {
