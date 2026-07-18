@@ -222,6 +222,47 @@ describe("safeFetch", () => {
     expect(await response.text()).toBe("compressed payload");
   });
 
+  it("strips a caller-supplied Host header (no vhost override)", async () => {
+    // A forwarded Host could route to an internal vhost behind the validated
+    // public IP; it must be derived from the URL, not the caller's headers.
+    let receivedHost: string | undefined;
+    const h = await startServer((req, res) => {
+      receivedHost = req.headers.host;
+      res.writeHead(200);
+      res.end("ok");
+    });
+    const port = new URL(h.base).port;
+    await safeFetch(`${h.base}/`, {
+      ...local,
+      headers: { Host: "evil.internal", "x-keep": "1" },
+    });
+    expect(receivedHost).toBe(`127.0.0.1:${port}`);
+  });
+
+  it("frames fixed-length bodies with content-length, never chunked", async () => {
+    let contentLength: string | undefined;
+    let transferEncoding: string | undefined;
+    const h = await startServer((req, res) => {
+      contentLength = req.headers["content-length"];
+      transferEncoding = req.headers["transfer-encoding"];
+      req.on("data", () => {});
+      req.on("end", () => {
+        res.writeHead(200);
+        res.end("ok");
+      });
+    });
+    // A wrongly-cased, wrong-value caller Content-Length must be overridden
+    // with the real byte length, and no chunked encoding may be sent.
+    await safeFetch(`${h.base}/`, {
+      ...local,
+      method: "POST",
+      headers: { "Content-Length": "999" },
+      body: "hello",
+    });
+    expect(contentLength).toBe("5");
+    expect(transferEncoding).toBeUndefined();
+  });
+
   it("does not follow redirects (returns the 3xx as-is)", async () => {
     const h = await startServer((req, res) => {
       if (req.url === "/redirect") {

@@ -431,10 +431,12 @@ async function pinnedFetch(
   const lookup = createPinnedLookup(pinnedIp, family);
 
   const outHeaders = toOutgoingHeaders(init.headers);
-  // Send fixed-size bodies with an explicit content-length rather than the
-  // chunked transfer-encoding Node falls back to, which some webhook receivers
-  // (and strict HTTP/1.0 servers) reject.
-  if (init.body != null && !("content-length" in outHeaders)) {
+  // Frame a fixed-size body with the exact content-length (overriding any
+  // caller-supplied one, which could be wrong or wrongly cased) and drop any
+  // transfer-encoding, so Node never falls back to chunked encoding, which some
+  // webhook receivers and strict HTTP/1.0 servers reject with 411.
+  if (init.body != null) {
+    delete outHeaders["transfer-encoding"];
     outHeaders["content-length"] = String(
       typeof init.body === "string"
         ? Buffer.byteLength(init.body)
@@ -518,7 +520,14 @@ async function pinnedFetch(
   });
 }
 
-/** Normalize a `HeadersInit` into Node's outgoing-header shape. */
+/**
+ * Normalize a `HeadersInit` into Node's outgoing-header shape. Header names are
+ * lowercased (they are case-insensitive) so later framing checks
+ * (`content-length`) and the Host strip are reliable regardless of caller
+ * casing. A caller-supplied `Host` is dropped: it is derived from the validated
+ * URL, and honoring an override would let Host-based routing reach an internal
+ * vhost behind a validated public IP, defeating the SSRF pin.
+ */
 function toOutgoingHeaders(
   headers?: HeadersInit
 ): Record<string, string | string[]> {
@@ -527,7 +536,9 @@ function toOutgoingHeaders(
   // Repeated keys must accumulate rather than clobber: only the entries-array
   // form can carry duplicates (a plain object can't, and `Headers` already
   // merges same-name values on iteration).
-  const add = (key: string, value: string): void => {
+  const add = (rawKey: string, value: string): void => {
+    const key = rawKey.toLowerCase();
+    if (key === "host") return;
     const existing = out[key];
     out[key] =
       existing === undefined ? value : ([] as string[]).concat(existing, value);
