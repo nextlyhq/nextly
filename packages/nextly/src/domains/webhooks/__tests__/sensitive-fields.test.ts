@@ -38,6 +38,20 @@ describe("sensitiveFieldNames", () => {
     expect(names.sort()).toEqual(["apiKey", "token"]);
   });
 
+  it("walks per-block fields of a blocks field", () => {
+    const names = sensitiveFieldNames([
+      {
+        name: "content",
+        type: "blocks",
+        blocks: [
+          { fields: [{ name: "heading", type: "text" }] },
+          { fields: [{ name: "apiKey", type: "password" }] },
+        ],
+      },
+    ]);
+    expect(names).toEqual(["apiKey"]);
+  });
+
   it("treats an admin-scoped hidden flag as sensitive", () => {
     // Real collection fields carry hidden under admin.hidden, not top-level.
     const names = sensitiveFieldNames([

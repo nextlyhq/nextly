@@ -3,9 +3,15 @@
  *
  * Turns a collection's field configuration into the flat list of field names
  * `buildEnvelope` strips from webhook payloads. A field is sensitive when it is
- * a password field (secret by construction) or explicitly hidden. Nested
- * fields (groups, repeaters, blocks) are walked, and their names are collected
- * too, because `buildEnvelope` strips by name at any depth.
+ * a password field (secret by construction) or explicitly hidden (top-level
+ * `hidden` or `admin.hidden`). Structurally-inline nested fields are walked —
+ * group/repeater `fields` and blocks' per-block `fields` — since `buildEnvelope`
+ * strips by name at any depth.
+ *
+ * Reference-based fields (a `component` field points at a component definition
+ * elsewhere) are NOT resolved here: that needs the component registry, which a
+ * pure policy has no access to. The capture wiring must expand those references
+ * into the field tree it passes in, so component secrets are covered too.
  *
  * @module domains/webhooks/sensitive-fields
  */
@@ -18,8 +24,10 @@ export interface SensitiveFieldSource {
   hidden?: boolean;
   /** Admin-scoped options; real collection fields put `hidden` here. */
   admin?: { hidden?: boolean };
-  /** Sub-fields of a group/repeater/blocks field, if any. */
+  /** Inline sub-fields of a group/repeater field, if any. */
   fields?: SensitiveFieldSource[];
+  /** Block definitions of a blocks field; each carries its own `fields`. */
+  blocks?: { fields?: SensitiveFieldSource[] }[];
 }
 
 /**
@@ -39,7 +47,14 @@ export function sensitiveFieldNames(
       ) {
         names.add(field.name);
       }
+      // group/repeater sub-fields are inline on `fields`; blocks carry their
+      // own `fields` on each block definition.
       if (Array.isArray(field.fields)) walk(field.fields);
+      if (Array.isArray(field.blocks)) {
+        for (const block of field.blocks) {
+          if (Array.isArray(block.fields)) walk(block.fields);
+        }
+      }
     }
   };
   walk(fields);

@@ -102,7 +102,22 @@ export async function recordEvent(
 
   await tx.insert("nextly_events", eventRow(envelope, now));
 
-  const targets = selectDeliveryTargets(endpoints, envelope);
+  const candidates = selectDeliveryTargets(endpoints, envelope);
+  if (candidates.length === 0) return { deliveries: 0 };
+
+  // The endpoint set is a (possibly stale) registry snapshot. Confirm each
+  // target still exists before inserting: a webhook deleted between the
+  // snapshot and this write would otherwise fail the delivery's foreign key and
+  // roll back the surrounding content transaction. A missing target is skipped
+  // (a deleted endpoint should get no delivery), so webhook admin changes can
+  // never make an unrelated content write fail.
+  const existing = await tx.select<{ id: string }>("nextly_webhooks", {
+    where: {
+      and: [{ column: "id", op: "IN", value: candidates.map(c => c.id) }],
+    },
+  });
+  const existingIds = new Set(existing.map(row => row.id));
+  const targets = candidates.filter(c => existingIds.has(c.id));
   if (targets.length === 0) return { deliveries: 0 };
 
   // Chunk the fan-out: a delivery row binds 8 parameters, and SQLite caps a

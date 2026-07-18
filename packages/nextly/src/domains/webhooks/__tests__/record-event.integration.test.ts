@@ -222,6 +222,32 @@ describe("webhook outbox capture (real SQLite)", () => {
     expect(await countRows("nextly_webhook_deliveries")).toBe(0);
   });
 
+  it("skips a target deleted after the snapshot instead of failing the write", async () => {
+    const keptId = await insertWebhook({ id: "kept" });
+    const goneId = await insertWebhook({ id: "gone" });
+    const endpoints = await registry.getEnabledEndpoints();
+    expect(endpoints).toHaveLength(2);
+
+    // The endpoint is deleted after the registry snapshot was taken.
+    await adapter.executeQuery("DELETE FROM nextly_webhooks WHERE id = ?", [
+      goneId,
+    ]);
+
+    const envelope = makeEnvelope();
+    const result = await adapter.transaction(async tx =>
+      recordEvent(tx, { envelope, endpoints })
+    );
+
+    // The content write succeeds; only the still-existing target gets a row.
+    expect(result.deliveries).toBe(1);
+    expect(await countRows("nextly_events")).toBe(1);
+    const deliveries = await adapter.select<{ webhookId: string }>(
+      "nextly_webhook_deliveries",
+      { where: { and: [{ column: "eventId", op: "=", value: envelope.id }] } }
+    );
+    expect(deliveries.map(d => d.webhookId)).toEqual([keptId]);
+  });
+
   it("fans out to many endpoints without overflowing the insert", async () => {
     // More than one chunk (and past SQLite's 999-parameter single-statement
     // limit at 8 params/row) must not fail the content transaction.
