@@ -21,8 +21,9 @@ function endpoint(over: Partial<WebhookEndpoint>): WebhookEndpoint {
     secretPrefix: "",
     fieldAllowlist: null,
     createdBy: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    // Well before the sample event time so the pre-subscription guard admits it.
+    createdAt: new Date("2020-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2020-01-01T00:00:00.000Z"),
     ...over,
   };
 }
@@ -67,6 +68,23 @@ describe("selectDeliveryTargets", () => {
       event({ type: "entry.updated" })
     );
     expect(targets.map(t => t.id)).toEqual(["sub"]);
+  });
+
+  it("excludes endpoints created after the event (no pre-subscription backlog)", () => {
+    const targets = selectDeliveryTargets(
+      [
+        endpoint({
+          id: "before",
+          createdAt: new Date("2026-07-17T00:00:00.000Z"),
+        }),
+        endpoint({
+          id: "after",
+          createdAt: new Date("2026-07-19T00:00:00.000Z"),
+        }),
+      ],
+      event({ timestamp: "2026-07-18T00:00:00.000Z" })
+    );
+    expect(targets.map(t => t.id)).toEqual(["before"]);
   });
 
   it("applies the endpoint filter (collection scope)", () => {

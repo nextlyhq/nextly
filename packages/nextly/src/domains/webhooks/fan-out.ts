@@ -32,16 +32,25 @@ const DELIVERY_INSERT_CHUNK = 100;
 
 /**
  * The endpoints that should receive an event: enabled, subscribed to the
- * event's type, and passing the endpoint's filter. Pure.
+ * event's type, created no later than the event, and passing the endpoint's
+ * filter. Pure.
+ *
+ * The `createdAt <= event time` guard gives standard webhook semantics — an
+ * endpoint receives only events that occurred after it was created — and makes
+ * fan-out deterministic regardless of drain lag: a webhook created after an
+ * event but before the drain runs must not receive that backlog event.
  */
 export function selectDeliveryTargets(
   endpoints: readonly WebhookEndpoint[],
   envelope: WebhookEvent
 ): WebhookEndpoint[] {
+  const eventTime = Date.parse(envelope.timestamp);
   return endpoints.filter(
     e =>
       e.enabled &&
       e.eventTypes.includes(envelope.type) &&
+      // Permissive if the timestamp is unparseable (don't silently drop).
+      (!Number.isFinite(eventTime) || e.createdAt.getTime() <= eventTime) &&
       matchesFilter(e.filter, envelope)
   );
 }

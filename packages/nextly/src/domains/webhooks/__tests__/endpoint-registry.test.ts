@@ -87,6 +87,19 @@ describe("WebhookEndpointRegistry", () => {
     expect(endpoint.eventTypes).toEqual([]);
   });
 
+  it("normalizes a malformed v1 filter so matching cannot throw", async () => {
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader);
+    const p = registry.getEnabledEndpoints();
+    // A legacy/manual write stored changedFields as a bare string; matchesFilter
+    // would call .some(...) on it and throw.
+    reader.resolveNext([
+      { ...row("wh"), filter: { version: 1, changedFields: "title" } },
+    ]);
+    const [endpoint] = await p;
+    expect(endpoint.filter).toMatchObject({ version: 1, changedFields: null });
+  });
+
   it("reloads after the TTL elapses (bounds cross-process staleness)", async () => {
     let clock = 1000;
     const reader = new FakeReader();

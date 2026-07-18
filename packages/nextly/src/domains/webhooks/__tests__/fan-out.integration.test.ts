@@ -87,7 +87,8 @@ describe("webhook fan-out (real SQLite)", () => {
       secret_prefix: "",
       field_allowlist: null,
       created_by: null,
-      created_at: now,
+      // Well before the seeded event time so the pre-subscription guard admits it.
+      created_at: new Date("2020-01-01T00:00:00.000Z"),
       updated_at: now,
     });
   }

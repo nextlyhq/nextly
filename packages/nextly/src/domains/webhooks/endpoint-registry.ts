@@ -12,6 +12,28 @@
 
 import type { FilterSpec, WebhookEndpoint, WebhookEventType } from "./types";
 
+/**
+ * Normalize a stored filter so a malformed value can't throw during matching.
+ * For the v1 shape, coerce each array field to an array (or drop it): a legacy
+ * or manual write of `{ version: 1, changedFields: "title" }` would otherwise
+ * make `matchesFilter` call `.some(...)` on a string and throw, stalling the
+ * batch. A non-object is treated as no filter; a non-v1 shape is passed through
+ * unchanged (matchesFilter rejects unknown versions on its own).
+ */
+function normalizeFilter(raw: unknown): FilterSpec | null {
+  if (raw == null || typeof raw !== "object") return null;
+  const f = raw as Record<string, unknown>;
+  if (f.version !== 1) return f as unknown as FilterSpec;
+  const asArray = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? (v as string[]) : undefined;
+  return {
+    version: 1,
+    eventTypes: asArray(f.eventTypes) as WebhookEventType[] | undefined,
+    collections: asArray(f.collections) ?? null,
+    changedFields: asArray(f.changedFields) ?? null,
+  };
+}
+
 /** The narrow read surface the registry needs (satisfied by the DB adapter). */
 export interface WebhookEndpointReader {
   select<T = unknown>(
@@ -41,7 +63,7 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
     eventTypes: Array.isArray(row.eventTypes)
       ? (row.eventTypes as WebhookEventType[])
       : [],
-    filter: (row.filter as FilterSpec | null) ?? null,
+    filter: normalizeFilter(row.filter),
     headers: (row.headers as Record<string, string> | null) ?? null,
     secretHash: Array.isArray(row.secretHash)
       ? (row.secretHash as string[])
