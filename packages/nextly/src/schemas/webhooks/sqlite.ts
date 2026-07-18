@@ -9,7 +9,13 @@
  * @module schemas/webhooks/sqlite
  */
 
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 import { users } from "../users/sqlite";
 
@@ -90,6 +96,15 @@ export const nextlyWebhookDeliveries = sqliteTable(
       t.status,
       t.nextAttemptAt
     ),
-    index("nextly_webhook_deliveries_webhook_idx").on(t.webhookId),
+    // One delivery per (webhook, event): fan-out and retry both insert with
+    // ON CONFLICT DO NOTHING, so a duplicate capture can never double-send.
+    // The leading webhook_id column also serves lookups scoped to an endpoint.
+    uniqueIndex("nextly_webhook_deliveries_webhook_event_unique").on(
+      t.webhookId,
+      t.eventId
+    ),
+    // Index event_id for the event -> deliveries cascade delete and
+    // event-scoped admin queries.
+    index("nextly_webhook_deliveries_event_idx").on(t.eventId),
   ]
 );

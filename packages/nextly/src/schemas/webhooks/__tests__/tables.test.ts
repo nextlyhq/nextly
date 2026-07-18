@@ -1,6 +1,8 @@
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, it, expect } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
+import { nextlyWebhookDeliveries } from "../postgres";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -47,6 +49,17 @@ describe("webhook system tables", () => {
     ]) {
       expect(cols).toContain(col);
     }
+  });
+
+  it("enforces one delivery per (webhook, event) with a unique index", () => {
+    // The DB constraint is what makes capture idempotent: fan-out and retry
+    // insert with ON CONFLICT DO NOTHING, so a duplicate can never double-send.
+    const { indexes } = getTableConfig(nextlyWebhookDeliveries);
+    const unique = indexes.find(i => i.config.unique);
+    expect(unique).toBeDefined();
+    expect(
+      unique?.config.columns.map(c => (c as { name: string }).name)
+    ).toEqual(["webhook_id", "event_id"]);
   });
 
   it("stores the full envelope on the event ledger (postgres)", () => {

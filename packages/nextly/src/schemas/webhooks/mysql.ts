@@ -19,6 +19,7 @@ import {
   json,
   datetime,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 import { users } from "../users/mysql";
@@ -100,6 +101,15 @@ export const nextlyWebhookDeliveries = mysqlTable(
       t.status,
       t.nextAttemptAt
     ),
-    index("nextly_webhook_deliveries_webhook_idx").on(t.webhookId),
+    // One delivery per (webhook, event): fan-out and retry both insert with
+    // ON CONFLICT DO NOTHING, so a duplicate capture can never double-send.
+    // The leading webhook_id column also serves lookups scoped to an endpoint.
+    uniqueIndex("nextly_webhook_deliveries_webhook_event_unique").on(
+      t.webhookId,
+      t.eventId
+    ),
+    // MySQL auto-indexes FK columns, but declare event_id explicitly so the
+    // schema is identical across dialects and the diff pipeline round-trips.
+    index("nextly_webhook_deliveries_event_idx").on(t.eventId),
   ]
 );
