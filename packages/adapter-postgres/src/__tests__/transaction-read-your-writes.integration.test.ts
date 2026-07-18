@@ -5,6 +5,10 @@
 //
 // Self-skips when TEST_POSTGRES_URL is unset.
 
+// `sql` builds the tagged-template query run through the transaction-bound
+// Drizzle handle (tx.getDrizzle()); the getDrizzle test below uses it to prove
+// a write on that handle is visible in-transaction and rolls back.
+import { sql } from "drizzle-orm";
 import { pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -97,5 +101,31 @@ describe("PostgreSQL transaction read-your-writes", async () => {
     });
 
     expect(chosen).toEqual(["dup", "dup-2"]);
+  });
+
+  it("getDrizzle() returns a handle bound to the transaction", async () => {
+    // A raw sql insert via the tx-scoped Drizzle handle must be visible to a
+    // read on the SAME handle inside the tx, and must vanish after rollback.
+    const id = "tx-drizzle-1";
+    await expect(
+      adapter.transaction(async tx => {
+        const db = tx.getDrizzle<{
+          execute: (q: unknown) => Promise<{ rows: unknown[] }>;
+        }>();
+        await db.execute(
+          sql`INSERT INTO ${sql.identifier(TABLE)} (id, slug) VALUES (${id}, ${"tx-drizzle-slug"})`
+        );
+        const seen = await db.execute(
+          sql`SELECT id FROM ${sql.identifier(TABLE)} WHERE id = ${id}`
+        );
+        expect(seen.rows.length).toBe(1); // read-your-writes inside the tx
+        throw new Error("rollback"); // force rollback
+      })
+    ).rejects.toThrow("rollback");
+
+    const after = await adapter.select(TABLE, {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(after.length).toBe(0); // rolled back, no row
   });
 });

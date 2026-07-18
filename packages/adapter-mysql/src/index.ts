@@ -933,6 +933,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       savepoint: undefined,
       rollbackToSavepoint: undefined,
       releaseSavepoint: undefined,
+
+      // Expose the transaction-bound Drizzle instance so callers can run
+      // Drizzle sql templates inside this transaction (junction-table writes
+      // need this to be atomic with the entry write). Reuses the memoized
+      // txDb() built for the delegated CRUD methods.
+      getDrizzle: <T = unknown>(): T => txDb() as T,
     };
   }
 
