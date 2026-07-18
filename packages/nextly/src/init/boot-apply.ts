@@ -204,8 +204,13 @@ async function registerMigrationMetadata(label: string): Promise<void> {
     const fs = await import("fs");
     const path = await import("path");
 
-    // Check for migrations directory
-    const migrationsDir = path.join(process.cwd(), "migrations");
+    // Load config FIRST to get configured migrationsDir
+    const { loadConfig } = await import("../cli/utils/config-loader");
+    const configResult = await loadConfig({ cwd: process.cwd() });
+    const migrationsDir = path.join(
+      process.cwd(),
+      configResult.config.db.migrationsDir
+    );
 
     if (!fs.existsSync(migrationsDir)) {
       return; // No migrations directory, skip
@@ -345,8 +350,13 @@ async function applyPendingMigrations(label: string): Promise<void> {
     const fs = await import("fs");
     const path = await import("path");
 
-    // Check for migrations directory
-    const migrationsDir = path.join(process.cwd(), "migrations");
+    // Load config FIRST to get configured migrationsDir
+    const { loadConfig } = await import("../cli/utils/config-loader");
+    const configResult = await loadConfig({ cwd: process.cwd() });
+    const migrationsDir = path.join(
+      process.cwd(),
+      configResult.config.db.migrationsDir
+    );
 
     if (!fs.existsSync(migrationsDir)) {
       return; // No migrations directory, skip
@@ -390,14 +400,6 @@ async function applyPendingMigrations(label: string): Promise<void> {
       );
       return;
     }
-
-    // Import config for migrations directory and lock TTL
-    const { loadConfig } = await import("../cli/utils/config-loader");
-    const configResult = await loadConfig({ cwd: process.cwd() });
-    const appMigrationsDir = path.join(
-      process.cwd(),
-      configResult.config.db.migrationsDir
-    );
 
     // Import getSchemaEventsDdl for ledger bootstrap
     const { getSchemaEventsDdl } = await import(
@@ -467,7 +469,7 @@ async function applyPendingMigrations(label: string): Promise<void> {
       dialect: adapterDialect,
       db,
       adapter: cliAdapter,
-      migrationsDir: appMigrationsDir,
+      migrationsDir,
       logger,
       lockMode: "fail-fast",
       ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
