@@ -207,4 +207,28 @@ describe("slug auto-generation on create", () => {
 
     expect((created.item as { slug?: string }).slug).toBe("fallback-title");
   });
+
+  it("derives a slug when a beforeChange hook returns a non-string", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [
+        text({ name: "title" }),
+        text({
+          name: "slug",
+          unique: true,
+          // A hook returning null (or any non-string) must not leave a
+          // non-string slug on the required column.
+          hooks: { beforeChange: [() => null] },
+        }),
+      ],
+    });
+    current = await createTestNextly({ collections: [posts] });
+
+    const created = await current.nextly.create({
+      collection: "posts",
+      data: { title: "Recovered Title" },
+    });
+
+    expect((created.item as { slug?: string }).slug).toBe("recovered-title");
+  });
 });

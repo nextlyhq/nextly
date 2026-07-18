@@ -451,12 +451,13 @@ export class CollectionMutationService extends BaseService {
     finalData: Record<string, unknown>,
     isSlugTaken: (slug: string) => Promise<boolean>
   ): Promise<void> {
-    if (typeof finalData.slug !== "string") return;
-    // A blank/whitespace slug and a non-URL-safe one both sanitize to "".
-    // Either way derive a valid slug rather than leaving an empty or
-    // un-sanitized value: the post-beforeChange call runs after validation, so
-    // nothing downstream catches a blank slug the hook may have set.
-    const sanitized = generateSlug(finalData.slug);
+    // `applyGeneratedSlugAndTitle` always sets a string slug before hooks run,
+    // so any blank, non-URL-safe, or non-string value here means a hook set it.
+    // All of those sanitize to "" (a non-string yields ""), and each is derived
+    // back to a valid slug: the post-beforeChange call runs after validation,
+    // so nothing downstream catches an empty or invalid slug a hook may leave.
+    const current = finalData.slug;
+    const sanitized = typeof current === "string" ? generateSlug(current) : "";
     finalData.slug =
       sanitized !== ""
         ? sanitized
