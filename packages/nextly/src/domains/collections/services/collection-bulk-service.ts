@@ -185,6 +185,8 @@ export class CollectionBulkService extends BaseService {
     overrides?: Record<string, unknown>;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** Route auth already ran the create RBAC gate; skip only that re-check. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -240,11 +242,16 @@ export class CollectionBulkService extends BaseService {
         Object.assign(duplicateData, params.overrides);
       }
 
-      // 5. Create the new entry using createEntry (inherits all hooks and validation)
+      // 5. Create the new entry using createEntry (inherits all hooks and
+      // validation). Forward routeAuthorized + overrideAccess so a route that
+      // already authorized the create is not re-gated under the wrong scope,
+      // matching the other route write paths.
       const createResult = await this.mutationService.createEntry(
         {
           collectionName: params.collectionName,
           user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
         },
         duplicateData
       );

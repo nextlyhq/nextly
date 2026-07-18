@@ -167,6 +167,37 @@ describe("checkSingleAccess — stored rule enforcement", () => {
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
   });
 
+  it("forwards the current document to evaluateAccess so owner-only rules can check ownership", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    const ownerOnly: CollectionAccessRules = {
+      update: { type: "owner-only", ownerField: "createdBy" },
+    };
+    const doc = { id: "site", createdBy: "user-1" };
+
+    await checkSingleAccess({
+      slug: "site",
+      operation: "update",
+      user: editor,
+      routeAuthorized: true,
+      rbacAccessControlService: rbacAccessControlService as never,
+      accessControlService: accessControlService as never,
+      accessRules: ownerOnly,
+      document: doc,
+      logger: silentLogger,
+    });
+
+    // The document is passed as the 5th arg so evaluateOwnerAccess compares
+    // ownership instead of allowing by default.
+    expect(accessControlService.evaluateAccess).toHaveBeenCalledWith(
+      ownerOnly,
+      "update",
+      expect.anything(),
+      undefined,
+      doc
+    );
+  });
+
   it("skips stored evaluation and honors routeAuthorized when there are no stored rules", async () => {
     const { accessControlService, rbacAccessControlService } = makeDeps();
 

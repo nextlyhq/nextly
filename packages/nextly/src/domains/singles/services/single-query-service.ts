@@ -34,11 +34,11 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type { CollectionAccessRules } from "../../../services/access";
-import {
+import type {
   AccessControlService,
-  isSuperAdminContext,
+  CollectionAccessRules,
 } from "../../../services/access";
+import { isSuperAdminContext } from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -140,6 +140,11 @@ export async function checkSingleAccess(params: {
   accessControlService?: AccessControlService;
   /** The Single's stored access rules (from the registry metadata). */
   accessRules?: CollectionAccessRules;
+  /**
+   * The current Single document, when loaded. Owner-only rules need it to
+   * compare ownership; without it they allow (deferring to the DB-level check).
+   */
+  document?: Record<string, unknown>;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -151,6 +156,7 @@ export async function checkSingleAccess(params: {
     rbacAccessControlService,
     accessControlService,
     accessRules,
+    document,
     logger,
   } = params;
 
@@ -182,7 +188,9 @@ export async function checkSingleAccess(params: {
               email: user.email,
             }
           : undefined,
-      }
+      },
+      undefined,
+      document
     );
     if (!result.allowed) {
       return {
@@ -253,21 +261,15 @@ export async function checkSingleAccess(params: {
  * service can reuse them without duplication.
  */
 export class SingleQueryService extends BaseService {
-  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
-  private readonly accessControlService: AccessControlService;
-
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService,
-    accessControlService?: AccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService
   ) {
     super(adapter, logger);
-    this.accessControlService =
-      accessControlService ?? new AccessControlService();
   }
 
   // ============================================================
@@ -297,16 +299,18 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 1.5. Access check (stored rules + RBAC) after metadata, before
-      // hooks/DB operations.
+      // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
+      // Stored read-rule enforcement is intentionally NOT wired here yet: the
+      // REST read handlers do not forward the authenticated user, so evaluating
+      // a `read: authenticated` / role-based rule would reject every REST caller
+      // as anonymous. It lands with read-path user forwarding in the follow-up
+      // read PR (hence no `accessRules` passed).
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
         user: options.user,
         overrideAccess: options.overrideAccess,
         rbacAccessControlService: this.rbacAccessControlService,
-        accessControlService: this.accessControlService,
-        accessRules: singleMeta.accessRules,
         logger: this.logger,
       });
       if (accessDenied) {

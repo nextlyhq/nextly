@@ -18,7 +18,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
@@ -63,28 +62,24 @@ export class SingleEntryService extends BaseService {
   ) {
     super(adapter, logger);
 
-    // One stateless evaluator shared by the read and write paths so both
-    // enforce a Single's stored access rules identically.
-    const accessControlService = new AccessControlService();
-
     this.queryService = new SingleQueryService(
       adapter,
       logger,
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService,
-      accessControlService
+      rbacAccessControlService
     );
 
+    // The write path evaluates a Single's stored access rules; its own
+    // stateless evaluator is created inside SingleMutationService.
     this.mutationService = new SingleMutationService(
       adapter,
       logger,
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService,
-      accessControlService
+      rbacAccessControlService
     );
   }
 

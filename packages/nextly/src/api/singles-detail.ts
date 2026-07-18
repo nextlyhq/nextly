@@ -84,6 +84,13 @@ function throwFromSingleResult<T>(
     throw NextlyError.notFound({ logContext });
   }
 
+  // A stored Single access rule (or RBAC) denial surfaces as 403 now that
+  // route writes run with overrideAccess:false; map it to a forbidden error
+  // instead of letting it fall through to a 500.
+  if (result.statusCode === 403) {
+    throw NextlyError.forbidden({ logContext });
+  }
+
   if (result.statusCode === 400) {
     throw NextlyError.validation({
       errors: (result.errors ?? []).map(e => ({

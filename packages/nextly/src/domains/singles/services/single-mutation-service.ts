@@ -94,8 +94,7 @@ export class SingleMutationService extends BaseService {
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService,
-      this.accessControlService
+      rbacAccessControlService
     );
   }
 
@@ -127,8 +126,14 @@ export class SingleMutationService extends BaseService {
         };
       }
 
-      // 1.5. Access check (stored rules + RBAC) after metadata, before
-      // hooks/DB operations.
+      // 1.5. Load the current document first (no auto-create yet) so an
+      // owner-only stored rule can compare ownership, then run the access
+      // check (stored rules + RBAC) before any hooks/DB writes.
+      let existingDoc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "update",
@@ -138,18 +143,14 @@ export class SingleMutationService extends BaseService {
         rbacAccessControlService: this.rbacAccessControlService,
         accessControlService: this.accessControlService,
         accessRules: singleMeta.accessRules,
+        document: existingDoc ?? undefined,
         logger: this.logger,
       });
       if (accessDenied) {
         return accessDenied;
       }
 
-      // 2. Ensure document exists (auto-create if needed)
-      let existingDoc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
-
+      // 2. Ensure document exists (auto-create if it did not yet exist).
       if (!existingDoc) {
         this.logger.info("Auto-creating Single document before update", {
           slug,

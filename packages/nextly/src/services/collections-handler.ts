@@ -184,6 +184,11 @@ export class CollectionsHandler {
           // Carry the authenticated role set so role-based access rules and
           // field-level access.read evaluate against the real user.
           roles: userRoles,
+          // Also expose a singular `role` so field-level access callbacks that
+          // read the documented `req.user.role` (rather than the role set) see
+          // an authorized value instead of stripping fields for a legitimate
+          // caller. A representative slug; role-set-aware rules use `roles`.
+          role: userRoles?.[0],
         },
         // Default the bridged route caller to enforced access, but never
         // clobber an explicit trusted-server override (overrideAccess: true)
