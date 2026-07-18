@@ -19,6 +19,6 @@
 "@nextlyhq/ui": patch
 ---
 
-Add the webhook transactional-outbox capture core.
+Add the webhook transactional-outbox capture.
 
-`recordEvent` is the single choke-point that persists an event and fans out one pending delivery per matching enabled endpoint through the caller's transaction, so the delivery obligation commits atomically with the content change. Adds `selectDeliveryTargets` (pure fan-out selection), `WebhookEndpointRegistry` (cached, invalidatable enabled-endpoint lookup), and `sensitiveFieldNames` (the password/hidden strip policy, walking nested groups/repeaters). No write-path wiring or network delivery yet; those land in the capture-wiring and delivery slices.
+`recordEvent` is the single choke-point every write path calls to durably record a content event inside the caller's transaction, so the event commits atomically with the change and can never be lost or fired for a rolled-back change. It writes only the `nextly_events` row; fan-out to endpoints happens later in the drain, keeping content writes fully decoupled from the webhook registry (the canonical transactional-outbox split). Also adds `sensitiveFieldNames`, the password/hidden strip policy (walking nested groups, repeaters, and blocks) that feeds the envelope builder.
