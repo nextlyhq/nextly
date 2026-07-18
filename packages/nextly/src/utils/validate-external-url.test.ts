@@ -226,6 +226,17 @@ describe("safeFetch", () => {
     expect(response.headers.get("content-length")).toBeNull();
   });
 
+  it("does not fail an empty body that carries a content-encoding", async () => {
+    // Inflating zero bytes throws; an empty encoded 2xx must stay a success.
+    const h = await startServer((_req, res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end();
+    });
+    const response = await safeFetch(`${h.base}/`, local);
+    expect(response.ok).toBe(true);
+    expect(await response.text()).toBe("");
+  });
+
   it("strips a caller-supplied Host header (no vhost override)", async () => {
     // A forwarded Host could route to an internal vhost behind the validated
     // public IP; it must be derived from the URL, not the caller's headers.

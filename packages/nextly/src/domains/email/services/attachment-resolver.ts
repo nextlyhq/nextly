@@ -100,6 +100,10 @@ export async function resolveAttachments(
     try {
       content = await deps.readBytes(media.filename);
     } catch (err) {
+      // A typed NextlyError from readBytes (e.g. the size-exceeded validation a
+      // URL-backed fetch raises when the object is over the limit) is already
+      // precise; pass it through and wrap only opaque storage failures.
+      if (NextlyError.is(err)) throw err;
       throw NextlyError.internal({
         cause: err instanceof Error ? err : undefined,
         logContext: {
