@@ -191,16 +191,20 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
     try {
-      // 1. Fetch the source entry (with read permission check). status "all"
-      // so a draft source stays visible to an authorized duplicator — matching
-      // the regular authenticated getEntry, which defaults to "all"; without it
-      // duplicating a draft would 404 before the create runs.
+      // 1. Fetch the source entry (with read permission check). Only a trusted
+      // (overrideAccess) or route-authenticated duplicate sees drafts via
+      // status "all" — matching the regular authenticated getEntry dispatcher,
+      // which defaults authenticated reads to "all". An untrusted Direct API
+      // caller keeps the default published-only visibility, so it can't
+      // duplicate a draft by id that a plain findByID would 404.
+      const sourceStatus =
+        params.overrideAccess || params.routeAuthorized ? "all" : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
         user: params.user,
         overrideAccess: params.overrideAccess,
-        status: "all",
+        status: sourceStatus,
         context: params.context,
       });
 

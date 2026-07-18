@@ -194,12 +194,17 @@ export class CollectionsHandler {
         // clobber an explicit trusted-server override (overrideAccess: true)
         // if one was passed alongside the userId.
         overrideAccess: rest.overrideAccess ?? false,
-        // Mark route authorization only for real route callers. When a trusted
-        // override is in play the caller is NOT a route caller, and stamping
-        // routeAuthorized would defeat the mutation response redaction guard
-        // (`overrideAccess && !routeAuthorized`), stripping fields the explicit
-        // override was meant to expose unredacted.
-        routeAuthorized: !(rest.overrideAccess ?? false),
+        // Route authorization is NEVER inferred from a userId being present:
+        // the RBAC/database-permission gate may only be skipped when the caller
+        // explicitly attests the route middleware already ran it (the REST
+        // dispatcher passes `routeAuthorized: true`). Any other caller that
+        // merely attributes a userId for hooks/audit gets `false`, so the gate
+        // still runs and a rule-less collection is not mutated without the
+        // permission check. A trusted override forces it false regardless, so
+        // it never defeats the response redaction guard
+        // (`overrideAccess && !routeAuthorized`).
+        routeAuthorized:
+          !(rest.overrideAccess ?? false) && !!rest.routeAuthorized,
       };
     }
     return rest;
@@ -404,6 +409,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -496,6 +507,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -524,6 +541,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -548,6 +572,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -573,6 +604,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -631,6 +669,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -661,6 +705,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
