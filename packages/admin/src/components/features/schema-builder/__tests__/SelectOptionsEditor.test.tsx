@@ -8,6 +8,47 @@ import { render, screen } from "@admin/__tests__/utils";
 
 import { SelectOptionsEditor } from "../SelectOptionsEditor";
 
+describe("SelectOptionsEditor -- duplicate value reporting", () => {
+  it("names every duplicated value at once, not just the first collision", () => {
+    render(
+      <SelectOptionsEditor
+        options={[
+          { id: "1", label: "Red", value: "red" },
+          { id: "2", label: "Crimson", value: "red" },
+          { id: "3", label: "Blue", value: "blue" },
+          { id: "4", label: "Navy", value: "blue" },
+          { id: "5", label: "Green", value: "green" },
+        ]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent('"red"');
+    expect(alert).toHaveTextContent('"blue"');
+    expect(alert).not.toHaveTextContent('"green"');
+  });
+
+  it("shows no duplicate warning when values are unique or blank", () => {
+    render(
+      <SelectOptionsEditor
+        options={[
+          { id: "1", label: "Red", value: "red" },
+          { id: "2", label: "", value: "" },
+          { id: "3", label: "", value: "" },
+        ]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
 describe("SelectOptionsEditor -- PR E3 admin knobs", () => {
   describe("select fieldType", () => {
     it("renders the Clearable switch and reports onIsClearableChange", async () => {

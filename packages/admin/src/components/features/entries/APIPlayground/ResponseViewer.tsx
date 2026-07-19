@@ -170,7 +170,7 @@ export function ResponseViewer({
       >
         {isLoading ? (
           <div className="flex h-full flex-col items-center justify-center bg-muted/30">
-            <Loader2 className="mb-4 h-8 w-8 animate-spin text-muted-foreground/60" />
+            <Loader2 className="mb-4 h-8 w-8 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">Sending request…</p>
           </div>
         ) : error ? (
@@ -188,7 +188,7 @@ export function ResponseViewer({
         ) : !jsonString ? (
           <div className="flex h-full flex-col items-center justify-center bg-muted/30 p-12 text-center">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-none border border-border bg-card">
-              <FileJson className="h-6 w-6 text-muted-foreground/60" />
+              <FileJson className="h-6 w-6 text-muted-foreground" />
             </div>
             <h3 className="mb-1 text-base font-semibold tracking-tight text-foreground">
               No response yet

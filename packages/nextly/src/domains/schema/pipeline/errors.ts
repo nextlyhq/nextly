@@ -37,9 +37,13 @@ export function classifyError(err: unknown): ClassifiedError {
   }
 
   if (err instanceof Error) {
-    // drizzle-kit's pushSchema throws plain Error objects whose stack frames
-    // contain drizzle-kit/api.js. We use the stack trace as the signal because
-    // drizzle-kit does not expose a typed error hierarchy.
+    // drizzle-kit v1's programmatic entrypoints still throw plain Error
+    // objects with no typed hierarchy (verified: resolver crashes and
+    // client failures alike), so the stack trace remains the signal —
+    // its frames contain the drizzle-kit payload-* module paths.
+    // (drizzle-orm QUERY errors, by contrast, are typed DrizzleQueryError
+    // in v1 and carry the driver error on `.cause`; those surface through
+    // the executor as DDL_EXECUTION_FAILED, not here.)
     const stack = err.stack ?? "";
     if (stack.includes("drizzle-kit")) {
       return {

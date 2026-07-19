@@ -52,7 +52,6 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -60,6 +59,7 @@ import {
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
+  type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";

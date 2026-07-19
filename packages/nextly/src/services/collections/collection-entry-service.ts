@@ -307,6 +307,8 @@ export class CollectionEntryService extends BaseService {
       data: Record<string, unknown>;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Route auth already ran; response is still redacted for this user */
+      routeAuthorized?: boolean;
       context?: Record<string, unknown>;
     },
     options?: BulkOperationOptions & { limit?: number }

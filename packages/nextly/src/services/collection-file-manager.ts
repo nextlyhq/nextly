@@ -253,10 +253,11 @@ export class CollectionFileManager {
             // in di/register.ts already does this; FileManager's lazy
             // fallback used to drop the option silently.
             //
-            // i18n H2: also forward `localized` so the lazily-generated MAIN table
-            // omits translatable columns (they live in the companion `_locales`
-            // table). Without this the read path selects the localized columns from
-            // the main table, which the migration has dropped → the query fails.
+            // Forward `localized` too: on a localized collection, migrations
+            // move translatable fields into `<table>_locales`, so the main-table
+            // schema must omit those columns. Without this, a lazy schema built
+            // after a restart/cache-miss would still declare the moved columns and
+            // `select().from(schema)` would reference columns that no longer exist.
             {
               status: metadata.status === true,
               localized: metadata.localized === true,

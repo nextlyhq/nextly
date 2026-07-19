@@ -18,13 +18,15 @@ import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
 import type {
   BeforeEmailFilterContext,
-  FormNotificationItem,
+  FormNotification,
   FormBuilderPluginOptions,
   FormEmailNotification,
   FormDocument,
   SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "./types";
+import { evaluateSingleCondition } from "./utils/evaluate-conditions";
+import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -178,6 +180,13 @@ export function formBuilder(
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
+    // Identity metadata for the admin plugins page, mirroring package.json.
+    author: "Nextly",
+    homepage: "https://nextlyhq.com",
+    repository: "https://github.com/nextlyhq/nextly",
+    license: "MIT",
+    category: "forms",
+    tags: ["forms", "submissions", "email-notifications"],
 
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
@@ -213,54 +222,164 @@ export function formBuilder(
           method: "GET",
           path: "/submissions/export",
           requiredPermission: "export-submissions",
-          handler: async (_req, ctx) => {
+          handler: async (req, ctx) => {
             const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
             const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
-            const result = await ctx.services.collections.listEntries(
-              slug,
-              {},
-              { as: "user", user: ctx.user ?? undefined }
+            const url = new URL(req.url);
+            const format = url.searchParams.get("format") ?? "json";
+            const formId = url.searchParams.get("form");
+            const status = url.searchParams.get("status");
+
+            // Spam stays out of exports unless it is explicitly requested —
+            // an export is "what people submitted", not "what bots sent".
+            const where: Record<string, unknown> = {};
+            if (formId) where.form = { equals: formId };
+            if (status) where.status = { equals: status };
+            else where.status = { not_equals: "spam" };
+
+            const opts = { as: "user", user: ctx.user ?? undefined } as const;
+
+            // CSV needs its form BEFORE any submissions are read: the
+            // columns come from one form's fields, and a malformed request
+            // must fail fast instead of paginating the whole table first.
+            let form: Record<string, unknown> | undefined;
+            if (format === "csv") {
+              if (!formId) {
+                return Response.json(
+                  {
+                    error: {
+                      code: "VALIDATION_ERROR",
+                      message: "CSV export requires a form parameter.",
+                    },
+                  },
+                  { status: 400 }
+                );
+              }
+              const formsSlugDeclared = resolvedConfig.formOverrides.slug;
+              const formsSlug =
+                ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
+              const formResult = await ctx.services.collections.listEntries(
+                formsSlug,
+                { where: { id: { equals: formId } } },
+                opts
+              );
+              form = formResult.data[0];
+              if (!form) {
+                return Response.json(
+                  { error: { code: "NOT_FOUND", message: "Form not found." } },
+                  { status: 404 }
+                );
+              }
+            }
+
+            // Page through the export with a hard ceiling: an unbounded loop
+            // over a high-traffic form could hold the whole table in memory.
+            // Hitting the ceiling is reported in a header, never silent.
+            const MAX_EXPORT_ROWS = 50_000;
+            const items: unknown[] = [];
+            const pageSize = 200;
+            let truncated = false;
+            for (let page = 1; ; page += 1) {
+              const result = await ctx.services.collections.listEntries(
+                slug,
+                { where, pagination: { limit: pageSize, page } },
+                opts
+              );
+              items.push(...result.data);
+              const pageWasFull = result.data.length === pageSize;
+              if (items.length >= MAX_EXPORT_ROWS) {
+                truncated = pageWasFull || items.length > MAX_EXPORT_ROWS;
+                items.length = MAX_EXPORT_ROWS;
+                break;
+              }
+              if (!pageWasFull) break;
+            }
+            const truncationHeaders: Record<string, string> = truncated
+              ? { "X-Export-Truncated": "true" }
+              : {};
+
+            if (format !== "csv" || !form) {
+              return Response.json({ items }, { headers: truncationHeaders });
+            }
+
+            // The service returns parsed entries; the export helpers declare
+            // the document shapes — the boundary cast is through unknown.
+            const csv = exportToCSV(
+              items as unknown as SubmissionDocument[],
+              form as unknown as FormDocument
             );
-            return Response.json({ items: result.data });
+            const filename = generateExportFilename(
+              typeof form.slug === "string" ? form.slug : "form",
+              "csv"
+            );
+            return new Response(csv, {
+              headers: {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": `attachment; filename="${filename}"`,
+                ...truncationHeaders,
+              },
+            });
           },
+        },
+        {
+          // The builder UI reads the host's resolved field enable/disable map
+          // from here, so the plugin option actually gates the type picker.
+          // Options resolve server-side only; this is the one channel the
+          // admin client has to them.
+          method: "GET",
+          path: "/builder-config",
+          // Derived from the forms slug like the menu entry: with an
+          // overridden slug, users hold read-<slug>, not read-forms.
+          requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
+          handler: (_req, ctx) =>
+            Promise.resolve(
+              Response.json({
+                fields: resolvedConfig.fields,
+                // Notification defaults the builder surfaces: defaultToEmail
+                // seeds a new form's first rule, defaultFrom renders as the
+                // inherited sender placeholder.
+                notifications: {
+                  defaultFrom: resolvedConfig.notifications.defaultFrom,
+                  defaultToEmail: resolvedConfig.notifications.defaultToEmail,
+                },
+                // Spam defaults the Settings tab surfaces, so per-form
+                // override selects can show what "inherit" resolves to.
+                spamProtection: {
+                  honeypot: resolvedConfig.spamProtection.honeypot,
+                  recaptchaEnabled:
+                    resolvedConfig.spamProtection.recaptcha?.enabled ?? false,
+                },
+                // Runtime-resolved collection slugs (through ctx.self, so a
+                // framework .rename() is honored too) — admin components
+                // never hardcode "forms"/"form-submissions".
+                slugs: {
+                  forms:
+                    ctx.self.collections[resolvedConfig.formOverrides.slug] ??
+                    resolvedConfig.formOverrides.slug,
+                  submissions:
+                    ctx.self.collections[
+                      resolvedConfig.formSubmissionOverrides.slug
+                    ] ?? resolvedConfig.formSubmissionOverrides.slug,
+                },
+              })
+            ),
         },
       ],
-      // Admin UI — the canonical contributes.admin example. Paths
-      // are the components form-builder's `/admin` module self-registers (kept
-      // as literals so this node entry stays React-free). menu links to
-      // the forms collection; settings renders the builder UI at
-      // /admin/plugins/<slug>; a custom page is gated by export-submissions;
-      // a submissions beforeList view injects the filter above the list.
-      admin: {
-        menu: [
-          {
-            label: "Forms",
-            to: `/admin/collections/${resolvedConfig.formOverrides.slug}`,
-            icon: "file-text",
-            order: 50,
-            requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
-          },
-        ],
-        settings: {
-          component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
-        },
-        pages: [
-          {
-            path: "submissions",
-            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-            requiredPermission: "export-submissions",
-          },
-        ],
-        views: {
-          [resolvedConfig.formSubmissionOverrides.slug]: {
-            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
-          },
-        },
-      },
     },
 
+    // Forms is a first-class destination, not a plugin detail: standalone
+    // placement gives it its own main-rail icon after Media, and its
+    // sub-sidebar lists the plugin's collections (Forms, Submissions) —
+    // no separate menu contribution, so "Forms" exists exactly once.
+    // Hosts preferring the Plugins section override placement in config.
+    // (The old admin.settings.component that rendered a second full builder
+    // at /admin/plugins/<slug> is gone; the collection Edit-view override
+    // is the single FormBuilderView mount.)
     admin: {
+      placement: "standalone",
+      after: "media",
       order: 50,
+      appearance: { icon: "FileText", label: "Forms" },
       description: "Create and manage forms with submission tracking",
     },
 
@@ -313,6 +432,59 @@ export function formBuilder(
           await handleSubmissionCreated(context, resolvedConfig, nextly);
         }
       );
+
+      // Stamp admin edits of submitted data: changing what the visitor
+      // submitted must leave a visible trace. Registered directly on the
+      // registry (like the notification hook) so it runs for every API
+      // surface that updates a submission.
+      nextly.hooks.on("beforeUpdate", submissionSlug, (context: unknown) => {
+        const ctx = context as {
+          data?: Record<string, unknown>;
+          user?: { id?: string };
+        };
+        if (ctx.data && ctx.data.data !== undefined) {
+          ctx.data.editedAt = new Date();
+          ctx.data.editedBy = ctx.user?.id ?? null;
+        }
+        return ctx.data;
+      });
+
+      // Inject a real submissionCount into form reads (spam excluded — the
+      // number answers "how many people submitted", not "how many bots").
+      const declaredFormsSlug = resolvedConfig.formOverrides.slug;
+      const formsSlug =
+        nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
+      nextly.hooks.on("afterRead", formsSlug, async (context: unknown) => {
+        const data = (context as { data?: unknown }).data;
+        // afterRead fires for single reads (one record) and list reads
+        // (array); count each form either way. Counts run concurrently —
+        // form lists are paginated, so this is a bounded fan-out of small
+        // indexed queries, not a serial N+1 walk.
+        const records = Array.isArray(data) ? data : data ? [data] : [];
+        await Promise.all(
+          records.map(async record => {
+            const form = record as Record<string, unknown>;
+            if (typeof form.id !== "string") return;
+            try {
+              // Count as system: whoever may read the form may see its
+              // submission volume without holding submission read rights.
+              form.submissionCount = await nextly.services.collections.count(
+                submissionSlug,
+                {
+                  where: {
+                    form: { equals: form.id },
+                    status: { not_equals: "spam" },
+                  },
+                },
+                { as: "system" }
+              );
+            } catch {
+              // A failed count must never break reading the form itself.
+              form.submissionCount = 0;
+            }
+          })
+        );
+      });
     },
   });
 
@@ -395,6 +567,150 @@ export function collectAttachmentInputs(
 // ---------------------------------------------------------------------------
 
 /**
+ * Normalize a JSON column value from a raw DB row into an object. Hook
+ * contexts carry the row as stored, so the value may be an already-parsed
+ * object (jsonb dialects) or a serialized string (text-storage dialects).
+ *
+ * @internal Exported for testing — not part of the public plugin API.
+ */
+export function parseJsonColumn(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** Trim an address list and drop blanks; undefined when nothing remains. */
+function normalizeAddressList(
+  addresses: readonly string[] | undefined
+): string[] | undefined {
+  if (!Array.isArray(addresses)) return undefined;
+  const cleaned = addresses
+    .map(address => (typeof address === "string" ? address.trim() : ""))
+    .filter(Boolean);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/** Why a notification rule produced no email for a given submission. */
+export interface SkippedNotification {
+  notificationId: string;
+  reason: "empty-recipient" | "condition-unmet" | "no-template";
+}
+
+/**
+ * Resolve a form's notification rules against one submission into outgoing
+ * email descriptors, honoring everything a rule can configure: the send
+ * condition gates the rule, the recipient/reply-to resolve `{{fieldName}}`
+ * references, and the sender falls back from the rule's own address to the
+ * plugin's `notifications.defaultFrom` (undefined lets the template/provider
+ * default apply downstream).
+ *
+ * @internal Exported for testing — not part of the public plugin API.
+ */
+export function buildNotificationEmails(input: {
+  notifications: readonly FormNotification[];
+  submittedData: Record<string, unknown>;
+  formName: unknown;
+  submissionId: unknown;
+  defaultFrom?: string;
+}): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
+  const { notifications, submittedData, formName, submissionId, defaultFrom } =
+    input;
+
+  const seen = new Set<string>();
+  const emails: FormEmailNotification[] = [];
+  const skipped: SkippedNotification[] = [];
+
+  for (const notification of notifications) {
+    if (!notification.enabled) continue;
+
+    if (!notification.templateSlug) {
+      skipped.push({ notificationId: notification.id, reason: "no-template" });
+      continue;
+    }
+
+    // Deduplicate (UI can append duplicates on repeated saves). For id-less
+    // rules (API-authored), only an exact structural duplicate counts — a
+    // to+template key would silently drop distinct rules that share a
+    // recipient and template but differ elsewhere (e.g. their condition).
+    const key = notification.id || JSON.stringify(notification);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    // An unmet send condition skips the rule for this submission — an
+    // expected state, never an error.
+    if (
+      notification.condition &&
+      !evaluateSingleCondition(notification.condition, submittedData)
+    ) {
+      skipped.push({
+        notificationId: notification.id,
+        reason: "condition-unmet",
+      });
+      continue;
+    }
+
+    // Trim every address on the way out: whitespace-only values must count
+    // as empty, and stray spaces must not reach the provider as headers.
+    const to = (
+      notification.recipientType === "field"
+        ? resolveFieldRef(notification.to, submittedData)
+        : notification.to
+    ).trim();
+
+    if (!to) {
+      skipped.push({
+        notificationId: notification.id,
+        reason: "empty-recipient",
+      });
+      continue;
+    }
+
+    const cc = normalizeAddressList(notification.cc);
+    const bcc = normalizeAddressList(notification.bcc);
+
+    // Sender resolution: the rule's own address wins, then the plugin's
+    // configured default; undefined defers to the template/provider chain.
+    const from =
+      notification.senderEmail?.trim() || defaultFrom?.trim() || undefined;
+
+    // Reply-To resolves {{fieldName}} like recipients do; a reference to a
+    // field the visitor left empty degrades to "no Reply-To header" rather
+    // than an invalid address.
+    const replyTo = notification.replyTo
+      ? resolveFieldRef(notification.replyTo, submittedData).trim() || undefined
+      : undefined;
+
+    emails.push({
+      to,
+      templateSlug: notification.templateSlug,
+      variables: {
+        ...submittedData,
+        formName,
+        submissionId,
+      },
+      providerId: notification.providerId,
+      from,
+      replyTo,
+      cc,
+      bcc,
+      notificationId: notification.id,
+    });
+  }
+
+  return { emails, skipped };
+}
+
+/**
  * Send email notifications after a form submission is created.
  */
 async function handleSubmissionCreated(
@@ -402,8 +718,16 @@ async function handleSubmissionCreated(
   config: ResolvedFormBuilderConfig,
   nextly: NextlyInstance
 ): Promise<void> {
+  // The plugin-level kill switch: `notifications.enabled: false` turns off
+  // all form emails regardless of per-rule state.
+  if (!config.notifications.enabled) return;
+
   const submission = (context as { data?: Record<string, unknown> }).data;
   if (!submission) return;
+
+  // Spam is stored for review, but nobody gets emailed about it — otherwise
+  // every bot hit would trigger the form's notification rules.
+  if (submission.status === "spam") return;
 
   const rawFormId = submission.form;
   let formId: string | null = null;
@@ -420,14 +744,18 @@ async function handleSubmissionCreated(
   if (!form) return;
 
   const notifications = Array.isArray(form.notifications)
-    ? (form.notifications as FormNotificationItem[])
+    ? (form.notifications as FormNotification[])
     : [];
   if (notifications.length === 0) return;
 
   const emailService = nextly.services.email;
   if (!emailService) return;
 
-  const submittedData = (submission.data ?? {}) as Record<string, unknown>;
+  // The afterCreate hook receives the raw DB row, so on dialects that store
+  // JSON columns as text (e.g. SQLite) `data` arrives serialized. Without
+  // parsing it, {{field}} recipients, reply-to references, and send
+  // conditions all silently see an empty submission.
+  const submittedData = parseJsonColumn(submission.data);
 
   // Collect mediaIds from file fields marked for email attachment
   const formFields = Array.isArray(form.fields)
@@ -435,56 +763,31 @@ async function handleSubmissionCreated(
     : [];
   const fileAttachments = collectAttachmentInputs(formFields, submittedData);
 
-  const seen = new Set<string>();
-
   // -- Build phase: resolve each enabled notification into an outgoing
   // descriptor (the value the D63 seam transforms).
-  const emails: FormEmailNotification[] = [];
+  const { emails, skipped } = buildNotificationEmails({
+    notifications,
+    submittedData,
+    formName: form.name,
+    submissionId: submission.id,
+    defaultFrom: config.notifications.defaultFrom,
+  });
 
-  for (const notification of notifications) {
-    if (!notification.enabled || !notification.templateSlug) continue;
-
-    // Deduplicate (UI can append duplicates on repeated saves)
-    const key =
-      notification.id || `${notification.to}::${notification.templateSlug}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    const to =
-      notification.recipientType === "field"
-        ? resolveFieldRef(notification.to, submittedData)
-        : notification.to;
-
-    if (!to) {
+  for (const skip of skipped) {
+    if (skip.reason === "empty-recipient") {
       nextly.logger.warn?.(
         "Form Builder: empty recipient, skipping notification",
-        { notificationId: notification.id, formSlug: form.slug }
+        { notificationId: skip.notificationId, formSlug: form.slug }
       );
-      continue;
+    } else {
+      // Unmet conditions and missing templates are expected states, not
+      // faults — surface them only at debug level.
+      nextly.logger.debug?.("Form Builder: notification skipped", {
+        notificationId: skip.notificationId,
+        formSlug: form.slug,
+        reason: skip.reason,
+      });
     }
-
-    const cc =
-      Array.isArray(notification.cc) && notification.cc.length
-        ? notification.cc
-        : undefined;
-    const bcc =
-      Array.isArray(notification.bcc) && notification.bcc.length
-        ? notification.bcc
-        : undefined;
-
-    emails.push({
-      to,
-      templateSlug: notification.templateSlug,
-      variables: {
-        ...submittedData,
-        formName: form.name,
-        submissionId: submission.id,
-      },
-      providerId: notification.providerId,
-      cc,
-      bcc,
-      notificationId: notification.id,
-    });
   }
 
   if (emails.length === 0) return;
@@ -505,6 +808,8 @@ async function handleSubmissionCreated(
         email.variables,
         {
           providerId: email.providerId,
+          from: email.from,
+          replyTo: email.replyTo,
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,

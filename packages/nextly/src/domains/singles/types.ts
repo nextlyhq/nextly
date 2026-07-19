@@ -21,6 +21,16 @@ export interface UserContext {
   /** User email */
   email?: string;
 
+  /** Singular authorized role (the Direct API forwards only this). */
+  role?: string;
+
+  /**
+   * Full authorized role set. The route path forwards the caller's decoded
+   * roles so stored Single access rules (role-based) and the super-admin
+   * bypass evaluate against the real authorized scope.
+   */
+  roles?: string[];
+
   /** Additional user properties */
   [key: string]: unknown;
 }
@@ -99,6 +109,13 @@ export interface UpdateSingleOptions {
    * @default true (when called via Direct API)
    */
   overrideAccess?: boolean;
+
+  /**
+   * Set by the REST dispatcher: route-level auth already ran, so `overrideAccess`
+   * is used to skip the RBAC re-check — but this is NOT a trusted-server read,
+   * so the response is still redacted to what the user may read.
+   */
+  routeAuthorized?: boolean;
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;

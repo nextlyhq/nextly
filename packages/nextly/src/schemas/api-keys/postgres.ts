@@ -5,8 +5,8 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` (apiKeysRelations) lives in
- * `./postgres-relations.ts` to keep this file free of cross-feature imports
+ * Drizzle v2 relations for this feature live centrally in
+ * `../_dialect-bundles/postgres.relations.ts` (defineRelations).
  * (`users`, `roles`). Re-exported at the bottom so namespace consumers see it.
  *
  * @module schemas/api-keys/postgres

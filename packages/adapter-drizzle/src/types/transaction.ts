@@ -204,4 +204,19 @@ export interface TransactionContext {
    * @param name - Savepoint name
    */
   releaseSavepoint?(name: string): Promise<void>;
+
+  /**
+   * Return the Drizzle ORM instance bound to THIS transaction's connection.
+   *
+   * @remarks
+   * Runs Drizzle `sql` templates / fluent queries inside the caller's
+   * transaction (same client the delegated CRUD methods use), so services
+   * that drop to Drizzle raw SQL (e.g. junction-table writes) can participate
+   * in the transaction instead of running on the pooled connection. Required
+   * so callers never silently fall back to the pooled connection (which would
+   * run a write outside the transaction); every adapter must implement it.
+   * Generic return so callers narrow to the dialect Drizzle type they need
+   * without an `any` cast.
+   */
+  getDrizzle<T = unknown>(): T;
 }

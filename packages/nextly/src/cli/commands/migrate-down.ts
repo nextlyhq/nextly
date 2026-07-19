@@ -23,12 +23,12 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
+  type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 

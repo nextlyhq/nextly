@@ -49,6 +49,7 @@ import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
 import {
   filterUnsafeStatements,
+  findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
 } from "./filter-unsafe-statements";
@@ -170,24 +171,25 @@ export interface PipelineResult {
   summary?: MigrationJournalSummary;
 }
 
-// Shape of drizzle-kit's pushSchema return value.
+// Shape of drizzle-kit v1's pushSchema return value (mirrors the wrapper's
+// PushSchemaResult in database/drizzle-kit-lazy.ts). v1 removed the pre-v1
+// hasDataLoss/warnings fields; destructive statements arrive INSIDE
+// sqlStatements with empty hints — the guard below scans the statements.
 interface PushSchemaPassResult {
-  statementsToExecute: string[];
-  warnings: string[];
-  hasDataLoss: boolean;
+  sqlStatements: string[];
+  hints: Array<{ hint: string; statement?: string }>;
 }
 
 interface DrizzleKitLike {
-  // Phase C (2026-05-01): added optional tablesFilter so PG pushSchema
-  // can scope drizzle-kit's internal introspection to only the desired
-  // tables. Without this, drizzle-kit walks the full live DB and emits
-  // DROP TABLE for any managed table absent from the partial pipeline
-  // desired schema (boot-time sync only knows code-first collections,
-  // so admin-UI tables get DROPped). SQLite/MySQL drizzle-kit upstream
-  // does NOT accept tablesFilter — those branches discard it. The
-  // post-emission `filterUnsafeStatements` is the second line of
-  // defense and the ONLY defense for SQLite/MySQL until upstream adds
-  // tablesFilter or we move to generateMigration.
+  // The tablesFilter scopes PG's introspection to only the desired tables
+  // (travels as v1's named `entitiesConfig.tables`). Without scoping — and
+  // without the system-table injection in buildDrizzleSchema — drizzle-kit
+  // compares the full live DB against a partial desired schema, pairs
+  // "dropped" tables with added ones, and its v1 rename resolver throws
+  // `Internal error: resolver(...) was called without a HintsHandler`
+  // (verified on rc.4; the pre-v1 behavior was an unanswerable TTY prompt).
+  // SQLite/MySQL payload entrypoints accept NO tables filter — for those the
+  // injection + post-emission `filterUnsafeStatements` are the only defenses.
   pushSchema: (
     schema: Record<string, unknown>,
     db: unknown,
@@ -560,8 +562,6 @@ export class PushSchemaPipeline {
       // pure (DI surface).
       const classificationResult = await this.deps.classifier.classify({
         operations,
-        drizzleWarnings: [],
-        hasDataLoss: false,
         countNulls: (table, column) =>
           countNullsHelper(db, dialect, table, column),
         countRows: table => countRowsHelper(db, dialect, table),
@@ -759,14 +759,21 @@ export class PushSchemaPipeline {
 
         // Phase D: pushSchema for purely-additive remainder.
         // After pre-resolution, the live DB has had its renames + drops
-        // applied INSIDE this transaction. We pass `tx` (not the outer
-        // `db`) so drizzle-kit's introspection runs within the same
-        // transaction and SEES the uncommitted pre-resolution changes.
+        // applied INSIDE this transaction. On PostgreSQL we pass `tx` (not
+        // the outer `db`) so drizzle-kit's introspection runs within the
+        // same transaction and SEES the uncommitted pre-resolution changes.
         // Without this, drizzle-kit's introspection would still see the
         // old DROP+ADD ambiguity and fire its TTY prompt.
         //
         // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
         // SQLite (it's the same handle).
+        //
+        // MySQL must receive the OUTER db: the v1 kit derives its raw
+        // client from `db.$client`, which only exists on the top-level
+        // drizzle instance — MySql2Transaction objects have no $client, so
+        // passing `tx` crashes the shim. That is semantically safe because
+        // MySQL DDL auto-commits: the pre-resolution statements are already
+        // visible to any connection by the time Phase D introspects.
         //
         // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
         // as `tablesFilter` so its introspection is scoped to just our
@@ -785,18 +792,28 @@ export class PushSchemaPipeline {
         logApplyRoute(useFastPath, resolvedOps);
 
         let emittedStatements: string[];
+        let pushResult: PushSchemaPassResult | undefined;
         if (useFastPath) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
-          let pushResult: PushSchemaPassResult;
           try {
             // withCapturedStdout reroutes any chatter drizzle-kit writes to
             // process.stdout/stderr so it doesn't leak into the dev console.
             // The sink only forwards when DEBUG_SCHEMA=1 — see
             // stdout-capture.ts for the scope-caveat (sync-return path).
+            //
+            // v1 note: if the kit's differ manufactures a drop+add rename
+            // ambiguity (partial schema, scope mismatch), its resolver throws
+            // `Internal error: resolver(...) without a HintsHandler` — the
+            // catch below converts that into a journaled PushSchemaError
+            // instead of the pre-v1 unanswerable TTY prompt.
             pushResult = await withCapturedStdout(
               () =>
-                kit.pushSchema(effectiveDrizzleSchema, tx, desiredTableNames),
+                kit.pushSchema(
+                  effectiveDrizzleSchema,
+                  dialect === "mysql" ? db : tx,
+                  desiredTableNames
+                ),
               // eslint-disable-next-line turbo/no-undeclared-env-vars
               process.env.DEBUG_SCHEMA === "1"
                 ? { debug: (msg: string) => console.debug(msg) }
@@ -808,46 +825,84 @@ export class PushSchemaPipeline {
               err
             );
           }
-          emittedStatements = pushResult.statementsToExecute;
-
-          // Safety net: drizzle-kit's pushSchema is interactive by
-          // contract — when it sees a change it considers data-losing
-          // (e.g. `text` → `jsonb` on Postgres) it omits the SQL from
-          // `statementsToExecute` and records the skipped change in
-          // `warnings`. Older Nextly versions ran the (possibly empty)
-          // statement list and logged the journal entry as `success`
-          // even though the drifting columns were never altered, so
-          // every subsequent preview re-detected the same drift
-          // forever (see rext-site-v2 / `dc_case_studies`, May 2026).
-          //
-          // The fast path now owns every op type that previously
-          // triggered the silent-skip class on Postgres, so this
-          // branch executes only on MySQL / SQLite (or when no ops
-          // are queued at all). We still guard here because (a)
-          // MySQL / SQLite drizzle-kit has its own silent-skip
-          // surfaces and (b) any future op type we forget to add to
-          // the fast path would otherwise reintroduce the same bug.
-          //
-          // `warnings.length > 0` is drizzle-kit's own signal that it
-          // omitted statements it would not auto-apply — that is the
-          // precise condition we need to fail on. Throwing surfaces
-          // the issue immediately and the journal records a failed
-          // apply (with the warning text) rather than a false success.
-          if (pushResult.warnings.length > 0) {
-            throw new PushSchemaError(
-              `drizzle-kit pushSchema declined to apply ` +
-                `${pushResult.warnings.length} change(s) it considered ` +
-                `data-losing or otherwise interactive. The schema was NOT ` +
-                `applied — the journal will record this as a failed apply ` +
-                `rather than a false success. drizzle-kit warnings: ` +
-                pushResult.warnings.join("; ")
-            );
-          }
+          emittedStatements = pushResult.sqlStatements;
         }
+        // Safety net, v1 semantics (observed on all three dialects,
+        // 2026-07): drizzle-kit now INCLUDES destructive statements in
+        // sqlStatements with EMPTY hints — the pre-v1 "omit + warn"
+        // contract is gone (that omission caused three false-success
+        // applies on a live site: rext-site-v2 / `dc_case_studies`,
+        // May 2026). Every user-approved destructive op has already run
+        // in the pre-resolution phase, so anything destructive emitted
+        // here means the emitter disagrees with our differ — never
+        // execute it; fail the apply so the journal records failure.
+        //
+        // Properties of this scan:
+        //   - It runs on BOTH routes (fast path and kit path), so the
+        //     guarantee never depends on FAST_PATH_OP_TYPES staying
+        //     drop-free forever.
+        //   - It scans the RAW kit output (`emittedStatements`) BEFORE
+        //     filterUnsafeStatements, restricted to MANAGED tables (the
+        //     desired schema). Scanning the post-filter remainder would make
+        //     the guarantee depend on the filter having correctly stripped
+        //     every orphan drop first; a filter bug that mis-classified a
+        //     managed-table drop as an orphan would then hide it from the
+        //     scan. Identifying orphans here by table membership instead —
+        //     drops of tables outside the desired schema are the EXPECTED
+        //     emission the filter handles separately — keeps the
+        //     destructive-on-managed guard independent of the filter. `safe`
+        //     is still what actually executes.
+        // Rebuild blocks are only trusted for tables where OUR diff
+        // approved a rebuild-justifying change — a rebuild on any other
+        // table is the kit encoding a column drop we never approved
+        // (rc.4 emits exactly that shape; probe-verified).
+        const allowedRebuildTables = new Set(
+          resolvedOps
+            .filter(
+              op =>
+                op.type === "change_column_type" ||
+                op.type === "change_column_nullable" ||
+                op.type === "change_column_default"
+            )
+            .map(op => op.tableName.toLowerCase())
+        );
+        const managedTables = new Set(
+          desiredTableNames.map(t => t.toLowerCase())
+        );
         const safe = filterUnsafeStatements(
           emittedStatements,
           desiredTableNames
         );
+        const unexpectedDestructive = findUnexpectedDestructiveStatements(
+          emittedStatements,
+          allowedRebuildTables,
+          managedTables
+        );
+        if (unexpectedDestructive.length > 0) {
+          throw new PushSchemaError(
+            `schema emitter produced ${unexpectedDestructive.length} ` +
+              `destructive statement(s) on the purely-additive ` +
+              `remainder. The schema was NOT applied. Statements: ` +
+              unexpectedDestructive.join("; ")
+          );
+        }
+
+        if (pushResult) {
+          // Secondary tripwire: hints were empty in every observed rc.4
+          // scenario. If one ever appears here, the kit's semantics
+          // changed underneath us — fail loudly rather than ignore an
+          // uninterpreted signal.
+          if (pushResult.hints.length > 0) {
+            throw new PushSchemaError(
+              `drizzle-kit returned ${pushResult.hints.length} hint(s) on ` +
+                `the purely-additive remainder — uninterpreted signal, ` +
+                `refusing to apply: ` +
+                pushResult.hints
+                  .map(h => h.hint + (h.statement ? ` [${h.statement}]` : ""))
+                  .join("; ")
+            );
+          }
+        }
 
         try {
           await this.deps.executor.executeStatements(tx, safe);
@@ -1073,12 +1128,16 @@ export class PushSchemaPipeline {
       case "postgresql": {
         const kit = await getPgDrizzleKit();
         return {
-          // PG drizzle-kit accepts tablesFilter (4th arg) — pass through
-          // so introspection is scoped to just the current pipeline's
-          // desired tables. Eliminates spurious DROP TABLE / RENAME
-          // emissions for managed tables outside the pipeline's scope.
+          // PG's v1 pushSchema takes a named entities filter (replaces the
+          // pre-v1 positional schemaFilters/tablesFilter args). Scoping the
+          // introspection to the desired tables prevents the kit's differ
+          // from pairing out-of-scope live tables as phantom renames —
+          // which on v1 throws its resolver's HintsHandler internal error.
           pushSchema: (schema, db, tablesFilter) =>
-            kit.pushSchema(schema, db, ["public"], tablesFilter),
+            kit.pushSchema(schema, db, {
+              schemas: ["public"],
+              tables: tablesFilter,
+            }),
         };
       }
       case "mysql": {

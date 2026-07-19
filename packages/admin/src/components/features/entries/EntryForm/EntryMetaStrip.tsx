@@ -99,7 +99,7 @@ function SlugInlineEditor({
   if (readOnly) {
     return (
       <div className="flex items-center gap-1.5 min-w-0 flex-1">
-        <span className="text-muted-foreground/70 shrink-0">slug:</span>
+        <span className="text-muted-foreground shrink-0">slug:</span>
         <code className="text-foreground/80 font-mono text-xs whitespace-nowrap truncate">
           {liveValue || "(unset)"}
         </code>
@@ -124,7 +124,7 @@ function SlugInlineEditor({
 
   return (
     <div className="flex items-center gap-1.5 group min-w-0 flex-1">
-      <span className="text-muted-foreground/70 shrink-0">slug:</span>
+      <span className="text-muted-foreground shrink-0">slug:</span>
       <div className="flex items-center gap-1.5 min-w-0 flex-1">
         {editing ? (
           <input
@@ -142,7 +142,7 @@ function SlugInlineEditor({
                 cancel();
               }
             }}
-            className="text-xs font-mono text-foreground bg-background border border-primary/20 rounded px-1.5 py-0 w-full focus:border-primary/40 focus:outline-none transition-colors"
+            className="text-xs font-mono text-foreground bg-background border border-input rounded px-1.5 py-0 w-full focus:border-primary focus:outline-none transition-colors"
             aria-label="Slug"
             aria-invalid={!!errorMsg}
           />

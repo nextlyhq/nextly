@@ -12,7 +12,20 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+  stripSystemOwnerField,
+} from "../../../shared/lib/password-fields";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+
+/**
+ * System-entity columns that hold secrets and must never ride along a
+ * populated relationship. System entities have no schema field list, so
+ * they are stripped by column name (both snake_case as stored and the
+ * camelCase form some conversions produce).
+ */
+const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
 
 /**
  * Default depth for relationship population.
@@ -212,6 +225,27 @@ function getSystemEntityLabelField(targetName: string): string {
 }
 
 /**
+ * System-entity label field, honoring an explicit `targetLabelField` unless it
+ * names a secret column (e.g. users `passwordHash`). The label is copied onto
+ * the expanded row before row-level redaction runs, so a secret label field
+ * would leak the hash via `label` even though the column itself is stripped.
+ */
+function resolveSystemEntityLabelField(
+  targetName: string,
+  targetLabelField?: string
+): string {
+  if (
+    targetLabelField &&
+    !(SYSTEM_ENTITY_SECRET_COLUMNS as readonly string[]).includes(
+      targetLabelField
+    )
+  ) {
+    return targetLabelField;
+  }
+  return getSystemEntityLabelField(targetName);
+}
+
+/**
  * Recursively collects all media IDs from a data object based on field definitions.
  * Handles nested upload fields inside repeater and group fields.
  *
@@ -358,12 +392,21 @@ function expandMediaInData(
  * For polymorphic relationships (relationTo is array), returns the first collection.
  */
 function getTargetCollection(field: FieldDefinition): string | undefined {
+  // A many-to-many field's junction table is created from `options.target`
+  // (see generateJunctionTable), so resolve m2m targets from there FIRST. A
+  // stale or legacy `relationTo` would otherwise make reads/writes derive a
+  // different junction-table name than the one that physically exists.
+  if (field.options?.relationType === "manyToMany" && field.options.target) {
+    return field.options.target;
+  }
   if (field.relationTo) {
     return Array.isArray(field.relationTo)
       ? field.relationTo[0]
       : field.relationTo;
   }
-  return undefined;
+  // Other Builder-authored relationship fields may also carry the target under
+  // `options.target`; fall back to it when `relationTo` is absent.
+  return field.options?.target;
 }
 
 /**
@@ -513,6 +556,22 @@ function normalizeToIdArray(value: unknown): string[] {
  * const expanded = await relationshipService.expandRelationships(entry, 'posts', fields);
  * ```
  */
+// The minimal raw-SQL surface the junction-table code needs from a database
+// handle. Both the pooled `this.db` and a transaction-scoped Drizzle instance
+// (from `tx.getDrizzle()`) satisfy it, so junction writes can run either on the
+// pool (default) or inside a caller's transaction (when an executor is passed),
+// keeping the junction write atomic with the entry write.
+// Each method is optional because a given dialect's Drizzle handle exposes only
+// a subset: SQLite's better-sqlite3 handle has `all`/`run` (no `execute`),
+// while the Postgres/MySQL handles have `execute` (no `all`/`run`). The
+// junction raw-SQL helpers below are dialect-gated, so the method they call is
+// always present for the current dialect.
+export type RelationshipDbExecutor = {
+  all?(query: unknown): unknown[];
+  run?(query: unknown): unknown;
+  execute?(query: unknown): Promise<unknown>;
+};
+
 export class CollectionRelationshipService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -527,33 +586,55 @@ export class CollectionRelationshipService extends BaseService {
    * Run a SELECT-style raw SQL tag and return its rows in a normalized
    * `{ rows: [...] }` shape regardless of dialect.
    *
-   * Drizzle's API for raw SQL differs across dialects:
-   *   - PG / MySQL: `db.execute(sqlTag)` → `{ rows, ... }`
-   *   - SQLite (better-sqlite3): `db.all(sqlTag)` → `unknown[]`
+   * Drizzle's raw-execute result shape differs across drivers:
+   *   - Postgres (node-postgres): `db.execute(sqlTag)` → `{ rows: [...] }`
+   *   - MySQL (mysql2): `db.execute(sqlTag)` → a `[rows, fieldPackets]` tuple
+   *     (or a flat rows array), NOT `{ rows }`
+   *   - SQLite (better-sqlite3): `db.all(sqlTag)` → `unknown[]` (no execute())
    *
-   * Without this helper, the existing `(this.db as any).execute(...)`
-   * calls in the junction-table code paths blow up at runtime on
-   * SQLite with `this.db.execute is not a function`.
+   * Without this helper, the junction-table code paths blow up at runtime on
+   * SQLite (`this.db.execute is not a function`) and on MySQL (reading
+   * `.rows` off the tuple yields undefined). The MySQL normalization mirrors
+   * the defensive handling in schema/pipeline/classifier/count-helpers.ts.
    */
-  private async selectRawSql(query: unknown): Promise<{ rows: unknown[] }> {
+  private async selectRawSql(
+    query: unknown,
+    // Run on the caller's transaction handle when provided, else the pool.
+    db: RelationshipDbExecutor = this.db
+  ): Promise<{ rows: unknown[] }> {
     if (this.dialect === "sqlite") {
-      const rows = this.db.all(query) as unknown[];
+      // SQLite's handle exposes all(); the dialect gate guarantees it here.
+      const rows = db.all!(query);
       return { rows };
     }
-    return (await this.db.execute(query)) as { rows: unknown[] };
+    // Postgres/MySQL handles expose execute().
+    const result: unknown = await db.execute!(query);
+    if (this.dialect === "mysql" && Array.isArray(result)) {
+      // Tuple form `[rows, fieldPackets]` -> take rows; a flat rows array (first
+      // element is a row object, not an array) is already the rows.
+      const first = result[0];
+      return { rows: Array.isArray(first) ? (first as unknown[]) : result };
+    }
+    return result as { rows: unknown[] };
   }
 
   /**
    * Run an INSERT / UPDATE / DELETE / DDL raw SQL tag, dialect-aware.
    * Same rationale as `selectRawSql`. Returns void since callers don't
-   * inspect the mutation result here.
+   * inspect the mutation result here. Accepts an optional handle for the same
+   * reason as `selectRawSql` (defaults to the pool).
    */
-  private async mutateRawSql(query: unknown): Promise<void> {
+  private async mutateRawSql(
+    query: unknown,
+    db: RelationshipDbExecutor = this.db
+  ): Promise<void> {
     if (this.dialect === "sqlite") {
-      this.db.run(query);
+      // SQLite's handle exposes run(); the dialect gate guarantees it here.
+      db.run!(query);
       return;
     }
-    await this.db.execute(query);
+    // Postgres/MySQL handles expose execute().
+    await db.execute!(query);
   }
 
   /**
@@ -569,9 +650,10 @@ export class CollectionRelationshipService extends BaseService {
     targetLabelField?: string
   ): Promise<string> {
     try {
-      // Check if this is a system entity first
+      // Check if this is a system entity first. Never surface a secret column
+      // as a label (see resolveSystemEntityLabelField).
       if (isSystemEntity(collectionName)) {
-        return targetLabelField || getSystemEntityLabelField(collectionName);
+        return resolveSystemEntityLabelField(collectionName, targetLabelField);
       }
 
       const collection =
@@ -584,10 +666,15 @@ export class CollectionRelationshipService extends BaseService {
         (collection as Record<string, unknown>).fields ||
         []) as FieldDefinition[];
 
-      // If targetLabelField is provided, validate it exists in the collection
+      // If targetLabelField is provided, validate it exists in the collection.
+      // A `password` field is excluded: it must never become the label, or its
+      // hash would ride along in `label` past the row-level redaction.
       if (targetLabelField) {
         const fieldExists = fields.some(
-          f => f.name === targetLabelField && f.type !== "relationship"
+          f =>
+            f.name === targetLabelField &&
+            f.type !== "relationship" &&
+            f.type !== "password"
         );
 
         if (fieldExists) {
@@ -612,10 +699,17 @@ export class CollectionRelationshipService extends BaseService {
         "username",
       ];
 
-      // First try priority fields
+      // First try priority fields. A `password` field named like a priority
+      // label (e.g. "email") must never be chosen — its hash would be copied
+      // into `label` and survive the row-level password redaction.
       for (const labelField of labelPriority) {
         if (
-          fields.some(f => f.name === labelField && f.type !== "relationship")
+          fields.some(
+            f =>
+              f.name === labelField &&
+              f.type !== "relationship" &&
+              f.type !== "password"
+          )
         ) {
           console.log(
             `[LabelField] Using priority field "${labelField}" for collection "${collectionName}"`
@@ -624,11 +718,13 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
 
-      // Fallback: find first text-like field (not ID, not relationship).
+      // Fallback: find first text-like field (not ID, not relationship,
+      // never a password).
       const textField = fields.find(
         f =>
           f.name !== "id" &&
           f.type !== "relationship" &&
+          f.type !== "password" &&
           (f.type === "text" || f.type === "email")
       );
 
@@ -983,9 +1079,13 @@ export class CollectionRelationshipService extends BaseService {
           return resultMap;
         }
 
-        const labelField =
-          field.options?.targetLabelField ||
-          getSystemEntityLabelField(targetCollection);
+        // Guard against a secret column being used as the label — the hash
+        // would be copied into `label` before row redaction (see
+        // resolveSystemEntityLabelField).
+        const labelField = resolveSystemEntityLabelField(
+          targetCollection,
+          field.options?.targetLabelField
+        );
 
         // Batch fetch all entries from system entity
         const entries = await this.db
@@ -1031,6 +1131,9 @@ export class CollectionRelationshipService extends BaseService {
         error
       );
     }
+
+    // Strip related-row secrets before the map is spread into responses.
+    await this.redactRelatedRows(targetCollection, [...resultMap.values()]);
 
     return resultMap;
   }
@@ -1171,6 +1274,12 @@ export class CollectionRelationshipService extends BaseService {
       }
     }
 
+    // Strip related-row secrets before the map is spread into responses.
+    await this.redactRelatedRows(
+      targetCollectionName,
+      [...resultMap.values()].flat()
+    );
+
     return resultMap;
   }
 
@@ -1218,7 +1327,14 @@ export class CollectionRelationshipService extends BaseService {
       const targetCollection = getTargetCollection(field);
       const hasMany = isHasManyRelationship(field);
 
-      if (!targetCollection || !entry[field.name]) {
+      if (!targetCollection) {
+        continue;
+      }
+      // A many-to-many field has no parent-row value (its links live in the
+      // junction table, keyed by entry.id), so the `entry[field.name]` guard
+      // would wrongly skip it on single-entry reads. Only non-m2m fields read
+      // their FK id(s) off the row, so gate on the row value for those.
+      if (relationType !== "manyToMany" && !entry[field.name]) {
         continue;
       }
 
@@ -1544,6 +1660,89 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Strip secret values from related rows before they are merged into a
+   * response. Relationship expansion spreads the entire related row into the
+   * parent entry, so without this a related collection's password fields (or
+   * the users entity's password hash) would be returned to any caller that
+   * populates the relationship. Called once per fetch with the row set, so
+   * the target schema is loaded at most once per relation, not per row.
+   */
+  private async redactRelatedRows(
+    targetCollection: string,
+    rows: Record<string, unknown>[]
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    // The system owner column must never ride along a populated relationship:
+    // a collection readable by non-creators would otherwise leak a related
+    // row's creator user id through the nested payload. Strip it from every
+    // related row up front (it's a reserved system column, so this can't touch
+    // a user field) — this runs at each expansion level, so nested relations
+    // are covered too.
+    for (const row of rows) {
+      stripSystemOwnerField(row);
+    }
+    // System entities expose secret columns that are not schema fields, so
+    // strip them by name.
+    if (isSystemEntity(targetCollection)) {
+      for (const row of rows) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
+      }
+      return;
+    }
+    // Dynamic collections: drop password-type field values using the TARGET
+    // collection's schema — the source collection's fields never describe a
+    // related row. If the schema can't be resolved we cannot tell which
+    // fields are secret, so fail closed: strip every non-identity field
+    // rather than risk returning a row that carries a password hash.
+    const targetFields = await this.getRedactionFields(targetCollection);
+    if (targetFields === null) {
+      for (const row of rows) {
+        for (const key of Object.keys(row)) {
+          if (key !== "id" && key !== "label") delete row[key];
+        }
+        // Defense in depth: the label is normally a display field (never a
+        // password — a password can't be configured as a label), but a row
+        // migrated from before that guard could carry a bcrypt hash here, so
+        // drop a hash-shaped label rather than surface it.
+        if (typeof row.label === "string" && row.label.startsWith("$2")) {
+          delete row.label;
+        }
+      }
+      return;
+    }
+    if (!hasPasswordField(targetFields)) return;
+    for (const row of rows) {
+      stripPasswordFieldValues(row, targetFields);
+    }
+  }
+
+  /**
+   * Resolve a collection's fields for redaction. Uses the same
+   * `schemaDefinition.fields` (API shape) OR `collection.fields` (raw DB row)
+   * fallback the rest of this service uses — `getCollection` returns the raw
+   * row, whose fields live at the top level, so a `schemaDefinition`-only
+   * lookup silently resolves to nothing and skips stripping. Returns null
+   * when the schema cannot be resolved so the caller fails closed.
+   */
+  private async getRedactionFields(
+    collectionName: string
+  ): Promise<FieldDefinition[] | null> {
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const fields =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields || (collection as Record<string, unknown>).fields;
+      return Array.isArray(fields) ? (fields as FieldDefinition[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Fetch a single related entry from a collection or system entity.
    * Supports both dynamic collections and system entities (like "users").
    *
@@ -1569,7 +1768,10 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(targetSchema.id, entryId))
           .limit(1);
 
-        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
+        if (!entry) return null;
+        const normalized = convertTimestampsToCamelCase({ ...entry });
+        await this.redactRelatedRows(collectionName, [normalized]);
+        return normalized;
       } else {
         // Handle dynamic collections
         const schema = await this.fileManager.loadDynamicSchema(collectionName);
@@ -1579,7 +1781,10 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(schema.id, entryId))
           .limit(1);
 
-        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
+        if (!entry) return null;
+        const normalized = convertTimestampsToCamelCase({ ...entry });
+        await this.redactRelatedRows(collectionName, [normalized]);
+        return normalized;
       }
     } catch {
       return null;
@@ -1650,9 +1855,12 @@ export class CollectionRelationshipService extends BaseService {
         .from(targetSchema)
         .where(sql`${targetSchema.id} IN (${placeholders})`);
 
-      return (entries || []).map((entry: Record<string, unknown>) =>
+      const normalized = (entries || []).map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
+      // Strip related-row secrets before rows are spread into responses.
+      await this.redactRelatedRows(targetCollectionName, normalized);
+      return normalized;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];
@@ -1667,12 +1875,17 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
    * @param relatedIds - Array of related entry IDs to link
+   * @param executor - Optional transaction-scoped Drizzle handle (from
+   *   `tx.getDrizzle()`); when provided, the junction existence check and
+   *   inserts run inside the caller's transaction so they commit atomically
+   *   with the entry write instead of always hitting the pool.
    */
   async insertManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
     field: FieldDefinition,
-    relatedIds: string[]
+    relatedIds: string[],
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     if (relatedIds.length === 0) return;
 
@@ -1731,7 +1944,7 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       }
-      const result = (await this.selectRawSql(checkQuery)) as {
+      const result = (await this.selectRawSql(checkQuery, executor)) as {
         rows: Array<{ table_exists: boolean | number }>;
       };
       const exists = Boolean(result.rows[0]?.table_exists);
@@ -1752,48 +1965,43 @@ export class CollectionRelationshipService extends BaseService {
     const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
     const targetIdCol = sql.identifier(targetCollectionName + "_id");
 
-    // Track errors
-    const errors: string[] = [];
-
-    // Insert each relationship individually for reliability
-    // Modern databases handle this efficiently with proper indexes
+    // Insert each relationship. A genuine failure (for example a foreign-key
+    // violation from a bad target id) is allowed to propagate: junction writes
+    // run inside the caller's transaction via `executor`, so throwing rolls the
+    // whole write back instead of committing a partial set of junction rows.
+    // Duplicate (source,target) pairs never throw here (the dialect conflict
+    // clause below ignores them).
     for (const targetId of relatedIds) {
-      try {
-        const id = this.collectionService.generateId();
-        const now = new Date();
+      const id = this.collectionService.generateId();
+      // This raw sql`` template binds straight to the driver, bypassing
+      // Drizzle's per-column serialization. better-sqlite3 only accepts
+      // numbers/strings/bigints/buffers/null, so a Date throws; the junction
+      // created_at column is `integer` epoch-seconds on SQLite (see
+      // generateJunctionTable), so bind that. PG/MySQL drivers accept a Date.
+      const createdAt =
+        this.dialect === "sqlite" ? Math.floor(Date.now() / 1000) : new Date();
 
-        const query = sql`
-          INSERT INTO ${sql.identifier(junctionTableName)}
-          (id, ${sourceIdCol}, ${targetIdCol}, created_at)
-          VALUES (${id}, ${sourceEntryId}, ${targetId}, ${now})
-          ON CONFLICT DO NOTHING
-        `;
+      // "Insert, ignore an existing (source,target) pair" is spelled
+      // differently per dialect: MySQL has no ON CONFLICT (it errors with
+      // ER_PARSE_ERROR). Use ON DUPLICATE KEY UPDATE with a no-op assignment
+      // rather than INSERT IGNORE, so only a duplicate-key conflict is
+      // swallowed while other errors (e.g. a foreign-key violation from a
+      // bad target id) still surface, matching the Postgres/SQLite
+      // ON CONFLICT DO NOTHING behaviour against the unique pair index.
+      const idCol = sql.identifier("id");
+      const conflictClause =
+        this.dialect === "mysql"
+          ? sql`ON DUPLICATE KEY UPDATE ${idCol} = ${idCol}`
+          : sql`ON CONFLICT DO NOTHING`;
 
-        console.log(`[ManyToMany] Executing insert for targetId: ${targetId}`);
-        await this.mutateRawSql(query);
-        console.log(
-          `[ManyToMany] ✓ Insert successful for targetId: ${targetId}`
-        );
-      } catch (error: unknown) {
-        const errorMsg = `Failed to insert junction record for ${targetId}: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(`[ManyToMany] ✗ ${errorMsg}`);
-        console.error(`[ManyToMany] Full error:`, error);
-        errors.push(errorMsg);
-      }
-    }
+      const query = sql`
+        INSERT INTO ${sql.identifier(junctionTableName)}
+        (id, ${sourceIdCol}, ${targetIdCol}, created_at)
+        VALUES (${id}, ${sourceEntryId}, ${targetId}, ${createdAt})
+        ${conflictClause}
+      `;
 
-    // If all inserts failed, throw error
-    if (errors.length === relatedIds.length && relatedIds.length > 0) {
-      throw new Error(
-        `Failed to insert all manyToMany relations for field "${field.name}". Errors: ${errors.join("; ")}`
-      );
-    }
-
-    // If some failed, log warning
-    if (errors.length > 0) {
-      console.warn(
-        `[ManyToMany] Partial failure: ${errors.length}/${relatedIds.length} inserts failed`
-      );
+      await this.mutateRawSql(query, executor);
     }
   }
 
@@ -1804,11 +2012,15 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceCollectionName - Name of the source collection
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
+   * @param executor - Optional transaction-scoped Drizzle handle; when
+   *   provided, the delete runs inside the caller's transaction instead of the
+   *   pool (see `insertManyToManyRelations` for the rationale).
    */
   async deleteManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
   ): Promise<void> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
@@ -1831,7 +2043,7 @@ export class CollectionRelationshipService extends BaseService {
       WHERE ${sourceIdCol} = ${sourceEntryId}
     `;
 
-    await this.mutateRawSql(query);
+    await this.mutateRawSql(query, executor);
   }
 
   /**

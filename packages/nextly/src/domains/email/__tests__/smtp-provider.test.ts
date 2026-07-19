@@ -104,7 +104,7 @@ describe("createSmtpProvider", () => {
     });
   });
 
-  it("defaults secure to false when config.secure is undefined", async () => {
+  it("defaults secure to true when config.secure is undefined", async () => {
     mockSendMail.mockResolvedValueOnce({ messageId: "<msg3>" });
 
     const configWithoutSecure = {
@@ -116,8 +116,10 @@ describe("createSmtpProvider", () => {
     const adapter = createSmtpProvider(configWithoutSecure);
     await adapter.send(BASE_OPTIONS);
 
+    // Secure-by-default: an unset `secure` resolves to true (port 465 implicit
+    // TLS), never silently downgrading to plaintext.
     expect(mockCreateTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ secure: false })
+      expect.objectContaining({ secure: true })
     );
   });
 

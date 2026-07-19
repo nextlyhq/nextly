@@ -38,7 +38,9 @@ test("a custom field can be created", async ({ page }) => {
 
   await page.getByRole("button", { name: "Create Field" }).click();
 
-  await expect(page).toHaveURL(/\/admin\/users\/fields$/);
+  // Generous timeout: dev mode compiles the list route on first navigation,
+  // and a timeout here strands the created row for the retry to collide with.
+  await expect(page).toHaveURL(/\/admin\/users\/fields$/, { timeout: 15_000 });
   await expect(page.getByText(FIELD_NAME).first()).toBeVisible();
 });
 
@@ -52,8 +54,10 @@ test("name and type are fixed once the field exists", async ({ page }) => {
   await expect(
     page.getByRole("textbox", { name: "Field Name" })
   ).toBeDisabled();
+  // The type picker is a real radio group now (roving tabindex, arrow keys),
+  // so the cards expose role "radio" rather than "button".
   await expect(
-    page.getByRole("button", { name: /^Text/ }).first()
+    page.getByRole("radio", { name: /^Text/ }).first()
   ).toBeDisabled();
 
   // The label is the part that is safe to change, so it must stay editable —

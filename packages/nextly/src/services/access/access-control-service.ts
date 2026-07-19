@@ -52,7 +52,7 @@ import type {
   CollectionAccessRules,
   AccessEvaluationResult,
 } from "./types";
-import { DEFAULT_OWNER_FIELD } from "./types";
+import { GENERIC_DEFAULT_OWNER_FIELD } from "./types";
 
 /**
  * Signature for custom access functions.
@@ -200,7 +200,12 @@ export class AccessControlService {
     operation: AccessOperation,
     context: RequestContext,
     documentId?: string,
-    document?: Record<string, unknown>
+    document?: Record<string, unknown>,
+    // Owner field used for a rule-less `owner-only` default. Defaults to the
+    // generic camelCase `createdBy` so singles/components and any generic caller
+    // keep the historical behavior; collection callers pass DEFAULT_OWNER_FIELD
+    // (`created_by`) since collections carry the auto-stamped system column.
+    defaultOwnerField: string = GENERIC_DEFAULT_OWNER_FIELD
   ): Promise<AccessEvaluationResult> {
     const rule = rules?.[operation];
 
@@ -220,7 +225,13 @@ export class AccessControlService {
         return this.evaluateRoleBasedAccess(rule, context);
 
       case "owner-only":
-        return this.evaluateOwnerAccess(rule, operation, context, document);
+        return this.evaluateOwnerAccess(
+          rule,
+          operation,
+          context,
+          document,
+          defaultOwnerField
+        );
 
       case "custom":
         return this.evaluateCustomAccess(rule, context, documentId, document);
@@ -247,18 +258,23 @@ export class AccessControlService {
     rule: StoredAccessRule,
     context: RequestContext
   ): AccessEvaluationResult {
-    const userRole = context.user?.role;
     const allowedRoles = rule.allowedRoles ?? [];
 
     if (!context.user) {
       return { allowed: false, reason: "Authentication required" };
     }
 
-    if (!userRole) {
+    // Collect every role the user holds: the many-to-many `roles` set plus the
+    // single `role` when present (deduped). Role-based rules use OR logic, so
+    // access is granted if ANY held role is in the allowed list.
+    const userRoles = new Set<string>(context.user.roles ?? []);
+    if (context.user.role) userRoles.add(context.user.role);
+
+    if (userRoles.size === 0) {
       return { allowed: false, reason: "User has no role assigned" };
     }
 
-    const allowed = allowedRoles.includes(userRole);
+    const allowed = allowedRoles.some(role => userRoles.has(role));
 
     return {
       allowed,
@@ -272,9 +288,10 @@ export class AccessControlService {
     rule: StoredAccessRule,
     operation: AccessOperation,
     context: RequestContext,
-    document?: Record<string, unknown>
+    document?: Record<string, unknown>,
+    defaultOwnerField: string = GENERIC_DEFAULT_OWNER_FIELD
   ): AccessEvaluationResult {
-    const ownerField = rule.ownerField ?? DEFAULT_OWNER_FIELD;
+    const ownerField = rule.ownerField ?? defaultOwnerField;
 
     if (!context.user) {
       return { allowed: false, reason: "Authentication required" };

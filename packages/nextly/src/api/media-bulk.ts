@@ -20,11 +20,11 @@
  * (HTTP 200). 4xx is reserved for malformed requests (e.g. empty input,
  * all entries failed input validation before the service was reached).
  *
- * @example
- * ```typescript
- * // In your Next.js app: app/api/media/bulk/route.ts
- * export { POST, DELETE } from 'nextly/api/media-bulk';
- * ```
+ * INTERNAL: this module runs no authentication of its own, so the package
+ * does not export it. Consumer apps mount media through
+ * `nextly/api/media-handlers`, which calls `executeBulkDelete` only after
+ * the media auth model has passed; the local POST/DELETE wrappers exist
+ * for the wire-shape regression tests.
  *
  * @module api/media-bulk
  */

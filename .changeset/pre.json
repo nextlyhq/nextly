@@ -23,11 +23,37 @@
     "@nextlyhq/plugin-page-builder": "0.0.2-alpha.29"
   },
   "changesets": [
+    "admin-css-scans-plugin-sources",
+    "admin-dev-improvements",
+    "admin-plugins-page",
     "admin-shadcn-standards-p3",
+    "admin-tier-3",
     "admin-tokens-full-color-values",
     "admin-tokens-oklch",
+    "admin-users-roles",
     "admin-visual-refresh",
+    "align-workspace-dependency-versions",
     "design-system-in-ui",
-    "page-builder-parity-expansion"
+    "field-type-catalog",
+    "field-ui-primitives",
+    "force-password-change-on-first-sign-in",
+    "form-builder-dead-field-ui",
+    "form-builder-field-cards",
+    "form-builder-notifications",
+    "form-field-catalog",
+    "form-preview-interactive",
+    "form-settings-canonical",
+    "form-submissions-server",
+    "form-submissions-view",
+    "forms-main-nav",
+    "invite-token-infrastructure",
+    "invite-user-from-admin",
+    "media-api-requires-auth",
+    "media-folders-defaults",
+    "media-upload-queue",
+    "page-builder-parity-expansion",
+    "user-field-guards-and-browser-tests",
+    "user-field-page-rebuild",
+    "workspace-manifest-consistency"
   ]
 }

@@ -361,7 +361,8 @@ export default function EditUserPage(): ReactElement {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Edit User</h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
+            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
+            <p className="text-sm font-normal text-muted-foreground mt-1">
               Update user details, change roles, or reset the password.
             </p>
           </div>
@@ -405,7 +406,10 @@ export default function EditUserPage(): ReactElement {
               fullName={watchedFullName || user?.name || ""}
               disabled={isUpdating}
               className="border border-border"
-              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
+              // Keep text-primary in both modes: on the dark bg-primary/20 tint it
+              // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
+              // color meant for solid primary fills) fell to ~1.45:1 on the tint.
+              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
             />
             <div className="flex-1">
               <h2 className="text-xl font-semibold text-foreground">

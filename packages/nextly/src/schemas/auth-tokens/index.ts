@@ -32,18 +32,21 @@ export function authTokenTables(dialect: SupportedDialect) {
       return {
         emailVerificationTokens: pg.emailVerificationTokens,
         passwordResetTokens: pg.passwordResetTokens,
+        userInviteTokens: pg.userInviteTokens,
         refreshTokens: pg.refreshTokens,
       };
     case "mysql":
       return {
         emailVerificationTokens: my.emailVerificationTokens,
         passwordResetTokens: my.passwordResetTokens,
+        userInviteTokens: my.userInviteTokens,
         refreshTokens: my.refreshTokens,
       };
     case "sqlite":
       return {
         emailVerificationTokens: sl.emailVerificationTokens,
         passwordResetTokens: sl.passwordResetTokens,
+        userInviteTokens: sl.userInviteTokens,
         refreshTokens: sl.refreshTokens,
       };
     default: {

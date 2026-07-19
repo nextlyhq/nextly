@@ -6,6 +6,7 @@ export const ROUTES = {
   FORGOT_PASSWORD: "/admin/forgot-password",
   RESET_PASSWORD: "/admin/reset-password",
   VERIFY_EMAIL: "/admin/verify-email",
+  ACCEPT_INVITE: "/admin/accept-invite",
 
   // Dashboard route (homepage)
   DASHBOARD: "/admin",
@@ -98,7 +99,8 @@ export const ROUTES = {
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
-  PLUGIN_SETTINGS: "/admin/plugins/[slug]",
+  PLUGIN_DETAIL: "/admin/plugins/[slug]",
+  PLUGIN_SETTINGS: "/admin/plugins/[slug]/settings",
 } as const;
 
 /**

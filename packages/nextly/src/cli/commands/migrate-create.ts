@@ -59,7 +59,6 @@ import {
   type MinimalConfigEntity,
 } from "../../domains/schema/migrate-create/generate";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
   applyDeferredExtendsToManifest,
@@ -71,7 +70,11 @@ import {
   buildSingleMetadataUpsert,
 } from "../../domains/schema/ui-schema/metadata-sql";
 import { createContext, type CommandContext } from "../program";
-import { getDialectDisplayName, validateDatabaseEnv } from "../utils/adapter";
+import {
+  getDialectDisplayName,
+  validateDatabaseEnv,
+  type SupportedDialect,
+} from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
@@ -433,6 +436,9 @@ function toMinimalEntities(
         unique?: boolean;
         index?: boolean;
         localized?: boolean;
+        dbType?: "integer" | "decimal";
+        precision?: number;
+        scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
@@ -450,6 +456,11 @@ function toMinimalEntities(
       // Forward the per-field localized flag so translatable columns are
       // relocated to the companion `_locales` table (i18n M3b-2).
       localized: f.localized,
+      // Forward decimal storage so migrate:create emits a decimal column, not
+      // the integer default, for a code-first `dbType: "decimal"` number field.
+      dbType: f.dbType,
+      precision: f.precision,
+      scale: f.scale,
     }));
     return {
       slug,

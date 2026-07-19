@@ -12,19 +12,18 @@
  * - **Checkbox Selection**: Top-left overlay for bulk operations (44×44px mobile, 20×20px desktop)
  * - **Actions Menu**: Top-right dropdown with Edit/Delete/Copy URL/Download (44×44px mobile, 32×32px desktop)
  * - **Bottom Overlay**: Gradient background with filename and file type badge
- * - **Visual States**: Default, hover (scale + shadow), selected  (border border-border + ring), focus (keyboard ring)
+ * - **Visual States**: Default, hover (border emphasis + image scale), selected (primary border)
  * - **Responsive**: Touch-friendly on mobile (44×44px touch targets), compact on desktop
  *
  * ## Design Specifications
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
- * - **Border**: Default  `border border-border`, Selected  `border border-border border-primary`
- * - **Border Radius**: 8px (`rounded-none`)
- * - **Hover State**: `border-primary-300 scale-105 shadow-md` (NOT when selected)
- * - **Selected State**: `border-2 border-primary-500 ring-2 ring-primary-500`, no scale
- * - **Focus State**: `ring-2 ring-primary-500 ring-offset-2` (keyboard navigation)
- * - **Transition**: `transition-all duration-150` (design system standard)
- * - **Bottom Overlay**: `bg-gradient-to-t from-black/60 to-transparent`, white text
+ * - **Border**: Default `border border-border`, Selected `border-primary`
+ * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
+ * - **Hover State**: `hover:border-primary` on the card, image scales (`group-hover:scale-105`); no shadow
+ * - **Selected State**: `border-primary`, no ring, no scale
+ * - **Transition**: `transition-all duration-300`
+ * - **Bottom Bar**: token surface (`bg-primary/5`, `border-t border-border`)
  * - **Filename**: `text-sm font-medium truncate`
  * - **Badge**: Type-based (image=success, video=primary, document=default, audio=warning)
  *
@@ -164,9 +163,10 @@ export function MediaCard({
       aria-selected={isSelected}
       className={cn(
         "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
+        // Selected uses border-primary; unselected gets it on hover, keeping the states distinct and the active boundary perceivable.
         isSelected
-          ? "border-primary/30 cursor-pointer"
-          : "hover:border-primary/30 cursor-pointer",
+          ? "border-primary cursor-pointer"
+          : "hover:border-primary cursor-pointer",
         className
       )}
     >
@@ -186,7 +186,7 @@ export function MediaCard({
               setImageLoading(false);
             }}
             className={cn(
-              "max-w-full max-h-full object-contain drop-shadow-sm",
+              "max-w-full max-h-full object-contain",
               imageLoading ? "opacity-0" : "opacity-100",
               "transition-all duration-500 group-hover:scale-105"
             )}
@@ -199,7 +199,7 @@ export function MediaCard({
         )}
         {imageError && (
           <div className="absolute inset-0 bg-accent/50 flex items-center justify-center">
-            <MediaTypeIcon className="w-12 h-12 text-muted-foreground/40" />
+            <MediaTypeIcon className="w-12 h-12 text-muted-foreground" />
           </div>
         )}
       </div>

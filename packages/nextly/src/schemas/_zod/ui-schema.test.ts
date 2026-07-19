@@ -40,6 +40,19 @@ describe("parseUiSchema", () => {
     expect(r.success).toBe(true);
   });
 
+  it("accepts an upload field WITHOUT relationTo (builder default shape)", () => {
+    // The builder's upload editor deliberately collects no relationTo (the
+    // runtime always targets the media library), so the manifest must
+    // accept the builder's default output or every builder upload field
+    // fails the mirror write while the DB apply succeeds.
+    const r = parseUiSchema({
+      collections: [
+        { slug: "pages", fields: [{ name: "hero", type: "upload" }] },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+
   it("treats an empty object as an empty manifest (version defaulted)", () => {
     const r = parseUiSchema({});
     expect(r.success).toBe(true);

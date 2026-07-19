@@ -76,6 +76,15 @@ export interface UpdateUserFieldDefinitionInput {
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
+  /**
+   * Accepted only when echoed back unchanged — the flag decides the backing
+   * column's type, which cannot change after creation.
+   */
+  hasMany?: boolean | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
   placeholder?: string | null;
   description?: string | null;
   sortOrder?: number;
@@ -195,6 +204,29 @@ export class UserFieldDefinitionService extends BaseService {
         logContext: { id: existing.id, from: existing.type, to: data.type },
       });
     }
+
+    // hasMany picks between a scalar and a json column, so it is as
+    // immutable as the type itself. Absent and echoed-back values pass.
+    if (
+      data.hasMany !== undefined &&
+      (data.hasMany ?? false) !== (existing.hasMany ?? false)
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "hasMany",
+            code: "USER_FIELD_HAS_MANY_IMMUTABLE",
+            message:
+              "Whether a field stores multiple values cannot be changed after it is created. Create a new field instead.",
+          },
+        ],
+        logContext: {
+          id: existing.id,
+          from: existing.hasMany,
+          to: data.hasMany,
+        },
+      });
+    }
   }
 
   /**
@@ -229,6 +261,11 @@ export class UserFieldDefinitionService extends BaseService {
       required: data.required ?? false,
       defaultValue: data.defaultValue ?? null,
       options: data.options ?? null,
+      hasMany: data.hasMany ?? null,
+      minLength: data.minLength ?? null,
+      maxLength: data.maxLength ?? null,
+      minValue: data.minValue ?? null,
+      maxValue: data.maxValue ?? null,
       placeholder: data.placeholder ?? null,
       description: data.description ?? null,
       sortOrder,
@@ -330,6 +367,10 @@ export class UserFieldDefinitionService extends BaseService {
     if (data.defaultValue !== undefined)
       updateData.defaultValue = data.defaultValue;
     if (data.options !== undefined) updateData.options = data.options;
+    if (data.minLength !== undefined) updateData.minLength = data.minLength;
+    if (data.maxLength !== undefined) updateData.maxLength = data.maxLength;
+    if (data.minValue !== undefined) updateData.minValue = data.minValue;
+    if (data.maxValue !== undefined) updateData.maxValue = data.maxValue;
     if (data.placeholder !== undefined)
       updateData.placeholder = data.placeholder;
     if (data.description !== undefined)
@@ -459,8 +500,24 @@ export class UserFieldDefinitionService extends BaseService {
         const defaultValue = (field.defaultValue as string) ?? null;
         const options =
           (field.options as { label: string; value: string }[]) ?? null;
-        const placeholder = (field.placeholder as string) ?? null;
-        const description = (field.description as string) ?? null;
+        // Presentation options live under `admin` on field configs; the flat
+        // spelling is kept for older configs that carried them at top level.
+        const admin = (field.admin ?? {}) as {
+          placeholder?: string;
+          description?: string;
+        };
+        const placeholder =
+          (field.placeholder as string) ?? admin.placeholder ?? null;
+        const description =
+          (field.description as string) ?? admin.description ?? null;
+        // Persist the multi-value flag and the validation bounds: dropping
+        // them here made a code-declared maxLength silently inert, because
+        // the checker reads configs back from these rows, not from code.
+        const hasMany = (field.hasMany as boolean) ?? null;
+        const minLength = (field.minLength as number) ?? null;
+        const maxLength = (field.maxLength as number) ?? null;
+        const minValue = (field.min as number) ?? null;
+        const maxValue = (field.max as number) ?? null;
         const sortOrder = i;
 
         const existing = existingByName.get(name);
@@ -475,6 +532,11 @@ export class UserFieldDefinitionService extends BaseService {
             JSON.stringify(existing.options) !== JSON.stringify(options) ||
             existing.placeholder !== placeholder ||
             existing.description !== description ||
+            (existing.hasMany ?? null) !== hasMany ||
+            (existing.minLength ?? null) !== minLength ||
+            (existing.maxLength ?? null) !== maxLength ||
+            (existing.minValue ?? null) !== minValue ||
+            (existing.maxValue ?? null) !== maxValue ||
             existing.sortOrder !== sortOrder;
 
           if (changed) {
@@ -488,6 +550,11 @@ export class UserFieldDefinitionService extends BaseService {
                 options,
                 placeholder,
                 description,
+                hasMany,
+                minLength,
+                maxLength,
+                minValue,
+                maxValue,
                 sortOrder,
                 updatedAt: now,
               })
@@ -505,6 +572,11 @@ export class UserFieldDefinitionService extends BaseService {
             options,
             placeholder,
             description,
+            hasMany,
+            minLength,
+            maxLength,
+            minValue,
+            maxValue,
             sortOrder,
             source: "code",
             isActive: true,

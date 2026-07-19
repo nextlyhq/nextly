@@ -15,7 +15,6 @@
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
-
 /** Per-locale translation state, mirroring the backend `_translations` map. */
 export interface LocaleTranslationMeta {
   translated: boolean;
@@ -46,10 +45,10 @@ function pillState(meta: LocaleTranslationMeta | undefined): PillState {
 // neutral muted, translated-without-status = subtle positive, missing = dashed/outline.
 const PILL_CLASS: Record<PillState, string> = {
   missing:
-    "border border-dashed border-primary/20 text-muted-foreground/70 bg-transparent",
-  draft: "bg-muted text-muted-foreground border border-primary/10",
+    "border border-dashed border-border text-muted-foreground bg-transparent",
+  draft: "bg-muted text-muted-foreground border border-border",
   translated:
-    "bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-900",
+    "bg-success-100 text-success-800 border border-success-200 dark:bg-success-950/40 dark:text-success-200 dark:border-success-900",
   published: "bg-foreground text-background",
 };
 

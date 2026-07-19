@@ -14,33 +14,33 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
 import { Columns, Package } from "@admin/components/icons";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
-import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
-import type {
-  DataTableSelection,
-  NextlyColumn,
-} from "@admin/components/ui/table/data-table";
+import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
-import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { publicApi } from "@admin/lib/api/publicApi";
 import type { PluginMetadata, AdminBranding } from "@admin/types/branding";
 
-const PLACEMENT_LABELS: Record<string, string> = {
-  collections: "Collections",
-  singles: "Singles",
-  users: "Users",
-  settings: "Settings",
-  plugins: "Plugins",
-  standalone: "Standalone",
+/** Human labels for the category vocabulary plugins declare. */
+const CATEGORY_LABELS: Record<string, string> = {
+  content: "Content",
+  forms: "Forms",
+  seo: "SEO",
+  media: "Media",
+  commerce: "Commerce",
+  integration: "Integration",
+  "dev-tools": "Dev Tools",
+  other: "Other",
 };
 
 type PluginWithId = PluginMetadata & { id: string };
+
+type StatusFilter = "all" | "enabled" | "disabled";
 
 function toSlug(name: string): string {
   return name
@@ -53,11 +53,39 @@ function toSlug(name: string): string {
 const ALWAYS_VISIBLE = new Set(["name"]);
 
 /**
+ * Read-only Enabled/Disabled pill. Enabled state comes from the developer's
+ * config, so the admin reports it rather than offering a toggle that the next
+ * deploy would silently revert.
+ */
+export function PluginStatusPill({ enabled }: { enabled: boolean }) {
+  return (
+    <Badge
+      variant="outline"
+      className={
+        // Full-strength success border so the enabled pill's boundary is perceivable at the 3:1 UI minimum.
+        enabled
+          ? "text-xs font-normal border-success text-success"
+          : "text-xs font-normal text-muted-foreground"
+      }
+    >
+      <span
+        aria-hidden
+        className={`mr-1.5 inline-block h-1.5 w-1.5 ${
+          enabled ? "bg-success" : "bg-muted-foreground/60"
+        }`}
+      />
+      {enabled ? "Enabled" : "Disabled"}
+    </Badge>
+  );
+}
+
+/**
  * PluginsTable
  *
- * Lists installed plugins with client-side search, pagination, column
- * visibility, and selection. Plugins are read-only previews (no row actions or
- * navigation); bulk operations are not yet available.
+ * Lists installed plugins with client-side search, a status filter,
+ * pagination, and column visibility. Rows navigate to the plugin's detail
+ * page. Plugins are installed and updated through npm + the Nextly config, so
+ * the table exposes no mutation actions.
  */
 export default function PluginsTable() {
   const { data: branding } = useSuspenseQuery<AdminBranding>({
@@ -70,13 +98,14 @@ export default function PluginsTable() {
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Reset to the first page when the search term changes so the slice does not
-  // fall out of range against the newly filtered list.
+  // Reset to the first page when the search term or status filter changes so
+  // the slice does not fall out of range against the newly filtered list.
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch]);
+  }, [debouncedSearch, statusFilter]);
 
   // Changing the page size can leave the current page index out of range; snap
   // back to the first page.
@@ -93,15 +122,25 @@ export default function PluginsTable() {
   }, [branding?.plugins]);
 
   const filteredPlugins = useMemo(() => {
-    if (!debouncedSearch) return pluginsWithId;
-    const query = debouncedSearch.toLowerCase();
-    return pluginsWithId.filter(
-      plugin =>
-        plugin.name.toLowerCase().includes(query) ||
-        plugin.appearance?.label?.toLowerCase().includes(query) ||
-        plugin.description?.toLowerCase().includes(query)
-    );
-  }, [pluginsWithId, debouncedSearch]);
+    let result = pluginsWithId;
+    if (statusFilter !== "all") {
+      // Older servers omit `enabled`; a plugin whose behavior loads is enabled.
+      result = result.filter(
+        plugin => (plugin.enabled !== false) === (statusFilter === "enabled")
+      );
+    }
+    if (debouncedSearch) {
+      const query = debouncedSearch.toLowerCase();
+      result = result.filter(
+        plugin =>
+          plugin.name.toLowerCase().includes(query) ||
+          plugin.appearance?.label?.toLowerCase().includes(query) ||
+          plugin.description?.toLowerCase().includes(query) ||
+          plugin.author?.toLowerCase().includes(query)
+      );
+    }
+    return result;
+  }, [pluginsWithId, debouncedSearch, statusFilter]);
 
   const totalCount = filteredPlugins.length;
 
@@ -109,15 +148,6 @@ export default function PluginsTable() {
     const start = page * pageSize;
     return filteredPlugins.slice(start, start + pageSize);
   }, [filteredPlugins, page, pageSize]);
-
-  const {
-    selectedIds,
-    selectedCount,
-    toggleSelection,
-    selectAllOnPage,
-    deselectAllOnPage,
-    clearSelection,
-  } = useRowSelection();
 
   const toggleColumn = useCallback((key: string) => {
     setHiddenColumns(prev => {
@@ -128,22 +158,20 @@ export default function PluginsTable() {
     });
   }, []);
 
-  const handleBulkDelete = useCallback(() => {
-    toast.info("Bulk delete is not available for plugins yet.");
-  }, []);
-
   const allColumns = useMemo<NextlyColumn<PluginWithId>[]>(() => {
-    const conversion = (v: unknown): string =>
-      typeof v === "string" ? v : "—";
-
     return [
       {
         name: "name",
-        header: "NAME",
+        header: "PLUGIN",
         cell: ({ row }) => {
           const iconName = row.appearance?.icon || "Package";
           const IconComponent =
             (Icons as Record<string, React.ElementType>)[iconName] || Package;
+          // Secondary metadata (description, author) packs under the name so
+          // the table stays two-scan-columns wide like an installed-list should.
+          const secondary = [row.description, row.author && `by ${row.author}`]
+            .filter(Boolean)
+            .join(" · ");
           return (
             <div className="flex items-center gap-3">
               <div className="table-row-icon-cover">
@@ -153,9 +181,9 @@ export default function PluginsTable() {
                 <span className="truncate text-sm font-medium text-foreground">
                   {row.appearance?.label ?? row.name}
                 </span>
-                {row.description && (
+                {secondary && (
                   <span className="truncate text-xs text-muted-foreground">
-                    {row.description}
+                    {secondary}
                   </span>
                 )}
               </div>
@@ -168,21 +196,29 @@ export default function PluginsTable() {
         header: "VERSION",
         cell: ({ value }) => (
           <span className="font-mono text-sm text-muted-foreground">
-            {conversion(value)}
+            {typeof value === "string" ? value : "—"}
           </span>
         ),
       },
       {
-        name: "placement",
-        header: "PLACEMENT",
-        cell: ({ value }) => (
-          <Badge
-            variant="default"
-            className="text-xs font-normal capitalize text-muted-foreground"
-          >
-            {PLACEMENT_LABELS[String(value)] ?? String(value)}
-          </Badge>
-        ),
+        name: "category",
+        header: "CATEGORY",
+        cell: ({ value }) =>
+          typeof value === "string" && value ? (
+            <Badge
+              variant="default"
+              className="text-xs font-normal text-muted-foreground"
+            >
+              {CATEGORY_LABELS[value] ?? value}
+            </Badge>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          ),
+      },
+      {
+        name: "enabled",
+        header: "STATUS",
+        cell: ({ row }) => <PluginStatusPill enabled={row.enabled !== false} />,
       },
     ];
   }, []);
@@ -198,31 +234,8 @@ export default function PluginsTable() {
     [allColumns]
   );
 
-  const selection = useMemo<DataTableSelection<PluginWithId>>(
-    () => ({
-      selectedIds,
-      onToggle: plugin => toggleSelection(plugin.id),
-      onToggleAll: (rows, allSelected) => {
-        const ids = rows.map(r => r.id);
-        if (allSelected) deselectAllOnPage(ids);
-        else selectAllOnPage(ids);
-      },
-    }),
-    [selectedIds, toggleSelection, deselectAllOnPage, selectAllOnPage]
-  );
-
   return (
     <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="plugin"
-        />
-      )}
-
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <SearchBar
           value={search}
@@ -231,6 +244,23 @@ export default function PluginsTable() {
           className="w-full border-border bg-background text-foreground md:max-w-sm"
         />
         <div className="flex items-center gap-2">
+          <div
+            className="flex items-center gap-1"
+            role="group"
+            aria-label="Filter plugins by status"
+          >
+            {(["all", "enabled", "disabled"] as StatusFilter[]).map(f => (
+              <Button
+                key={f}
+                variant={statusFilter === f ? "default" : "outline"}
+                size="md"
+                onClick={() => setStatusFilter(f)}
+                className="capitalize"
+              >
+                {f}
+              </Button>
+            ))}
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -262,13 +292,15 @@ export default function PluginsTable() {
       <DataTableView<PluginWithId>
         columns={columns}
         rows={paginatedPlugins}
-        selection={selection}
+        rowHref={plugin =>
+          buildRoute(ROUTES.PLUGIN_DETAIL, { slug: plugin.id })
+        }
         registryKey="plugins"
         ariaLabel="Installed plugins table"
         emptyMessage={
-          debouncedSearch
-            ? "No plugins found matching your search."
-            : "No plugins installed."
+          debouncedSearch || statusFilter !== "all"
+            ? "No plugins match the current filters."
+            : "No plugins installed. Add plugins to your Nextly config to extend functionality."
         }
       />
       {totalCount > 0 && (

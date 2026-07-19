@@ -16,7 +16,6 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
     ["radio", "text"],
     ["repeater", "jsonb"],
     ["group", "jsonb"],
-    ["component", "jsonb"],
     ["json", "jsonb"],
     ["chips", "jsonb"],
   ];
@@ -31,6 +30,18 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
       expect(d?.dialectType).toBe(dialectType);
     });
   }
+
+  // component is storable but has no parent column: its values live in a
+  // separate comp_{slug} table, so the descriptor returns null (column-less).
+  it("maps component -> no parent column (stored in its own table)", () => {
+    const d = getColumnDescriptor(
+      { name: "f", type: "component", required: true } as unknown as Parameters<
+        typeof getColumnDescriptor
+      >[0],
+      "postgresql"
+    );
+    expect(d).toBeNull();
+  });
 });
 
 // Minimal FieldConfig shape used by the helper. The real type lives in
@@ -47,6 +58,7 @@ const RESERVED_NAMES = new Set([
   "slug",
   "created_at",
   "updated_at",
+  "created_by",
 ]);
 
 function userColumns(columns: ColumnSpec[]): ColumnSpec[] {
@@ -61,7 +73,7 @@ function findColumn(
 }
 
 describe("buildDesiredTableFromFields - reserved columns", () => {
-  it("PG: injects id + created_at + updated_at + title + slug", () => {
+  it("PG: injects id + created_at + updated_at + title + slug + created_by", () => {
     const table = buildDesiredTableFromFields("dc_x", [], "postgresql");
     expect(findColumn(table.columns, "id")).toEqual({
       name: "id",
@@ -80,6 +92,27 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     });
     expect(findColumn(table.columns, "created_at")?.type).toBe("timestamp");
     expect(findColumn(table.columns, "updated_at")?.type).toBe("timestamp");
+    // Owner column: nullable text (matches the id column type), no default.
+    expect(findColumn(table.columns, "created_by")).toEqual({
+      name: "created_by",
+      type: "text",
+      nullable: true,
+    });
+  });
+
+  it("keeps the system title column when a component field is named 'title'", () => {
+    // A component provides no column, so it must not suppress the system title
+    // column the way a real user 'title' field does.
+    const table = buildDesiredTableFromFields(
+      "dc_x",
+      [{ name: "title", type: "component" }] as never,
+      "postgresql"
+    );
+    expect(findColumn(table.columns, "title")).toEqual({
+      name: "title",
+      type: "text",
+      nullable: false,
+    });
   });
 
   it("MySQL: id is varchar(36); title/slug varchar(255); timestamps", () => {

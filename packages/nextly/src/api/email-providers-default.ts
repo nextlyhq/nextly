@@ -18,8 +18,8 @@ import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { respondAction } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -50,7 +50,10 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "update", resource: "email-providers" },
+      { action: "manage", resource: "email-providers" },
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();

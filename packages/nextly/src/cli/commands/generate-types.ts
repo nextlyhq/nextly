@@ -442,10 +442,23 @@ function convertToUserFieldRecords(
           ? String(field.defaultValue ?? "") || null
           : null,
       options,
+      hasMany: "hasMany" in field ? Boolean(field.hasMany) : null,
+      minLength:
+        "minLength" in field ? ((field.minLength as number) ?? null) : null,
+      maxLength:
+        "maxLength" in field ? ((field.maxLength as number) ?? null) : null,
+      minValue: "min" in field ? ((field.min as number) ?? null) : null,
+      maxValue: "max" in field ? ((field.max as number) ?? null) : null,
       placeholder:
-        "placeholder" in field ? ((field.placeholder as string) ?? null) : null,
+        ("placeholder" in field ? (field.placeholder as string) : undefined) ??
+        ("admin" in field
+          ? ((field.admin as { placeholder?: string })?.placeholder ?? null)
+          : null),
       description:
-        "description" in field ? ((field.description as string) ?? null) : null,
+        ("description" in field ? (field.description as string) : undefined) ??
+        ("admin" in field
+          ? ((field.admin as { description?: string })?.description ?? null)
+          : null),
       sortOrder: index,
       source: "code" as const,
       isActive: true,

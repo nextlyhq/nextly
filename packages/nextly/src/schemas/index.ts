@@ -55,6 +55,8 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { versionsTables } from "./versions";
+import { webhookTables } from "./webhooks";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -89,6 +91,12 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     // localization is disabled (recoverable backup). Bootstrapped out-of-band via
     // `getI18nArchiveDdl` for existing DBs; declared here for fresh installs.
     ...Object.values(nextlyI18nArchiveTables(dialect)),
+    // `nextly_versions` is a first-class managed system table. It has no
+    // bootstrap-ordering constraint (nothing records into it before it exists,
+    // unlike the migration ledger), so declaring it here is sufficient:
+    // core-reconcile creates it on fresh and existing databases.
+    ...Object.values(versionsTables(dialect)),
+    ...Object.values(webhookTables(dialect)),
   ];
 
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
@@ -143,6 +151,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "accounts",
   "sessions",
   "password_reset_tokens",
+  "user_invite_tokens",
   "email_verification_tokens",
   "refresh_tokens",
   "roles",
@@ -167,6 +176,10 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_templates",
   "nextly_schema_events",
   "nextly_i18n_archive",
+  "nextly_versions",
+  "nextly_events",
+  "nextly_webhooks",
+  "nextly_webhook_deliveries",
 ] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */
@@ -192,6 +205,7 @@ export { users, accounts, sessions } from "./users/postgres";
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "./auth-tokens/postgres";
 
@@ -216,6 +230,10 @@ export { auditLog, activityLog } from "./audit/postgres";
 export { nextlyMeta } from "./nextly-meta/postgres";
 // Plan B — schema-events bookkeeping table. PG re-export for direct-query callers.
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "./schema-events/postgres";
+
+// Content-versioning store. PG re-export for direct-query callers, matching the
+// other managed core tables listed in CORE_TABLE_NAMES.
+export { nextlyVersionsPg as nextlyVersions } from "./versions/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 // Plan A Task 11 — apiKeys (Drizzle). PG re-exports for direct-query callers.
@@ -223,4 +241,12 @@ export * from "./dynamic-components"; // kept; unchanged
 // schemas/_zod/api-keys.ts and are re-exported via `export * from "./_zod"`
 // at the top of this file.
 export { apiKeys } from "./api-keys/postgres";
+// Webhook + event system tables. PG re-exports for direct-query callers who
+// want to inspect the event/webhook/delivery ledger via the `nextly/schemas`
+// subpath; other dialects are reachable through getCoreSchema(dialect).
+export {
+  nextlyEvents,
+  nextlyWebhooks,
+  nextlyWebhookDeliveries,
+} from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19

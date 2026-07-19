@@ -64,9 +64,17 @@ export interface ColumnDescriptor {
   name: string;
   dialectType: string;
   length?: number;
+  /** Total digits for the `decimal` kind (DECIMAL/NUMERIC precision). */
+  precision?: number;
+  /** Fractional digits for the `decimal` kind (DECIMAL/NUMERIC scale). */
+  scale?: number;
   nullable: boolean;
   kind: ColumnKind;
 }
+
+/** Default DECIMAL(precision, scale) when a decimal number field omits them. */
+export const DEFAULT_DECIMAL_PRECISION = 10;
+export const DEFAULT_DECIMAL_SCALE = 2;
 
 /**
  * Logical column kind — used by `runtime-schema-generator.ts` to
@@ -84,6 +92,7 @@ export type ColumnKind =
   | "boolean" // PG: bool, MySQL: tinyint(1), SQLite: integer(boolean mode)
   | "integer" // PG: int4, MySQL: int, SQLite: integer
   | "double" // PG: float8, MySQL: double, SQLite: real
+  | "decimal" // exact DECIMAL/NUMERIC(precision, scale); PG/SQLite: numeric, MySQL: decimal
   | "timestamp" // PG/MySQL: timestamp, SQLite: integer(timestamp mode)
   | "json" // PG: jsonb, MySQL: json, SQLite: text
   | "fkSingle" // single-target foreign key — text/varchar(36)
@@ -124,13 +133,28 @@ export function getColumnDescriptor(
 
   if (kind === "skip") return null;
 
-  const dialectType = renderDialectType(kind, dialect, /* length */ undefined);
+  // Decimal fields carry precision/scale (author-set or the DECIMAL(10,2)
+  // default); every other kind ignores them.
+  const decimal =
+    kind === "decimal"
+      ? {
+          precision: field.precision ?? DEFAULT_DECIMAL_PRECISION,
+          scale: field.scale ?? DEFAULT_DECIMAL_SCALE,
+        }
+      : undefined;
+
+  const dialectType = renderDialectType(kind, dialect, {
+    length: undefined,
+    precision: decimal?.precision,
+    scale: decimal?.scale,
+  });
   const length = lengthForKind(kind);
 
   return {
     name,
     dialectType,
     ...(length !== undefined ? { length } : {}),
+    ...(decimal ? { precision: decimal.precision, scale: decimal.scale } : {}),
     nullable,
     kind,
   };
@@ -158,11 +182,17 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       return "longText";
 
     case "number": {
-      // UI-created fields carry options.format === "float" for decimal storage;
-      // code-first fields have no options, defaulting to integer — matching
-      // the DDL emitted by dynamic-collection-schema-service.ts.
-      const fmt = (field as { options?: { format?: string } }).options?.format;
-      return fmt === "float" ? "double" : "integer";
+      // A hasMany number is written as a JSON array (the mutation path
+      // stringifies it), so it must be stored as JSON, not a scalar numeric
+      // column, regardless of dbType.
+      if (field.hasMany) return "json";
+      // Code-first fields opt into exact fractional storage via
+      // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
+      if (field.dbType === "decimal") return "decimal";
+      // UI-created fields carry options.format === "float" for float storage;
+      // code-first without dbType defaults to integer, matching the DDL emitted
+      // by dynamic-collection-schema-service.ts.
+      return field.options?.format === "float" ? "double" : "integer";
     }
 
     case "checkbox":
@@ -173,6 +203,14 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "relationship":
     case "upload": {
+      // A many-to-many relationship stores its links in a dedicated junction
+      // table, not on the parent row, so the parent needs no column (mirrors
+      // component fields, which return "skip"). Emitting an fkSingle column
+      // here produced a phantom parent column the junction-only physical
+      // schema never has, so the runtime table object disagreed with the DB.
+      const relationType = (field as { options?: { relationType?: string } })
+        .options?.relationType;
+      if (relationType === "manyToMany") return "skip";
       // hasMany or array-target relationships are stored as JSON
       // arrays of FK ids. Single-target -> plain FK column.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
@@ -183,10 +221,15 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "repeater":
     case "group":
-    case "component":
     case "json":
     case "chips":
       return "json";
+
+    case "component":
+      // Component values live in their own comp_{slug} tables and are stripped
+      // from the parent row on write, so the parent needs no column. Emitting
+      // one (NOT NULL when required) produced an orphan that broke every insert.
+      return "skip";
 
     default: {
       // Plugin-contributed custom field type maps to its declared storage
@@ -211,8 +254,23 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 function renderDialectType(
   kind: ColumnKind,
   dialect: SupportedDialect,
-  length: number | undefined
+  opts: { length?: number; precision?: number; scale?: number }
 ): string {
+  const { length } = opts;
+  if (kind === "decimal") {
+    // The diff normalizes precision away (numeric(10,2) -> "numeric"), so a
+    // decimal column never triggers a phantom type change; precision is carried
+    // for the emitter. Trade-off: a later precision/scale change on an existing
+    // column (e.g. 10,2 -> 12,4) is NOT detected as a diff, because the live
+    // introspector reports only the base type. Resizing a decimal column needs
+    // a manual migration until the introspector captures numeric_precision/
+    // numeric_scale on the live side.
+    const p = opts.precision ?? DEFAULT_DECIMAL_PRECISION;
+    const s = opts.scale ?? DEFAULT_DECIMAL_SCALE;
+    if (dialect === "postgresql") return `numeric(${p}, ${s})`;
+    if (dialect === "mysql") return `decimal(${p},${s})`;
+    return "numeric"; // sqlite stores as NUMERIC affinity
+  }
   if (kind === "text") {
     if (dialect === "postgresql") return "text";
     if (dialect === "mysql") return `varchar(${length ?? 255})`;
@@ -295,6 +353,14 @@ export interface SystemColumnSet {
    * never leaks during the migration that adds the column.
    */
   hasStatus?: boolean;
+  /**
+   * True for a Single's table. Singles are a single global row with no
+   * per-user owner, so the `created_by` owner column is NOT injected (owner-only
+   * access is a collection concept). Keeps the runtime schema, the diff input,
+   * and the DDL in lockstep — otherwise a Single's runtime schema would select
+   * a column its physical table never gets.
+   */
+  isSingle?: boolean;
 }
 
 export interface SystemColumnDescriptor {
@@ -355,6 +421,18 @@ export function getSystemColumnDescriptors(
       primaryKey: false,
       default: "now()",
     });
+    // Owner of the row, stamped with the creating user's id. Collections only
+    // (never singles). Nullable: existing rows and system/seed creates have no
+    // user. Mirrors runtime-schema-generator's pgText("created_by") (text,
+    // matching the id column type).
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "text",
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       // Must mirror runtime-schema-generator's
       // pgVarchar("status", { length: 20 }).notNull().default("draft").
@@ -408,6 +486,20 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    // Owner of the row (creating user's id, NOT the row id). Collections only
+    // (never singles). Sized to match the MySQL users.id column (varchar(191),
+    // Auth.js-compatible), not the varchar(36) row id — a longer user id would
+    // otherwise be truncated. Nullable; mirrors runtime-schema-generator's
+    // created_by column.
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "varchar(191)",
+        length: 191,
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       cols.push({
         name: "status",
@@ -454,6 +546,17 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    // Owner of the row (creating user's id). Collections only (never singles).
+    // Nullable; mirrors runtime-schema-generator's sqliteText("created_by")
+    // (matching the id column type).
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "text",
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       cols.push({
         name: "status",

@@ -83,7 +83,7 @@ export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
                 <span className="flex items-center gap-1">{content}</span>
               )}
               {!isLast && (
-                <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
               )}
             </li>
           );

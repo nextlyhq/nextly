@@ -20,8 +20,8 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { respondAction } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -62,7 +62,10 @@ const testProviderSchema = z.object({
  */
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "create", resource: "email-providers" },
+      { action: "manage", resource: "email-providers" },
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();

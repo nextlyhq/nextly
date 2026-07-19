@@ -185,16 +185,28 @@ export class CollectionBulkService extends BaseService {
     overrides?: Record<string, unknown>;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** Route auth already ran the create RBAC gate; skip only that re-check. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
     try {
-      // 1. Fetch the source entry (with read permission check)
+      // 1. Fetch the source entry with a REAL read check. Duplicating a row is
+      // reading it plus creating a copy, and the route only authorized the
+      // create — so the caller must genuinely be able to READ the source under
+      // its own (key-scoped) access. `overrideAccess` stays as passed (false
+      // for route/untrusted callers), so a create-only caller without read is
+      // correctly denied rather than silently duplicating a row it can't see.
+      // Draft visibility is limited to trusted (overrideAccess) callers: route
+      // auth attested create, not the right to read unpublished rows, so a
+      // route/untrusted duplicate keeps the default published-only visibility.
+      const sourceStatus = params.overrideAccess ? "all" : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
         user: params.user,
         overrideAccess: params.overrideAccess,
+        status: sourceStatus,
         context: params.context,
       });
 
@@ -240,11 +252,16 @@ export class CollectionBulkService extends BaseService {
         Object.assign(duplicateData, params.overrides);
       }
 
-      // 5. Create the new entry using createEntry (inherits all hooks and validation)
+      // 5. Create the new entry using createEntry (inherits all hooks and
+      // validation). Forward routeAuthorized + overrideAccess so a route that
+      // already authorized the create is not re-gated under the wrong scope,
+      // matching the other route write paths.
       const createResult = await this.mutationService.createEntry(
         {
           collectionName: params.collectionName,
           user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
         },
         duplicateData
       );
@@ -281,6 +298,9 @@ export class CollectionBulkService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /** When true, the route middleware already ran the RBAC gate; forwarded to
+     * each per-entry delete so it isn't redundantly re-checked. */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
@@ -302,6 +322,7 @@ export class CollectionBulkService extends BaseService {
               entryId,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              routeAuthorized: params.routeAuthorized,
               context: params.context,
             });
 
@@ -351,6 +372,11 @@ export class CollectionBulkService extends BaseService {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Route-level auth already ran (REST dispatcher). Forwarded to updateEntry
+     * so per-row success records are still redacted to what the user may read.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
@@ -368,6 +394,7 @@ export class CollectionBulkService extends BaseService {
                 entryId,
                 user: params.user,
                 overrideAccess: params.overrideAccess,
+                routeAuthorized: params.routeAuthorized,
                 context: params.context,
               },
               params.data
@@ -443,6 +470,8 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Route auth already ran; response is still redacted for this user */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -469,7 +498,8 @@ export class CollectionBulkService extends BaseService {
       accessUser,
       undefined,
       undefined,
-      params.overrideAccess
+      params.overrideAccess,
+      params.routeAuthorized
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -481,13 +511,39 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Find matching entries using listEntries (respects access control).
-    // Use a high limit to get all matching entries for bulk update.
+    // 2. Enumerate the target rows under the UPDATE rule. The collection-level
+    // UPDATE access was already checked above, so this runs with overrideAccess
+    // to skip the READ rules (a role allowed to update but not read must still
+    // see its targets) and `status: "all"` to keep drafts enumerable — but it
+    // is constrained to rows the caller may actually UPDATE via the update
+    // owner constraint. That means an owner-only update enumerates only owned
+    // rows, so non-updatable ids are never surfaced as per-id failures or
+    // counted against the limit. getOwnerConstraint returns null for trusted /
+    // super-admin callers and for non-owner-only rules, so those enumerate all
+    // matching rows. Each row is still gated per-row in bulkUpdateEntries.
+    const updateOwnerConstraint = await this.accessService.getOwnerConstraint(
+      params.collectionName,
+      "update",
+      params.user,
+      params.overrideAccess
+    );
+    const updateEnumerationWhere: WhereFilter = updateOwnerConstraint
+      ? {
+          and: [
+            params.where,
+            {
+              [updateOwnerConstraint.field]: {
+                equals: updateOwnerConstraint.value,
+              },
+            },
+          ],
+        }
+      : params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
-      where: params.where,
-      user: params.user,
-      overrideAccess: params.overrideAccess,
+      where: updateEnumerationWhere,
+      overrideAccess: true,
+      status: "all",
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit, // Use limit or max allowed
@@ -549,13 +605,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // 5. Use existing bulkUpdateEntries for per-entry updates with hooks
+    // 5. Use existing bulkUpdateEntries for per-entry updates with hooks.
+    // Forward routeAuthorized so per-entry response redaction matches the
+    // id-based path (route auth ran, but reads are still redacted per user).
     return this.bulkUpdateEntries({
       collectionName: params.collectionName,
       ids,
       data: params.data,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
     });
   }
@@ -597,6 +656,9 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** When true, the route middleware already ran the RBAC gate; stored
+       * rules are still enforced. */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -622,7 +684,8 @@ export class CollectionBulkService extends BaseService {
       accessUser,
       undefined,
       undefined,
-      params.overrideAccess
+      params.overrideAccess,
+      params.routeAuthorized
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -634,12 +697,36 @@ export class CollectionBulkService extends BaseService {
       });
     }
 
-    // 2. Find matching entries using listEntries (respects access control)
+    // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
+    // the READ rules (a role allowed to delete but not read must still see its
+    // targets) and `status: "all"` keeps drafts enumerable, but the delete
+    // owner constraint scopes it to rows the caller may actually DELETE, so an
+    // owner-only delete enumerates only owned rows and never surfaces
+    // non-deletable ids. Null for trusted / super-admin / non-owner-only rules
+    // (enumerate all). Each row is still gated per-row in bulkDeleteEntries.
+    const deleteOwnerConstraint = await this.accessService.getOwnerConstraint(
+      params.collectionName,
+      "delete",
+      params.user,
+      params.overrideAccess
+    );
+    const deleteEnumerationWhere: WhereFilter = deleteOwnerConstraint
+      ? {
+          and: [
+            params.where,
+            {
+              [deleteOwnerConstraint.field]: {
+                equals: deleteOwnerConstraint.value,
+              },
+            },
+          ],
+        }
+      : params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
-      where: params.where,
-      user: params.user,
-      overrideAccess: params.overrideAccess,
+      where: deleteEnumerationWhere,
+      overrideAccess: true,
+      status: "all",
       context: params.context,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit,
@@ -702,6 +789,7 @@ export class CollectionBulkService extends BaseService {
       ids,
       user: params.user,
       overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       context: params.context,
     });
   }

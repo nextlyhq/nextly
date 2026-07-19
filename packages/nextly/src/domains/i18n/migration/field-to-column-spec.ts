@@ -28,5 +28,10 @@ export function fieldToLocalizedColumnSpec(
     name: desc.name,
     kind,
     ...(desc.length ? { length: desc.length } : {}),
+    // Carry precision/scale so a localized decimal keeps exact numeric storage
+    // in the companion table (main added `decimal` field storage).
+    ...(kind === "decimal"
+      ? { precision: desc.precision, scale: desc.scale }
+      : {}),
   };
 }

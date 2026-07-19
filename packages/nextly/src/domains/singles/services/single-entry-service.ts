@@ -76,6 +76,8 @@ export class SingleEntryService extends BaseService {
       localization
     );
 
+    // The write path evaluates a Single's stored access rules; its own
+    // stateless evaluator is created inside SingleMutationService.
     this.mutationService = new SingleMutationService(
       adapter,
       logger,

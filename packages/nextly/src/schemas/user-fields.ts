@@ -36,6 +36,42 @@ function fieldConfigToZod(field: UserFieldConfig): z.ZodTypeAny {
     case "email":
       return z.string().email();
 
+    case "url": {
+      let schema = z.string().url();
+      if ("minLength" in field && typeof field.minLength === "number") {
+        schema = schema.min(field.minLength);
+      }
+      if ("maxLength" in field && typeof field.maxLength === "number") {
+        schema = schema.max(field.maxLength);
+      }
+      return schema;
+    }
+
+    case "phone": {
+      // Deliberately permissive: digits with common separators and an
+      // optional leading +. Strict national formats belong to the app.
+      // The digit lookahead rejects separator-only strings like "---".
+      // The regex is structural only — length lives entirely in the bounds,
+      // so a declared bound can never contradict a hard-coded range and
+      // produce an unsatisfiable field.
+      const min =
+        "minLength" in field && typeof field.minLength === "number"
+          ? field.minLength
+          : 3;
+      const max =
+        "maxLength" in field && typeof field.maxLength === "number"
+          ? field.maxLength
+          : 32;
+      return z
+        .string()
+        .regex(
+          /^(?=.*\d)\+?[\d\s().-]+$/,
+          "Must be a phone number (digits, spaces, and + ( ) . - only)"
+        )
+        .min(min)
+        .max(max);
+    }
+
     case "number": {
       let schema = z.number();
       if ("min" in field && typeof field.min === "number") {
@@ -88,6 +124,18 @@ function fieldConfigToZod(field: UserFieldConfig): z.ZodTypeAny {
     }
 
     default:
+      // A plugin user field's value shape is owned by the plugin, so accept any
+      // value — but enforce the base required check for a required plugin field
+      // (buildUserFieldsSchema leaves required fields unwrapped, and z.unknown()
+      // alone would still treat a missing key as valid).
+      if ("required" in field && field.required === true) {
+        return z
+          .unknown()
+          .refine(
+            value => value !== undefined && value !== null && value !== "",
+            { message: "This field is required" }
+          );
+      }
       return z.unknown();
   }
 }

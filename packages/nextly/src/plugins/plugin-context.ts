@@ -318,6 +318,21 @@ export interface PluginAdminAppearance {
   badgeVariant?: "default" | "secondary" | "destructive" | "outline";
 }
 
+/**
+ * Controlled vocabulary for the admin plugins list's category filter.
+ * Deliberately short: a category is only useful when several plugins can
+ * share it, so new values are added here rather than typed ad hoc.
+ */
+export type PluginCategory =
+  | "content"
+  | "forms"
+  | "seo"
+  | "media"
+  | "commerce"
+  | "integration"
+  | "dev-tools"
+  | "other";
+
 // ============================================================
 // Plugin Admin Config Interface
 // ============================================================
@@ -450,6 +465,48 @@ export interface PluginDefinition {
    * Required so that other plugins' `dependsOn` ranges can be checked.
    */
   version: string;
+
+  /**
+   * @public Author shown in the admin plugins list (a person or an
+   * organization). Convention: mirror the package.json `author` value.
+   */
+  author?: string;
+
+  /**
+   * @public Homepage URL, linked from the admin plugin detail page.
+   * Convention: mirror the package.json `homepage` value.
+   */
+  homepage?: string;
+
+  /**
+   * @public Source repository URL, linked from the admin plugin detail page.
+   * Convention: mirror the package.json `repository` URL.
+   */
+  repository?: string;
+
+  /**
+   * @public Documentation URL, when the docs live somewhere other than the
+   * homepage. Omit if `homepage` already points at the docs.
+   */
+  docsUrl?: string;
+
+  /**
+   * @public SPDX license identifier (e.g. `"MIT"`), shown on the admin plugin
+   * detail page. Convention: mirror the package.json `license` value.
+   */
+  license?: string;
+
+  /**
+   * @public Category the admin plugins list groups and filters by.
+   * A controlled vocabulary rather than free text so filtering stays useful.
+   */
+  category?: PluginCategory;
+
+  /**
+   * @public Free-form descriptive tags, shown on the admin plugin detail
+   * page. Unlike `category` these are not used for filtering.
+   */
+  tags?: string[];
 
   /**
    * @public Core-compatibility range, boot-checked. May span majors,

@@ -24,13 +24,14 @@
  * ```
  */
 
-import { hasFieldType } from "../../domains/schema/field-types/field-type-registry";
+import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateFieldNameShared,
   validateFieldTypeShared,
+  validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -76,6 +77,7 @@ export type ValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // Field-specific errors
@@ -88,6 +90,9 @@ export type ValidationErrorCode =
   | "RELATIONSHIP_TARGET_UNKNOWN"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
+  | "DECIMAL_PRECISION_INVALID"
+  | "DECIMAL_SCALE_INVALID"
+  | "DECIMAL_SCALE_EXCEEDS_PRECISION"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -144,6 +149,20 @@ export interface ValidationResult {
 // public API surface for this file is unchanged.
 
 const RESERVED_SLUGS_SET: Set<string> = new Set<string>(RESERVED_SLUGS);
+
+// The owner column `created_by` is injected as a system column on every
+// collection table (both the snake_case name and its camelCase alias, which
+// snake-cases to the same column). A code-first collection therefore must not
+// declare a top-level field with either name, or its DDL would collide with the
+// injected column and the owner stamp / response strip would consume a user
+// field. Reserved for collections only — singles are a single global row and
+// components embed in JSON, so neither carries this column and both may use the
+// name freely. Nested repeater/group fields are stored inside JSON, not as
+// table columns, so the reservation applies to the top level only.
+const COLLECTION_RESERVED_FIELD_NAMES: Set<string> = new Set([
+  "created_by",
+  "createdBy",
+]);
 
 // ============================================================
 // Index Validation (collection-specific)
@@ -330,7 +349,13 @@ function validateField(
   const f = field as Record<string, unknown>;
   const errsBase = errors as unknown as BaseValidationError[];
 
-  if (!validateFieldTypeShared(f.type, path, errsBase, hasFieldType)) {
+  // Plugin types are accepted only when they opted into the entries surface —
+  // registration alone is not authorization for a collection field.
+  if (
+    !validateFieldTypeShared(f.type, path, errsBase, type =>
+      isPluginFieldTypeOnSurface(type, "entries")
+    )
+  ) {
     return;
   }
   const fieldType = f.type as string;
@@ -397,6 +422,10 @@ function validateField(
     case "component":
       validateComponentFieldRefShared(f, path, errsBase);
       break;
+
+    case "number":
+      validateNumberDecimalDimensionsShared(f, path, errsBase);
+      break;
   }
 }
 
@@ -453,6 +482,21 @@ function validateFields(
     });
     return;
   }
+
+  // Block the injected owner column at the top level before per-field
+  // validation. Nested fields are validated recursively inside
+  // validateFieldsArray and are intentionally exempt (JSON-stored, no column).
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (typeof name === "string" && COLLECTION_RESERVED_FIELD_NAMES.has(name)) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved for the system owner column`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
 
   validateFieldsArray(fields, path, errors, allCollectionSlugs);
 }

@@ -38,7 +38,7 @@ export interface EnsureFirstRunSetupDeps {
     dialect: "postgresql" | "mysql" | "sqlite",
     db: unknown,
     schema: Record<string, unknown>
-  ) => Promise<{ statementsExecuted: string[]; applied: true }>;
+  ) => Promise<{ statementsExecuted: string[] }>;
   getDialectTables: (dialect: string) => Record<string, unknown>;
   /**
    * Raw CREATE-TABLE/-INDEX DDL for the `nextly_schema_events` ledger. The

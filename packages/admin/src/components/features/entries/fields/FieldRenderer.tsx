@@ -118,6 +118,8 @@ export interface FieldRendererProps {
   disabled?: boolean;
   /** Whether the field is read-only */
   readOnly?: boolean;
+  /** Form mode; write-only fields (password) adjust their affordances */
+  mode?: "create" | "edit";
 }
 
 // ============================================================================
@@ -241,6 +243,7 @@ export function FieldRenderer({
   basePath = "",
   disabled,
   readOnly,
+  mode,
 }: FieldRendererProps) {
   const {
     formState: { errors },
@@ -381,6 +384,7 @@ export function FieldRenderer({
           <PasswordInput
             {...commonProps}
             field={field as PasswordFieldConfig}
+            mode={mode}
           />
         );
 
@@ -525,7 +529,7 @@ export function FieldRenderer({
           );
         }
         return (
-          <div className="rounded-none  border border-border border-destructive/50 bg-destructive/10 p-4 text-center">
+          <div className="rounded-none  border border-destructive bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">
               Unknown field type: {(field as { type: string }).type}
             </p>

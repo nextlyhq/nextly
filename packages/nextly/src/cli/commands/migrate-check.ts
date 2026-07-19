@@ -47,6 +47,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
@@ -62,7 +63,6 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
@@ -70,7 +70,7 @@ import {
   mergeUiEntities,
 } from "../../domains/schema/ui-schema/merge";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv } from "../utils/adapter";
+import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 
 // ============================================================================
@@ -241,6 +241,10 @@ export async function runChecks(args: {
   // Check 1+2: hash + missing snapshot per .sql file.
   for (const sqlName of sqlFiles) {
     const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
+    // Localization/companion migrations are snapshot-less by design (they carry
+    // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
+    // rather than flagging them MISSING_SNAPSHOT.
+    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
     let result;
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
@@ -390,6 +394,9 @@ function toMinimalEntities(
         unique?: boolean;
         index?: boolean;
         localized?: boolean;
+        dbType?: "integer" | "decimal";
+        precision?: number;
+        scale?: number;
       }[];
       dbName?: string;
       status?: boolean;
@@ -407,6 +414,11 @@ function toMinimalEntities(
         unique: f.unique,
         index: f.index,
         localized: f.localized,
+        // Forward decimal storage so drift detection compares a decimal column
+        // against the decimal desired state, not the integer default.
+        dbType: f.dbType,
+        precision: f.precision,
+        scale: f.scale,
       })),
       // Why: forward the Draft/Published flag so migrate:check's drift
       // detection compares status correctly. Components don't carry

@@ -1,6 +1,8 @@
 // M5b: server-side validation is language-aware — a required LOCALIZED field is enforced only
 // for the default-locale write; other locales may be blank (they fall back). Shared required
-// fields are always enforced. Validation runs BEFORE the DB write, so it produces named 400s.
+// fields are always enforced. Validation runs BEFORE the DB write and surfaces the offending
+// field in the canonical envelope's `errors` array (path/code/message), which the admin maps
+// onto form fields; the top-level `message` stays the generic "Validation failed.".
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -41,13 +43,29 @@ async function migrate(t: TestNextly): Promise<void> {
   await adapter.executeQuery('ALTER TABLE "dc_pages" DROP COLUMN "heading"');
 }
 
+interface ValidationFieldError {
+  path: string;
+  code: string;
+  message: string;
+}
+
 function handlerOf(t: TestNextly) {
   return t.getService("collectionsHandler") as unknown as {
     createEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
-    ) => Promise<{ success: boolean; statusCode: number; message: string }>;
+    ) => Promise<{
+      success: boolean;
+      statusCode: number;
+      message: string;
+      errors?: ValidationFieldError[];
+    }>;
   };
+}
+
+/** The paths named in a result's canonical `errors` array (empty when none). */
+function errorPaths(res: { errors?: ValidationFieldError[] }): string[] {
+  return (res.errors ?? []).map(e => e.path);
 }
 
 describe("write validation — language-aware required (M5b)", () => {
@@ -59,7 +77,7 @@ describe("write validation — language-aware required (M5b)", () => {
     );
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(400);
-    expect(res.message).toContain("heading");
+    expect(errorPaths(res)).toContain("heading");
   });
 
   it("passes when the default-locale required localized field is provided", async () => {
@@ -89,6 +107,6 @@ describe("write validation — language-aware required (M5b)", () => {
     );
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(400);
-    expect(res.message).toContain("code");
+    expect(errorPaths(res)).toContain("code");
   });
 });

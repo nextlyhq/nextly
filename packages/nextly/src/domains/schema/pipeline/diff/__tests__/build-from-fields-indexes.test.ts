@@ -39,6 +39,21 @@ describe("buildDesiredTableFromFields — indexes", () => {
     expect(idxNames(t)).not.toContain("idx_dc_posts_tags:n");
   });
 
+  it("never indexes a component field (it has no parent column)", () => {
+    const t = buildDesiredTableFromFields(
+      "dc_posts",
+      [
+        { name: "title", type: "text" },
+        { name: "hero", type: "component", unique: true, index: true },
+      ] as never,
+      "postgresql",
+      {}
+    );
+    expect(t.columns.some(c => c.name === "hero")).toBe(false);
+    expect(idxNames(t)).not.toContain("uq_dc_posts_hero:u");
+    expect(idxNames(t)).not.toContain("idx_dc_posts_hero:n");
+  });
+
   it("dedupes the slug index when a unique slug field collides with the system index", () => {
     // defineCollection injects a `slug` field with unique:true; the system also
     // adds idx_<t>_slug (unique). Only ONE unique slug index should result.

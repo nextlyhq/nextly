@@ -1,5 +1,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
+} from "../../schema/services/field-column-descriptor";
+
 import type { LocalizedColumnSpec } from "./types";
 
 /**
@@ -33,6 +38,16 @@ export function ddlType(
         : dialect === "mysql"
           ? "DOUBLE"
           : "REAL";
+    case "decimal": {
+      // Exact numeric so a localized decimal keeps its precision in the
+      // companion table; PG/SQLite render NUMERIC, MySQL DECIMAL — matching the
+      // main-table column emitted by field-column-descriptor.
+      const precision = col.precision ?? DEFAULT_DECIMAL_PRECISION;
+      const scale = col.scale ?? DEFAULT_DECIMAL_SCALE;
+      return dialect === "mysql"
+        ? `DECIMAL(${precision}, ${scale})`
+        : `NUMERIC(${precision}, ${scale})`;
+    }
     case "timestamp":
       return dialect === "postgresql"
         ? "TIMESTAMPTZ"

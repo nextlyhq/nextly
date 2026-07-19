@@ -115,6 +115,13 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
+        // Component fields store their data in a separate comp_{slug} table and
+        // are stripped from the parent row on write, so they get no parent
+        // column (a NOT NULL one would break every insert).
+        if (f.type === "component") {
+          return null;
+        }
+
         const type = this.mapFieldTypeToSQL(
           f.type,
           f.length,
@@ -232,8 +239,11 @@ export class DynamicCollectionSchemaService {
       );
     }
 
-    // title (only if not user-defined)
-    const hasTitleField = fields.some(f => f.name === "title");
+    // title (only if not user-defined). A component named "title" produces no
+    // column, so it must not suppress the system title column.
+    const hasTitleField = fields.some(
+      f => f.name === "title" && f.type !== "component"
+    );
     if (!hasTitleField) {
       if (this.dialect === "mysql") {
         allColumnDefs.push(
@@ -244,8 +254,10 @@ export class DynamicCollectionSchemaService {
       }
     }
 
-    // slug (only if not user-defined)
-    const hasSlugField = fields.some(f => f.name === "slug");
+    // slug (only if not user-defined). Same column-less exclusion as title.
+    const hasSlugField = fields.some(
+      f => f.name === "slug" && f.type !== "component"
+    );
     if (!hasSlugField) {
       if (this.dialect === "mysql") {
         allColumnDefs.push(
@@ -318,6 +330,23 @@ export class DynamicCollectionSchemaService {
       );
     }
 
+    // Owner column — COLLECTIONS ONLY. A single is one global row, so
+    // owner-only ownership is meaningless; singles never stamp or query it.
+    // Nullable with no default (matches getSystemColumnDescriptors) so existing
+    // rows and system creates stay null; sized to the users.id column on MySQL
+    // since it holds a user id, not the row id.
+    // Prefer the explicit flag, but also fall back to the `single_` table
+    // prefix so this stays in lockstep with the runtime schema / diff (which
+    // derive it from the name) even if a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+    if (!isSingleTable) {
+      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
+      );
+    }
+
     let sql = `-- Create dynamic collection: ${tableName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 ${allColumnDefs.join(",\n")}
@@ -362,10 +391,11 @@ ${allColumnDefs.join(",\n")}
     });
 
     // Add manual indexes requested by the user. Use mainFields so a localized field
-    // that also requested an index doesn't try to index a column that was relocated
-    // to the companion table (i18n).
+    // that also requested an index doesn't try to index a column relocated to the
+    // companion table (i18n). Component fields have no column to index, so skip them
+    // too (an index on a nonexistent column fails).
     mainFields.forEach(f => {
-      if (f.index && f.type !== "relationship") {
+      if (f.index && f.type !== "relationship" && f.type !== "component") {
         const col = this.toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
@@ -393,6 +423,21 @@ ${allColumnDefs.join(",\n")}
       createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     }
     indexStatements.push(createdAtIndex);
+
+    // Index the owner column on collections. Owner-only reads/lists/counts and
+    // bulk-by-query enumeration all filter on `created_by`, so without an index
+    // a large owner-scoped collection would full-scan the primary access-control
+    // predicate. Collections only — singles/components never carry the column,
+    // mirroring the column gate above. Plain (non-unique) index; users cannot
+    // request one on this reserved field, so it is injected here.
+    if (!isSingleTable) {
+      const ownerIndexName = `idx_${tableName}_created_by`;
+      const ownerIndex =
+        this.dialect === "mysql"
+          ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
+          : `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`;
+      indexStatements.push(ownerIndex);
+    }
 
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
@@ -524,6 +569,12 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
+        // Component fields store their data in a separate comp_{slug} table, so
+        // adding one must not ADD COLUMN on the parent table.
+        if (field.type === "component") {
+          continue;
+        }
+
         const type = this.mapFieldTypeToSQL(field.type, field.length);
         const nullable = field.required ? "NOT NULL" : "";
 
@@ -576,6 +627,8 @@ ${allColumnDefs.join(",\n")}
 
     // Find fields that were modified to add/remove an index
     for (const field of newFields) {
+      // Component fields have no parent column, so there is no index to add/drop.
+      if (field.type === "component") continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
         const idxCol = this.toSnakeCase(field.name);
@@ -611,6 +664,9 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed source — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedFromName) continue;
+      // Component fields never had a parent column, so there is nothing to drop
+      // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
+      if (field.type === "component") continue;
       if (!newFieldMap.has(field.name)) {
         const dropCol = this.toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
@@ -631,6 +687,8 @@ ${allColumnDefs.join(",\n")}
     // For simplicity, we skip column modifications for SQLite
     if (this.dialect !== "sqlite") {
       for (const field of newFields) {
+        // Component fields have no parent column to alter.
+        if (field.type === "component") continue;
         const oldField = oldFieldMap.get(field.name);
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = this.toSnakeCase(field.name);
@@ -843,6 +901,12 @@ ${dropStatement}`;
       timestampDefault = "timestamp DEFAULT now() NOT NULL";
     }
 
+    // The result is split on `--> statement-breakpoint` and each part executed
+    // as one statement, so every part must be a complete, standalone statement:
+    // one CREATE TABLE (closed by its own `);`), then the two CREATE INDEX
+    // statements. The UNIQUE pair constraint belongs inside the CREATE TABLE
+    // body only; it must not appear again as a trailing fragment (a bare
+    // `CONSTRAINT ... );` is not valid SQL on any dialect).
     return `-- Junction table for many-to-many: ${sourceCollectionName}.${field.name} -> ${targetCollectionName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("id")} ${this.dialect === "mysql" ? "varchar(36)" : "text"} PRIMARY KEY NOT NULL,
@@ -851,9 +915,6 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("created_at")} ${timestampDefault},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${sourceCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${sourceCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(sourceTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${targetCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${targetCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(targetTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
-  CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
-);
---> statement-breakpoint
   CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
 );
 --> statement-breakpoint

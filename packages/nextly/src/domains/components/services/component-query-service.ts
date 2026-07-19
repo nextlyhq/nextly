@@ -6,6 +6,7 @@ import type { DynamicComponentRecord } from "../../../schemas/dynamic-components
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
+import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -728,6 +729,10 @@ export class ComponentQueryService extends BaseService {
         result[fieldName] = value ?? null;
       }
     }
+
+    // Password fields are write-only; strip stored hashes (including any
+    // nested in group/repeater containers) before the instance is returned.
+    stripPasswordFieldValues(result, componentFields);
 
     return result;
   }

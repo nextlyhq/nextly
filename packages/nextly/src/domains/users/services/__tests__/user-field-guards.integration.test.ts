@@ -144,6 +144,37 @@ describe("updateField — name and type are fixed at creation", () => {
     expect(updated.name).toBe("phoneNumber");
   });
 
+  it("refuses to change whether a field stores multiple values", async () => {
+    // hasMany picks a scalar vs a json column, so it is as fixed as the type.
+    const service = await bootService();
+    const field = await service.createField(validField);
+
+    const error = await service
+      .updateField(field.id, { hasMany: true })
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(error)).toBe(true);
+    const data = (error as NextlyError).publicData as {
+      errors: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(data.errors[0].path).toBe("hasMany");
+    expect(data.errors[0].code).toBe("USER_FIELD_HAS_MANY_IMMUTABLE");
+  });
+
+  it("accepts hasMany echoed back unchanged", async () => {
+    // An unset field stores hasMany as null, which is equivalent to false, so
+    // echoing false must not fire the guard.
+    const service = await bootService();
+    const field = await service.createField(validField);
+
+    const updated = await service.updateField(field.id, {
+      hasMany: false,
+      label: "Still Single-Valued",
+    });
+
+    expect(updated.label).toBe("Still Single-Valued");
+  });
+
   it("still updates everything that is not the field's identity", async () => {
     const service = await bootService();
     const field = await service.createField(validField);

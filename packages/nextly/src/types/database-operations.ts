@@ -8,6 +8,8 @@ export interface UserInsertData {
   emailVerified: Date | null;
   image: string | null;
   isActive?: boolean;
+  /** True when an admin set the password and the user must replace it on first sign-in. */
+  mustChangePassword?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -19,6 +21,8 @@ export interface UserUpdateData {
   emailVerified?: Date | null;
   passwordHash?: string;
   isActive?: boolean;
+  /** Cleared to false once the user replaces an admin-set password. */
+  mustChangePassword?: boolean;
   updatedAt?: Date;
 }
 

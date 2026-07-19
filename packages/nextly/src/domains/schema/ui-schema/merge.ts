@@ -52,8 +52,10 @@ function uiToMinimal(
       relationTo: f.relationTo,
       unique: f.unique,
       index: f.index,
+      localized: f.localized,
     })),
     status: entity.status === true,
+    localized: entity.localized === true,
   };
 }
 

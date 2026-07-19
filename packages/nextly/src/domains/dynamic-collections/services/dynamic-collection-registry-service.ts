@@ -35,6 +35,7 @@ export interface CollectionMetadata {
     order?: number;
     sidebarGroup?: string;
     isPlugin?: boolean;
+    disableCreate?: boolean;
     pagination?: { defaultLimit?: number; limits?: number[] };
   };
   source?: "code" | "ui" | "built-in";
@@ -96,7 +97,6 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string,
     options?: { currentCollectionId?: string }
   ): Promise<void> {
-     
     const existingCollection = await this.db
       .select({ id: this.dynamicCollections.id })
       .from(this.dynamicCollections)
@@ -112,7 +112,6 @@ export class DynamicCollectionRegistryService extends BaseService {
       );
     }
 
-     
     const existingSingle = await this.db
       .select({ id: this.dynamicSingles.id })
       .from(this.dynamicSingles)
@@ -129,7 +128,6 @@ export class DynamicCollectionRegistryService extends BaseService {
   async registerCollection(metadata: CollectionMetadata): Promise<unknown> {
     await this.ensureGlobalSlugUniqueness(metadata.slug);
 
-     
     await this.db.insert(this.dynamicCollections).values({
       id: metadata.id,
       slug: metadata.slug,
@@ -166,7 +164,6 @@ export class DynamicCollectionRegistryService extends BaseService {
     collectionSlug: string,
     updates: Partial<CollectionMetadata>
   ): Promise<unknown> {
-     
     const existing = await this.db
       .select({
         id: this.dynamicCollections.id,
@@ -191,7 +188,6 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     updateData.updatedAt = new Date();
 
-     
     await this.db
       .update(this.dynamicCollections)
       .set(updateData)
@@ -252,7 +248,6 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     const offset = (page - 1) * limit;
 
-     
     const countResult = await this.db
       .select({ value: count() })
       .from(this.dynamicCollections)
@@ -262,16 +257,14 @@ export class DynamicCollectionRegistryService extends BaseService {
     const totalPages = Math.ceil(total / limit);
 
     const collections = includeSchema
-      ?  
-        await this.db
+      ? await this.db
           .select()
           .from(this.dynamicCollections)
           .where(whereClause)
           .orderBy(orderByClause)
           .limit(limit)
           .offset(offset)
-      :  
-        await this.db
+      : await this.db
           .select({
             id: this.dynamicCollections.id,
             slug: this.dynamicCollections.slug,
@@ -305,7 +298,6 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async getCollection(slug: string): Promise<unknown> {
-
     const result = await this.db
       .select()
       .from(this.dynamicCollections)
@@ -328,7 +320,6 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async collectionExists(slug: string): Promise<boolean> {
-     
     const result = await this.db
       .select({ id: this.dynamicCollections.id })
       .from(this.dynamicCollections)
@@ -339,7 +330,6 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-     
     await this.db
       .delete(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug));

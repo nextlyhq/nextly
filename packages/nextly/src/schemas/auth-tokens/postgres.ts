@@ -5,8 +5,8 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks (refreshTokensRelations) live in
- * `./postgres-relations.ts` to keep this file free of cross-feature imports
+ * Drizzle v2 relations for this feature live centrally in
+ * `../_dialect-bundles/postgres.relations.ts` (defineRelations).
  * (`users`). Re-exported at the bottom so namespace consumers see them.
  *
  * @module schemas/auth-tokens/postgres
@@ -45,6 +45,35 @@ export const passwordResetTokens = pgTable(
     ),
     index("prt_expires_idx").on(t.expires),
     index("prt_used_at_idx").on(t.usedAt),
+  ]
+);
+
+// User invite tokens — the single-use set-password link an admin hands to a
+// new user. Mirrors passwordResetTokens (with a used_at consume marker), but
+// keyed on user_id rather than an email identifier: the invite belongs to one
+// account, survives an email change, and keeps the address out of the token
+// store. Only the SHA-256 hash of the token is kept, never the raw value.
+export const userInviteTokens = pgTable(
+  "user_invite_tokens",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expires: timestamp("expires", { withTimezone: false }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: false }),
+    createdAt: timestamp("created_at", { withTimezone: false })
+      .defaultNow()
+      .notNull(),
+  },
+  t => [
+    // One invite row per account, enforced by the database: two concurrent
+    // re-invites cannot both leave a live link, and superseding an earlier
+    // invite holds without a read-modify-write race.
+    uniqueIndex("uit_user_id_unique").on(t.userId),
+    index("uit_token_hash_idx").on(t.tokenHash),
+    index("uit_expires_idx").on(t.expires),
   ]
 );
 

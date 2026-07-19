@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { EmailErrorCode } from "../errors";
 import { resolveAttachments } from "../services/attachment-resolver";
 import type {
@@ -82,6 +83,54 @@ describe("resolveAttachments", () => {
   it("throws STORAGE_READ_FAILED when readBytes throws", async () => {
     const deps = makeDeps({
       readBytes: vi.fn().mockRejectedValue(new Error("disk gone")),
+    });
+    await expect(
+      resolveAttachments([{ mediaId: "m1" }], deps)
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: {
+        emailAttachmentCode: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+      },
+    });
+  });
+
+  it("passes a typed NextlyError from readBytes through unwrapped", async () => {
+    // A URL-backed fetch that exceeds the size cap raises a size-exceeded
+    // validation error; it must surface as-is, not be re-wrapped as an opaque
+    // storage-read failure (which is what local/S3 raw throws become).
+    const deps = makeDeps({
+      readBytes: vi.fn().mockRejectedValue(
+        NextlyError.validation({
+          errors: [
+            {
+              path: "attachments",
+              code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+              message: "too big",
+            },
+          ],
+        })
+      ),
+    });
+    await expect(
+      resolveAttachments([{ mediaId: "m1" }], deps)
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED }],
+      },
+    });
+  });
+
+  it("wraps a non-validation NextlyError from readBytes as STORAGE_READ_FAILED", async () => {
+    // A URL fetch that fails for a non-size reason (SSRF reject, timeout, a
+    // relative-URL/missing-file error) must not leak its code/message to the
+    // caller; only the size-exceeded validation error passes through.
+    const deps = makeDeps({
+      readBytes: vi
+        .fn()
+        .mockRejectedValue(
+          NextlyError.internal({ logContext: { reason: "ssrf-reject" } })
+        ),
     });
     await expect(
       resolveAttachments([{ mediaId: "m1" }], deps)

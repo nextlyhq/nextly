@@ -248,10 +248,10 @@ export default function EditEntryPage({
     entryId: id,
     depth: 2,
     locale,
-    // i18n M5: edit the ACTUAL per-locale values — disable fallback so an untranslated
-    // field shows empty (not the default-language value, which would bleed the source
-    // text into the field and risk saving it into the target locale). The inline source
-    // hint is shown separately from `sourceEntry` below.
+    // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
+    // shows empty (not the default-language text, which a save would otherwise persist
+    // as this locale's translation). sourceEntry (below) supplies the default-language
+    // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
     translationStatus: localizationEnabled,
   });

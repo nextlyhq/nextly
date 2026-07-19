@@ -36,10 +36,7 @@ export function PermissionMatrixCell({
   if (!permission) {
     return (
       <td className={className}>
-        <span
-          aria-hidden="true"
-          className="text-muted-foreground/40 font-medium"
-        >
+        <span aria-hidden="true" className="text-muted-foreground font-medium">
           -
         </span>
         <span className="sr-only">

@@ -22,6 +22,9 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
     throw new Error("localization.locales must contain at least one locale.");
   }
 
+  // The companion `_locale` column is VARCHAR(20); a longer code would fail or
+  // truncate on insert (a truncation could even collide with another locale).
+  const MAX_LOCALE_CODE_LENGTH = 20;
   const codes = new Set<string>();
   // Case-insensitive view for duplicate detection so `en` / `EN` (and stray
   // whitespace variants) are caught rather than treated as distinct locales (M10).
@@ -33,6 +36,13 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
       throw new Error(
         `Invalid locale code '${l.code}' in localization.locales — a code must be ` +
           `non-empty and contain only letters, digits, '-' or '_' (e.g. 'en', 'en-US').`
+      );
+    }
+    // Bound the length to the companion `_locale` VARCHAR(20) so a longer code
+    // can't fail or silently truncate (and then collide) on insert.
+    if (l.code.length > MAX_LOCALE_CODE_LENGTH) {
+      throw new Error(
+        `Locale code '${l.code}' exceeds the ${MAX_LOCALE_CODE_LENGTH}-character limit for companion _locale storage.`
       );
     }
     const lower = l.code.toLowerCase();

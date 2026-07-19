@@ -176,11 +176,12 @@ export function EmailProviderForm({
                         <Card
                           key={p.type}
                           variant="interactive"
+                          // Full-strength foreground on hover so the border state change is perceivable.
                           className={cn(
                             "relative h-20 w-[120px] flex items-center justify-center overflow-hidden cursor-pointer transition-colors",
                             isSelected
                               ? "border-foreground bg-primary/[0.04] ring-1 ring-foreground shadow-sm"
-                              : "border-input hover:border-foreground/40 opacity-80 hover:opacity-100"
+                              : "border-input hover:border-foreground opacity-80 hover:opacity-100"
                           )}
                           onClick={() => {
                             if (!isSelected) {

@@ -1,9 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 
-import {
-  formatGlobalDateTime,
-  setGlobalDateTimeConfig,
-} from "../../../admin/src/utils/globalDateTime";
 import { container } from "../di/container";
 
 import {
@@ -11,112 +7,95 @@ import {
   withTimezoneFormatting,
 } from "./date-formatting";
 
-describe("date formatting integration (API -> admin)", () => {
+// This suite exercises the API-side timestamp contract that nextly owns.
+// The admin panel has its own formatter tests in the admin package; nextly
+// must not import admin source, so the assertions here verify nextly's real
+// behavior with timezone-independent epoch/string checks rather than a
+// display formatter.
+//
+// The contract (see `normalizeTimestampsInPayload`): a naive wall-clock
+// string is read as UTC, and the value is re-rendered carrying the target
+// timezone's offset. The instant it denotes never changes — only the offset
+// suffix does — so a client knows which offset to display without the stored
+// moment being shifted.
+
+describe("date formatting (API normalization contract)", () => {
   beforeEach(() => {
-    // Keep tests deterministic and avoid cross-test config bleed.
-    setGlobalDateTimeConfig({});
     container.clear();
   });
 
-  it("keeps admin display consistent for the same payload after API normalization", () => {
+  it("re-renders a naive timestamp with the timezone's offset without moving the instant", () => {
     const payload = {
       createdAt: "2026-04-03T12:34:56",
-      nested: {
-        updatedAt: "2026-04-03 18:00:00",
-      },
+      nested: { updatedAt: "2026-04-03 18:00:00" },
     };
+    const normalized = normalizeTimestampsInPayload(
+      payload,
+      "America/New_York"
+    ) as { createdAt: string; nested: { updatedAt: string } };
 
-    const timezone = "America/New_York";
-
-    const normalized = normalizeTimestampsInPayload(payload, timezone) as {
-      createdAt: string;
-      nested: { updatedAt: string };
-    };
-
-    setGlobalDateTimeConfig({
-      timezone,
-      dateFormat: "YYYY-MM-DD",
-      timeFormat: "24h",
-      locale: "en-US",
-    });
-
-    const fromOriginalCreatedAt = formatGlobalDateTime(payload.createdAt);
-    const fromNormalizedCreatedAt = formatGlobalDateTime(normalized.createdAt);
-    const fromOriginalUpdatedAt = formatGlobalDateTime(
-      payload.nested.updatedAt
-    );
-    const fromNormalizedUpdatedAt = formatGlobalDateTime(
-      normalized.nested.updatedAt
-    );
-
+    // Carries an explicit offset (or Z), so it is an unambiguous instant.
     expect(normalized.createdAt).toMatch(/[+-]\d{2}:\d{2}|Z$/);
     expect(normalized.nested.updatedAt).toMatch(/[+-]\d{2}:\d{2}|Z$/);
 
-    expect(fromNormalizedCreatedAt).toBe(fromOriginalCreatedAt);
-    expect(fromNormalizedUpdatedAt).toBe(fromOriginalUpdatedAt);
+    // The instant equals the source read as UTC (naive input is treated as
+    // UTC; only the rendered offset changes).
+    expect(new Date(normalized.createdAt).getTime()).toBe(
+      Date.parse("2026-04-03T12:34:56Z")
+    );
+    expect(new Date(normalized.nested.updatedAt).getTime()).toBe(
+      Date.parse("2026-04-03T18:00:00Z")
+    );
+
+    // And it renders with New York's offset in early April (EDT, -04:00).
+    expect(normalized.createdAt).toContain("-04:00");
   });
 
-  it("applies localization/time settings changes immediately", () => {
-    const value = "2026-04-03T12:34:56";
+  it("changes the rendered offset per timezone while preserving the instant", () => {
+    const value = { createdAt: "2026-04-03T12:34:56" };
 
-    setGlobalDateTimeConfig({
-      timezone: "America/New_York",
-      dateFormat: "YYYY-MM-DD",
-      timeFormat: "24h",
-      locale: "en-US",
-    });
-    const firstRender = formatGlobalDateTime(value);
+    const inNewYork = normalizeTimestampsInPayload(
+      value,
+      "America/New_York"
+    ) as { createdAt: string };
+    const inTokyo = normalizeTimestampsInPayload(value, "Asia/Tokyo") as {
+      createdAt: string;
+    };
 
-    setGlobalDateTimeConfig({
-      timezone: "Asia/Tokyo",
-      dateFormat: "MM/DD/YYYY",
-      timeFormat: "12h",
-      locale: "en-US",
-    });
-    const secondRender = formatGlobalDateTime(value);
-
-    expect(secondRender).not.toBe(firstRender);
+    // Same moment in time, different offset labels.
+    expect(new Date(inNewYork.createdAt).getTime()).toBe(
+      new Date(inTokyo.createdAt).getTime()
+    );
+    expect(inNewYork.createdAt).not.toBe(inTokyo.createdAt);
+    expect(inNewYork.createdAt).toContain("-04:00");
+    expect(inTokyo.createdAt).toContain("+09:00");
   });
 
-  it("keeps displayed UI value consistent with API returned timestamp", async () => {
+  it("transforms nested timestamps on a Response using the configured timezone", async () => {
     let activeTimezone = "America/New_York";
     container.registerSingleton("generalSettingsService", () => ({
       getTimezone: async () => activeTimezone,
     }));
 
     const originalPayload = {
-      data: {
-        data: {
-          createdAt: "2026-04-03T12:34:56",
-        },
-      },
+      data: { data: { createdAt: "2026-04-03T12:34:56" } },
     };
 
-    const apiResponse = new Response(JSON.stringify(originalPayload), {
-      headers: { "Content-Type": "application/json" },
-      status: 200,
-    });
-
-    const transformedResponse = await withTimezoneFormatting(apiResponse);
-    const transformedJson = (await transformedResponse.json()) as {
+    const transformed = await withTimezoneFormatting(
+      new Response(JSON.stringify(originalPayload), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      })
+    );
+    const json = (await transformed.json()) as {
       data: { data: { createdAt: string } };
     };
 
-    setGlobalDateTimeConfig({
-      timezone: activeTimezone,
-      dateFormat: "YYYY-MM-DD",
-      timeFormat: "24h",
-      locale: "en-US",
-    });
+    expect(json.data.data.createdAt).toMatch(/[+-]\d{2}:\d{2}|Z$/);
+    expect(json.data.data.createdAt).toContain("-04:00");
 
-    const uiFromOriginal = formatGlobalDateTime(
-      originalPayload.data.data.createdAt
-    );
-    const uiFromApi = formatGlobalDateTime(transformedJson.data.data.createdAt);
-
-    expect(transformedJson.data.data.createdAt).toMatch(/[+-]\d{2}:\d{2}|Z$/);
-    expect(uiFromApi).toBe(uiFromOriginal);
-
+    // Switching the configured timezone re-renders the same instant with a
+    // different offset.
     activeTimezone = "Asia/Tokyo";
     const transformedAgain = await withTimezoneFormatting(
       new Response(JSON.stringify(originalPayload), {
@@ -124,25 +103,23 @@ describe("date formatting integration (API -> admin)", () => {
         status: 200,
       })
     );
-    const transformedAgainJson = (await transformedAgain.json()) as {
+    const jsonAgain = (await transformedAgain.json()) as {
       data: { data: { createdAt: string } };
     };
 
-    expect(transformedAgainJson.data.data.createdAt).not.toBe(
-      transformedJson.data.data.createdAt
+    expect(new Date(jsonAgain.data.data.createdAt).getTime()).toBe(
+      new Date(json.data.data.createdAt).getTime()
     );
+    expect(jsonAgain.data.data.createdAt).not.toBe(json.data.data.createdAt);
+    expect(jsonAgain.data.data.createdAt).toContain("+09:00");
   });
 
-  it("keeps unset timezone payloads in UTC", async () => {
+  it("keeps unset-timezone payloads in UTC", async () => {
     container.registerSingleton("generalSettingsService", () => ({
       getTimezone: async () => null,
     }));
 
-    const payload = {
-      data: {
-        uploadedAt: "2026-04-03T12:34:56",
-      },
-    };
+    const payload = { data: { uploadedAt: "2026-04-03T12:34:56" } };
 
     const transformed = await withTimezoneFormatting(
       new Response(JSON.stringify(payload), {
@@ -150,7 +127,6 @@ describe("date formatting integration (API -> admin)", () => {
         status: 200,
       })
     );
-
     const json = (await transformed.json()) as { data: { uploadedAt: string } };
 
     expect(json.data.uploadedAt).toBe("2026-04-03T12:34:56.000Z");

@@ -151,6 +151,11 @@ export interface CollectionAdminConfig {
   isPlugin?: boolean;
 
   /**
+   * Hide the admin's "New …" affordances (for machine-created collections).
+   */
+  disableCreate?: boolean;
+
+  /**
    * Preview URL configuration for content preview workflows.
    *
    * For UI-created collections, use `urlTemplate` with placeholders.

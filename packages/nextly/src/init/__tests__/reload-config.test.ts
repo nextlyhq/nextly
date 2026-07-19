@@ -9,7 +9,7 @@
 // the gate behavior against actual diff output. Pipeline is still mocked
 // so we don't hit drizzle-kit.
 
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -878,7 +878,7 @@ describe("reloadNextlyConfig", () => {
         registered,
         "comp_meta_data must be re-registered after an HMR refresh"
       ).toBeTruthy();
-      const columns = Object.keys(getTableColumns(registered![1] as never));
+      const columns = Object.keys(getColumns(registered![1] as never));
       // Component link columns the query/mutation services depend on.
       expect(columns).toContain("_parent_id");
       expect(columns).toContain("_parent_table");

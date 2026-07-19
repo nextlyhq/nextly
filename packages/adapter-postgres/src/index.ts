@@ -91,6 +91,7 @@ import {
   isDatabaseError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
@@ -275,6 +276,15 @@ function applyHappyEyeballsTimeoutOnce(): void {
  * @public
  */
 export class PostgresAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'postgresql' for this adapter.
    */
@@ -451,18 +461,25 @@ export class PostgresAdapter extends DrizzleAdapter {
    * It waits for all checked-out clients to be returned before shutting down.
    */
   async disconnect(): Promise<void> {
-    if (!this.pool) {
+    // Detach the pool FIRST, then drop the memoized drizzle instances —
+    // this closes the repopulation window where a concurrent getDrizzle()
+    // call during the (async) pool.end() could cache an instance wrapping
+    // the closing pool.
+    const pool = this.pool;
+    this.pool = null;
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
+    if (!pool) {
       return;
     }
 
     try {
-      await this.pool.end();
+      await pool.end();
 
       if (this.config.logger?.info) {
         this.config.logger.info("PostgreSQL connection closed");
       }
     } finally {
-      this.pool = null;
       this.connected = false;
     }
   }
@@ -750,13 +767,26 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the pg pool connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = NodePgDatabase<any>>(schema?: Record<string, unknown>): T {
+  getDrizzle<T = NodePgDatabase<AnyRelations>>(relations?: AnyRelations): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    return (schema ? drizzle(pool, { schema }) : drizzle(pool)) as T;
+    // drizzle v1 removed the positional (client, config) form — the object
+    // form is REQUIRED (positional silently treats the client as config).
+    // `relations` (defineRelations output, assembled by Nextly's schema
+    // registry) is what powers db.query in v1; a bare instance serves the
+    // select-builder CRUD paths.
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client: pool });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client: pool, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**
@@ -889,6 +919,14 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Creates a TransactionContext for the given client.
    */
   private createTransactionContext(client: PoolClient): TransactionContext {
+    // Bind a Drizzle instance to this transaction's checked-out client so the
+    // delegated CRUD methods run inside the transaction and see its uncommitted
+    // rows. getDrizzle() wraps the pool, which would use a different connection.
+    // Built lazily and memoized: transactions that use only raw execute/insert
+    // never construct it.
+    const buildTxExecutor = () => drizzle({ client });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       execute: async <T = unknown>(
         sql: string,
@@ -903,26 +941,34 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const columns = Object.keys(data);
-        const values = Object.values(data);
+        const mapped = this.mapKeysToSqlColumns(
+          this.getTableObject(table),
+          data
+        );
+        const columns = Object.keys(mapped);
+        const values = Object.values(mapped);
         const placeholders = values.map((_, i) => `$${i + 1}`).join(", ");
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const result = await client.query(sql, values);
-        return result.rows[0] as T;
+        // Return JS property-named keys to match the non-transactional insert.
+        return this.mapRowKeysToJs(
+          this.getTableObject(table),
+          result.rows[0] as T
+        );
       },
 
       insertMany: async <T = unknown>(
@@ -932,11 +978,15 @@ export class PostgresAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const columns = Object.keys(data[0]);
+        const tableObj = this.getTableObject(table);
+        const mappedRecords = data.map(r =>
+          this.mapKeysToSqlColumns(tableObj, r)
+        );
+        const columns = Object.keys(mappedRecords[0]);
         const params: unknown[] = [];
         const valuesClauses: string[] = [];
 
-        for (const record of data) {
+        for (const record of mappedRecords) {
           const placeholders: string[] = [];
           for (const col of columns) {
             params.push(record[col]);
@@ -947,37 +997,37 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const result = await client.query(sql, params);
-        return result.rows as T[];
+        return (result.rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
-      // The Drizzle transaction is handled at a higher level.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -986,15 +1036,15 @@ export class PostgresAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -1002,7 +1052,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       savepoint: async (name: string): Promise<void> => {
@@ -1018,6 +1068,12 @@ export class PostgresAdapter extends DrizzleAdapter {
       releaseSavepoint: async (name: string): Promise<void> => {
         await client.query(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
+
+      // Expose the transaction-bound Drizzle instance so callers can run
+      // Drizzle sql templates inside this transaction (junction-table writes
+      // need this to be atomic with the entry write). Reuses the memoized
+      // txDb() built for the delegated CRUD methods.
+      getDrizzle: <T = unknown>(): T => txDb() as T,
     };
   }
 

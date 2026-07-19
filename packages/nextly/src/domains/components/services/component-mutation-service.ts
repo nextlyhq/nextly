@@ -17,7 +17,9 @@ import { NextlyError } from "../../../errors";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
+import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
@@ -340,6 +342,12 @@ export class ComponentMutationService extends BaseService {
       );
 
       let instanceId: string;
+      await this.prepareInstanceForWrite(
+        data,
+        componentFields,
+        existing.length > 0 ? "update" : "create"
+      );
+
       if (existing.length > 0) {
         instanceId = existing[0].id;
         const updateData = this.serializeComponentRow(
@@ -431,6 +439,12 @@ export class ComponentMutationService extends BaseService {
       );
 
       let instanceId: string;
+      await this.prepareInstanceForWrite(
+        data,
+        componentFields,
+        existing.length > 0 ? "update" : "create"
+      );
+
       if (existing.length > 0) {
         instanceId = existing[0].id;
         const updateData = this.serializeComponentRow(
@@ -522,6 +536,12 @@ export class ComponentMutationService extends BaseService {
         const { schema, main, companion } = this.splitLocalizedComponent(
           componentMeta,
           instance
+        );
+
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && existingMap.has(instanceId) ? "update" : "create"
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -633,6 +653,12 @@ export class ComponentMutationService extends BaseService {
         const { schema, main, companion } = this.splitLocalizedComponent(
           componentMeta,
           instance
+        );
+
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && existingMap.has(instanceId) ? "update" : "create"
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -799,6 +825,12 @@ export class ComponentMutationService extends BaseService {
           instance
         );
 
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && globalExistingMap.has(instanceId) ? "update" : "create"
+        );
+
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(
@@ -948,6 +980,12 @@ export class ComponentMutationService extends BaseService {
         const { schema, main, companion } = this.splitLocalizedComponent(
           meta,
           instance
+        );
+
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && globalExistingMap.has(instanceId) ? "update" : "create"
         );
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -1155,6 +1193,45 @@ export class ComponentMutationService extends BaseService {
       created_at: now,
       updated_at: now,
     };
+  }
+
+  /**
+   * Enforce the component schema on an instance before it is persisted.
+   * Component instances live in their own tables, so the parent entry's
+   * validate/hash pass never reaches them; without this, required / length /
+   * range / option rules on component fields go unchecked server-side and a
+   * `password` field inside a component would be stored in plaintext.
+   * Validation runs before hashing so length rules see the plaintext value,
+   * matching the parent entry pipeline. `mode` is "update" for an instance
+   * that already exists (so a write-only password left empty keeps the stored
+   * hash) and "create" for a new one.
+   */
+  private async prepareInstanceForWrite(
+    instance: ComponentInstanceData,
+    componentFields: FieldConfig[],
+    mode: "create" | "update"
+  ): Promise<void> {
+    // A component instance must be a plain object. A primitive (e.g. a bare
+    // string sent for a non-repeatable component field) would make the field
+    // validator's `field.name in data` throw a TypeError, surfacing as a 500
+    // instead of a validation error, so reject the shape up front.
+    const value: unknown = instance;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "",
+            code: "INVALID_TYPE",
+            message: "Component data must be an object.",
+          },
+        ],
+      });
+    }
+    const issues = await validateEntryData(instance, componentFields, { mode });
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
+    }
+    await hashPasswordFieldValues(instance, componentFields);
   }
 
   private serializeComponentRow(

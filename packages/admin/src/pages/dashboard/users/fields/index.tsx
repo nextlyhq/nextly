@@ -47,6 +47,8 @@ import { UserBreadcrumbs } from "@admin/components/features/user-management/brea
 import {
   AlertTriangle,
   AlignLeft,
+  Link2,
+  Phone,
   Calendar,
   CheckSquare,
   Circle,
@@ -60,6 +62,7 @@ import {
   Mail,
   MoreHorizontal,
   Plus,
+  Puzzle,
   RefreshCw,
   Trash2,
   Type,
@@ -104,11 +107,35 @@ const FIELD_TYPE_CONFIG: Record<
   textarea: { label: "Textarea", variant: "default", icon: AlignLeft },
   number: { label: "Number", variant: "primary", icon: Hash },
   email: { label: "Email", variant: "primary", icon: Mail },
+  url: { label: "URL", variant: "primary", icon: Link2 },
+  phone: { label: "Phone", variant: "primary", icon: Phone },
   select: { label: "Select", variant: "success", icon: List },
   radio: { label: "Radio", variant: "success", icon: Circle },
   checkbox: { label: "Checkbox", variant: "default", icon: CheckSquare },
   date: { label: "Date", variant: "default", icon: Calendar },
 };
+
+/** Presentation for a plugin-contributed type the built-in map does not cover. */
+const PLUGIN_FIELD_TYPE_CONFIG = {
+  label: "Custom",
+  variant: "default" as const,
+  icon: Puzzle,
+};
+
+/**
+ * The badge/icon config for a field type, falling back to a generic "Custom"
+ * presentation for plugin-contributed types outside the built-in scalar set.
+ */
+function fieldTypeConfig(type: string) {
+  return (
+    (
+      FIELD_TYPE_CONFIG as Record<
+        string,
+        (typeof FIELD_TYPE_CONFIG)[UserFieldType]
+      >
+    )[type] ?? PLUGIN_FIELD_TYPE_CONFIG
+  );
+}
 
 // ============================================================
 // Static User Fields (built-in, read-only)
@@ -220,7 +247,7 @@ function FieldDeleteDialog({
 // ============================================================
 
 function StaticFieldRow({ field }: { field: StaticField }) {
-  const typeConfig = FIELD_TYPE_CONFIG[field.type];
+  const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
 
   return (
@@ -314,7 +341,7 @@ function SortableFieldRow({
     transition,
   };
 
-  const typeConfig = FIELD_TYPE_CONFIG[field.type];
+  const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
   const isCode = field.source === "code";
 

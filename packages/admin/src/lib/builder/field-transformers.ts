@@ -200,18 +200,20 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   const definition: FieldDefinition = {
     name: toSnakeName(field.name),
     label: field.label || field.name,
-    type: field.type as FieldDefinition["type"],
+    type: field.type,
     required: Boolean(field.validation?.required),
     unique: Boolean(field.advanced?.unique),
     index: Boolean(field.advanced?.index),
-    // i18n H4: `localized` has a smart per-type default in the backend classifier
-    // (text-like fields localize by default). Coercing an untoggled field to an
-    // explicit `false` defeats that default, so preserve `undefined` — the manifest
-    // passthrough omits undefined and the backend applies the smart default. Only a
-    // deliberate user toggle sends an explicit boolean.
-    localized: field.advanced?.localized,
     defaultValue: field.defaultValue,
   };
+
+  // Forward the localized choice only when the editor actually set it; coercing
+  // an untouched switch to false would override the backend's per-type default
+  // (text-like fields localize when the collection opts in), pinning fields to
+  // shared. Omission means "use the default".
+  if (typeof field.advanced?.localized === "boolean") {
+    definition.localized = field.advanced.localized;
+  }
 
   // Validation rules
   if (field.validation) {
@@ -372,9 +374,9 @@ export function convertToBuilderField(
     advanced: {
       unique: field.unique || false,
       index: field.index || false,
-      // i18n H4: preserve `undefined` (don't coerce to false) so a field using the
-      // backend smart default round-trips through edit → save without being pinned
-      // to an explicit `localized: false`.
+      // Preserve an omitted (default-on) localized flag instead of coercing it
+      // to false, so editing and re-saving a default-localized field does not
+      // silently un-localize it.
       localized: field.localized,
     },
     // Relationship properties

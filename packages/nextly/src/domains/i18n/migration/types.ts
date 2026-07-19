@@ -15,11 +15,15 @@ export interface LocalizedColumnSpec {
     | "boolean"
     | "integer"
     | "double"
+    | "decimal"
     | "timestamp"
     | "json"
     | "fkSingle";
   /** optional length for text/varchar-like columns. */
   length?: number;
+  /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */
+  precision?: number;
+  scale?: number;
 }
 
 /**

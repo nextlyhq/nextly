@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-postgres",
-  "version": "0.0.2-alpha.34",
+  "version": "0.0.2-alpha.35",
   "description": "PostgreSQL database adapter for Nextly - extends @nextlyhq/adapter-drizzle",
   "license": "MIT",
   "type": "module",
@@ -35,21 +35,21 @@
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "1.0.0-rc.4",
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/pg": "^8.11.0",
-    "@vitest/coverage-v8": "^4.0.8",
-    "@vitest/ui": "^4.0.8",
-    "eslint": "^9.34.0",
-    "pg": "^8.13.0",
+    "@types/pg": "^8.15.5",
+    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/ui": "^4.1.0",
+    "eslint": "^9.39.1",
+    "pg": "^8.16.3",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "keywords": [
     "nextly",

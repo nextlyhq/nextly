@@ -11,18 +11,13 @@
  */
 
 export { users, accounts, sessions } from "../users/sqlite";
-export {
-  usersRelations,
-  accountsRelations,
-  sessionsRelations,
-} from "../users/sqlite-relations";
 
 export {
   emailVerificationTokens,
   passwordResetTokens,
+  userInviteTokens,
   refreshTokens,
 } from "../auth-tokens/sqlite";
-export { refreshTokensRelations } from "../auth-tokens/sqlite-relations";
 
 export {
   roles,
@@ -32,30 +27,16 @@ export {
   roleInherits,
   userPermissionCache,
 } from "../rbac/sqlite";
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "../rbac/sqlite-relations";
 
 export { apiKeys } from "../api-keys/sqlite";
-export { apiKeysRelations } from "../api-keys/sqlite-relations";
 
 export { auditLog, activityLog } from "../audit/sqlite";
-export { activityLogRelations } from "../audit/sqlite-relations";
 
 export { media, mediaFolders, imageSizes } from "../media/sqlite";
-export {
-  mediaRelations,
-  mediaFoldersRelations,
-} from "../media/sqlite-relations";
 
 export { nextlyMeta } from "../nextly-meta/sqlite";
 
 export { dynamicCollectionsSqlite as dynamicCollections } from "../dynamic-collections/sqlite";
-export { dynamicCollectionsRelations } from "../dynamic-collections/sqlite-relations";
 export { dynamicSinglesSqlite as dynamicSingles } from "../dynamic-singles/sqlite";
 export { dynamicComponentsSqlite as dynamicComponents } from "../dynamic-components/sqlite";
 
@@ -65,3 +46,15 @@ export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlit
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
+
+// Content-version store; in the bundle so the adapter table resolver can
+// resolve `nextly_versions` (a managed core table) for runtime CRUD.
+export { nextlyVersionsSqlite as nextlyVersions } from "../versions/sqlite";
+
+// Webhook + event system tables. Must be in this flat bundle (not just
+// getCoreSchema) so freshPushSchema creates them on a fresh database.
+export {
+  nextlyEvents,
+  nextlyWebhooks,
+  nextlyWebhookDeliveries,
+} from "../webhooks/sqlite";

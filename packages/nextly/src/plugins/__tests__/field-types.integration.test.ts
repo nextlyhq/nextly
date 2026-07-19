@@ -75,6 +75,18 @@ describe("custom field types", () => {
     expect(after.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(false);
   });
 
+  it("rejects a registered type that did not opt into the entries surface", () => {
+    // Registration is not authorization: a forms-only type must not validate on
+    // a collection (entries surface), or the entry editor would try to render a
+    // component the plugin never opted in there.
+    registerFieldType({ ...ratingType, surfaces: ["forms"] });
+    const result = validateCollectionConfig({
+      slug: "ratings",
+      fields: [{ name: "score", type: "rating" }],
+    } as unknown as CollectionConfig);
+    expect(result.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(true);
+  });
+
   it("persists a custom-typed field end-to-end through a real boot", async () => {
     const plugin = definePlugin({
       name: "@test/field-types",

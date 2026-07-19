@@ -21,8 +21,8 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { respondAction } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -61,7 +61,10 @@ const reorderSchema = z.object({
  */
 export const PATCH = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    requireAuthHeader(request);
+    await requireRouteAnyPermission(request, [
+      { action: "update", resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ]);
 
     let raw: unknown;
     try {

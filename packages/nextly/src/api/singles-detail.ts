@@ -24,12 +24,13 @@ import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import { transformRichTextFields } from "../lib/field-transform";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
-import { requireAuthHeader } from "./auth-header-only";
 import { readJsonBody } from "./read-json-body";
 import { respondDoc, respondMutation } from "./response-shapes";
+import { requireRouteCollectionAccess } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -81,6 +82,13 @@ function throwFromSingleResult<T>(
 
   if (result.statusCode === 404) {
     throw NextlyError.notFound({ logContext });
+  }
+
+  // A stored Single access rule (or RBAC) denial surfaces as 403 now that
+  // route writes run with overrideAccess:false; map it to a forbidden error
+  // instead of letting it fall through to a 500.
+  if (result.statusCode === 403) {
+    throw NextlyError.forbidden({ logContext });
   }
 
   if (result.statusCode === 400) {
@@ -178,8 +186,10 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a Single document.
  *
- * Requires authentication. If the Single document doesn't exist,
- * it will be auto-created first, then updated with the provided data.
+ * Requires a verified session or API key with update access to the Single,
+ * matching the dispatcher's `updateSingleDocument` authorization. If the
+ * Single document doesn't exist, it will be auto-created first, then
+ * updated with the provided data.
  *
  * Note: Singles cannot be deleted. They represent persistent site-wide
  * configuration that always exists once accessed.
@@ -194,9 +204,16 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    requireAuthHeader(request);
-
     const { slug } = await context.params;
+    // Capture the authorized identity so the update runs as this user. Route
+    // auth already ran the coarse RBAC gate, so `routeAuthorized` skips only
+    // that re-check; `overrideAccess` stays false so stored single access rules
+    // and field-level write access are still enforced with this user, and the
+    // response stays redacted to what they may read. Without forwarding the
+    // user, the standalone route ran the update anonymously and diverged from
+    // the dispatcher's updateSingleDocument.
+    const auth = await requireRouteCollectionAccess(request, "update", slug);
+
     const service = await getSingleEntryService();
 
     const body = await readJsonBody<Record<string, unknown>>(request, { slug });
@@ -204,7 +221,30 @@ export const PATCH = withErrorHandler(
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;
 
-    const result = await service.update(slug, body, { locale });
+    // Include resolved role slugs so field-level `access.read` (which redacts
+    // the response under `routeAuthorized`) evaluates against the caller's
+    // roles, matching the collection route path. Session auth carries role IDs,
+    // so they are resolved; API-key auth already carries slugs.
+    const roles = await resolveRoleSlugs(auth);
+    const user = {
+      id: auth.userId,
+      name: auth.userName,
+      email: auth.userEmail,
+      roles,
+      // A representative singular `role` so field-level `access.update`/
+      // `access.read` callbacks reading `req.user.role` see an authorized
+      // value instead of stripping fields for a legitimate caller.
+      role: roles?.[0],
+    };
+
+    const result = await service.update(slug, body, {
+      locale,
+      user,
+      overrideAccess: false,
+      // Guard on a resolved user id (matches the dispatcher) so the
+      // RBAC-skip only applies to an authenticated caller.
+      routeAuthorized: !!user.id,
+    });
 
     if (!result.success) {
       throwFromSingleResult(result, slug);
@@ -224,7 +264,8 @@ export const PATCH = withErrorHandler(
  * This endpoint returns the Single's schema configuration, not the document data.
  * Useful for Admin UI to understand the field structure.
  *
- * Requires authentication.
+ * Requires a verified session or API key with read access to the Single,
+ * matching the dispatcher's `getSingleSchema` authorization.
  *
  * Response:
  * - 200 OK: bare schema object (canonical `respondDoc` shape).
@@ -239,7 +280,7 @@ export const PATCH = withErrorHandler(
  */
 export function getSchema(request: Request, slug: string): Promise<Response> {
   return withErrorHandler(async (req: Request) => {
-    requireAuthHeader(req);
+    await requireRouteCollectionAccess(req, "read", slug);
 
     const registry = await getSingleRegistry();
     const single = await registry.getSingleBySlug(slug);

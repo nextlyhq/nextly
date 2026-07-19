@@ -34,10 +34,23 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type {
+  AccessControlService,
+  CollectionAccessRules,
+} from "../../../services/access";
+import { isSuperAdminContext } from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
+import {
+  hasPasswordField,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
   populateCompanionFields,
@@ -108,13 +121,21 @@ export function buildSingleHookContext<T>(
 }
 
 /**
- * Check RBAC access for a Single operation.
+ * Check access for a Single operation.
  *
  * Evaluation order:
  * 1. `overrideAccess` bypass → null (allow)
- * 2. No RBAC service or no user → null (skip)
- * 3. RBAC check (super-admin → code-defined → DB permissions)
- * 4. Fail-secure on unexpected errors
+ * 2. Super-admin (by authorized role) bypass → null (allow)
+ * 3. Stored access rules (`accessRules[operation]`: public / authenticated /
+ *    role-based / owner-only / custom) — denies with 403 when they fail. UI
+ *    Singles persist these, so they must be enforced on every transport, not
+ *    just the coarse RBAC permission.
+ * 4. `routeAuthorized` with a verified user → null: the route middleware
+ *    already ran the RBAC gate, so skip only that redundant re-check (the
+ *    stored rules above still ran).
+ * 5. No RBAC service or no user → null (skip)
+ * 6. RBAC check (super-admin → code-defined → DB permissions)
+ * 7. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
@@ -123,7 +144,17 @@ export async function checkSingleAccess(params: {
   operation: "read" | "update";
   user?: UserContext;
   overrideAccess?: boolean;
+  routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  /** Evaluator for the Single's stored access rules. */
+  accessControlService?: AccessControlService;
+  /** The Single's stored access rules (from the registry metadata). */
+  accessRules?: CollectionAccessRules;
+  /**
+   * The current Single document, when loaded. Owner-only rules need it to
+   * compare ownership; without it they allow (deferring to the DB-level check).
+   */
+  document?: Record<string, unknown>;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -131,11 +162,80 @@ export async function checkSingleAccess(params: {
     operation,
     user,
     overrideAccess,
+    routeAuthorized,
     rbacAccessControlService,
+    accessControlService,
+    accessRules,
+    document,
     logger,
   } = params;
 
   if (overrideAccess) {
+    return null;
+  }
+
+  // Super-admins bypass the stored rules on every transport, keyed on the
+  // authorized role set (never the account id).
+  if (isSuperAdminContext(user)) {
+    return null;
+  }
+
+  // Evaluate the Single's stored access rules (owner-only is degenerate for a
+  // single global document; public / authenticated / role-based / custom all
+  // apply). This runs for both route-authorized and Direct API callers so a
+  // caller holding the coarse `update-<single>` permission but failing a
+  // stored rule is still denied.
+  if (accessControlService && accessRules) {
+    // Owner-only with no loaded document: ownership cannot be evaluated (there
+    // is nothing to compare against), and evaluateOwnerAccess would otherwise
+    // ALLOW the write for lack of a document — letting a caller with only the
+    // coarse permission perform the first PATCH to an owner-only Single without
+    // any ownership check. Fail closed; a legitimate first write goes through a
+    // trusted `overrideAccess` seed.
+    if (accessRules[operation]?.type === "owner-only" && !document) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: ${operation} on single "${slug}" requires an existing owned document`,
+      };
+    }
+    // A stored `custom` rule may key on the document id, so forward it (from
+    // the loaded document) alongside the document itself.
+    const documentId =
+      typeof document?.id === "string" ? document.id : undefined;
+    const result = await accessControlService.evaluateAccess(
+      accessRules,
+      operation,
+      {
+        user: user
+          ? {
+              id: user.id,
+              role: user.role,
+              roles: user.roles,
+              email: user.email,
+            }
+          : undefined,
+      },
+      documentId,
+      document
+    );
+    if (!result.allowed) {
+      return {
+        success: false,
+        statusCode: 403,
+        message:
+          result.reason ??
+          `Access denied: ${operation} on single "${slug}" is not permitted`,
+      };
+    }
+  }
+
+  // The route middleware already ran this exact RBAC gate; skip the redundant
+  // re-check — but only when a verified user is present, so a caller that sets
+  // routeAuthorized without authenticating cannot silently allow an anonymous
+  // write. The stored rules above already ran; field-level write access still
+  // applies downstream (overrideAccess is false).
+  if (routeAuthorized && user) {
     return null;
   }
 
@@ -229,7 +329,12 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 1.5. RBAC access check (after metadata, before hooks/DB operations)
+      // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
+      // Stored read-rule enforcement is intentionally NOT wired here yet: the
+      // REST read handlers do not forward the authenticated user, so evaluating
+      // a `read: authenticated` / role-based rule would reject every REST caller
+      // as anonymous. It lands with read-path user forwarding in the follow-up
+      // read PR (hence no `accessRules` passed).
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
@@ -350,6 +455,14 @@ export class SingleQueryService extends BaseService {
         await this.populateTranslationMeta(slug, singleMeta, doc);
       }
 
+      // Redact password hashes BEFORE any afterRead hook runs (a hook could
+      // copy the hash elsewhere); the final redaction below is defense in
+      // depth.
+      const singleHasPassword = hasPasswordField(singleMeta.fields);
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
+
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
         const afterContext = buildSingleHookContext({
@@ -369,6 +482,30 @@ export class SingleQueryService extends BaseService {
       }
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
+
+      // Field-level afterRead hooks + read access (functions resolved via
+      // the field-level registry).
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterRead",
+        data: doc,
+        operation: "read",
+        user: options.user,
+      });
+      await applyFieldReadAccess({
+        kind: "single",
+        slug,
+        entry: doc,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
+
+      // Defense in depth: re-strip after hooks in case a hook re-introduced
+      // a password value under its declared key.
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
 
       return {
         success: true,

@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import type {
   DatabaseError,
@@ -66,10 +66,7 @@ export class RoleInheritanceService extends BaseService {
     const duplicate = await (
       this.db as RBACDatabaseInstance
     ).query.roleInherits.findFirst({
-      where: and(
-        eq(this.tables.roleInherits.parentRoleId, parentRoleId),
-        eq(this.tables.roleInherits.childRoleId, childRoleId)
-      ),
+      where: { parentRoleId: parentRoleId, childRoleId: childRoleId },
       columns: {
         id: true,
       },
@@ -144,7 +141,7 @@ export class RoleInheritanceService extends BaseService {
       const inheritances = await (
         this.db as RBACDatabaseInstance
       ).query.roleInherits.findMany({
-        where: inArray(this.tables.roleInherits.childRoleId, batch),
+        where: { childRoleId: { in: batch } },
         columns: {
           parentRoleId: true,
         },
@@ -185,7 +182,7 @@ export class RoleInheritanceService extends BaseService {
       const inheritances = await (
         this.db as RBACDatabaseInstance
       ).query.roleInherits.findMany({
-        where: inArray(this.tables.roleInherits.parentRoleId, batch),
+        where: { parentRoleId: { in: batch } },
         columns: {
           childRoleId: true,
         },

@@ -18,6 +18,7 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import { assertValidFieldsPayload } from "../../api/fields-payload";
 import {
   respondAction,
   respondBulk,
@@ -65,6 +66,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -85,9 +87,14 @@ import {
   parseWhereParam,
   requireBody,
   requireParam,
+  stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
+
+// Shared guard that centralizes required + stale schema-version validation for
+// all three entity kinds, so a stale UI save is rejected before any DDL runs.
+import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -313,6 +320,10 @@ const COLLECTIONS_METHODS: Record<
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields, { kind: "collection" });
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -386,13 +397,17 @@ const COLLECTIONS_METHODS: Record<
       return respondData({
         ...legacyAsRecord,
         renamed,
-        schemaVersion: collection.schemaVersion,
+        // Normalize legacy rows (schema_version NULL) to 1 so the editor always
+        // receives a concrete version to echo back on apply; otherwise JSON
+        // omits an undefined value and the guard rejects the first save as
+        // version-less. Mirrors the single-dispatcher preview.
+        schemaVersion: collection.schemaVersion ?? 1,
       });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
   //
-  // Single-process model: drizzle-kit/api is loaded lazily via
+  // Single-process model: drizzle-kit's payload/* entrypoints are loaded lazily via
   // drizzle-kit-lazy.ts (webpackIgnore + turbopackIgnore magic comments
   // keep it out of the handler bundle), so DDL runs cleanly in the same
   // process serving requests.
@@ -453,6 +468,10 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("Schema changes must be confirmed");
       }
       if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields, { kind: "collection" });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -463,7 +482,15 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
-      const currentVersion = collection.schemaVersion;
+      // Default legacy rows (schema_version NULL) to 1 so a first save is not
+      // rejected as version-less. The registry types schemaVersion as `number`
+      // via a type assertion, but the DB column is nullable, so the value can
+      // be null at runtime; singles/components apply the same `?? 1` fallback.
+      const currentVersion = collection.schemaVersion ?? 1;
+      // Reject a stale or version-less UI save before any DDL runs. The shared
+      // guard gives all three entity kinds (collections, singles, components)
+      // one optimistic-lock behavior and one error surface.
+      assertSchemaVersionMatch(schemaVersion, currentVersion, p.collectionName);
       const tableName = collection.tableName;
 
       // Legacy per-field resolutions get translated to typed
@@ -563,10 +590,9 @@ const COLLECTIONS_METHODS: Record<
             uiTargetSlug: p.collectionName,
           });
         },
-        // Optimistic-lock: only the slug being saved has a known
-        // currentVersion (we pre-fetched it above). For sibling
-        // collections in the snapshot, return null = no version check
-        // needed (caller didn't pass schemaVersions for them either).
+        // The optimistic-lock check now runs up front via
+        // assertSchemaVersionMatch, so no schemaVersions are passed below and
+        // this callback is unused; it is retained to satisfy the deps contract.
         readSchemaVersionForSlug: (slug: string) =>
           Promise.resolve(slug === p.collectionName ? currentVersion : null),
         // Read post-apply versions for the saved slug from the registry.
@@ -581,22 +607,13 @@ const COLLECTIONS_METHODS: Record<
         },
       });
 
-      const schemaVersionsCtx: Record<string, number> = {};
-      if (schemaVersion !== undefined) {
-        schemaVersionsCtx[p.collectionName] = schemaVersion;
-      }
-
       const result = await apply(desired, "ui", {
-        schemaVersions: schemaVersionsCtx,
         promptChannel: "auto",
       });
 
       if (!result.success) {
-        if (result.error.code === "SCHEMA_VERSION_CONFLICT") {
-          throw new Error(
-            "Schema was modified by another session. Please refresh."
-          );
-        }
+        // The stale-version case is already rejected up front by
+        // assertSchemaVersionMatch, so any failure here is a real apply error.
         throw new Error(result.error.message);
       }
 
@@ -661,29 +678,35 @@ const COLLECTIONS_METHODS: Record<
       // every list query 500s.
       //
       // Use `adapter.update` directly (not `registry.updateCollection`)
-      // because the registry helper auto-bumps `schema_version` and
-      // resets `migration_status` to `"pending"` on any `fields`
-      // change; both wrong here. The pipeline already bumped the schema
-      // version (see bumpSchemaVersion below plus the journal record),
-      // and the migration status is now `applied`, not `pending`.
-      // Surgical write of just the `fields` column keeps invariants
-      // intact.
+      // because the registry helper resets `migration_status` to `"pending"`
+      // on any `fields` change, which is wrong here (the migration is now
+      // `applied`). Advance `schema_version` in this same write so the
+      // optimistic-lock check above sees a new value on the next save;
+      // nothing else persists it, so without this bump the stored version
+      // never changes and a second stale save would pass the guard. The
+      // write is non-fatal (the DDL already succeeded), but track whether it
+      // landed so the response never reports a version the DB did not persist.
+      const newSchemaVersion = currentVersion + 1;
+      let versionPersisted = true;
       try {
         await adapter.update(
           "dynamic_collections",
           {
             fields: JSON.stringify(fields),
+            schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
         );
       } catch (err) {
+        versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
         // Non-fatal: the schema apply itself already succeeded. If the
         // metadata write fails, the actual DB column was already
         // renamed and the collection is in a good state structurally;
-        // only the admin's view of the field name is stale. Log so an
-        // operator can diagnose, but don't block the response.
+        // only the admin's view of the field name is stale, and the version
+        // was not advanced (the response reports the current version so a
+        // retry re-attempts the bump). Log so an operator can diagnose.
         console.warn(
           `[applySchemaChanges] Post-apply metadata write failed for ` +
             `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
@@ -767,8 +790,7 @@ const COLLECTIONS_METHODS: Record<
       // pipeline didn't emit diff counts; the conditional spread drops
       // undefined fields silently.
       return respondAction(`Schema applied for '${p.collectionName}'`, {
-        newSchemaVersion:
-          result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
+        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
         ...(result.summary
           ? { toastSummary: formatToastSummary(result.summary) }
           : {}),
@@ -887,6 +909,11 @@ const COLLECTIONS_METHODS: Record<
             : undefined,
           // i18n M5: `?locale=de` stores the translatable values for German.
           locale: p.locale,
+          userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -955,6 +982,11 @@ const COLLECTIONS_METHODS: Record<
             : undefined,
           // i18n M5: `?locale=de` updates only the German translatable values.
           locale: p.locale,
+          userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -983,6 +1015,14 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        // Forward the authenticated role set so role-based access and stored
+        // rules evaluate against the real user (parity with the update handler);
+        // without it publish-all could be denied for a user the route authorized.
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1012,6 +1052,11 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1046,6 +1091,11 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -1088,6 +1138,11 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const message =
         result.failures.length === 0
@@ -1121,11 +1176,35 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.data || typeof b.data !== "object") {
         throw new Error("data must be an object with update values");
       }
+      // Forward the authenticated identity so per-entry updates run as this
+      // user (hooks get a user) and the response is redacted to what they may
+      // read. Without it the query-based bulk update ran anonymously, unlike
+      // the id-based bulkUpdateEntries path which already resolves the user.
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
-          where: b.where as WhereFilter,
+          // Strip owner-column conditions from the request body so a caller
+          // cannot target rows by the system owner column via `body.where`
+          // (mirrors parseWhereParam on the query-string path). The service's
+          // own owner constraint is added separately and is unaffected; a where
+          // that was only an owner filter becomes {} and stays bounded by the
+          // collection's access rules.
+          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
+          userId: p._authenticatedUserId
+            ? String(p._authenticatedUserId)
+            : undefined,
+          userName: p._authenticatedUserName
+            ? String(p._authenticatedUserName)
+            : undefined,
+          userEmail: p._authenticatedUserEmail
+            ? String(p._authenticatedUserEmail)
+            : undefined,
+          userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         { limit: b.limit }
       );
@@ -1161,6 +1240,11 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

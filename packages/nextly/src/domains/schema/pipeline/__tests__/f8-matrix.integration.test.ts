@@ -68,7 +68,7 @@ let db: ReturnType<typeof drizzle>;
 beforeEach(() => {
   sqlite = new Database(":memory:");
   sqlite.pragma("foreign_keys = ON");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 });
 
 afterEach(() => {
@@ -147,6 +147,7 @@ describe("F8 matrix — SQLite — add field", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL
       )
     `);
@@ -216,6 +217,7 @@ describe("F8 matrix — SQLite — drop field", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL,
         "obsolete_field" text
       )
@@ -285,6 +287,7 @@ describe("F8 matrix — SQLite — rename field preserves data", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL
       )
     `);
@@ -368,6 +371,7 @@ describe("F8 matrix — SQLite — NOT-NULL coercion via provide_default", () =>
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "total" text
       )
     `);
@@ -463,7 +467,7 @@ describe("F8 matrix — PostgreSQL — NOT-NULL coercion via provide_default", (
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    pgDb = drizzlePg(pool);
+    pgDb = drizzlePg({ client: pool });
     await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
   });
 

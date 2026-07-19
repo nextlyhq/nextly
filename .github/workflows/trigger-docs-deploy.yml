@@ -6,6 +6,10 @@ on:
     paths:
       - 'docs/content/**'
 
+# The job only curls an external deploy hook; it never uses the
+# GITHUB_TOKEN, so the token gets no permissions at all.
+permissions: {}
+
 jobs:
   trigger-deploy:
     runs-on: ubuntu-latest

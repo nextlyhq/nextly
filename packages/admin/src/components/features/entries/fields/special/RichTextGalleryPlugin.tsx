@@ -284,7 +284,7 @@ export function RichTextGalleryPlugin({
                     </div>
                     <button
                       type="button"
-                      className="absolute top-1 right-1 h-5 w-5 rounded-none bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-1 right-1 h-5 w-5 rounded-none bg-destructive-solid text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={() => removeImage(index)}
                     >
                       <X className="h-3 w-3" />

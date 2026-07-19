@@ -13,7 +13,7 @@ let db: ReturnType<typeof drizzle>;
 
 beforeEach(() => {
   sqlite = new Database(":memory:");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
   sqlite.exec(
     'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "body" text)'
   );

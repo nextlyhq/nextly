@@ -6,14 +6,22 @@ import {
   AlertDescription,
   AlertTitle,
   Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   Input,
   Switch,
   Textarea,
 } from "@nextlyhq/ui";
-import { useEffect, useCallback, useRef } from "react";
+import { USER_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
+import { useEffect, useCallback, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
-import { Info, Loader2, SlidersHorizontal } from "@admin/components/icons";
+import {
+  FieldTypePicker,
+  usePluginFieldTypeEntries,
+} from "@admin/components/field-ui";
+import { ChevronDown, Info, Loader2 } from "@admin/components/icons";
 import {
   Form,
   FormControl,
@@ -26,18 +34,18 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import type {
-  UserFieldType,
+  UserFieldTypeId,
   UserFieldDefinitionRecord,
 } from "@admin/services/userFieldsApi";
 
 import { DefaultValueField } from "./DefaultValueField";
-import { FieldTypePicker } from "./FieldTypeSelector";
 import { OptionsEditor } from "./OptionsFieldArray";
 import {
   buildUserFieldSchema,
   DEFAULT_VALUES,
   fieldToFormValues,
   generateFieldName,
+  LENGTH_BOUND_TYPES,
   type UserFieldFormValues,
 } from "./schemas/userFieldSchema";
 
@@ -52,6 +60,17 @@ export interface UserFieldFormProps {
   onSubmit: (values: UserFieldFormValues) => void;
 }
 
+// `readonly string[]` (not the built-in union) so membership checks accept a
+// plugin-contributed type id; a plugin type is simply not a member, which
+// correctly hides the placeholder control for it.
+const PLACEHOLDER_TYPES: readonly string[] = [
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "phone",
+];
+
 export function UserFieldForm({
   mode,
   userField,
@@ -60,10 +79,11 @@ export function UserFieldForm({
 }: UserFieldFormProps) {
   const isEdit = mode === "edit";
   const isCodeSourced = isEdit && userField?.source === "code";
-  // Name and type identify the backing database column, which the schema
-  // reconciler only ever adds to — changing either would strand the existing
-  // column and its data. The server refuses both; the form matches it rather
-  // than offering an edit that cannot succeed.
+  // Name, type, and the multi-value flag identify the backing database
+  // column, which the schema reconciler only ever adds to — changing any of
+  // them would strand the existing column and its data. The server refuses
+  // all three; the form matches it rather than offering an edit that cannot
+  // succeed.
   const isIdentityLocked = isEdit || isCodeSourced;
   const nameTouchedRef = useRef(false);
   const schema = buildUserFieldSchema(mode);
@@ -75,10 +95,23 @@ export function UserFieldForm({
 
   const selectedType = form.watch("type");
   const showOptions = selectedType === "select" || selectedType === "radio";
-  const showPlaceholder =
-    selectedType === "text" ||
-    selectedType === "textarea" ||
-    selectedType === "email";
+  const showPlaceholder = PLACEHOLDER_TYPES.includes(selectedType);
+  const showLengthBounds = LENGTH_BOUND_TYPES.includes(selectedType);
+  const showNumberBounds = selectedType === "number";
+  const showValidation = showLengthBounds || showNumberBounds;
+
+  // Built-in user-field types plus any plugin type that opted into the users
+  // surface. A plugin whose id reuses a built-in never shadows it.
+  const pluginTypeEntries = usePluginFieldTypeEntries("users");
+  const typeEntries = useMemo(() => {
+    const builtinTypes = new Set<string>(
+      USER_FIELD_TYPE_CATALOG.map(entry => entry.type)
+    );
+    return [
+      ...USER_FIELD_TYPE_CATALOG,
+      ...pluginTypeEntries.filter(entry => !builtinTypes.has(entry.type)),
+    ];
+  }, [pluginTypeEntries]);
 
   // Populate form when field data loads in edit mode
   useEffect(() => {
@@ -100,23 +133,61 @@ export function UserFieldForm({
     [isEdit, form]
   );
 
-  // Reset type-specific fields when switching field type
+  // Reset type-specific fields when switching field type, so a default or a
+  // bound declared for one type never survives into a type it cannot fit.
   const handleTypeChange = useCallback(
-    (newType: string) => {
+    (newType: UserFieldTypeId) => {
       const current = form.getValues();
       form.reset({
         ...current,
-        type: newType as UserFieldType,
+        type: newType,
         options:
           newType === "select" || newType === "radio" ? current.options : [],
-        placeholder:
-          newType === "text" || newType === "textarea" || newType === "email"
-            ? current.placeholder
-            : "",
+        hasMany: newType === "select" ? current.hasMany : false,
+        placeholder: PLACEHOLDER_TYPES.includes(newType)
+          ? current.placeholder
+          : "",
+        minLength: LENGTH_BOUND_TYPES.includes(newType)
+          ? current.minLength
+          : "",
+        maxLength: LENGTH_BOUND_TYPES.includes(newType)
+          ? current.maxLength
+          : "",
+        minValue: newType === "number" ? current.minValue : "",
+        maxValue: newType === "number" ? current.maxValue : "",
         defaultValue: "",
       });
     },
     [form]
+  );
+
+  const boundInput = (
+    name: "minLength" | "maxLength" | "minValue" | "maxValue",
+    label: string
+  ) => (
+    <FormField
+      control={form.control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>
+            {label}{" "}
+            <span className="text-muted-foreground font-normal">
+              (Optional)
+            </span>
+          </FormLabel>
+          <FormControl>
+            <Input
+              type="number"
+              placeholder="No limit"
+              disabled={isCodeSourced}
+              {...field}
+            />
+          </FormControl>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
   );
 
   return (
@@ -141,246 +212,264 @@ export function UserFieldForm({
           }}
           className="space-y-6"
         >
-          <div className="bg-card  border border-border rounded-none overflow-hidden">
-            {/* Page Header */}
-            <div className="border-b border-border bg-primary/5 px-6 py-5">
-              <div className="flex items-center gap-3">
-                <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary">
-                  <SlidersHorizontal className="h-4 w-4" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold">
-                    {isEdit
-                      ? isCodeSourced
-                        ? "View User Field"
-                        : "Edit User Field"
-                      : "New User Field"}
-                  </h2>
-                  <p className="text-sm font-normal text-primary/50 mt-1">
-                    {isEdit
-                      ? isCodeSourced
-                        ? "This field is defined in your application code"
-                        : "Update the user field configuration"
-                      : "Add a custom field to user profiles"}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6">
-              {/* Two-column layout: Left for form, Right for field type selection */}
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-16">
-                {/* Left Column: Form Fields */}
-                <div className="space-y-6">
-                  {/* Section: Field Details */}
-                  <div className="space-y-4">
-                    <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
-                      Field Details
-                    </h3>
-
-                    {/* Label */}
-                    <FormField
-                      control={form.control}
-                      name="label"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Label</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="e.g. Phone Number"
-                              disabled={isCodeSourced}
-                              {...field}
-                              onChange={e =>
-                                handleLabelChange(
-                                  e.target.value,
-                                  field.onChange
-                                )
-                              }
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Field Name */}
-                    <FormField
-                      control={form.control}
-                      name="name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Field Name</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="e.g. phone_number"
-                              disabled={isIdentityLocked}
-                              {...field}
-                              onChange={e => {
-                                field.onChange(e.target.value);
-                                if (!isEdit) {
-                                  nameTouchedRef.current = true;
-                                }
-                              }}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            {isEdit
-                              ? "Names the database column, so it cannot change once the field exists. Create a new field instead."
-                              : "Auto-generated from label (snake_case)"}
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Description/Additional Info */}
-                    <FormField
-                      control={form.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            Description/Additional Info{" "}
-                            <span className="text-muted-foreground font-normal">
-                              (Optional)
-                            </span>
-                          </FormLabel>
-                          <FormControl>
-                            <Textarea
-                              placeholder="Helper text or field description (Optional)"
-                              className="min-h-20"
-                              disabled={isCodeSourced}
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-
-                  {/* Section: Type Configuration (conditional) */}
-                  {(showOptions || showPlaceholder) && (
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
-                        Type Configuration (Dynamically Updates)
-                      </h3>
-
-                      {/* Placeholder (text/textarea/email) */}
-                      {showPlaceholder && (
-                        <FormField
-                          control={form.control}
-                          name="placeholder"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Placeholder</FormLabel>
-                              <FormControl>
-                                <Input
-                                  placeholder="e.g. Enter your phone number"
-                                  disabled={isCodeSourced}
-                                  {...field}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
+          <div className="bg-card border border-border rounded-none overflow-hidden">
+            {/* Single column: the type governs everything below it, so it is
+                the first decision the form asks for. */}
+            <div className="mx-auto max-w-3xl space-y-8 p-6">
+              {/* Section: Field Type */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+                  Field Type
+                </h3>
+                <FormField
+                  control={form.control}
+                  name="type"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <FieldTypePicker
+                          entries={typeEntries}
+                          columns={4}
+                          value={field.value}
+                          onChange={val => {
+                            field.onChange(val);
+                            handleTypeChange(val);
+                          }}
+                          disabled={isIdentityLocked}
                         />
+                      </FormControl>
+                      {isEdit && (
+                        <FormDescription>
+                          Sets the database column type, so it cannot change
+                          once the field exists. Create a new field instead.
+                        </FormDescription>
                       )}
-
-                      {/* Options (select/radio) */}
-                      {showOptions && (
-                        <OptionsEditor form={form} disabled={isCodeSourced} />
-                      )}
-                    </div>
+                      <FormMessage />
+                    </FormItem>
                   )}
+                />
+              </div>
 
-                  {/* Default Value */}
-                  <DefaultValueField form={form} disabled={isCodeSourced} />
-                </div>
+              {/* Section: Field Details */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+                  Field Details
+                </h3>
 
-                {/* Right Column: Field Type Selection */}
+                <FormField
+                  control={form.control}
+                  name="label"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Label</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="e.g. Phone Number"
+                          disabled={isCodeSourced}
+                          {...field}
+                          onChange={e =>
+                            handleLabelChange(e.target.value, field.onChange)
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Field Name</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="e.g. phone_number"
+                          disabled={isIdentityLocked}
+                          {...field}
+                          onChange={e => {
+                            field.onChange(e.target.value);
+                            if (!isEdit) {
+                              nameTouchedRef.current = true;
+                            }
+                          }}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {isEdit
+                          ? "Names the database column, so it cannot change once the field exists. Create a new field instead."
+                          : "Auto-generated from label (snake_case)"}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="description"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Description{" "}
+                        <span className="text-muted-foreground font-normal">
+                          (Optional)
+                        </span>
+                      </FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Helper text shown under the input"
+                          className="min-h-20"
+                          disabled={isCodeSourced}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {/* Section: Type Configuration (conditional) */}
+              {(showOptions || showPlaceholder) && (
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
-                    Field Type Selection
+                    Type Configuration
                   </h3>
+
+                  {showPlaceholder && (
+                    <FormField
+                      control={form.control}
+                      name="placeholder"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Placeholder</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="e.g. Enter your phone number"
+                              disabled={isCodeSourced}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {showOptions && (
+                    <OptionsEditor form={form} disabled={isCodeSourced} />
+                  )}
+
+                  {selectedType === "select" && (
+                    <FormField
+                      control={form.control}
+                      name="hasMany"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                          <div className="space-y-0.5">
+                            <FormLabel>Allow multiple selections</FormLabel>
+                            <FormDescription>
+                              {isEdit
+                                ? "Decides the column type, so it cannot change once the field exists."
+                                : "Store a list of values instead of one."}
+                            </FormDescription>
+                          </div>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              disabled={isIdentityLocked}
+                            />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Section: Validation (collapsed — Required covers the common case) */}
+              {showValidation && (
+                <Collapsible>
+                  <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-none border border-border p-4 text-left">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+                        Validation
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {showLengthBounds
+                          ? "Length limits for the value"
+                          : "Numeric range for the value"}
+                      </p>
+                    </div>
+                    <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="grid grid-cols-1 gap-4 border border-t-0 border-border p-4 sm:grid-cols-2">
+                      {showLengthBounds && (
+                        <>
+                          {boundInput("minLength", "Minimum length")}
+                          {boundInput("maxLength", "Maximum length")}
+                        </>
+                      )}
+                      {showNumberBounds && (
+                        <>
+                          {boundInput("minValue", "Minimum value")}
+                          {boundInput("maxValue", "Maximum value")}
+                        </>
+                      )}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+
+              {/* Section: Default Value */}
+              <DefaultValueField form={form} disabled={isCodeSourced} />
+
+              {/* Section: Behavior */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+                  Behavior
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <FormField
                     control={form.control}
-                    name="type"
+                    name="required"
                     render={({ field }) => (
-                      <FormItem>
+                      <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                        <div className="space-y-0.5">
+                          <FormLabel>Required</FormLabel>
+                        </div>
                         <FormControl>
-                          <FieldTypePicker
-                            value={field.value}
-                            onChange={val => {
-                              field.onChange(val);
-                              handleTypeChange(val);
-                            }}
-                            disabled={isIdentityLocked}
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                            disabled={isCodeSourced}
                           />
                         </FormControl>
-                        {isEdit && (
-                          <FormDescription>
-                            Sets the database column type, so it cannot change
-                            once the field exists. Create a new field instead.
-                          </FormDescription>
-                        )}
-                        <FormMessage />
                       </FormItem>
                     )}
                   />
-                  <div className="space-y-4">
-                    <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
-                      Field Rules & Default
-                    </h3>
-
-                    {/* Field Behavior - Required and Active inline */}
-                    <div className="space-y-3">
-                      <h4 className="text-sm font-medium text-foreground">
-                        Field Behavior
-                      </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {/* Required */}
-                        <FormField
-                          control={form.control}
-                          name="required"
-                          render={({ field }) => (
-                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-border border-primary/25">
-                              <div className="space-y-0.5">
-                                <FormLabel>Required</FormLabel>
-                              </div>
-                              <FormControl>
-                                <Switch
-                                  checked={field.value}
-                                  onCheckedChange={field.onChange}
-                                  disabled={isCodeSourced}
-                                />
-                              </FormControl>
-                            </FormItem>
-                          )}
-                        />
-
-                        {/* Active */}
-                        <FormField
-                          control={form.control}
-                          name="isActive"
-                          render={({ field }) => (
-                            <FormItem className="flex items-center justify-between rounded-none p-4  border border-border border-primary/25">
-                              <div className="space-y-0.5">
-                                <FormLabel>Active</FormLabel>
-                              </div>
-                              <FormControl>
-                                <Switch
-                                  checked={field.value}
-                                  onCheckedChange={field.onChange}
-                                  disabled={isCodeSourced}
-                                />
-                              </FormControl>
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  <FormField
+                    control={form.control}
+                    name="isActive"
+                    render={({ field }) => (
+                      <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                        <div className="space-y-0.5">
+                          <FormLabel>Active</FormLabel>
+                        </div>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                            disabled={isCodeSourced}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
                 </div>
               </div>
             </div>

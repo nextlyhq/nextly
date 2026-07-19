@@ -66,6 +66,13 @@ export interface PasswordInputProps<
    * Additional CSS classes for the input.
    */
   className?: string;
+
+  /**
+   * Form mode. Stored password values are write-only server-side, so edit
+   * forms seed this input blank; in edit mode the placeholder explains
+   * that leaving it blank keeps the current password.
+   */
+  mode?: "create" | "edit";
 }
 
 // ============================================================
@@ -125,8 +132,15 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
+  mode,
 }: PasswordInputProps<TFieldValues>) {
   const [showPassword, setShowPassword] = useState(false);
+
+  // An explicit admin placeholder always wins; otherwise edit forms explain
+  // the blank-keeps-current semantics (the stored hash never round-trips).
+  const placeholder =
+    field.admin?.placeholder ??
+    (mode === "edit" ? "Leave blank to keep the current password" : undefined);
 
   // Get default value - handle function default values
   const defaultValue =
@@ -154,7 +168,7 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
         onBlur={onBlur}
         disabled={disabled}
         readOnly={readOnly}
-        placeholder={field.admin?.placeholder}
+        placeholder={placeholder}
         minLength={field.minLength}
         maxLength={field.maxLength}
         autoComplete={field.admin?.autoComplete || "new-password"}

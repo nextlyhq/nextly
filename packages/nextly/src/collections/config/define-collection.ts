@@ -310,6 +310,18 @@ export interface CollectionAdminOptions {
   isPlugin?: boolean;
 
   /**
+   * Hide the admin's "New …" affordances for this collection.
+   *
+   * For collections whose entries are machine-created (form submissions,
+   * logs, webhooks), a create button offers a fiction — nothing a human
+   * types there is a real event. The API surface is unaffected; only the
+   * admin UI stops offering creation.
+   *
+   * @default false
+   */
+  disableCreate?: boolean;
+
+  /**
    * Icon identifier for the collection.
    * Should be a valid icon name from the icon library (e.g., Lucide).
    *

@@ -26,10 +26,7 @@ import { PushSchemaPipeline } from "../../../domains/schema/pipeline/pushschema-
 import { DrizzleStatementExecutor } from "../../../domains/schema/services/drizzle-statement-executor";
 import type { DesiredSchema } from "../../../domains/schema/pipeline/types";
 import { createNotifier } from "../dispatcher";
-import type {
-  MigrationNotificationEvent,
-  NotificationChannel,
-} from "../types";
+import type { MigrationNotificationEvent, NotificationChannel } from "../types";
 
 const ctx = makeTestContext("postgresql");
 
@@ -44,7 +41,7 @@ describe("Notifications pipeline — real-PG integration", () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
-    db = drizzle(pool);
+    db = drizzle({ client: pool });
 
     // Pre-clean — pushSchema will create our managed table fresh.
     await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_posts" CASCADE`);
@@ -88,11 +85,10 @@ describe("Notifications pipeline — real-PG integration", () => {
         _kitOverride: {
           pushSchema: () =>
             Promise.resolve({
-              statementsToExecute: [
+              sqlStatements: [
                 `CREATE TABLE "${ctx.prefix}_dc_posts" (id text primary key, title text)`,
               ],
-              hasDataLoss: false,
-              warnings: [],
+              hints: [],
             }),
         },
         _buildDrizzleSchemaOverride: () => ({}),
@@ -166,12 +162,27 @@ describe("Notifications pipeline — real-PG integration", () => {
           pushSchema: () =>
             Promise.resolve({
               // Intentionally invalid SQL → DDL_EXECUTION_FAILED.
-              statementsToExecute: ["CREATE TABLE invalid syntax oops"],
-              hasDataLoss: false,
-              warnings: [],
+              sqlStatements: ["CREATE TABLE invalid syntax oops"],
+              hints: [],
             }),
         },
         _buildDrizzleSchemaOverride: () => ({}),
+        // Post-Option-E the additive fast path never calls drizzle-kit, so
+        // the invalid statement above would be unreachable. Inject a resolved
+        // op OUTSIDE the fast-path set (rename_column) and stub
+        // pre-resolution so Phase D takes the kit path and executes the
+        // invalid statement.
+        _resolvedOpsOverride: [
+          {
+            type: "rename_column",
+            tableName: `${ctx.prefix}_dc_posts_bad`,
+            fromColumn: "a",
+            toColumn: "b",
+            fromType: "text",
+            toType: "text",
+          },
+        ],
+        _executePreResolutionOverride: async () => 0,
       }
     );
 
@@ -243,11 +254,10 @@ describe("Notifications pipeline — real-PG integration", () => {
         _kitOverride: {
           pushSchema: () =>
             Promise.resolve({
-              statementsToExecute: [
+              sqlStatements: [
                 `CREATE TABLE "${ctx.prefix}_dc_isolation" (id text primary key)`,
               ],
-              hasDataLoss: false,
-              warnings: [],
+              hints: [],
             }),
         },
         _buildDrizzleSchemaOverride: () => ({}),
@@ -280,6 +290,8 @@ describe("Notifications pipeline — real-PG integration", () => {
     expect(warns).toHaveLength(1);
     expect(warns[0]).toContain("[notifications] fail channel failed");
 
-    await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_isolation"`).catch(() => {});
+    await pool
+      .query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_isolation"`)
+      .catch(() => {});
   });
 });

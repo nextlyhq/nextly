@@ -10,7 +10,9 @@
 
 import { z } from "zod";
 
+import { isKnownFormField } from "../types";
 import type {
+  AnyFormField,
   FormField,
   TextFormField,
   EmailFormField,
@@ -53,11 +55,26 @@ import type {
  * ```
  */
 export function generateZodSchema(
-  fields: FormField[]
+  fields: AnyFormField[]
 ): z.ZodObject<Record<string, z.ZodTypeAny>> {
   const schemaShape: Record<string, z.ZodTypeAny> = {};
 
   for (const field of fields) {
+    // A plugin-contributed field's value shape is owned by the plugin: accept
+    // any value, but keep the base required check so a required plugin field
+    // cannot be omitted (z.unknown() alone treats a missing key as valid).
+    if (!isKnownFormField(field)) {
+      schemaShape[field.name] = field.required
+        ? z
+            .unknown()
+            .refine(
+              value => value !== undefined && value !== null && value !== "",
+              { message: `${field.label || field.name} is required` }
+            )
+        : z.unknown();
+      continue;
+    }
+
     // Skip hidden fields without required flag
     if (field.type === "hidden" && !field.required) {
       // Still add to schema but make optional
@@ -110,7 +127,8 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
     case "hidden":
       return generateHiddenSchema(field);
     default:
-      // Unknown field type - accept any value
+      // Unreachable for a known FormField; plugin types are handled in
+      // generateZodSchema before this switch is reached.
       return z.unknown();
   }
 }
@@ -170,9 +188,14 @@ function generateEmailSchema(field: EmailFormField): z.ZodTypeAny {
  * Generate schema for number field.
  */
 function generateNumberSchema(field: NumberFormField): z.ZodTypeAny {
+  // Zod 4 unified message customization under a single `error` callback;
+  // an undefined input is the "missing required" case, anything else is a
+  // type mismatch.
   let schema = z.number({
-    required_error: field.validation?.errorMessage || "This field is required",
-    invalid_type_error: "Must be a number",
+    error: issue =>
+      issue.input === undefined
+        ? field.validation?.errorMessage || "This field is required"
+        : "Must be a number",
   });
 
   if (field.validation?.min !== undefined) {
@@ -283,9 +306,8 @@ function generateSelectSchema(field: SelectFormField): z.ZodTypeAny {
 
   // Single select
   const schema = z.enum(validValues as [string, ...string[]], {
-    errorMap: () => ({
-      message: field.validation?.errorMessage || "Please select a valid option",
-    }),
+    error: () =>
+      field.validation?.errorMessage || "Please select a valid option",
   });
 
   if (field.required) {
@@ -318,9 +340,7 @@ function generateRadioSchema(field: RadioFormField): z.ZodTypeAny {
   const validValues = field.options.map(opt => opt.value);
 
   const schema = z.enum(validValues as [string, ...string[]], {
-    errorMap: () => ({
-      message: field.validation?.errorMessage || "Please select an option",
-    }),
+    error: () => field.validation?.errorMessage || "Please select an option",
   });
 
   if (field.required) {
@@ -375,9 +395,9 @@ function generateDateSchema(field: DateFormField): z.ZodTypeAny {
   // Min/max date validation
   if (field.min || field.max) {
     schema = schema.refine(
-      (val: string) => {
+      (val: unknown) => {
         if (!val) return true;
-        const date = new Date(val);
+        const date = new Date(val as string);
         if (field.min && date < new Date(field.min)) return false;
         if (field.max && date > new Date(field.max)) return false;
         return true;
@@ -394,7 +414,7 @@ function generateDateSchema(field: DateFormField): z.ZodTypeAny {
   if (field.required) {
     // Add non-empty check for required fields
     return schema.refine(
-      (val: string) => val !== undefined && val !== null && val !== "",
+      (val: unknown) => val !== undefined && val !== null && val !== "",
       { message: field.validation?.errorMessage || "This field is required" }
     );
   }
@@ -462,7 +482,7 @@ function applyRequired(
  */
 export function transformFormData(
   data: Record<string, unknown>,
-  fields: FormField[]
+  fields: AnyFormField[]
 ): Record<string, unknown> {
   const transformed: Record<string, unknown> = {};
 
@@ -474,7 +494,11 @@ export function transformFormData(
       continue;
     }
 
-    transformed[field.name] = transformFieldValue(value, field);
+    // A plugin field's value passes through untransformed — the plugin owns its
+    // value shape; only built-in types get type coercion.
+    transformed[field.name] = isKnownFormField(field)
+      ? transformFieldValue(value, field)
+      : value;
   }
 
   return transformed;
@@ -557,8 +581,8 @@ function transformFieldValue(value: unknown, field: FormField): unknown {
  */
 export function validateFormData(
   data: Record<string, unknown>,
-  fields: FormField[]
-): z.SafeParseReturnType<Record<string, unknown>, Record<string, unknown>> {
+  fields: AnyFormField[]
+): z.ZodSafeParseResult<Record<string, unknown>> {
   const transformed = transformFormData(data, fields);
   const schema = generateZodSchema(fields);
   return schema.safeParse(transformed);
@@ -571,7 +595,7 @@ export function validateFormData(
  * @returns Object mapping field names to error messages
  */
 export function getValidationErrors(
-  result: z.SafeParseReturnType<unknown, unknown>
+  result: z.ZodSafeParseResult<unknown>
 ): Record<string, string> {
   if (result.success) {
     return {};
@@ -579,7 +603,8 @@ export function getValidationErrors(
 
   const errors: Record<string, string> = {};
 
-  for (const error of result.error.errors) {
+  // Zod 4 renamed ZodError.errors to ZodError.issues.
+  for (const error of result.error.issues) {
     const path = error.path.join(".");
     if (!errors[path]) {
       errors[path] = error.message;

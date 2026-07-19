@@ -282,10 +282,9 @@ export const buildFindQuery = (params: FindParams): string => {
     query.set("locale", params.locale);
   }
   if (params.fallbackLocale) {
-    // Server reads the hyphenated `fallback-locale` (see collection-dispatcher
-    // listEntries/getEntry). Sending camelCase here meant `fallbackLocale=none`
-    // was dropped server-side, so untranslated fields fell back to the default
-    // locale instead of rendering empty.
+    // The dispatcher reads the kebab-case `fallback-locale` query key; sending
+    // `fallbackLocale` would be ignored, so `fallbackLocale: "none"` would still
+    // fall back to the default language.
     query.set("fallback-locale", params.fallbackLocale);
   }
   // i18n M7: opt into the per-locale translation-status overview map.
@@ -449,9 +448,9 @@ export const entryApi = {
     const query = new URLSearchParams();
     if (options?.depth !== undefined) query.set("depth", String(options.depth));
     if (options?.locale) query.set("locale", options.locale);
-    // Canonical server param is hyphenated `fallback-locale` (matches
-    // listEntries/getEntry + count/update). camelCase was silently ignored,
-    // leaking the default-locale value into untranslated languages.
+    // Kebab-case `fallback-locale` is the query key the dispatcher reads; the
+    // camelCase form is silently ignored (so `fallbackLocale: "none"` would not
+    // actually disable fallback).
     if (options?.fallbackLocale)
       query.set("fallback-locale", options.fallbackLocale);
     if (options?.draft !== undefined) query.set("draft", String(options.draft));

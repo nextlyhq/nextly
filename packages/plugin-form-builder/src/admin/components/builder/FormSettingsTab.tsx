@@ -1,301 +1,297 @@
 "use client";
 
+/**
+ * Form Settings Tab
+ *
+ * Per-form behavior on the canonical settings shape: every control here is
+ * consumed somewhere (the submit handler or the confirmation flow) — a
+ * setting that does nothing does not get a toggle. Spam controls are
+ * per-form OVERRIDES of the plugin's global config: blank means inherit,
+ * and the inherited value is shown rather than hidden.
+ *
+ * @module admin/components/builder/FormSettingsTab
+ */
+
 import {
   Input,
-  Textarea,
-  Tabs,
-  TabsList,
-  TabsTrigger,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
+  Textarea,
 } from "@nextlyhq/ui";
 import type React from "react";
 
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
-// ============================================================================
-// Helper Components
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Layout helpers
+// ---------------------------------------------------------------------------
 
-/**
- * SettingRow - A layout component for a single setting with label and description on the left,
- * and the control/input on the right.
- */
 function SettingRow({
   label,
   description,
+  htmlFor,
   children,
-  className = "",
 }: {
   label: string;
   description?: string;
+  htmlFor?: string;
   children: React.ReactNode;
-  className?: string;
 }) {
   return (
-    <div
-      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-6 py-2 ${className}`}
-    >
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 py-2">
       <div className="space-y-1 max-w-xl">
-        <h4 className="text-[13px] font-semibold text-foreground tracking-tight">
+        <Label
+          htmlFor={htmlFor}
+          className="text-[13px] font-semibold text-foreground tracking-tight"
+        >
           {label}
-        </h4>
+        </Label>
         {description && (
           <p className="text-[12px] text-muted-foreground leading-relaxed">
             {description}
           </p>
         )}
       </div>
-      <div className="flex-shrink-0 flex items-center justify-end min-w-[100px]">
+      <div className="shrink-0 flex items-center justify-end min-w-25">
         {children}
       </div>
     </div>
   );
 }
 
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="border-b border-border pb-3">
+      <h3 className="text-[16px] font-bold text-foreground tracking-tight">
+        {children}
+      </h3>
+    </div>
+  );
+}
+
 /**
- * FormSettingsTab - Form settings configuration panel
- *
- * Refined for Antigravity standard:
- * - Two-column layout for better space utilization.
- * - Title Case headings with improved hierarchy.
- * - Robust state management for action tabs.
+ * Tri-state override select: inherit from the plugin config (showing the
+ * effective value), or force on/off for this form.
  */
-export function FormSettingsTab() {
+function InheritToggle({
+  id,
+  value,
+  inherited,
+  onChange,
+}: {
+  id: string;
+  value: boolean | undefined;
+  inherited: boolean | undefined;
+  onChange: (value: boolean | undefined) => void;
+}) {
+  const inheritedLabel =
+    inherited === undefined
+      ? "Inherit"
+      : `Inherit (${inherited ? "on" : "off"})`;
+  return (
+    <Select
+      value={value === undefined ? "inherit" : value ? "on" : "off"}
+      onValueChange={selected =>
+        onChange(selected === "inherit" ? undefined : selected === "on")
+      }
+    >
+      <SelectTrigger
+        id={id}
+        className="w-40 bg-transparent border-input dark:bg-muted/50"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="inherit">{inheritedLabel}</SelectItem>
+        <SelectItem value="on">On</SelectItem>
+        <SelectItem value="off">Off</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export interface SpamDefaults {
+  honeypot?: boolean;
+  recaptchaEnabled?: boolean;
+}
+
+interface FormSettingsTabProps {
+  /** Plugin-level spam defaults (from builder-config); null while loading. */
+  spamDefaults: SpamDefaults | null;
+}
+
+export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
   const { settings, updateSettings } = useFormBuilder();
 
-  // Handle tab switch for After Submission
-  // We check for undefined specifically so empty strings "" are treated as "redirect"
-  const currentActionTab =
-    settings.redirectUrl !== undefined ? "redirect" : "message";
-
   return (
-    <div className="w-full flex flex-row gap-8">
-      {/* Left Column: Submission & After Submission */}
-      <div className="w-full flex flex-col gap-8">
-        {/* Submission Settings */}
-        <section className="mb-12">
-          <div className="border-b border-primary/5 pb-3">
-            <h3 className="text-[16px] font-bold text-foreground tracking-tight">
-              Submission Settings
-            </h3>
-          </div>
+    <div className="w-full max-w-3xl flex flex-col gap-10">
+      {/* Submission */}
+      <section>
+        <SectionHeading>Submission</SectionHeading>
+        <div className="flex flex-col gap-1 pt-2">
+          <SettingRow
+            label="Submit button text"
+            description="Label on the form's primary action button"
+            htmlFor="settings-submit-text"
+          >
+            <Input
+              id="settings-submit-text"
+              type="text"
+              className="w-56"
+              value={settings.submitButtonText ?? ""}
+              onChange={e =>
+                updateSettings({ submitButtonText: e.target.value })
+              }
+            />
+          </SettingRow>
 
-          <div className="flex flex-col gap-1">
+          <SettingRow
+            label="Allow multiple submissions"
+            description="When off, the same visitor (by IP) can submit this form only once. Best-effort: IP-based, so shared networks count as one visitor."
+            htmlFor="settings-multiple"
+          >
+            <Switch
+              id="settings-multiple"
+              checked={settings.allowMultipleSubmissions ?? true}
+              onCheckedChange={checked =>
+                updateSettings({ allowMultipleSubmissions: checked })
+              }
+            />
+          </SettingRow>
+        </div>
+      </section>
+
+      {/* After submission */}
+      <section>
+        <SectionHeading>After submission</SectionHeading>
+        <div className="flex flex-col gap-4 pt-4">
+          {settings.confirmationType === "relationship" && (
+            <p className="border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+              This form redirects to a linked page (configured via the API).
+              Picking an option below replaces that behavior.
+            </p>
+          )}
+          <RadioGroup
+            value={settings.confirmationType ?? "message"}
+            onValueChange={value =>
+              updateSettings({
+                confirmationType: value as "message" | "redirect",
+              })
+            }
+            className="flex flex-col gap-3"
+          >
+            <div className="flex items-start gap-3">
+              <RadioGroupItem
+                value="message"
+                id="settings-confirm-message"
+                className="mt-0.5"
+              />
+              <div className="w-full space-y-2">
+                <Label htmlFor="settings-confirm-message">Show a message</Label>
+                {(settings.confirmationType ?? "message") === "message" && (
+                  <Textarea
+                    aria-label="Success message"
+                    value={settings.successMessage ?? ""}
+                    onChange={e =>
+                      updateSettings({ successMessage: e.target.value })
+                    }
+                    rows={3}
+                    placeholder="Thank you for your submission!"
+                  />
+                )}
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <RadioGroupItem
+                value="redirect"
+                id="settings-confirm-redirect"
+                className="mt-0.5"
+              />
+              <div className="w-full space-y-2">
+                <Label htmlFor="settings-confirm-redirect">
+                  Redirect to a URL
+                </Label>
+                {settings.confirmationType === "redirect" && (
+                  <Input
+                    aria-label="Redirect URL"
+                    type="url"
+                    value={settings.redirectUrl ?? ""}
+                    onChange={e =>
+                      updateSettings({
+                        redirectUrl: e.target.value || undefined,
+                      })
+                    }
+                    placeholder="https://example.com/thanks"
+                  />
+                )}
+              </div>
+            </div>
+          </RadioGroup>
+        </div>
+      </section>
+
+      {/* Spam protection */}
+      <section>
+        <SectionHeading>Spam protection</SectionHeading>
+        <div className="flex flex-col gap-1 pt-2">
+          <SettingRow
+            label="Honeypot"
+            description="Invisible trap field for bots. Inherits the plugin default unless overridden here."
+            htmlFor="settings-honeypot"
+          >
+            <InheritToggle
+              id="settings-honeypot"
+              value={settings.honeypotEnabled}
+              inherited={spamDefaults?.honeypot}
+              onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
+            />
+          </SettingRow>
+
+          <SettingRow
+            label="reCAPTCHA"
+            description="Challenge-based bot check. Inherits the plugin default unless overridden here."
+            htmlFor="settings-captcha"
+          >
+            <InheritToggle
+              id="settings-captcha"
+              value={settings.captchaEnabled}
+              inherited={spamDefaults?.recaptchaEnabled}
+              onChange={captchaEnabled => updateSettings({ captchaEnabled })}
+            />
+          </SettingRow>
+
+          {settings.captchaEnabled === true && (
             <SettingRow
-              label="Submit Button Text"
-              description="Label on the primary action button"
+              label="reCAPTCHA site key"
+              description="The client-facing site key for this form"
+              htmlFor="settings-captcha-key"
             >
               <Input
+                id="settings-captcha-key"
                 type="text"
-                value={settings.submitButtonText}
+                className="w-72 font-mono"
+                value={settings.captchaSiteKey ?? ""}
                 onChange={e =>
-                  updateSettings({ submitButtonText: e.target.value })
-                }
-                placeholder="Submit"
-                className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
-              />
-            </SettingRow>
-
-            <SettingRow
-              label="Show Reset Button"
-              description="Lets users clear all fields at once"
-            >
-              <Switch
-                checked={settings.showResetButton}
-                onCheckedChange={(checked: boolean) =>
-                  updateSettings({ showResetButton: checked })
+                  updateSettings({
+                    captchaSiteKey: e.target.value || undefined,
+                  })
                 }
               />
             </SettingRow>
-
-            {settings.showResetButton && (
-              <SettingRow
-                label="Reset Button Text"
-                description="Label on the secondary action button"
-                className="animate-in fade-in slide-in-from-top-2 duration-300"
-              >
-                <Input
-                  type="text"
-                  value={settings.resetButtonText}
-                  onChange={e =>
-                    updateSettings({ resetButtonText: e.target.value })
-                  }
-                  placeholder="Reset"
-                  className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
-                />
-              </SettingRow>
-            )}
-          </div>
-        </section>
-
-        {/* After Submission */}
-        <section className="mb-12">
-          <div className="border-b border-primary/5 pb-3">
-            <h3 className="text-[16px] font-bold text-foreground tracking-tight">
-              After Submission
-            </h3>
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <SettingRow
-              label="Action"
-              description="What happens after the form is submitted"
-            >
-              <Tabs
-                value={currentActionTab}
-                onValueChange={v => {
-                  if (v === "message") {
-                    updateSettings({ redirectUrl: undefined });
-                  } else if (v === "redirect") {
-                    updateSettings({ redirectUrl: "" });
-                  }
-                }}
-              >
-                <TabsList className="bg-primary/5 p-1 h-8">
-                  <TabsTrigger
-                    value="message"
-                    className="px-4 py-1 text-[11px] font-medium data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                  >
-                    Message
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="redirect"
-                    className="px-4 py-1 text-[11px] font-medium data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                  >
-                    Redirect
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </SettingRow>
-
-            {currentActionTab === "message" ? (
-              <div className="pt-2 animate-in fade-in duration-300">
-                <div className="space-y-1.5 mb-4">
-                  <h4 className="text-[13px] font-semibold text-foreground tracking-tight">
-                    Confirmation Message
-                  </h4>
-                  <p className="text-[12px] text-muted-foreground leading-relaxed">
-                    Message shown to user after successful submission
-                  </p>
-                </div>
-                <Textarea
-                  id="confirmationMessage"
-                  value={settings.confirmationMessage}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                    updateSettings({ confirmationMessage: e.target.value })
-                  }
-                  placeholder="Thank you for your submission!"
-                  rows={4}
-                  className="bg-transparent text-[13px] leading-relaxed w-full border-primary/5 focus-visible:ring-1"
-                />
-              </div>
-            ) : (
-              <div className="pt-2 animate-in fade-in duration-300">
-                <SettingRow
-                  label="Redirect URL"
-                  description="User will be redirected to this URL after submission"
-                >
-                  <Input
-                    type="url"
-                    value={settings.redirectUrl || ""}
-                    onChange={e =>
-                      updateSettings({ redirectUrl: e.target.value })
-                    }
-                    placeholder="https://example.com/thank-you"
-                    className="bg-transparent h-8 w-56 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
-                  />
-                </SettingRow>
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-
-      {/* Right Column: Spam Protection & Data Storage */}
-      <div className="w-full flex flex-col gap-8">
-        {/* Spam Protection */}
-        <section>
-          <div className="border-b border-primary/5 pb-3">
-            <h3 className="text-[16px] font-bold text-foreground tracking-tight">
-              Spam Protection
-            </h3>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <SettingRow
-              label="Honeypot Field"
-              description="Hidden field that silently catches bots"
-            >
-              <Switch
-                checked={settings.honeypotEnabled}
-                onCheckedChange={(checkedValue: boolean) =>
-                  updateSettings({ honeypotEnabled: checkedValue })
-                }
-              />
-            </SettingRow>
-
-            <SettingRow
-              label="CAPTCHA Challenge"
-              description="Human verification before submitting"
-            >
-              <Switch
-                checked={settings.captchaEnabled}
-                onCheckedChange={(checkedValue: boolean) =>
-                  updateSettings({ captchaEnabled: checkedValue })
-                }
-              />
-            </SettingRow>
-          </div>
-        </section>
-
-        {/* Data Storage */}
-        <section>
-          <div className="border-b border-primary/5 pb-3">
-            <h3 className="text-[16px] font-bold text-foreground tracking-tight">
-              Data Storage
-            </h3>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <SettingRow
-              label="Store Submissions"
-              description="Save responses to the database"
-            >
-              <Switch
-                checked={settings.storeSubmissions}
-                onCheckedChange={(checkedValue: boolean) =>
-                  updateSettings({ storeSubmissions: checkedValue })
-                }
-              />
-            </SettingRow>
-
-            <SettingRow
-              label="Submission Limit"
-              description="Max number of entries to store"
-            >
-              <div className="flex items-center gap-3">
-                <Input
-                  type="number"
-                  value={settings.submissionLimit || ""}
-                  onChange={e =>
-                    updateSettings({
-                      submissionLimit: e.target.value
-                        ? parseInt(e.target.value, 10)
-                        : undefined,
-                    })
-                  }
-                  placeholder="Unlimited"
-                  min={1}
-                  className="bg-transparent h-8 w-28 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
-                />
-                <span className="text-[12px] text-muted-foreground font-medium">
-                  Entries
-                </span>
-              </div>
-            </SettingRow>
-          </div>
-        </section>
-      </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

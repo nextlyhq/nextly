@@ -35,6 +35,7 @@ export {
   Baseline, // Rich text editor: text color
   Bell, // Collection Settings: icon picker
   Bookmark, // Collection Settings: icon picker
+  BookOpen, // Plugin detail: docs link
   Bold, // Rich text editor
   Box,
   Braces, // Collection Builder: json field
@@ -150,6 +151,7 @@ export {
   Redo, // Rich text editor
   RefreshCw,
   RotateCcw, // Column visibility: reset to default
+  Route, // Plugin detail: API routes contribution group
   RemoveFormatting, // Rich text editor
   SeparatorHorizontal, // Rich text editor: horizontal rule
   Search,

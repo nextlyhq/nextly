@@ -162,8 +162,8 @@ export interface PopulateCompanionAllArgs {
   idKey?: string;
   /**
    * Per-locale status filter (i18n M6). When set (e.g. `"published"`), a companion row whose
-   * `_status` doesn't match is dropped, so its locale projects as `null` (untranslated) instead
-   * of leaking a draft value. Undefined = no filter (admin / `status=all`). See findings M1.
+   * `_status` differs is treated as absent, so a published `locale=all` read never surfaces a
+   * draft translation. Undefined = no filter (admin / no per-locale status).
    */
   statusValue?: string;
 }
@@ -209,8 +209,8 @@ export async function populateCompanionFieldsAllLocales(
 
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
-    // i18n M1: drop rows failing the status filter so a draft translation never
-    // leaks into a public `locale=all` read (mirrors the single-locale path).
+    // Drop a row failing the status filter so a published locale=all read keys in
+    // only published translations (a draft locale then reads as null/absent).
     if (args.statusValue !== undefined && cr._status !== args.statusValue) {
       continue;
     }
@@ -263,10 +263,12 @@ export function buildLocalizedOrderExpr(args: {
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const statusPredicate =
-    statusValue !== undefined ? sql` AND ${t}."_status" = ${statusValue}` : sql``;
+    statusValue !== undefined
+      ? sql` AND ${t}.${sql.identifier("_status")} = ${statusValue}`
+      : sql``;
   const perLocale = localeChain.map(
     code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${code}${statusPredicate}), '')`
+      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
   );
   return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }
@@ -282,23 +284,29 @@ export function buildCompanionExists(args: {
   locale: string;
   valueCondition: SQL;
   /**
-   * Per-locale status filter (i18n M6). When set, the EXISTS also requires
-   * `_status = statusValue`, so a public `where`/`search` on a localized field
-   * never matches (or discloses) a draft translation. See findings M2.
+   * Per-locale status filter (i18n M6). When set (e.g. `"published"`), the EXISTS only matches a
+   * companion row whose `_status` equals it, so a where/search filter can't match a draft
+   * translation on a published read. Undefined = no status constraint (admin / no per-locale status).
    */
   statusValue?: string;
 }): SQL {
-  const { companionTableName, mainIdColumn, locale, valueCondition, statusValue } =
-    args;
+  const {
+    companionTableName,
+    mainIdColumn,
+    locale,
+    valueCondition,
+    statusValue,
+  } = args;
   const t = sql.identifier(companionTableName);
-  const statusPredicate =
-    statusValue !== undefined ? sql`AND ${t}."_status" = ${statusValue}` : sql``;
+  const statusCond =
+    statusValue !== undefined
+      ? sql` AND ${t}.${sql.identifier("_status")} = ${statusValue}`
+      : sql``;
   return sql`EXISTS (
     SELECT 1 FROM ${t}
-    WHERE ${t}."_parent" = ${mainIdColumn}
-    AND ${t}."_locale" = ${locale}
-    ${statusPredicate}
-    AND ${valueCondition}
+    WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn}
+    AND ${t}.${sql.identifier("_locale")} = ${locale}
+    AND ${valueCondition}${statusCond}
   )`;
 }
 
@@ -358,7 +366,7 @@ export function buildTranslationStatusCondition(args: {
       : sql`1=0`;
 
   const rowFor = (cond: SQL) =>
-    sql`SELECT 1 FROM ${t} WHERE ${t}."_parent" = ${mainIdColumn} AND ${t}."_locale" = ${locale} AND (${cond})`;
+    sql`SELECT 1 FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${locale} AND (${cond})`;
 
   switch (state) {
     case "translated":
@@ -370,7 +378,7 @@ export function buildTranslationStatusCondition(args: {
     case "draft":
     case "published":
       if (!hasStatus) return undefined;
-      return sql`EXISTS (${rowFor(sql`${t}."_status" = ${state}`)})`;
+      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state}`)})`;
     default:
       return undefined;
   }
@@ -406,6 +414,12 @@ export interface TranslationStatusArgs {
   idKey?: string;
   /** Row key to write the per-locale map under (default `_translations`). */
   outKey?: string;
+  /**
+   * Per-locale status filter (i18n M6). When set (e.g. `"published"`), a companion row whose
+   * `_status` differs is treated as absent, so a published read's overview never reports a
+   * draft-only translation as present. Undefined = report every row (admin / no per-locale status).
+   */
+  statusValue?: string;
 }
 
 /**
@@ -468,7 +482,15 @@ export async function populateTranslationStatus(
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     const meta: Record<string, LocaleTranslationMeta> = {};
     for (const code of locales) {
-      const cr = perLocaleRows[code];
+      const rawCr = perLocaleRows[code];
+      // On a status-scoped read, a companion row not in that status is treated as
+      // absent, so the overview does not report a draft-only translation as present.
+      const cr =
+        args.statusValue !== undefined &&
+        rawCr &&
+        rawCr._status !== args.statusValue
+          ? undefined
+          : rawCr;
       const hasContent =
         !!cr && localizedFields.some(f => !isBlank(cr[f.column]));
       const entry: LocaleTranslationMeta = {

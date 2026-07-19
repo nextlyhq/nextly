@@ -5,7 +5,7 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Cross-table `relations()` blocks live in `./postgres-relations.ts` (split
+ * Cross-table `relations()` blocks live in `../_dialect-bundles/postgres.relations.ts` (split
  * out in Task 17 to keep table definitions free of sibling-feature imports).
  * Re-exported at the bottom of this file so consumers using
  * `import * as schema from "./postgres"` still see the relations in the
@@ -37,8 +37,17 @@ export const users = pgTable(
       withTimezone: false,
     }),
     image: text("image"),
-    passwordHash: text("password_hash").notNull(),
+    // Nullable, matching SQLite and MySQL. An invited user has no password
+    // until they accept and set one, so the account has to exist without a
+    // hash. Loosening a NOT NULL constraint is not data-losing, so drizzle-kit
+    // applies it cleanly.
+    passwordHash: text("password_hash"),
     isActive: boolean("is_active").notNull().default(false),
+    // Set when an admin creates the account with a password they chose: the
+    // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
+    // column can be added to an existing table without a data-losing default;
+    // null and false both mean "no forced change".
+    mustChangePassword: boolean("must_change_password"),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: false }),

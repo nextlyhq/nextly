@@ -33,6 +33,7 @@ import {
   text,
   boolean,
   int,
+  double,
   datetime,
   json,
   index,
@@ -131,6 +132,31 @@ export const userFieldDefinitionsMysql = mysqlTable(
      * Placeholder text shown in the input field.
      * @example 'Enter your phone number'
      */
+    /**
+     * Whether a `select` field stores multiple values. Fixed at creation:
+     * it decides the backing column's type (json when multiple, varchar
+     * otherwise), and the reconciler only ever adds columns.
+     */
+    hasMany: boolean("has_many"),
+
+    // --------------------------------------------------------
+    // Validation bounds (nullable: unset means unconstrained, and a
+    // NOT NULL DEFAULT column added to a populated table is refused
+    // by the migration tooling as data-losing)
+    // --------------------------------------------------------
+
+    /** Minimum string length for text/textarea values. */
+    minLength: int("min_length"),
+
+    /** Maximum string length for text/textarea values; also sizes new varchar columns. */
+    maxLength: int("max_length"),
+
+    /** Minimum numeric value for number fields. */
+    minValue: double("min_value"),
+
+    /** Maximum numeric value for number fields. */
+    maxValue: double("max_value"),
+
     placeholder: varchar("placeholder", { length: 255 }),
 
     /**

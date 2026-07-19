@@ -63,7 +63,12 @@ import {
   type SslConfig,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import type { AnyRelations } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import type {
+  Pool as CallbackPool,
+  Connection as CallbackConnection,
+} from "mysql2";
 import mysql from "mysql2/promise";
 import type {
   PoolOptions,
@@ -233,6 +238,15 @@ function delay(ms: number): Promise<void> {
  * ```
  */
 export class MySqlAdapter extends DrizzleAdapter {
+  // getDrizzle memoization: drizzle v1's constructor builds a relational
+  // query builder per table in the relations config (~40 tables), and the
+  // service layer resolves an instance on every db access — construct once
+  // per relations object (identity-stable: the schema registry caches it
+  // and hands out a NEW object on invalidation, which naturally misses
+  // this cache and produces a fresh instance).
+  private drizzleByRelations = new WeakMap<AnyRelations, unknown>();
+  private drizzleBare: unknown;
+
   /**
    * The database dialect - always 'mysql' for this adapter.
    */
@@ -328,18 +342,25 @@ export class MySqlAdapter extends DrizzleAdapter {
    * It waits for all connections to be released before shutting down.
    */
   async disconnect(): Promise<void> {
-    if (!this.pool) {
+    // Detach the pool FIRST, then drop the memoized drizzle instances —
+    // this closes the repopulation window where a concurrent getDrizzle()
+    // call during the (async) pool.end() could cache an instance wrapping
+    // the closing pool.
+    const pool = this.pool;
+    this.pool = null;
+    this.drizzleBare = undefined;
+    this.drizzleByRelations = new WeakMap();
+    if (!pool) {
       return;
     }
 
     try {
-      await this.pool.end();
+      await pool.end();
 
       if (this.config.logger?.info) {
         this.config.logger.info("MySQL connection closed");
       }
     } finally {
-      this.pool = null;
       this.connected = false;
     }
   }
@@ -600,22 +621,26 @@ export class MySqlAdapter extends DrizzleAdapter {
    * @returns Drizzle ORM instance wrapping the mysql2 pool connection
    * @throws {Error} If called in browser or not connected
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getDrizzle<T = MySql2Database<any>>(schema?: Record<string, unknown>): T {
+  getDrizzle<T = MySql2Database<AnyRelations>>(relations?: AnyRelations): T {
     if (typeof window !== "undefined") {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    // Cast needed because mysql2/promise Pool type differs from drizzle's expected type
-    // MySQL requires mode when schema is provided
-
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    return (
-      schema
-        ? drizzle({ client: pool as any, schema, mode: "default" })
-        : drizzle(pool as any)
-    ) as T;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
+    // drizzle v1's mysql2 driver accepts the CALLBACK pool — handing it the
+    // mysql2/promise wrapper throws ("Cannot set properties of undefined
+    // (setting 'supportBigNumbers')"), so unwrap to the underlying pool.
+    // The pre-v1 `mode` option no longer exists.
+    const client = (pool as unknown as { pool: CallbackPool }).pool;
+    if (!relations) {
+      this.drizzleBare ??= drizzle({ client });
+      return this.drizzleBare as T;
+    }
+    let cached = this.drizzleByRelations.get(relations);
+    if (!cached) {
+      cached = drizzle({ client, relations });
+      this.drizzleByRelations.set(relations, cached);
+    }
+    return cached as T;
   }
 
   /**
@@ -728,6 +753,21 @@ export class MySqlAdapter extends DrizzleAdapter {
   private createTransactionContext(
     connection: PoolConnection
   ): TransactionContext {
+    // Bind a Drizzle instance to this transaction's checked-out connection so
+    // the delegated CRUD methods run inside the transaction and see its
+    // uncommitted rows. drizzle's mysql2 driver needs the underlying CALLBACK
+    // connection, which the mysql2/promise wrapper exposes on `.connection`
+    // (mirrors the `.pool` unwrap in getDrizzle()); getDrizzle() itself wraps
+    // the pool, which would use a different connection. Built lazily and
+    // memoized: transactions that use only raw execute/insert never construct
+    // it.
+    const buildTxExecutor = () =>
+      drizzle({
+        client: (connection as unknown as { connection: CallbackConnection })
+          .connection,
+      });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       execute: async <T = unknown>(
         sql: string,
@@ -743,49 +783,76 @@ export class MySqlAdapter extends DrizzleAdapter {
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
-        _options?: InsertOptions
+        options?: InsertOptions
       ): Promise<T> => {
-        const columns = Object.keys(data);
-        const values = Object.values(data);
+        const mapped = this.mapKeysToSqlColumns(
+          this.getTableObject(table),
+          data
+        );
+        const columns = Object.keys(mapped);
+        const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
 
         const sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
         const [result] = await connection.query<ResultSetHeader>(sql, values);
 
-        // MySQL doesn't have RETURNING, so we need to SELECT the inserted row
-        // Use insertId if available (auto-increment), otherwise use all inserted values
-        if (result.insertId) {
-          const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
-            [result.insertId]
-          );
-          return rows[0] as T;
+        const ret = options?.returning;
+        // No columns requested: skip the select-back reread entirely.
+        if (Array.isArray(ret) && ret.length === 0) {
+          return undefined as T;
         }
 
-        // Fallback: SELECT by all inserted values
+        // MySQL has no RETURNING; select the inserted row back. Project only the
+        // requested columns so a large JSON snapshot is not read unless asked.
+        const selectList =
+          !ret || ret === "*"
+            ? "*"
+            : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+                .map(c => this.escapeIdentifier(c))
+                .join(", ");
+
+        // Prefer the primary key: auto-increment via insertId, otherwise a
+        // supplied id (manually-keyed tables like nextly_versions). Matching by
+        // all values is a last resort because `col = NULL` never matches, so a
+        // row with nullable columns would not be found by that path.
+        const idValue = result.insertId ? result.insertId : mapped.id;
+        if (idValue !== undefined) {
+          const [rows] = await connection.query<RowDataPacket[]>(
+            `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
+            [idValue]
+          );
+          return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
+        }
+
         const whereClauses = columns.map(
           c => `${this.escapeIdentifier(c)} = ?`
         );
         const [rows] = await connection.query<RowDataPacket[]>(
-          `SELECT * FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
+          `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return rows[0] as T;
+        return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
       },
 
       insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
-        _options?: InsertOptions
+        options?: InsertOptions
       ): Promise<T[]> => {
         if (data.length === 0) return [];
+        const retMany = options?.returning;
+        const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
-        const columns = Object.keys(data[0]);
+        const tableObj = this.getTableObject(table);
+        const mappedRecords = data.map(r =>
+          this.mapKeysToSqlColumns(tableObj, r)
+        );
+        const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
 
-        for (const record of data) {
+        for (const record of mappedRecords) {
           const placeholders: string[] = [];
           for (const col of columns) {
             allValues.push(record[col]);
@@ -803,7 +870,7 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // For bulk insert, we need to SELECT the inserted rows
         // MySQL's insertId gives the first auto-increment ID
-        if (result.insertId && result.affectedRows > 0) {
+        if (!skipReread && result.insertId && result.affectedRows > 0) {
           const ids: number[] = [];
           for (let i = 0; i < result.affectedRows; i++) {
             ids.push(result.insertId + i);
@@ -813,27 +880,28 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return rows as T[];
+          return (rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
         }
 
         // Fallback: return empty if we can't determine inserted rows
         return [];
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -842,15 +910,15 @@ export class MySqlAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -858,13 +926,19 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       // Savepoints disabled per approved approach
       savepoint: undefined,
       rollbackToSavepoint: undefined,
       releaseSavepoint: undefined,
+
+      // Expose the transaction-bound Drizzle instance so callers can run
+      // Drizzle sql templates inside this transaction (junction-table writes
+      // need this to be atomic with the entry write). Reuses the memoized
+      // txDb() built for the delegated CRUD methods.
+      getDrizzle: <T = unknown>(): T => txDb() as T,
     };
   }
 

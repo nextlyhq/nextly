@@ -67,7 +67,7 @@ beforeEach(() => {
   mkdirSync(join(dir, "meta"), { recursive: true });
   sqlite = new Database(":memory:");
   sqlite.pragma("foreign_keys = ON");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
 
   for (const s of getSchemaEventsDdl("sqlite")) sqlite.exec(s);
   for (const s of getI18nArchiveDdl("sqlite")) sqlite.exec(s);

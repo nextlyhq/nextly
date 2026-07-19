@@ -149,7 +149,11 @@ export function FieldWrapper({
   // Uses the same classifier as storage generation (nextly/config) so the editor and the DB
   // agree. For non-localized collections this is always false and everything below is inert.
   const isLocalizedField = isFieldLocalized(
-    { type: _fieldType, name: fieldName ?? "", localized: fieldWithCommonProps.localized },
+    {
+      type: _fieldType,
+      name: fieldName ?? "",
+      localized: fieldWithCommonProps.localized,
+    },
     entryLocale.collectionLocalized
   );
   // Flip inputs right-to-left only for translatable fields in an RTL language — a shared field's
@@ -159,9 +163,11 @@ export function FieldWrapper({
   // language and has no per-language draft state (spec §7), so editing one changes all — surface
   // it so editors aren't surprised. Only meaningful for real (named) data fields.
   const sharedHint =
-    entryLocale.collectionLocalized && !isLocalizedField && fieldName != null ? (
+    entryLocale.collectionLocalized &&
+    !isLocalizedField &&
+    fieldName != null ? (
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground/70"
+        className="inline-flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground"
         title="Shared across languages — editing this field changes it for every language."
       >
         <Globe className="size-3" aria-hidden="true" />
@@ -186,7 +192,7 @@ export function FieldWrapper({
   const sourceHint = sourceText ? (
     <p
       dir="auto"
-      className="text-xs leading-relaxed text-muted-foreground/80 border-l-2 border-muted pl-2"
+      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
     >
       <span className="font-medium">Default:</span> {sourceText}
     </p>

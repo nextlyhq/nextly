@@ -31,19 +31,34 @@ export type UserFieldType =
   | "textarea"
   | "number"
   | "email"
+  | "url"
+  | "phone"
   | "select"
   | "radio"
   | "checkbox"
   | "date";
 
+/**
+ * A user field's type on the wire: a built-in scalar or a plugin-contributed
+ * type that opted into the users surface. The `(string & {})` arm admits the
+ * plugin id while keeping built-in autocomplete; use `UserFieldType` for logic
+ * that only ever branches on the built-ins.
+ */
+export type UserFieldTypeId = UserFieldType | (string & {});
+
 export interface UserFieldDefinitionRecord {
   id: string;
   name: string;
   label: string;
-  type: UserFieldType;
+  type: UserFieldTypeId;
   required: boolean;
   defaultValue: string | null;
   options: { label: string; value: string }[] | null;
+  hasMany: boolean | null;
+  minLength: number | null;
+  maxLength: number | null;
+  minValue: number | null;
+  maxValue: number | null;
   placeholder: string | null;
   description: string | null;
   sortOrder: number;
@@ -56,10 +71,15 @@ export interface UserFieldDefinitionRecord {
 export interface CreateUserFieldPayload {
   name: string;
   label: string;
-  type: UserFieldType;
+  type: UserFieldTypeId;
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
+  hasMany?: boolean | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
   placeholder?: string | null;
   description?: string | null;
   isActive?: boolean;
@@ -67,11 +87,15 @@ export interface CreateUserFieldPayload {
 
 export interface UpdateUserFieldPayload {
   name?: string;
-  type?: UserFieldType;
+  type?: UserFieldTypeId;
   label?: string;
   required?: boolean;
   defaultValue?: string | null;
   options?: { label: string; value: string }[] | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
   placeholder?: string | null;
   description?: string | null;
   isActive?: boolean;

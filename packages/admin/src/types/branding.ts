@@ -1,3 +1,5 @@
+import type { FieldSurface, FieldTypeCategory } from "nextly/field-catalog";
+
 export interface ResolvedBrandingColors {
   primary?: string;
   primaryForeground?: string;
@@ -38,6 +40,24 @@ export interface PluginMetadata {
   name: string;
   version?: string;
   description?: string;
+  /** Author shown in the plugins list; mirrors package.json by convention. */
+  author?: string;
+  /** Homepage URL linked from the plugin detail page. */
+  homepage?: string;
+  /** Source repository URL linked from the plugin detail page. */
+  repository?: string;
+  /** Documentation URL when distinct from the homepage. */
+  docsUrl?: string;
+  /** SPDX license identifier shown on the plugin detail page. */
+  license?: string;
+  /** Category the plugins list filters by (controlled vocabulary). */
+  category?: string;
+  /** Free-form descriptive tags shown on the plugin detail page. */
+  tags?: string[];
+  /** Whether the plugin's behavior is active. Absent on older servers. */
+  enabled?: boolean;
+  /** Required plugin dependencies → version range, for the detail page. */
+  dependsOn?: Record<string, string>;
   /** @deprecated Use `placement` instead. */
   group?: string;
   /** Immutable sidebar placement from plugin config. */
@@ -46,6 +66,20 @@ export interface PluginMetadata {
   /** Position anchor for standalone plugins (which built-in section to appear after). */
   after?: string;
   collections: string[];
+  /** Slugs of contributed singles, for the detail page's contributions view. */
+  singles?: string[];
+  /** Slugs of contributed components, for the detail page's contributions view. */
+  components?: string[];
+  /** Declared custom permissions (identity + display fields only; enabled plugins). */
+  permissions?: Array<{
+    action: string;
+    resource: string;
+    label?: string;
+    description?: string;
+    danger?: boolean;
+  }>;
+  /** Declared HTTP routes as method + path (enabled plugins only). */
+  routes?: Array<{ method: string; path: string }>;
   /** Sidebar appearance customization from plugin config. */
   appearance?: {
     icon?: string;
@@ -84,9 +118,21 @@ export interface PluginMetadata {
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
-   * to just that field + its condition controller (see takeoverLayout).
+   * to just that field + its condition controller (see takeoverLayout). The
+   * picker presentation (label/description/icon/category) and the `surfaces`
+   * the type opted into let each surface offer only the types meant for it
+   * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{ type: string; component: string; layout?: "takeover" }>;
+  fieldTypes?: Array<{
+    type: string;
+    component: string;
+    layout?: "takeover";
+    label?: string;
+    description?: string;
+    icon?: string;
+    category?: FieldTypeCategory;
+    surfaces?: readonly FieldSurface[];
+  }>;
 }
 
 export interface AdminBranding {

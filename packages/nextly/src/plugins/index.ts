@@ -17,6 +17,7 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginActionRegistry,
+  type PluginCategory,
   type PluginContext,
   type PluginDefinition,
   type PluginFilterRegistry,
@@ -30,6 +31,7 @@ export type {
   PluginEmailProvider,
   PluginEmailTemplate,
   PluginFieldType,
+  FieldSurface,
   ScheduledTask,
   PermissionSlug,
 } from "./contributions";
