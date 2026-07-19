@@ -1549,6 +1549,11 @@ export class CollectionMutationService extends BaseService {
       // a component save failure rolls back the entry update — no partial state.
       // tx.execute() is used for the UPDATE so it runs on the same DB client
       // as the transaction (unlike tx.update() which delegates to the pool).
+      // Resolved versioning config persisted on the collection (or null when
+      // unversioned); read once so the in-tx capture below can skip cheaply.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+
       await this.adapter.transaction(async tx => {
         const updatePayload = {
           ...stripImmutableSystemFields(finalData),
@@ -1614,6 +1619,36 @@ export class CollectionMutationService extends BaseService {
               );
             }
           }
+        }
+
+        // Capture a version snapshot of the post-update document atomically
+        // with the write when the collection opts into versioning. The parent
+        // is the pre-image (camelCased) overlaid with the changed values;
+        // components and m2m overlay it in assembleDocument to form the full
+        // read-shape snapshot. Status prefers the new value, else the prior one.
+        if (versionsConfig?.enabled) {
+          const preImage: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(
+            existingEntry as Record<string, unknown>
+          )) {
+            preImage[toCamelCase(key)] = value;
+          }
+          await captureInTx(tx, this.versionCapture, {
+            ref: {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            },
+            contentStatus:
+              (finalData as { status?: unknown }).status ??
+              (preImage as { status?: unknown }).status,
+            parts: {
+              parentRow: { ...preImage, ...finalData },
+              components: componentFieldData,
+              manyToMany: manyToManyData,
+            },
+            createdBy: params.user?.id ?? null,
+          });
         }
       });
 

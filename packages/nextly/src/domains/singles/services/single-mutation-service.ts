@@ -25,7 +25,7 @@ import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { keysToSnakeCase, toCamelCase } from "../../../lib/case-conversion";
 import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -42,6 +42,8 @@ import {
   stripPasswordFieldValues,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
 import type {
   SingleDocument,
   SingleResult,
@@ -75,6 +77,12 @@ export class SingleMutationService extends BaseService {
 
   /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
   private readonly accessControlService: AccessControlService;
+
+  /**
+   * Stateless version-capture service. Records a durable version snapshot
+   * inside the update transaction when the single opts into versioning.
+   */
+  private readonly versionCapture = new VersionCaptureService();
 
   constructor(
     adapter: DrizzleAdapter,
@@ -330,6 +338,30 @@ export class SingleMutationService extends BaseService {
               parentTable: singleMeta.tableName,
               fields: fieldConfigs,
               data: componentFieldData,
+            });
+          }
+
+          // Capture a version snapshot atomically with the write when the single
+          // opts into versioning. Singles have no many-to-many fields; the
+          // updated parent row (top-level keys camelCased to the read shape) plus
+          // component subtrees form the snapshot.
+          const versionsConfig = singleMeta.versions;
+          if (versionsConfig?.enabled) {
+            const parentRow: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(
+              rows[0] as Record<string, unknown>
+            )) {
+              parentRow[toCamelCase(key)] = value;
+            }
+            await captureInTx(tx, this.versionCapture, {
+              ref: {
+                scopeKind: "single",
+                scopeSlug: slug,
+                entryId: existingDoc.id,
+              },
+              contentStatus: (parentRow as { status?: unknown }).status,
+              parts: { parentRow, components: componentFieldData },
+              createdBy: options.user?.id ?? null,
             });
           }
 
