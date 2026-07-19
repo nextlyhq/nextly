@@ -459,23 +459,23 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Build the COMPLETE component-subtree and many-to-many id maps for an entry's
-   * version snapshot. A partial update only carries the fields present in the
-   * request, so the written maps cover just those; unchanged component/relation
-   * fields are read from the current committed state and overlaid, so a
-   * scalar-only edit does not drop existing components or relations from the
-   * snapshot (which a later restore would otherwise lose). Reads run on the
-   * pooled connection — unchanged fields are untouched by the in-flight write,
-   * so their committed value is correct — and written values always win.
+   * Read the entry's component subtrees + many-to-many id arrays for a version
+   * snapshot, using the WRITE TRANSACTION's connection (read-your-writes, #226)
+   * so the components and junction rows just written in the same transaction are
+   * visible on every dialect. The read path returns the full read shape — ids
+   * populated, JSON parsed, password fields stripped — and an empty relationship
+   * reads as `[]`, so the snapshot matches a normal read with no in-memory
+   * overlay and cannot leak component password hashes. A read failure fails the
+   * capture (the whole transaction rolls back) rather than persisting a
+   * knowingly-incomplete snapshot the caller cannot tell is incomplete.
    */
   private async buildFullSnapshotRelations(
+    tx: { getDrizzle<T = unknown>(): T },
     entryId: string,
     collectionName: string,
     parentTable: string,
     fields: FieldDefinition[],
-    manyToManyFields: FieldDefinition[],
-    writtenComponents: Record<string, unknown>,
-    writtenM2M: Record<string, string[]>
+    manyToManyFields: FieldDefinition[]
   ): Promise<{
     components: Record<string, unknown>;
     manyToMany: Record<string, string[]>;
@@ -483,21 +483,18 @@ export class CollectionMutationService extends BaseService {
     const components: Record<string, unknown> = {};
     if (this.componentDataService) {
       const componentFields = fields.filter(isComponentField);
-      // Only read when a component field was omitted from the write (else the
-      // written map is already complete).
-      const hasOmitted = componentFields.some(
-        f => writtenComponents[f.name] === undefined
-      );
-      if (hasOmitted) {
+      if (componentFields.length > 0) {
         try {
           const populated =
             await this.componentDataService.populateComponentData({
               entry: { id: entryId },
-              // Use the resolved parent table (custom `dbName` collections do not
-              // match getTableName(slug)); it must equal the table the component
-              // rows were written under, or the read finds nothing.
+              // Resolved parent table (custom `dbName` collections do not match
+              // getTableName(slug)) so the read targets the right comp_ tables.
               parentTable,
               fields: fields as unknown as FieldConfig[],
+              // Read on the transaction so components written earlier in it are
+              // visible (read-your-writes); the read path strips password fields.
+              executor: tx.getDrizzle(),
             });
           for (const f of componentFields) {
             if (populated[f.name] !== undefined) {
@@ -505,13 +502,10 @@ export class CollectionMutationService extends BaseService {
             }
           }
         } catch (err) {
-          // Fail the capture rather than persist a knowingly-incomplete snapshot:
-          // silently dropping the omitted components would reintroduce the exact
-          // partial-update data loss this read exists to prevent, and a version
-          // that looks complete but isn't is worse than a failed, retriable write
-          // (the whole tx rolls back atomically).
+          // A version that looks complete but silently dropped a component is
+          // worse than a failed, retriable write — fail the capture (rolls back).
           this.logger.error(
-            "Version snapshot: failed to read existing components; failing the write instead of capturing an incomplete snapshot",
+            "Version snapshot: failed to read components; failing the write instead of capturing an incomplete snapshot",
             {
               collection: collectionName,
               entryId,
@@ -529,51 +523,41 @@ export class CollectionMutationService extends BaseService {
         }
       }
     }
-    // Written component values win over the read-back.
-    Object.assign(components, writtenComponents);
 
     const manyToMany: Record<string, string[]> = {};
-    const hasOmittedM2M = manyToManyFields.some(
-      f => writtenM2M[f.name] === undefined
-    );
-    if (hasOmittedM2M) {
-      for (const field of manyToManyFields) {
-        if (writtenM2M[field.name] !== undefined) continue;
-        try {
-          const relatedRows =
-            await this.relationshipService.fetchManyToManyRelations(
-              collectionName,
-              entryId,
-              field
-            );
-          manyToMany[field.name] = relatedRows.map(
-            r => (r as { id: string }).id
+    const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+    for (const field of manyToManyFields) {
+      try {
+        const relatedRows =
+          await this.relationshipService.fetchManyToManyRelations(
+            collectionName,
+            entryId,
+            field,
+            txExecutor
           );
-        } catch (err) {
-          // Same reasoning as the component read above: fail the capture rather
-          // than record a snapshot that silently omits an existing relationship.
-          this.logger.error(
-            "Version snapshot: failed to read existing many-to-many relations; failing the write instead of capturing an incomplete snapshot",
-            {
-              collection: collectionName,
-              entryId,
-              field: field.name,
-              error: err instanceof Error ? err.message : String(err),
-            }
-          );
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              reason: "version-snapshot-m2m-read",
-              collection: collectionName,
-              entryId,
-              field: field.name,
-            },
-          });
-        }
+        manyToMany[field.name] = relatedRows.map(r => (r as { id: string }).id);
+      } catch (err) {
+        // Same reasoning as the component read above.
+        this.logger.error(
+          "Version snapshot: failed to read many-to-many relations; failing the write instead of capturing an incomplete snapshot",
+          {
+            collection: collectionName,
+            entryId,
+            field: field.name,
+            error: err instanceof Error ? err.message : String(err),
+          }
+        );
+        throw NextlyError.internal({
+          cause: err instanceof Error ? err : undefined,
+          logContext: {
+            reason: "version-snapshot-m2m-read",
+            collection: collectionName,
+            entryId,
+            field: field.name,
+          },
+        });
       }
     }
-    Object.assign(manyToMany, writtenM2M);
 
     return { components, manyToMany };
   }
@@ -1398,30 +1382,38 @@ export class CollectionMutationService extends BaseService {
 
         // Record a durable version snapshot atomically with the write when the
         // collection opts into versioning. Runs after components + m2m so the
-        // snapshot is the full assembled document (the read-shape). History-only
-        // here: the entry's status maps to a VersionStatus inside captureInTx.
-        // A create provides all field values, so componentFieldData/
-        // manyToManyData are already complete; only the parent needs read-shape
-        // normalization (parse JSON-backed fields; strip password hashes so they
-        // never enter durable history). `entry` is reused after the tx for hooks
-        // and the response, so snapshot a copy.
+        // read from the transaction below sees them (read-your-writes).
         if (versionsConfig?.enabled) {
-          const snapshotParent = this.deserializeJsonFieldsForSnapshot(
-            entry,
-            fields
+          // Snapshot the parent from the RAW insert row (field-name keys) — not
+          // the camelCased `entry` used for the response — so user fields whose
+          // names contain underscores keep their configured keys; convert only
+          // the timestamp columns to match a normal read. Merge this locale's
+          // translatable values (split out of the main insert), parse JSON-backed
+          // fields, and strip password hashes + the owner column (created_by) so
+          // neither ever enters durable history.
+          const snapshotParent = convertTimestampsToCamelCase(
+            this.deserializeJsonFieldsForSnapshot(
+              {
+                ...(rawEntry as Record<string, unknown>),
+                ...(localizedWrite?.localizedFieldValues ?? {}),
+              },
+              fields
+            )
           );
           stripPasswordFieldValues(snapshotParent, fields);
-          // Strip the system owner column (created_by) too: normal reads/
-          // responses redact it, so history must not durably retain a stable
-          // owner id or let a restore overwrite ownership from old history.
           stripSystemOwnerField(snapshotParent);
-          // A junction relationship with no rows reads as an empty array, so
-          // seed every m2m field to [] before overlaying the written ids —
-          // otherwise a create that omits a m2m field records a snapshot missing
-          // it, and a later restore/audit can't tell "empty" from "absent".
-          const snapshotM2M: Record<string, string[]> = {};
-          for (const f of manyToManyFields) snapshotM2M[f.name] = [];
-          Object.assign(snapshotM2M, manyToManyData);
+          // Components + m2m are read from the transaction: the write above just
+          // persisted them, and an empty relationship reads as [] — so the
+          // snapshot is complete and read-shaped with no in-memory overlay.
+          const { components: snapshotComponents, manyToMany: snapshotM2M } =
+            await this.buildFullSnapshotRelations(
+              tx,
+              entry.id as string,
+              params.collectionName,
+              tableName,
+              fields,
+              manyToManyFields
+            );
           await captureInTx(tx, this.versionCapture, {
             ref: {
               scopeKind: "collection",
@@ -1431,7 +1423,7 @@ export class CollectionMutationService extends BaseService {
             contentStatus: (entry as { status?: unknown }).status,
             parts: {
               parentRow: snapshotParent,
-              components: componentFieldData,
+              components: snapshotComponents,
               manyToMany: snapshotM2M,
             },
             createdBy: params.user?.id ?? null,
@@ -2285,13 +2277,12 @@ export class CollectionMutationService extends BaseService {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
               } = await this.buildFullSnapshotRelations(
+                tx,
                 params.entryId,
                 params.collectionName,
                 tableName,
                 fields,
-                manyToManyFields,
-                attemptComponentData,
-                manyToManyData
+                manyToManyFields
               );
               await captureInTx(tx, this.versionCapture, {
                 ref: {
