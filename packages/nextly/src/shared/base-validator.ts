@@ -214,6 +214,26 @@ export function validateSlugShared(
     });
   }
 
+  // a slug ending in `_locales` produces a physical table name
+  // (`dc_<slug>_locales` / `single_<slug>_locales`) that collides with the localization
+  // companion-table naming, so the schema-diff pipeline would treat the user's table as
+  // migration-owned (excluded from diff, its DROP silently blocked). Reserve the suffix.
+  // Normalize non-alphanumerics to `_` first (matching table-name generation) so a
+  // hyphenated slug like `posts-locales` → `dc_posts_locales` is caught too.
+  if (
+    typeof slug === "string" &&
+    slug
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .endsWith("_locales")
+  ) {
+    errors.push({
+      path,
+      message: `${ctx.entityLabel} slug '${slug}' cannot end with '_locales' (reserved for localization companion tables)`,
+      code: "SLUG_RESERVED",
+    });
+  }
+
   if (isSQLKeyword(slug, ctx.sqlKeywordsSet)) {
     errors.push({
       path,

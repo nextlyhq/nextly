@@ -51,7 +51,10 @@ export function registerComponentServices(ctx: RegistrationContext): void {
         adapter,
         logger,
         registryService,
-        relationshipService
+        relationshipService,
+        // i18n: forward the normalized localization config so a localized embedded
+        // component resolves/writes translatable fields via its companion per language.
+        ctx.config.localization
       );
     }
   );

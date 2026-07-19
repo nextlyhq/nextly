@@ -45,6 +45,8 @@ export function singleEntityFromSettings(
     settings: {
       singularName: settings.singularName,
       status: settings.status === true,
+      // i18n: the single-level Internationalization toggle (mirrors collectionEntityFromSettings).
+      localized: settings.i18n === true,
     },
     fields,
   });

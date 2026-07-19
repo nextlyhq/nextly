@@ -41,6 +41,8 @@ export interface CreateComponentPayload {
     description?: string;
     imageURL?: string;
   };
+  /** i18n: whether the component is localized (translatable fields live in comp_<slug>_locales). */
+  localized?: boolean;
 }
 
 /**
@@ -57,6 +59,8 @@ export interface UpdateComponentPayload {
     description?: string;
     imageURL?: string;
   };
+  /** i18n: the Internationalization toggle. Provisions/persists the companion when true. */
+  localized?: boolean;
 }
 
 // Build query string for pagination and search using shared utility
@@ -185,7 +189,10 @@ export const componentApi = {
     fields: unknown[],
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
-    renameResolutions?: SchemaRenameResolution[]
+    renameResolutions?: SchemaRenameResolution[],
+    // i18n: the current Internationalization toggle, so an apply that flips i18n AND changes
+    // fields provisions the companion in the same request. Undefined leaves the persisted value.
+    localized?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -195,6 +202,7 @@ export const componentApi = {
       schemaVersion,
       resolutions,
       renameResolutions,
+      ...(localized !== undefined ? { localized } : {}),
     });
     return {
       success: true,

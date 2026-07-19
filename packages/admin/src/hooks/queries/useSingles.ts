@@ -451,6 +451,11 @@ export function useSingleDocument(
   slug?: string,
   options?: {
     depth?: number;
+    // i18n: the active content language + fallback control + translation-status opt-in.
+    // Part of the cache key so switching languages refetches (values differ per locale).
+    locale?: string;
+    fallbackLocale?: string;
+    translationStatus?: boolean;
     queryOptions?: Omit<
       UseQueryOptions<SingleDocument, Error>,
       "queryKey" | "queryFn"
@@ -458,14 +463,28 @@ export function useSingleDocument(
   }
 ) {
   return useQuery<SingleDocument, Error>({
+    // i18n: locale is part of cache identity — switching languages must refetch, not serve the
+    // previous language's values. Mirrors useEntry.
     queryKey: slug
-      ? singleDocumentKeys.detail(slug)
+      ? [
+          ...singleDocumentKeys.detail(slug),
+          {
+            locale: options?.locale ?? null,
+            fallbackLocale: options?.fallbackLocale ?? null,
+            translationStatus: options?.translationStatus ?? false,
+          },
+        ]
       : singleDocumentKeys.details(),
     queryFn: async () => {
       if (!slug) {
         throw new Error("Single slug is required");
       }
-      return await singleApi.getDocument(slug, { depth: options?.depth });
+      return await singleApi.getDocument(slug, {
+        depth: options?.depth,
+        locale: options?.locale,
+        fallbackLocale: options?.fallbackLocale,
+        translationStatus: options?.translationStatus,
+      });
     },
     enabled: !!slug,
     ...options?.queryOptions,
@@ -548,12 +567,14 @@ export function useSingleSchema(
  * }
  * ```
  */
-export function useUpdateSingleDocument(slug: string) {
+export function useUpdateSingleDocument(slug: string, locale?: string) {
   const queryClient = useQueryClient();
 
   return useMutation<SingleDocument, Error, Record<string, unknown>>({
+    // i18n: route the save to the editor's active language so translatable values land on that
+    // locale's companion row (shared columns still update). Omitted for non-localized singles.
     mutationFn: async (data: Record<string, unknown>) => {
-      return await singleApi.updateDocument(slug, data);
+      return await singleApi.updateDocument(slug, data, { locale });
     },
     onSuccess: () => {
       // Invalidate the document cache

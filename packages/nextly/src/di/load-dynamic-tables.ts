@@ -54,29 +54,40 @@ export async function loadDynamicTables(
     localized: boolean
   ) => Promise<void>
 ): Promise<void> {
-  // Components don't have `status` / `localized` columns — selecting them would
-  // fail on strict dialects. Branch the SELECT so the boot pass survives every
-  // dialect/version combination.
-  const hasStatusColumn = sourceTable !== "dynamic_components";
-  const selectSql = hasStatusColumn
-    ? `SELECT table_name, fields, slug, status, localized FROM ${sourceTable}`
-    : `SELECT table_name, fields, slug FROM ${sourceTable}`;
+  // Components have no `status` column (they're not Draft/Published) — selecting it
+  // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
+  const statusCol = sourceTable !== "dynamic_components" ? ", status" : "";
 
-  try {
-    let rows: DynamicTableRow[];
+  // Read the rows, tolerating an existing DB that predates the i18n `localized`
+  // column: try the full select first, and on failure fall back to one without
+  // `localized`. Without this, the missing column throws and the outer catch
+  // below silently disables EVERY dynamic table app-wide. The
+  // column is added by the core-schema reconcile; until it runs, `localized`
+  // defaults to false, which is correct for a pre-i18n database.
+  const readRows = async (): Promise<DynamicTableRow[]> => {
     try {
-      rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+      return await adapter.executeQuery<DynamicTableRow>(
+        `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`
+      );
     } catch (err) {
-      // A database upgraded before the registry table gained the `localized`
-      // column throws on the combined SELECT. Without this retry the outer catch
-      // would treat it like a missing table and skip EVERY dynamic entity,
-      // hiding existing Builder collections. Retry without `localized` so rows
-      // still register (as non-localized). Components never select it.
-      if (!hasStatusColumn) throw err;
-      rows = await adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug, status FROM ${sourceTable}`
+      // Only a MISSING `localized` column should trigger the fallback select. A transient,
+      // permission, or genuinely-missing-table error must propagate (to the outer catch)
+      // instead of being converted into a non-localized registration with the wrong runtime
+      // schema for a localized table.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        !/localized|no such column|does not exist|unknown column/i.test(msg)
+      ) {
+        throw err;
+      }
+      return adapter.executeQuery<DynamicTableRow>(
+        `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`
       );
     }
+  };
+
+  try {
+    const rows = await readRows();
 
     for (const row of rows) {
       try {

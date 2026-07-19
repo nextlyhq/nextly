@@ -174,4 +174,250 @@ describe("generateMigration — localized companion emission", () => {
     expect(colNames).not.toContain("body");
     expect(colNames).toContain("price");
   });
+
+  // the DISABLE transition. Detection hangs on the
+  // snapshot's `localized` marker, so these also pin the marker's round-trip.
+  describe("DISABLE transition (localized true → false)", () => {
+    const localizedPages: MinimalConfigEntity = {
+      slug: "pages",
+      tableName: "dc_pages",
+      localized: true,
+      fields: [
+        { name: "body", type: "longText", localized: true },
+        { name: "price", type: "number" },
+      ],
+    };
+    /**
+     * The same collection with the MASTER SWITCH flipped off — the realistic disable action
+     * (the entity-level flag is the master switch; per-field flags go inert rather
+     * than being hand-removed). The companion's columns are reconstructed from the fields that
+     * still classify as translatable, which is what lets the transition be planned offline.
+     */
+    const plainPages: MinimalConfigEntity = {
+      slug: "pages",
+      tableName: "dc_pages",
+      fields: [
+        { name: "body", type: "longText", localized: true },
+        { name: "price", type: "number" },
+      ],
+    };
+
+    /** Generate the "currently localized" state so its snapshot carries the marker. */
+    async function seedLocalized() {
+      await generateMigration({
+        name: "create_pages_localized",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [localizedPages],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-07-08T12:00:00.000Z"),
+      });
+    }
+
+    async function latestSnapshotTable(name: string) {
+      const metaDir = resolve(migrationsDir, "meta");
+      const files = (await readdir(metaDir))
+        .filter(f => f.endsWith(".snapshot.json"))
+        .sort();
+      const snap = JSON.parse(
+        await readFile(resolve(metaDir, files[files.length - 1]), "utf-8")
+      );
+      return snap.snapshot.tables.find(
+        (t: { name: string }) => t.name === name
+      );
+    }
+
+    it("records the `localized` marker on a localized table, and omits it otherwise", async () => {
+      await seedLocalized();
+      expect((await latestSnapshotTable("dc_pages")).localized).toBe(true);
+
+      // A non-localized collection must not gain the marker (keeps snapshots churn-free).
+      const other = await mkdtemp(join(tmpdir(), "nextly-i18n-marker-"));
+      await generateMigration({
+        name: "create_plain",
+        dialect: "sqlite",
+        migrationsDir: other,
+        collections: [plainPages],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+      const meta = resolve(other, "meta");
+      const f = (await readdir(meta)).filter(x => x.endsWith(".snapshot.json"));
+      const snap = JSON.parse(await readFile(resolve(meta, f[0]), "utf-8"));
+      const t = snap.snapshot.tables.find(
+        (x: { name: string }) => x.name === "dc_pages"
+      );
+      expect(t.localized).toBeUndefined();
+    });
+
+    it("emits a disable companion: restore default → archive others → drop", async () => {
+      await seedLocalized();
+
+      const result = await generateMigration({
+        name: "disable_pages_localization",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [plainPages],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+      expect(result).not.toBeNull();
+
+      const files = await listSqlFiles(migrationsDir);
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
+      expect(disableFile).toBeDefined();
+      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
+
+      // The guarded, recoverable order.
+      expect(sql).toContain(`ALTER TABLE "dc_pages" ADD COLUMN "body"`);
+      expect(sql).toContain(`UPDATE "dc_pages"`); // restore the default locale
+      expect(sql).toContain("nextly_i18n_archive"); // archive the other languages
+      expect(sql).toContain(`<> 'en'`); // ...only the non-default ones
+      expect(sql).toContain(`DROP TABLE "dc_pages_locales"`);
+      // Rollback re-enables.
+      expect(sql).toContain("-- DOWN");
+
+      // The main migration must NOT also add `body` — the disable SQL re-adds it itself.
+      const mainSql = await readFile(result!.sqlPath, "utf-8");
+      expect(mainSql).not.toContain(`ADD COLUMN "body"`);
+
+      // The new snapshot drops the marker and puts `body` back on the main table.
+      const pages = await latestSnapshotTable("dc_pages");
+      expect(pages.localized).toBeUndefined();
+      expect(pages.columns.map((c: { name: string }) => c.name)).toContain(
+        "body"
+      );
+    });
+
+    it("restores a field whose explicit `localized: true` was removed in the same edit", async () => {
+      // The snapshot's recorded column list is authoritative, so a field that no longer
+      // classifies as translatable (a number never does by default) is still brought home.
+      await generateMigration({
+        name: "create_localized_number",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [
+          {
+            slug: "pages",
+            tableName: "dc_pages",
+            localized: true,
+            fields: [{ name: "views", type: "number", localized: true }],
+          },
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-07-08T12:00:00.000Z"),
+      });
+
+      await generateMigration({
+        name: "disable_and_unflag",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        // Master switch off AND the field's `localized: true` hand-removed.
+        collections: [
+          {
+            slug: "pages",
+            tableName: "dc_pages",
+            fields: [{ name: "views", type: "number" }],
+          },
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+
+      const files = await listSqlFiles(migrationsDir);
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
+      expect(disableFile).toBeDefined();
+      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
+      expect(sql).toContain(`"views"`); // still restored + archived
+      expect(sql).toContain("nextly_i18n_archive");
+    });
+
+    it("does not try to restore a translatable field ADDED in the same edit", async () => {
+      // `summary` never existed in the companion, so restoring it from there would emit SQL
+      // that fails on apply. It must be left to the normal diff instead.
+      await seedLocalized();
+
+      const result = await generateMigration({
+        name: "disable_and_add",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [
+          {
+            ...plainPages,
+            fields: [...plainPages.fields, { name: "summary", type: "text" }],
+          },
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+
+      const files = await listSqlFiles(migrationsDir);
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
+      expect(disableFile).toBeDefined();
+      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
+      // `body` was in the companion → restored. `summary` was not → never read from it.
+      expect(sql).toContain(`"body"`);
+      expect(sql).not.toContain(`"summary"`);
+      // The new column is added by the ordinary main migration instead.
+      const mainSql = await readFile(result!.sqlPath, "utf-8");
+      expect(mainSql).toContain(`ADD COLUMN "summary"`);
+    });
+
+    it("does NOT fire when fields are added to a never-localized collection", async () => {
+      // The shape (main table gains columns) is identical to a disable — only the marker
+      // distinguishes them. This is the false-positive the H5 note warned about.
+      await generateMigration({
+        name: "create_plain",
+        dialect: "sqlite",
+        migrationsDir,
+        collections: [plainPages],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-07-08T12:00:00.000Z"),
+      });
+
+      await generateMigration({
+        name: "add_field",
+        dialect: "sqlite",
+        migrationsDir,
+        collections: [
+          {
+            ...plainPages,
+            fields: [...plainPages.fields, { name: "summary", type: "text" }],
+          },
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+
+      const files = await listSqlFiles(migrationsDir);
+      expect(files.some(f => f.includes("disable_localization"))).toBe(false);
+    });
+  });
 });

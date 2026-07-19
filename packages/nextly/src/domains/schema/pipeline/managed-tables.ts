@@ -12,12 +12,13 @@ export function isManagedTable(name: string): boolean {
   return MANAGED_TABLE_PREFIXES_REGEX.test(name);
 }
 
-// Localized companion tables (`dc_<slug>_locales` / `single_<slug>_locales`) are owned by the
-// localization migration layer (M1) — created/dropped only by generated migrations. They match
-// the managed prefix above, so the diff/pushSchema pipeline MUST additionally exclude them via
-// `isCompanionTable`, or it would introspect/diff them against a desired state that never
-// declares them and spuriously add/drop the table.
-const COMPANION_TABLE_REGEX = /^(dc_|single_).+_locales$/;
+// Localized companion tables (`dc_<slug>_locales` / `single_<slug>_locales` /
+// `comp_<slug>_locales`) are owned by the localization migration layer (M1) — created/dropped
+// only by generated migrations (or the in-process companion reconcile on the UI apply path).
+// They match the managed prefix above, so the diff/pushSchema pipeline MUST additionally
+// exclude them via `isCompanionTable`, or it would introspect/diff them against a desired state
+// that never declares them and spuriously add/drop the table.
+const COMPANION_TABLE_REGEX = /^(dc_|single_|comp_).+_locales$/;
 
 export function isCompanionTable(name: string): boolean {
   return COMPANION_TABLE_REGEX.test(name);

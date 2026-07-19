@@ -54,6 +54,18 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import {
+  populateCompanionFields,
+  populateTranslationStatus,
+} from "../../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  isValidLocale,
+  resolveFallbackChain,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
+import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -292,7 +304,10 @@ export class SingleQueryService extends BaseService {
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    // i18n: when set and the single is localized, reads resolve translatable fields
+    // from the companion `single_<slug>_locales` table for the requested locale.
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
   }
@@ -410,6 +425,20 @@ export class SingleQueryService extends BaseService {
         };
       }
 
+      // 6.9. i18n: resolve translatable fields from the companion `_locales` table for the
+      // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
+      // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
+      // so the overlay must land before those transforms run (matching the collection read path).
+      // No-op when localization is off or the single isn't localized.
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        options.fallbackLocale,
+        statusFilter ? statusFilter.value : undefined
+      );
+
       // 7. Deserialize JSON fields
       doc = this.deserializeJsonFields(doc, singleMeta.fields);
 
@@ -430,7 +459,19 @@ export class SingleQueryService extends BaseService {
           parentTable: singleMeta.tableName,
           fields: singleMeta.fields,
           depth: options.depth,
+          // i18n: thread the read locale so an embedded localized component resolves
+          // its translatable fields per language, and forward fallback control so a
+          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+          // fields blank instead of showing default-language text.
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
         })) as SingleDocument;
+      }
+
+      // attach the per-locale `_translations` overview for the admin's language pills
+      // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
+      if (options.translationStatus) {
+        await this.populateTranslationMeta(slug, singleMeta, doc);
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
@@ -496,6 +537,118 @@ export class SingleQueryService extends BaseService {
     }
   }
 
+  /**
+   * i18n: overlay a localized single's translatable fields from its companion
+   * `single_<slug>_locales` row for the resolved locale chain. No-op when localization is
+   * off, the single isn't localized, or it has no translatable fields.
+   */
+  private async populateLocalized(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>,
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined,
+    statusFilterValue: string | undefined
+  ): Promise<void> {
+    const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
+    if (!localeChain) return;
+    // Gate on THIS single's flag: a non-localized single has no companion table, and
+    // buildCompanionSchema would otherwise classify its text fields as translatable and query a
+    // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
+    if (singleMeta.localized !== true) return;
+    const companion = buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+    if (!companion) return;
+    await populateCompanionFields({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [doc],
+      localeChain,
+      idKey: "id",
+      // Public reads pass the published filter so a draft translation never leaks;
+      // admin/status=all passes undefined (no filter). Only meaningful when the
+      // companion carries a per-locale `_status`.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
+    });
+  }
+
+  /**
+   * Attach a per-locale `_translations` map (which languages are translated + each
+   * one's draft/published status) to the document, for the admin editor's per-language status
+   * pills. No-op when localization is off or the single isn't localized. Mirrors the collection
+   * read path's `populateTranslationMeta`.
+   */
+  private async populateTranslationMeta(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>
+  ): Promise<void> {
+    // Gate on THIS single's flag, not just app-level localization — a non-localized single has
+    // no companion, so there is no per-locale translation status to attach.
+    if (!this.localization || singleMeta.localized !== true) return;
+    const companion = buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+    if (!companion) return;
+    await populateTranslationStatus({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [doc],
+      locales: this.localization.locales.map(l => l.code),
+      defaultLocale: this.localization.defaultLocale,
+      hasStatus: companion.hasStatus,
+      // The Single's own row id keys the companion `_parent`, same as the collection path.
+      idKey: "id",
+    });
+  }
+
+  /**
+   * Build the requested→fallback locale chain, or `null` when localization is off. A per-request
+   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale, so an
+   * untranslated field reads empty); a per-request string re-enables the chain even when the global
+   * flag is off; otherwise the global `fallback` flag decides. Mirrors the collection read path.
+   */
+  private resolveLocaleChain(
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): string[] | null {
+    if (!this.localization || locale === "all") return null;
+    const requested = resolveRequestedLocale(this.localization, locale);
+    // Per-request disable wins — the admin editor passes this so untranslated fields show blank.
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    // A concrete per-request fallback locale overrides the configured chain: the requested
+    // locale first, then the NAMED fallback's own chain (deduped) — not the requested locale's
+    // chain. Mirrors the collection read path so `?locale=de&fallback-locale=en` falls back to en.
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
+    }
+    if (this.localization.fallback === false) return [requested];
+    return resolveFallbackChain(this.localization, requested);
+  }
+
   // ============================================================
   // Helpers shared with SingleMutationService
   // ============================================================
@@ -529,8 +682,22 @@ export class SingleQueryService extends BaseService {
       updated_at: now,
     };
 
+    // i18n: a localized single's main table omits translatable columns (they live in the
+    // companion `single_<slug>_locales`), so a required/defaulted translatable value must
+    // not be inserted here — it would target a column that only exists on the companion and
+    // fail the auto-create insert.
+    const localizedNames = new Set(
+      singleMeta.localized === true
+        ? resolveLocalizedFieldNames(
+            singleMeta.fields as { name: string; type: string }[],
+            true
+          )
+        : []
+    );
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
+      if (localizedNames.has(field.name)) continue;
 
       if ("defaultValue" in field && field.defaultValue !== undefined) {
         if (shouldTreatAsJson(field)) {

@@ -81,6 +81,12 @@ async function ensureServicesInitialized(): Promise<void> {
       if (nextlyConfig.admin) serviceConfig.admin = nextlyConfig.admin;
       if (nextlyConfig.auth) serviceConfig.auth = nextlyConfig.auth;
       if (nextlyConfig.security) serviceConfig.security = nextlyConfig.security;
+      // i18n: carry the normalized localization block so the request-path boot
+      // registers localization-aware data services, matching build-service-config.ts.
+      // Omitting it makes ctx.config.localization undefined → localized reads/writes
+      // silently no-op to the main table.
+      if (nextlyConfig.localization)
+        serviceConfig.localization = nextlyConfig.localization;
       if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;

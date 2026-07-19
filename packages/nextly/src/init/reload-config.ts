@@ -204,13 +204,17 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       timestamps: c.timestamps,
       admin: c.admin,
       // Draft/Published flag + versioning persisted to dynamic_collections so a
-      // code-first toggle reaches the registry. `localized` is intentionally NOT
-      // forwarded here: the HMR reload diff does not carry localization into
-      // buildDesiredTableFromFields (no companion table is created/updated on
-      // reload), so marking the registry localized without the companion table
-      // would break lazy schema generation. A localized change persists on the
-      // next restart via the full boot sync instead.
+      // code-first toggle reaches the registry.
       status: c.status === true,
+      // i18n: forward the localized master switch. The reload apply pipeline
+      // carries `localized` into buildDesiredTableFromFields, so a localized
+      // toggle produces a real schema diff (main table drops translatable cols,
+      // companion table is created) and reaches this sync only AFTER the DDL
+      // path ran. On the metadata-only path localized is unchanged from the
+      // physical schema. Omitting it here would write `localized === undefined
+      // === true = false`, flipping a localized collection's flag OFF on every
+      // reload and desyncing the registry from the companion table.
+      localized: c.localized === true,
       versions: resolveVersionsConfig(c.versions, c.status),
     }));
 }
@@ -396,6 +400,7 @@ export async function reloadNextlyConfig(opts?: {
     tableName: string;
     fields: MinimalField[];
     status?: boolean;
+    localized?: boolean;
   }> = [];
   for (const c of newConfig.collections ?? []) {
     if (!c.slug) continue;
@@ -404,6 +409,10 @@ export async function reloadNextlyConfig(opts?: {
       tableName: c.tableName ?? resolveCollectionTableName(c.slug, c.dbName),
       fields: (c.fields ?? []) as MinimalField[],
       status: c.status === true,
+      // i18n: propagate the localized flag so the HMR diff omits translatable
+      // columns from the main table and the runtime schema is regenerated with
+      // the companion split.
+      localized: c.localized === true,
     });
   }
 
@@ -413,6 +422,7 @@ export async function reloadNextlyConfig(opts?: {
     tableName: string;
     fields: MinimalField[];
     status?: boolean;
+    localized?: boolean;
   }> = [];
   for (const s of newConfig.singles ?? []) {
     if (!s.slug) continue;
@@ -424,6 +434,9 @@ export async function reloadNextlyConfig(opts?: {
       tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
       fields: (s.fields ?? []) as MinimalField[],
       status: s.status === true,
+      // i18n: carry `localized` so the HMR diff omits translatable columns from the
+      // single's main table and registers its companion, mirroring the collection path.
+      localized: (s as { localized?: boolean }).localized === true,
     });
   }
 
@@ -432,6 +445,7 @@ export async function reloadNextlyConfig(opts?: {
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    localized?: boolean;
   }> = [];
   for (const c of newConfig.components ?? []) {
     if (!c.slug) continue;
@@ -442,6 +456,9 @@ export async function reloadNextlyConfig(opts?: {
         .replace(/[^a-z0-9]+/g, "_")
         .replace(/^_+|_+$/g, "")}`,
       fields: (c.fields ?? []) as MinimalField[],
+      // i18n: carry `localized` so the HMR diff omits translatable columns from the
+      // component's main table and registers its companion.
+      localized: (c as { localized?: boolean }).localized === true,
     });
   }
 
@@ -513,6 +530,9 @@ export async function reloadNextlyConfig(opts?: {
       tableName: target.tableName,
       fields: target.fields as DesiredCollection["fields"],
       status: target.status === true,
+      // i18n: carry `localized` on the desired entry so the runtime-schema
+      // regeneration below omits translatable columns and registers a companion.
+      localized: target.localized === true,
     };
     try {
       const live = liveByTable.has(target.tableName)
@@ -522,7 +542,12 @@ export async function reloadNextlyConfig(opts?: {
         target.tableName,
         target.fields,
         dialect,
-        { hasStatus: target.status === true }
+        // i18n: omit translatable columns from the main table's desired snapshot
+        // so the HMR diff doesn't re-add them (they live in the companion). H2.
+        {
+          hasStatus: target.status === true,
+          localized: target.localized === true,
+        }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -562,6 +587,7 @@ export async function reloadNextlyConfig(opts?: {
       tableName: target.tableName,
       fields: target.fields as DesiredSingle["fields"],
       status: target.status === true,
+      localized: target.localized === true,
     };
     try {
       const live = liveByTable.has(target.tableName)
@@ -571,7 +597,10 @@ export async function reloadNextlyConfig(opts?: {
         target.tableName,
         target.fields,
         dialect,
-        { hasStatus: target.status === true }
+        {
+          hasStatus: target.status === true,
+          localized: target.localized === true,
+        }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -609,6 +638,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: target.slug,
       tableName: target.tableName,
       fields: target.fields as DesiredComponent["fields"],
+      localized: target.localized === true,
     };
     try {
       const live = liveByTable.has(target.tableName)
@@ -617,7 +647,8 @@ export async function reloadNextlyConfig(opts?: {
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
         target.fields,
-        dialect
+        dialect,
+        { localized: target.localized === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -683,6 +714,9 @@ export async function reloadNextlyConfig(opts?: {
           tableName: c.tableName,
           fields: (c.fields ?? []) as DesiredCollection["fields"],
           status: c.status === true,
+          // i18n: carry localized for DB-registered (UI-created) collections too,
+          // so their main table omits translatable cols and a companion registers.
+          localized: (c as { localized?: boolean }).localized === true,
         };
       }
     }
@@ -894,6 +928,9 @@ export async function reloadNextlyConfig(opts?: {
             fields: c.fields ?? [],
             description: c.description,
             admin: c.admin,
+            // i18n: forward the localized master switch — otherwise the reload flips a
+            // localized component's flag OFF every HMR/boot.
+            localized: (c as { localized?: boolean }).localized === true,
           };
         });
       if (codeFirstComponentConfigs.length > 0) {
@@ -917,7 +954,10 @@ export async function reloadNextlyConfig(opts?: {
         "../domains/i18n/runtime/companion-registration"
       );
       for (const c of Object.values(desiredCollections)) {
-        const localized = (c as CollectionDef).localized === true;
+        // `localized` now travels on the DesiredCollection entry (set above from
+        // the config target), so the main table is regenerated without the
+        // translatable columns and the companion is registered.
+        const localized = c.localized === true;
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -927,11 +967,14 @@ export async function reloadNextlyConfig(opts?: {
         collectionFreshTables.set(c.tableName, table);
         if (localized) {
           const companion = buildCompanionRuntimeTable({
-            slug: (c as CollectionDef).slug ?? c.tableName,
+            slug: c.slug ?? c.tableName,
             tableName: c.tableName,
             fields: c.fields as { name: string; type: string }[],
             dialect,
+            // companion carries a per-locale `_status` column when the
+            // collection has Draft/Published (mirrors loadCompanionSchema). M9.
             localized: true,
+            status: c.status === true,
           });
           if (companion) {
             companionFreshTables.set(
@@ -942,13 +985,33 @@ export async function reloadNextlyConfig(opts?: {
         }
       }
       for (const s of Object.values(desiredSingles)) {
+        // i18n: a localized single omits its translatable columns from the main
+        // runtime table and registers the companion `single_<slug>_locales` table —
+        // mirrors the collection branch above.
+        const localized = (s as { localized?: boolean }).localized === true;
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
           dialect,
-          { status: s.status === true }
+          { status: s.status === true, localized }
         );
         singleFreshTables.set(s.tableName, table);
+        if (localized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: s.slug ?? s.tableName,
+            tableName: s.tableName,
+            fields: s.fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: s.status === true,
+          });
+          if (companion) {
+            companionFreshTables.set(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
       // Components must use the component schema generator, NOT the collection/
       // single generateRuntimeSchema. Components link to their parent document
@@ -959,11 +1022,31 @@ export async function reloadNextlyConfig(opts?: {
       // _parent_*) after an HMR config reload.
       const componentSchemaService = new ComponentSchemaService(dialect);
       for (const comp of Object.values(desiredComponents)) {
+        // i18n: a localized component omits its translatable columns from the main
+        // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
+        const localized = (comp as { localized?: boolean }).localized === true;
         const table = componentSchemaService.generateRuntimeSchema(
           comp.tableName,
-          comp.fields
+          comp.fields,
+          { localized }
         );
         componentFreshTables.set(comp.tableName, table);
+        if (localized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: comp.slug ?? comp.tableName,
+            tableName: comp.tableName,
+            fields: comp.fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+            status: false,
+          });
+          if (companion) {
+            companionFreshTables.set(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch {
       // Non-fatal: all refresh blocks below will no-op on empty maps.

@@ -150,6 +150,9 @@ const POSTGRES_SQL = {
       "admin" JSONB,
       "source" VARCHAR(20) NOT NULL DEFAULT 'ui',
       "locked" BOOLEAN NOT NULL DEFAULT false,
+      -- i18n: whether the component is localized (kept in lockstep with the
+      -- registration insert, which always writes this column).
+      "localized" BOOLEAN NOT NULL DEFAULT false,
       "config_path" VARCHAR(500),
       "schema_hash" VARCHAR(64) NOT NULL,
       "schema_version" INTEGER NOT NULL DEFAULT 1,
@@ -246,6 +249,9 @@ const MYSQL_SQL = {
       \`admin\` JSON,
       \`source\` VARCHAR(20) NOT NULL DEFAULT 'ui',
       \`locked\` BOOLEAN NOT NULL DEFAULT false,
+      -- i18n: whether the component is localized (kept in lockstep with the
+      -- registration insert, which always writes this column).
+      \`localized\` BOOLEAN NOT NULL DEFAULT false,
       \`config_path\` VARCHAR(500),
       \`schema_hash\` VARCHAR(64) NOT NULL,
       \`schema_version\` INTEGER NOT NULL DEFAULT 1,
@@ -345,6 +351,9 @@ const SQLITE_SQL = {
       "admin" TEXT,
       "source" TEXT NOT NULL DEFAULT 'ui',
       "locked" INTEGER NOT NULL DEFAULT 0,
+      -- i18n: whether the component is localized (kept in lockstep with the
+      -- registration insert, which always writes this column).
+      "localized" INTEGER NOT NULL DEFAULT 0,
       "config_path" TEXT,
       "schema_hash" TEXT NOT NULL,
       "schema_version" INTEGER NOT NULL DEFAULT 1,

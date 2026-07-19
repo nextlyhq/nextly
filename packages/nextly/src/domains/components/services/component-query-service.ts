@@ -2,11 +2,23 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
+import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import {
+  populateCompanionFields,
+  populateCompanionFieldsAllLocales,
+} from "../../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  isValidLocale,
+  resolveFallbackChain,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
+import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -49,6 +61,18 @@ export interface PopulateComponentDataParams {
   select?: Record<string, boolean>;
 
   /**
+   * i18n: requested read locale. When set and an embedded component is localized, its
+   * translatable fields resolve per language from the component's companion `_locales` table
+   * (with fallback). Threaded down from the parent entity's read.
+   */
+  locale?: string;
+  /**
+   * i18n: per-request fallback control, forwarded from the parent read's `?fallback-locale`.
+   * `false`/`"none"` suppresses fallback so an untranslated embedded component field stays
+   * blank (the admin's no-fallback edit mode); a named locale overrides the configured chain.
+   */
+  fallbackLocale?: string | false;
+  /**
    * Optional transaction-bound executor. When supplied, component-table reads
    * run on the transaction's connection (read-your-writes, #226) so a version
    * snapshot assembled inside the write transaction sees the components just
@@ -67,6 +91,10 @@ export interface PopulateComponentDataManyParams {
   depth?: number;
   currentDepth?: number;
   select?: Record<string, boolean>;
+  /** i18n: requested read locale (see PopulateComponentDataParams.locale). */
+  locale?: string;
+  /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
+  fallbackLocale?: string | false;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -83,11 +111,161 @@ export class ComponentQueryService extends BaseService {
     adapter: DrizzleAdapter,
     logger: Logger,
     registryService: ComponentRegistryService,
-    relationshipService?: CollectionRelationshipService
+    relationshipService?: CollectionRelationshipService,
+    // i18n: when set and an embedded component is localized, its translatable fields
+    // resolve/write per language via the component's companion `comp_<slug>_locales` table.
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
     this.registryService = registryService;
     this.relationshipService = relationshipService;
+  }
+
+  /**
+   * i18n: overlay a localized component's translatable fields onto its deserialized
+   * instance data from the companion `comp_<slug>_locales` table for the requested locale
+   * (with fallback). No-op when localization is off, the component isn't localized, no
+   * locale was requested, or it has no translatable fields. `dataArray` is mutated in place;
+   * each item must carry the instance `id` (deserializeComponentRow sets it).
+   */
+  private async overlayLocalizedComponent(
+    meta: DynamicComponentRecord,
+    dataArray: Record<string, unknown>[],
+    locale: string | undefined,
+    fallbackLocale?: string | false
+  ): Promise<void> {
+    if (
+      !this.localization ||
+      meta.localized !== true ||
+      dataArray.length === 0
+    ) {
+      return;
+    }
+    const companion = buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      // Components are never Draft/Published — companion has no `_status`.
+      status: false,
+    });
+    if (!companion) return;
+
+    // `?locale=all` (admin/export): the parent read projects its own localized fields as
+    // language-keyed maps, so mirror that for the embedded component's translatable fields —
+    // otherwise they would be missing entirely (the main comp_* table omits those columns).
+    if (locale === "all") {
+      await populateCompanionFieldsAllLocales({
+        db: this.adapter.getDrizzle(),
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        rows: dataArray,
+        locales: this.localization.locales.map(l => l.code),
+        idKey: "id",
+      });
+      this.decodeJsonLocalizedValues(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        true
+      );
+      return;
+    }
+
+    // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
+    // the default locale), so a default-locale read still overlays the component's companion
+    // values instead of returning the omitted main-table columns.
+    const requested = resolveRequestedLocale(this.localization, locale);
+    const localeChain = this.resolveComponentLocaleChain(
+      requested,
+      fallbackLocale
+    );
+    await populateCompanionFields({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: dataArray,
+      localeChain,
+      idKey: "id",
+    });
+    this.decodeJsonLocalizedValues(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      false
+    );
+  }
+
+  /**
+   * Parse JSON-backed localized values (richText/group/repeater/json) back to object shapes.
+   * The companion stores them as serialized text, so without this reads would return raw JSON
+   * strings, unlike the main-table deserialization the parent ran before this overlay. When
+   * `allLocales` is true each field holds a language-keyed map (`{ en, de }`) whose per-locale
+   * values are decoded; otherwise the field holds a single resolved value.
+   */
+  private decodeJsonLocalizedValues(
+    meta: DynamicComponentRecord,
+    localizedFields: { name: string; column: string }[],
+    dataArray: Record<string, unknown>[],
+    allLocales: boolean
+  ): void {
+    const jsonLocalized = localizedFields.filter(lf => {
+      const def = meta.fields.find(f => "name" in f && f.name === lf.name);
+      return def ? shouldTreatAsJson(def) : false;
+    });
+    if (jsonLocalized.length === 0) return;
+    const parse = (value: unknown): unknown => {
+      if (typeof value !== "string") return value;
+      try {
+        return JSON.parse(value);
+      } catch {
+        // A non-JSON string (or already-parsed value) stays as-is.
+        return value;
+      }
+    };
+    for (const row of dataArray) {
+      for (const lf of jsonLocalized) {
+        if (allLocales) {
+          const keyed = row[lf.name];
+          if (keyed && typeof keyed === "object") {
+            const map = keyed as Record<string, unknown>;
+            for (const code of Object.keys(map)) {
+              map[code] = parse(map[code]);
+            }
+          }
+        } else {
+          row[lf.name] = parse(row[lf.name]);
+        }
+      }
+    }
+  }
+
+  /**
+   * Build the fallback chain for a component read, honoring a per-request `fallbackLocale`
+   * (`false`/`"none"` disables fallback; a named locale overrides the configured chain),
+   * mirroring the collection read path so the admin's no-fallback edit mode works for
+   * embedded components too.
+   */
+  private resolveComponentLocaleChain(
+    requested: string,
+    fallbackLocale: string | false | undefined
+  ): string[] {
+    if (!this.localization) return [requested];
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
+    }
+    if (this.localization.fallback === false) return [requested];
+    return resolveFallbackChain(this.localization, requested);
   }
 
   setRelationshipService(service: CollectionRelationshipService): void {
@@ -109,6 +287,8 @@ export class ComponentQueryService extends BaseService {
       depth = DEFAULT_COMPONENT_DEPTH,
       currentDepth = 0,
       select,
+      locale,
+      fallbackLocale,
       executor,
     } = params;
     const entryId = entry.id as string;
@@ -133,6 +313,8 @@ export class ComponentQueryService extends BaseService {
             field,
             depth,
             currentDepth,
+            locale,
+            fallbackLocale,
             executor
           );
         } else if (field.component) {
@@ -144,6 +326,8 @@ export class ComponentQueryService extends BaseService {
               field.component,
               depth,
               currentDepth,
+              locale,
+              fallbackLocale,
               executor
             );
           } else {
@@ -154,6 +338,8 @@ export class ComponentQueryService extends BaseService {
               field.component,
               depth,
               currentDepth,
+              locale,
+              fallbackLocale,
               executor
             );
           }
@@ -183,6 +369,8 @@ export class ComponentQueryService extends BaseService {
       depth = DEFAULT_COMPONENT_DEPTH,
       currentDepth = 0,
       select,
+      locale,
+      fallbackLocale,
     } = params;
     if (entries.length === 0) return entries;
 
@@ -213,7 +401,9 @@ export class ComponentQueryService extends BaseService {
             field.name,
             field,
             depth,
-            currentDepth
+            currentDepth,
+            locale,
+            fallbackLocale
           );
           fieldDataMaps.set(field.name, dataMap);
         } else if (field.component) {
@@ -224,7 +414,9 @@ export class ComponentQueryService extends BaseService {
               field.name,
               field.component,
               depth,
-              currentDepth
+              currentDepth,
+              locale,
+              fallbackLocale
             );
             fieldDataMaps.set(field.name, dataMap);
           } else {
@@ -234,7 +426,9 @@ export class ComponentQueryService extends BaseService {
               field.name,
               field.component,
               depth,
-              currentDepth
+              currentDepth,
+              locale,
+              fallbackLocale
             );
             fieldDataMaps.set(field.name, dataMap);
           }
@@ -273,6 +467,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(componentSlug);
@@ -288,6 +484,8 @@ export class ComponentQueryService extends BaseService {
     if (rows.length === 0) return null;
 
     let data = this.deserializeComponentRow(rows[0], componentFields, false);
+    // i18n: overlay translatable fields from the companion for the requested locale.
+    await this.overlayLocalizedComponent(meta, [data], locale, fallbackLocale);
     data = await this.expandComponentRelationships(
       data,
       componentSlug,
@@ -306,6 +504,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(componentSlug);
@@ -320,6 +520,14 @@ export class ComponentQueryService extends BaseService {
 
     let dataArray = rows.map(row =>
       this.deserializeComponentRow(row, componentFields, false)
+    );
+
+    // i18n: overlay translatable fields per instance from the companion.
+    await this.overlayLocalizedComponent(
+      meta,
+      dataArray,
+      locale,
+      fallbackLocale
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -340,6 +548,8 @@ export class ComponentQueryService extends BaseService {
     field: ComponentFieldConfig,
     depth: number,
     currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
@@ -375,6 +585,16 @@ export class ComponentQueryService extends BaseService {
     const results: Record<string, unknown>[] = [];
     for (const { row, fields, slug } of allRows) {
       let data = this.deserializeComponentRow(row, fields, true);
+      // i18n: overlay translatable fields from the row's component companion. getComponent
+      // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
+      // may span several component types, each with its own companion.
+      const meta = await this.registryService.getComponent(slug);
+      await this.overlayLocalizedComponent(
+        meta,
+        [data],
+        locale,
+        fallbackLocale
+      );
       data = await this.expandComponentRelationships(
         data,
         slug,
@@ -394,9 +614,10 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     componentSlug: string,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false
   ): Promise<Map<string, unknown>> {
-    const result = new Map<string, unknown>();
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
     const rows = await this.batchGetInstances(
@@ -406,21 +627,39 @@ export class ComponentQueryService extends BaseService {
       fieldName
     );
 
+    // Deserialize first (one per parent), i18n-overlay the whole batch in a single
+    // companion query, THEN expand relationships — overlay must precede expansion
+    // because expand may return a new object, breaking the mutate-in-place reference.
+    const collected: { parentId: string; data: Record<string, unknown> }[] = [];
     for (const row of rows) {
       const parentId = row._parent_id;
-      if (!result.has(parentId)) {
-        let data = this.deserializeComponentRow(row, componentFields, false);
-        data = await this.expandComponentRelationships(
+      if (!collected.some(c => c.parentId === parentId)) {
+        collected.push({
+          parentId,
+          data: this.deserializeComponentRow(row, componentFields, false),
+        });
+      }
+    }
+    await this.overlayLocalizedComponent(
+      meta,
+      collected.map(c => c.data),
+      locale,
+      fallbackLocale
+    );
+
+    const result = new Map<string, unknown>();
+    for (const { parentId, data } of collected) {
+      result.set(
+        parentId,
+        await this.expandComponentRelationships(
           data,
           componentSlug,
           componentFields,
           depth,
           currentDepth + 1
-        );
-        result.set(parentId, data);
-      }
+        )
+      );
     }
-
     return result;
   }
 
@@ -430,9 +669,10 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     componentSlug: string,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false
   ): Promise<Map<string, unknown>> {
-    const grouped = new Map<string, Record<string, unknown>[]>();
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
 
@@ -443,23 +683,35 @@ export class ComponentQueryService extends BaseService {
       fieldName
     );
 
-    // Rows arrive ordered by (_parent_id, _order), preserving array order per parent
-    for (const row of rows) {
-      const parentId = row._parent_id;
-      if (!grouped.has(parentId)) {
-        grouped.set(parentId, []);
-      }
-      let data = this.deserializeComponentRow(row, componentFields, false);
-      data = await this.expandComponentRelationships(
-        data,
-        componentSlug,
-        componentFields,
-        depth,
-        currentDepth + 1
-      );
-      grouped.get(parentId)!.push(data);
-    }
+    // Deserialize all (rows arrive ordered by (_parent_id, _order)), overlay the whole
+    // batch once, then expand — same ordering constraint as batchPopulateSingleField.
+    const entries: { parentId: string; data: Record<string, unknown> }[] =
+      rows.map(row => ({
+        parentId: row._parent_id,
+        data: this.deserializeComponentRow(row, componentFields, false),
+      }));
+    await this.overlayLocalizedComponent(
+      meta,
+      entries.map(e => e.data),
+      locale,
+      fallbackLocale
+    );
 
+    const grouped = new Map<string, Record<string, unknown>[]>();
+    for (const { parentId, data } of entries) {
+      if (!grouped.has(parentId)) grouped.set(parentId, []);
+      grouped
+        .get(parentId)!
+        .push(
+          await this.expandComponentRelationships(
+            data,
+            componentSlug,
+            componentFields,
+            depth,
+            currentDepth + 1
+          )
+        );
+    }
     return grouped;
   }
 
@@ -469,7 +721,9 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     field: ComponentFieldConfig,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    locale?: string,
+    fallbackLocale?: string | false
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -513,6 +767,15 @@ export class ComponentQueryService extends BaseService {
       const expandedItems: Record<string, unknown>[] = [];
       for (const { row, fields, slug } of items) {
         let data = this.deserializeComponentRow(row, fields, true);
+        // i18n: overlay the instance's translatable fields from its component companion
+        // before relationship expansion (registry-cached meta lookup).
+        const itemMeta = await this.registryService.getComponent(slug);
+        await this.overlayLocalizedComponent(
+          itemMeta,
+          [data],
+          locale,
+          fallbackLocale
+        );
         data = await this.expandComponentRelationships(
           data,
           slug,

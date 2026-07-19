@@ -66,8 +66,11 @@ export function writeLocalizationMigrationFile(
 }
 
 export interface WriteCompanionMigrationOpts {
-  /** `enable` = create+seed+drop; `create-only` = bare CREATE for a fresh collection. */
-  kind: "enable" | "create-only";
+  /**
+   * `enable` = create+seed+drop; `create-only` = bare CREATE for a fresh collection;
+   * `disable` = restore default onto main + archive other languages + drop the companion.
+   */
+  kind: "enable" | "create-only" | "disable";
   /** Pre-planned UP SQL (from `planCompanionMigration`). */
   upSql: string;
   /** Pre-planned DOWN SQL (from `planCompanionMigration`). */
@@ -92,7 +95,12 @@ export function writeCompanionMigrationFile(
   spec: CompanionMigrationSpec,
   opts: WriteCompanionMigrationOpts
 ): string {
-  const verb = opts.kind === "enable" ? "enable" : "create";
+  const verb =
+    opts.kind === "enable"
+      ? "enable"
+      : opts.kind === "disable"
+        ? "disable"
+        : "create";
   const slug = `${verb}_localization_${spec.collection}`;
   const baseName = `${formatTimestamp(opts.now)}_${slug}`;
   const header =

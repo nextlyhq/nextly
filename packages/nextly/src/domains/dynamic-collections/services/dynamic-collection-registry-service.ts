@@ -23,6 +23,12 @@ export interface CollectionMetadata {
    */
   status?: boolean;
   /**
+   * i18n: whether the collection is localized. Backed by the
+   * `dynamic_collections.localized` boolean column. When true, translatable fields
+   * live in the companion `<table>_locales` table and the admin edits per-language.
+   */
+  localized?: boolean;
+  /**
    * Resolved content-versioning config, or null when unversioned. Backed by
    * the `dynamic_collections.versions` JSON column.
    */
@@ -142,6 +148,10 @@ export class DynamicCollectionRegistryService extends BaseService {
       // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
       // bool on postgres/mysql both accept a JS boolean here.
       status: metadata.status === true,
+      // i18n: persist the localized flag so the read/write path routes translatable
+      // fields to the companion table and the admin shows per-language editing. Without
+      // it, a UI-created localized collection is stored as non-localized (shared).
+      localized: metadata.localized === true,
       // Resolved versioning config (or null when unversioned). Stored as JSON
       // the same way `admin` is; Drizzle serializes the object per dialect.
       versions: metadata.versions ?? null,
@@ -308,13 +318,16 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const row = result[0] as Record<string, unknown>;
-    // Why: SQLite returns `status` as 0|1 even with `mode: "boolean"` in some
-    // driver/dialect combinations; postgres returns native boolean. Coerce
-    // here so the API contract is dialect-agnostic and the admin's
-    // `collection.status === true` gate works everywhere.
+    // Why: SQLite returns `status`/`localized` as 0|1 even with `mode: "boolean"` in
+    // some driver/dialect combinations; postgres returns native boolean. Coerce here so
+    // the API contract is dialect-agnostic and the `=== true` gates work everywhere.
+    // Without coercing `localized`, a SQLite `localized: 1` fails the `=== true` check and
+    // a later field-only update treats the collection as non-localized, emitting main-table
+    // alters for columns that live in the companion.
     return {
       ...row,
       status: row.status === 1 || row.status === true,
+      localized: row.localized === 1 || row.localized === true,
     };
   }
 

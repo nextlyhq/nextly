@@ -41,7 +41,7 @@ async function migrate(t: TestNextly): Promise<void> {
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "heading" text, PRIMARY KEY ("_parent","_locale"))'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
 }
 
@@ -76,6 +76,16 @@ async function idOf(t: TestNextly): Promise<string> {
     executeQuery: (sql: string) => Promise<{ id: string }[]>;
   };
   return (await adapter.executeQuery('SELECT "id" FROM "dc_pages"'))[0].id;
+}
+
+// Main-table `status` gates entry-level visibility (the read path filters on it),
+// so a per-locale status change must not touch it for a non-default locale (H3).
+async function mainStatus(t: TestNextly): Promise<string | undefined> {
+  const adapter = t.adapter as unknown as {
+    executeQuery: (sql: string) => Promise<{ status: string }[]>;
+  };
+  const rows = await adapter.executeQuery('SELECT "status" FROM "dc_pages"');
+  return rows[0]?.status;
 }
 
 describe("write companion _status (M6b)", () => {
@@ -132,5 +142,59 @@ describe("write companion _status (M6b)", () => {
       { status: "draft" }
     );
     expect(await companionStatus(t, "de")).toBe("draft");
+  });
+
+  // H3: a per-locale status change for a NON-default locale must not clobber the
+  // main table's status (which the read path uses to gate entry-level visibility).
+  it("status change on a non-default locale leaves the main status untouched", async () => {
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+    // Create in the default locale (en) as published → main.status = published.
+    await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "H", status: "published" }
+    );
+    const id = await idOf(t);
+    expect(await mainStatus(t)).toBe("published");
+
+    // Unpublish the German translation only.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { status: "draft" }
+    );
+    expect(await companionStatus(t, "de")).toBe("draft");
+    // The entry (and its default/English content) must remain published.
+    expect(await mainStatus(t)).toBe("published");
+  });
+
+  // H3: the default-locale write IS the entry-level status action → main updates.
+  it("status change on the default locale updates the main status", async () => {
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+    await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "H", status: "published" }
+    );
+    const id = await idOf(t);
+    expect(await mainStatus(t)).toBe("published");
+
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      },
+      { status: "draft" }
+    );
+    expect(await mainStatus(t)).toBe("draft");
+    expect(await companionStatus(t, "en")).toBe("draft");
   });
 });

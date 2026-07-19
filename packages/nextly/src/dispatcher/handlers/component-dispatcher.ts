@@ -23,6 +23,8 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -46,12 +48,14 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -125,7 +129,10 @@ function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
   tableName: string,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  // i18n: when localized, the main comp_ runtime table omits translatable columns and the
+  // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
+  localized = false
 ): void {
   try {
     const componentSchemaService = new ComponentSchemaService(
@@ -133,12 +140,31 @@ function registerComponentRuntimeSchema(
     );
     const runtimeTable = componentSchemaService.generateRuntimeSchema(
       tableName,
-      fields
+      fields,
+      { localized }
     );
+    const companion = localized
+      ? buildCompanionRuntimeTable({
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect: dialect as Parameters<
+            typeof buildCompanionRuntimeTable
+          >[0]["dialect"],
+          localized: true,
+          status: false,
+        })
+      : null;
 
     const registry = getSchemaRegistryFromDI();
     if (registry) {
       registry.registerDynamicSchema(tableName, runtimeTable);
+      if (companion) {
+        registry.registerDynamicSchema(
+          companion.companionTableName,
+          companion.table
+        );
+      }
       return;
     }
 
@@ -168,6 +194,61 @@ function registerComponentRuntimeSchema(
         `column names until next server restart.`
     );
   }
+}
+
+/**
+ * Provision (create / ADD-DROP columns) the component's companion `comp_<slug>_locales` table
+ * out-of-band after a schema change, then register its runtime table. The push pipeline excludes
+ * companions, so every component create/update/apply path that changes the localized field set
+ * goes through here. No-op when the component isn't localized. Mirrors reconcileSingleCompanion.
+ * DDL throws on failure; runtime registration is best-effort. Does not move existing main-table
+ * rows into the companion — that is the `nextly migrate` enable/disable path.
+ */
+async function reconcileComponentCompanion(args: {
+  slug: string;
+  tableName: string;
+  oldFields: FieldDefinition[];
+  newFields: FieldDefinition[];
+  /** Localization state AFTER this save (requested). */
+  localized: boolean;
+  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
+  wasLocalized: boolean;
+  adapter: DrizzleAdapter;
+}): Promise<void> {
+  const { slug, tableName, oldFields, newFields, localized, adapter } = args;
+  const wasLocalized = args.wasLocalized;
+  // Nothing to do when the component was and remains non-localized.
+  if (!wasLocalized && !localized) return;
+
+  const dialect = adapter.dialect;
+  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  const plan = buildCompanionTransitionStatements({
+    slug,
+    tableName,
+    dialect,
+    defaultLocale,
+    // Components are never Draft/Published — companion has no `_status`.
+    status: false,
+    wasLocalized,
+    isLocalized: localized,
+    oldFields,
+    newFields,
+    companionExists: await adapter.tableExists(`${tableName}_locales`),
+  });
+
+  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
+  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
+  if (plan.needsArchive) {
+    for (const stmt of getI18nArchiveDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+  }
+  for (const stmt of plan.statements) {
+    await adapter.executeQuery(stmt);
+  }
+  // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
+  // in the calling handlers, so no separate registration is needed here.
 }
 
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
@@ -200,6 +281,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             fields?: FieldConfig[];
             admin?: Record<string, unknown>;
             description?: string;
+            // i18n: Internationalization opt-in; persists to dynamic_components.localized and
+            // provisions the companion comp_<slug>_locales table.
+            localized?: boolean;
           }
         | undefined;
 
@@ -207,6 +291,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      const isLocalized = b.localized === true;
       const schemaHash = calculateSchemaHash(b.fields);
       const tableName = `comp_${b.slug.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
 
@@ -219,7 +304,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const migrationSQL = componentSchemaService.generateMigrationSQL(
         tableName,
-        b.fields
+        b.fields,
+        // i18n: omit translatable columns from the main comp_ table when localized — they live
+        // in the companion comp_<slug>_locales table (provisioned below).
+        { localized: isLocalized }
       );
 
       let migrationStatus: "pending" | "applied" | "failed" = "pending";
@@ -237,8 +325,33 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
               diAdapter,
               dialect,
               tableName,
-              b.fields
+              b.fields,
+              // i18n: main runtime table omits translatable columns for a localized component.
+              isLocalized
             );
+            // i18n: provision the companion comp_<slug>_locales table for a localized component.
+            try {
+              await reconcileComponentCompanion({
+                slug: b.slug,
+                tableName,
+                oldFields: [],
+                newFields: b.fields as unknown as FieldDefinition[],
+                localized: isLocalized,
+                // A brand-new component was never localized, so a localized create is a
+                // create-only companion rather than an enable transition.
+                wasLocalized: false,
+                adapter: diAdapter,
+              });
+            } catch (companionErr) {
+              migrationStatus = "failed";
+              const m =
+                companionErr instanceof Error
+                  ? companionErr.message
+                  : String(companionErr);
+              console.error(
+                `[Components] Companion provisioning failed for "${tableName}": ${m}`
+              );
+            }
           } else {
             migrationStatus = "failed";
             console.error(
@@ -269,6 +382,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         description: b.description,
         source: "ui",
         locked: false,
+        // i18n: persist the Internationalization flag so the component reads/writes per language.
+        localized: isLocalized,
         schemaHash,
         schemaVersion: 1,
         migrationStatus,
@@ -303,6 +418,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             fields?: FieldConfig[];
             admin?: Record<string, unknown>;
             description?: string;
+            // i18n: Internationalization toggle; honoured when defined, undefined leaves the
+            // existing value untouched. Persists to dynamic_components.localized.
+            localized?: boolean;
           }
         | undefined;
 
@@ -328,11 +446,25 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       if (b?.label) updateData.label = b.label;
       if (b?.admin) updateData.admin = b.admin;
       if (b?.description) updateData.description = b.description;
+      // i18n: persist the Internationalization toggle. `isLocalized` drives the companion
+      // provisioning below (create when newly localized, ADD/DROP as translatable fields change).
+      if (b?.localized !== undefined) updateData.localized = b.localized;
+      const wasLocalized =
+        (existing as { localized?: boolean }).localized === true;
+      const isLocalized =
+        b?.localized !== undefined ? b.localized === true : wasLocalized;
 
       if (b?.fields) {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
+      }
 
+      // Run the companion reconcile when fields changed OR the Internationalization flag toggled
+      // (a flag-only save still needs the enable/disable data move: enabling seeds + drops main
+      // columns, disabling restores + archives them). Without the transition on a flag-only
+      // toggle, `localized` was persisted while the physical schema stayed put and content
+      // stranded in the wrong table.
+      if (b?.fields || isLocalized !== wasLocalized) {
         // Schema changes (rename, drop, add required column) must go through
         // applyComponentSchemaChanges which runs PushSchemaPipeline. Here we
         // only store the updated fields JSON — this path is reached when
@@ -340,12 +472,37 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // descriptions, or field reordering changed but no DDL is needed).
         if (container.has("adapter")) {
           const adapter = container.get<DrizzleAdapter>("adapter");
+          const newFields = b?.fields ?? existing.fields;
           registerComponentRuntimeSchema(
             adapter,
             adapter.getCapabilities().dialect,
             existing.tableName,
-            b.fields
+            newFields,
+            // i18n: main runtime table omits translatable columns when localized.
+            isLocalized
           );
+          // i18n: provision/alter the companion comp_<slug>_locales table for the new localized
+          // field set: enabling seeds the default locale from main then drops those columns,
+          // disabling restores + archives them, a field change ADDs/DROPs columns.
+          try {
+            await reconcileComponentCompanion({
+              slug,
+              tableName: existing.tableName,
+              oldFields: existing.fields as unknown as FieldDefinition[],
+              newFields: newFields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              wasLocalized,
+              adapter,
+            });
+          } catch (companionErr) {
+            const m =
+              companionErr instanceof Error
+                ? companionErr.message
+                : String(companionErr);
+            console.error(
+              `[Components] Companion reconcile failed for "${existing.tableName}": ${m}`
+            );
+          }
         }
       }
 
@@ -389,6 +546,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         slug,
         tableName,
         fields: fields as DesiredComponent["fields"],
+        // i18n: carry the localized flag so the push diff omits translatable columns
+        // from the component's main table (they live in comp_<slug>_locales, reconciled
+        // out-of-band below) — mirrors the collection/single apply path.
+        localized: (component as { localized?: boolean }).localized === true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -447,6 +608,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
+        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -454,6 +616,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         resolutions?: Record<string, FieldResolution>;
         renameResolutions?: BrowserRenameResolution[];
         eventResolutions?: Resolution[];
+        // i18n: the builder sends the current toggle so a save that flips i18n AND changes fields
+        // provisions the companion in the same apply. Undefined = leave the persisted value.
+        localized?: boolean;
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
@@ -462,6 +627,13 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+
+      // i18n: prefer the request's localized flag over the persisted one (stale on a
+      // simultaneous toggle+field-change save); fall back to the registry value.
+      const isLocalized =
+        requestLocalized !== undefined
+          ? requestLocalized === true
+          : (component as { localized?: boolean }).localized === true;
 
       const currentVersion = component.schemaVersion ?? 1;
       // Reject a stale UI save before any DDL runs so two admins editing the
@@ -487,6 +659,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         slug,
         tableName,
         fields: fields as DesiredComponent["fields"],
+        // i18n: carry the localized flag so the push diff omits translatable columns
+        // from the component's main table (they live in comp_<slug>_locales, reconciled
+        // out-of-band below) — mirrors the collection/single apply path.
+        localized: isLocalized,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -524,15 +700,41 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         );
       }
 
+      // i18n: the push pipeline excludes companion tables, so reconcile the component's companion
+      // comp_<slug>_locales out-of-band — create on the first translatable field, then ADD/DROP
+      // columns as the field set changes. Uses the request's `isLocalized`.
+      try {
+        await reconcileComponentCompanion({
+          slug,
+          tableName,
+          oldFields: component.fields as unknown as FieldDefinition[],
+          newFields: fields as unknown as FieldDefinition[],
+          localized: isLocalized,
+          // Detect an enable/disable transition against the persisted state so this apply
+          // seeds/restores existing rows rather than only creating an empty companion.
+          wasLocalized:
+            (component as { localized?: boolean }).localized === true,
+          adapter,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw NextlyError.internal({
+          cause: err instanceof Error ? err : undefined,
+          logContext: { op: "componentCompanionReconcile", slug, detail: msg },
+        });
+      }
+
       const newSchemaVersion = currentVersion + 1;
 
       // Post-apply: update dynamic_components fields JSON + schema_hash directly
       // (not via the registry helper, whose auto-bump would also reset
       // migration_status). Advance schema_version here so the optimistic-lock
-      // check above sees a new value on the next save; without the bump the
-      // stored version never changes and a second stale save would pass. The
-      // write is non-fatal (the DDL already succeeded), but track whether it
-      // landed so the response never reports a version the DB did not persist.
+      // check above sees a new value on the next save (without the bump the
+      // stored version never changes and a second stale save would pass), and
+      // persist `localized` so a simultaneous toggle+field-change save keeps the
+      // flag. The write is non-fatal (the DDL already succeeded), but track
+      // whether it landed so the response never reports a version the DB did not
+      // persist.
       let versionPersisted = true;
       try {
         await adapter.update(
@@ -541,6 +743,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
+            localized: isLocalized,
             schema_version: newSchemaVersion,
             updated_at: new Date(),
           },
@@ -565,7 +768,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         adapter,
         dialect,
         tableName,
-        fields as FieldConfig[]
+        fields as FieldConfig[],
+        isLocalized
       );
 
       return respondAction(`Schema applied for component '${slug}'`, {

@@ -21,6 +21,7 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type {
   GetSingleOptions,
   SingleResult,
@@ -58,7 +59,10 @@ export class SingleEntryService extends BaseService {
     singleRegistryService: SingleRegistryService,
     hookRegistry: HookRegistry,
     componentDataService?: ComponentDataService,
-    rbacAccessControlService?: RBACAccessControlService
+    rbacAccessControlService?: RBACAccessControlService,
+    // i18n: normalized localization config so a localized single resolves/writes
+    // translatable fields via its companion `single_<slug>_locales` table.
+    localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
 
@@ -68,7 +72,8 @@ export class SingleEntryService extends BaseService {
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      localization
     );
 
     // The write path evaluates a Single's stored access rules; its own
@@ -79,7 +84,8 @@ export class SingleEntryService extends BaseService {
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      localization
     );
   }
 

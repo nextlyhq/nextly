@@ -335,8 +335,8 @@ function validateNextlyConfig(config: NextlyConfig): void {
     const localizedSlug = findLocalizedEntitySlug(config);
     if (localizedSlug) {
       throw new Error(
-        `Collection/single '${localizedSlug}' declares localized content but the app ` +
-          `has no \`localization\` config. Add a top-level \`localization\` block ` +
+        `Entity '${localizedSlug}' (collection/single/component) declares localized content ` +
+          `but the app has no \`localization\` config. Add a top-level \`localization\` block ` +
           `(locales + defaultLocale) or remove the \`localized\` flags.`
       );
     }
@@ -365,7 +365,13 @@ function hasLocalizedField(fields: readonly unknown[] | undefined): boolean {
  * config.
  */
 function findLocalizedEntitySlug(config: NextlyConfig): string | null {
-  const entities = [...(config.collections ?? []), ...(config.singles ?? [])];
+  const entities = [
+    ...(config.collections ?? []),
+    ...(config.singles ?? []),
+    // Components localize too — a localized component with no app-level localization config
+    // would route translatable writes to main comp_ columns the localized schema omits.
+    ...(config.components ?? []),
+  ];
   for (const entity of entities) {
     const rec = entity as {
       slug?: string;

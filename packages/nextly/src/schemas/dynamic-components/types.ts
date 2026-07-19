@@ -148,6 +148,13 @@ export interface DynamicComponentInsert {
   locked?: boolean;
 
   /**
+   * i18n: whether the component is localized. When true, translatable fields live in
+   * the companion `comp_<slug>_locales` table and embedded instances resolve/write them
+   * per language.
+   */
+  localized?: boolean;
+
+  /**
    * Path to the config file (code-first Components only).
    * Used for syncing and displaying source location.
    *
@@ -232,6 +239,9 @@ export interface DynamicComponentRecord extends DynamicComponentInsert {
    * Code-first Components are always locked.
    */
   locked: boolean;
+
+  /** i18n: whether the component is localized (translatable fields in `comp_<slug>_locales`). */
+  localized: boolean;
 
   /**
    * When the Component was created.

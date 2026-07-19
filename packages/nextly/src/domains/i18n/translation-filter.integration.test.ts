@@ -46,11 +46,11 @@ async function seedCompanion(
   for (const r of rows) {
     if (withStatus) {
       await adapter.executeQuery(
-        `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${r.parent}','${r.locale}','${r.status ?? "draft"}','${r.heading}')`
+        `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${r.parent}','${r.locale}','${r.status ?? "draft"}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "_status" = excluded."_status", "heading" = excluded."heading"`
       );
     } else {
       await adapter.executeQuery(
-        `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}')`
+        `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "heading" = excluded."heading"`
       );
     }
   }
@@ -60,7 +60,11 @@ function handlerOf(t: TestNextly) {
   return t.getService("collectionsHandler") as unknown as {
     listEntries: (p: Record<string, unknown>) => Promise<{
       success: boolean;
-      data: { docs: Record<string, unknown>[] } | null;
+      data: {
+        docs: Record<string, unknown>[];
+        totalDocs?: number;
+        totalPages?: number;
+      } | null;
     }>;
   };
 }
@@ -159,5 +163,29 @@ describe("translation-status list filter (_translated) (M7)", () => {
 
     const draftDe = await listIds(t, { locale: "de", state: "draft" });
     expect(draftDe).toEqual(new Set([b]));
+  });
+
+  // M3: totalDocs must reflect the language filter — it was dropped from the count
+  // query, so the count ignored the filter and over-counted (breaking pagination).
+  it("totalDocs matches the filtered rows when a language filter is active", async () => {
+    const t = await boot();
+    const a = await create(t, "A"); // translated in de
+    await create(t, "B"); // en only
+    await create(t, "C"); // en only
+    await seedCompanion(t, [
+      { parent: a, locale: "en", heading: "A-en" },
+      { parent: a, locale: "de", heading: "A-de" },
+    ]);
+
+    const res = await handlerOf(t).listEntries({
+      collectionName: "pages",
+      where: { _translated: { locale: "de", state: "translated" } },
+      overrideAccess: true,
+      limit: 50,
+    });
+    expect(res.data?.docs.length).toBe(1);
+    // Before the fix this was 3 (all entries) because the count ignored the filter.
+    expect(res.data?.totalDocs).toBe(1);
+    expect(res.data?.totalPages).toBe(1);
   });
 });

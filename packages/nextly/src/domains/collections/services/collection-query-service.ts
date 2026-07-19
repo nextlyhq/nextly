@@ -458,6 +458,9 @@ export class CollectionQueryService extends BaseService {
     statusFilterValue?: string | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
+    // The caller resolves the Draft/Published filter before building the context and
+    // passes it as `statusFilterValue`, so per-locale where/search/order subqueries
+    // constrain by the resolved status too (a public read never matches a draft).
     return {
       companionTableName: companion.companionTableName,
       localizedFields: companion.localizedFields,
@@ -773,7 +776,6 @@ export class CollectionQueryService extends BaseService {
       if (statusFilter && schema.status) {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
-
       // Build the localized-query context AFTER the status filter is resolved so
       // localized where/search EXISTS checks constrain by the per-locale status too
       // (a published read must not match a draft translation).
@@ -966,6 +968,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: schema.id,
             column: localizedSortField.column,
             localeChain,
+            statusValue: localizedCtx?.statusValue, // don't sort by draft translations
           });
           query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
         } else if (column) {
@@ -1015,16 +1018,12 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
-            // Re-attach the translation filter so the count applies the same
-            // companion predicate as the rows (countEntries re-extracts it);
-            // geo operators stay excluded via cleanedWhere. Without this the
-            // language filter paginates against the unfiltered total.
-            where: translationFilter
-              ? ({
-                  ...(cleanedWhere ?? {}),
-                  _translated: translationFilter,
-                } as WhereFilter)
-              : cleanedWhere,
+            where: cleanedWhere, // Use cleaned where (without geo operators)
+            // The `_translated` language filter was stripped from `cleanedWhere` for
+            // the list query; pass it explicitly so the count applies the same filter.
+            // Without it the count ignores the filter and over-counts
+            // totalDocs/totalPages when a language filter is active.
+            translationFilter: translationFilter ?? undefined,
             // Forward locale so count mirrors any locale-scoped filter (M4b parity).
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
@@ -1117,6 +1116,12 @@ export class CollectionQueryService extends BaseService {
             fields: fields as FieldConfig[],
             depth: params.depth,
             select: params.select,
+            // i18n: thread the read locale so embedded localized components resolve
+            // per language across the list, and forward fallback control so the
+            // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
+            // untranslated embedded field blank instead of showing default text.
+            locale: params.locale,
+            fallbackLocale: params.fallbackLocale,
           });
       }
 
@@ -1410,6 +1415,13 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
+    /**
+     * Language filter, already extracted by the caller (listEntries). When present it is
+     * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
+     * `_translated` from the where it forwards, so re-extraction would find nothing and the count
+     * would over-count.
+     */
+    translationFilter?: TranslationStatusFilter;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -1489,7 +1501,6 @@ export class CollectionQueryService extends BaseService {
       if (statusFilter && schema.status) {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
-
       // Build the localized-query context AFTER the status filter is resolved so
       // localized where/search EXISTS checks constrain by the per-locale status too
       // (a published read must not match a draft translation).
@@ -1534,6 +1545,23 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
+      // apply the `_translated` language filter regardless of `params.where` — when it
+      // is the ONLY filter, listEntries forwards `where: undefined` (the key having been stripped)
+      // and passes the filter via `translationFilter`. Applying it here (not inside the
+      // `if (params.where)` block below) keeps count == list so pagination totals stay correct.
+      const countTranslationFilter =
+        params.translationFilter ??
+        this.extractTranslationStatusFilter(params.where).filter;
+      if (countTranslationFilter) {
+        const translationCondition =
+          await this.buildTranslationStatusFilterCondition(
+            params.collectionName,
+            countTranslationFilter,
+            schema.id
+          );
+        if (translationCondition) whereConditions.push(translationCondition);
+      }
+
       // Apply where clause if provided
       if (params.where) {
         // Determine database dialect for ILIKE vs LIKE
@@ -1556,21 +1584,10 @@ export class CollectionQueryService extends BaseService {
           components?: string[];
         }>;
 
-        // i18n M7: pull the `_translated` language filter out before the component extractor
-        // (which drops unrecognized object keys), for count==list parity.
-        const {
-          filter: countTranslationFilter,
-          cleanedWhere: whereWithoutTranslation,
-        } = this.extractTranslationStatusFilter(params.where);
-        if (countTranslationFilter) {
-          const translationCondition =
-            await this.buildTranslationStatusFilterCondition(
-              params.collectionName,
-              countTranslationFilter,
-              schema.id
-            );
-          if (translationCondition) whereConditions.push(translationCondition);
-        }
+        // Strip the `_translated` key before the component extractor (which drops unrecognized
+        // object keys). The filter itself was already applied above.
+        const { cleanedWhere: whereWithoutTranslation } =
+          this.extractTranslationStatusFilter(params.where);
 
         // Extract component field conditions (e.g., 'seo.metaTitle')
         const { componentFilters, cleanedWhere } =
@@ -1890,6 +1907,12 @@ export class CollectionQueryService extends BaseService {
           fields: fields as FieldConfig[],
           depth: params.depth,
           select: params.select,
+          // i18n: thread the read locale so an embedded localized component resolves
+          // its translatable fields per language, and forward fallback control so a
+          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+          // fields blank rather than showing default-language text.
+          locale: params.locale,
+          fallbackLocale: params.fallbackLocale,
         });
       }
 
