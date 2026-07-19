@@ -229,6 +229,11 @@ export class CollectionMutationService extends BaseService {
    * `published` has no prior status to change from, so it passes
    * `emitStatusChanged: false` to keep emitting only `published` (and now the
    * general transition), never `statusChanged`.
+   *
+   * `locale` is set only for a per-locale (companion `_status`) transition on a
+   * localized collection; when present it rides on every emitted payload so a
+   * subscriber can tell a single-language transition apart from a document-wide
+   * one (a document-wide publish carries no `locale`).
    */
   private transitionStatus(args: {
     collection: string;
@@ -238,8 +243,14 @@ export class CollectionMutationService extends BaseService {
     previousStatus: string | null;
     status: string;
     emitStatusChanged: boolean;
+    locale?: string;
   }): void {
-    const docBase = { id: args.id, data: args.data, user: args.user };
+    const docBase = {
+      id: args.id,
+      data: args.data,
+      user: args.user,
+      ...(args.locale !== undefined ? { locale: args.locale } : {}),
+    };
     emitDocumentEvent("statusTransition", args.collection, {
       ...docBase,
       previousStatus: args.previousStatus,
@@ -2234,6 +2245,10 @@ export class CollectionMutationService extends BaseService {
       // concurrent winner may have changed the status, so the D69 status event
       // below must report that as `previousStatus`, not the stale pre-tx value.
       let committedPreviousStatus: string | null | undefined;
+      // The write locale's committed companion `_status` before this write, used
+      // by the per-locale status event below. Re-read inside each attempt (like
+      // committedPreviousStatus) so a retry reports the true prior state.
+      let localizedPreviousStatus: string | null = null;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           const updatePayload = {
@@ -2276,6 +2291,32 @@ export class CollectionMutationService extends BaseService {
             `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
             sqlParams as (string | number | boolean | Date | null | undefined)[]
           );
+
+          // Capture the committed per-locale `_status` BEFORE the upsert so the
+          // post-commit event can report the real prior value. Only when the
+          // write actually changes this locale's status (companion `_status` is
+          // present only when `status` was explicitly in the patch). Read with
+          // raw `tx.execute` (matching upsertCompanionRow / publishAllLocales):
+          // the companion `_locales` table is not in the Drizzle schema, and the
+          // CRUD helpers camelCase result keys, which would rename `_status`.
+          if (
+            localizedUpdate &&
+            typeof localizedUpdate.companionData._status === "string"
+          ) {
+            const isMysqlDialect = this.dialect === "mysql";
+            const quote = (id: string) =>
+              isMysqlDialect ? `\`${id}\`` : `"${id}"`;
+            const placeholder = (i: number) =>
+              this.dialect === "postgresql" ? `$${i}` : "?";
+            const priorRows = await tx.execute<{ _status?: unknown }>(
+              `SELECT ${quote("_status")} FROM ${quote(localizedUpdate.companionTableName)} ` +
+                `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
+              [params.entryId, localizedUpdate.writeLocale]
+            );
+            const priorStatus = priorRows[0]?._status;
+            localizedPreviousStatus =
+              typeof priorStatus === "string" ? priorStatus : null;
+          }
 
           // i18n M5: upsert the translatable values into the companion row for the write's locale
           // (same transaction). Only the provided localized columns are touched.
@@ -2544,6 +2585,32 @@ export class CollectionMutationService extends BaseService {
           previousStatus,
           status: nextStatus,
           emitStatusChanged: true,
+        });
+      }
+
+      // Per-locale status transition (i18n M6). On a localized collection the
+      // status moves to the companion `_status` for the write locale, leaving
+      // the main row's status unchanged — so the document-level check above
+      // never fires. Emit the same lifecycle events tagged with `locale` when a
+      // write actually changes this locale's status (companion `_status` is set
+      // only when `status` was explicitly in the patch), so workflows see the
+      // German publish they would otherwise miss. Skipped when the value did not
+      // move (re-publishing already-published content fires nothing).
+      const localizedNextStatus = localizedUpdate?.companionData._status;
+      if (
+        localizedUpdate &&
+        typeof localizedNextStatus === "string" &&
+        localizedNextStatus !== localizedPreviousStatus
+      ) {
+        this.transitionStatus({
+          collection: params.collectionName,
+          id: (updated as { id?: unknown }).id,
+          data: { ...(updated as Record<string, unknown>) },
+          user: params.user,
+          previousStatus: localizedPreviousStatus,
+          status: localizedNextStatus,
+          emitStatusChanged: true,
+          locale: localizedUpdate.writeLocale,
         });
       }
 
