@@ -24,8 +24,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
-// Resolve the versioning config on the HMR sync path so a `versions` change
-// while `next dev` is running persists without a restart (parity with di/register).
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
@@ -57,6 +55,8 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+// Resolve the versioning config on the HMR sync path so a `versions` change
+// while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";

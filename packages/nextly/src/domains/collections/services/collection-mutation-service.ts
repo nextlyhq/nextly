@@ -363,6 +363,11 @@ export class CollectionMutationService extends BaseService {
     companionTableName: string;
     writeLocale: string;
     companionData: Record<string, unknown>;
+    // The same written localized values, keyed by FIELD NAME (companionData is
+    // keyed by snake_case column). A version snapshot merges these onto the
+    // parent so the read-shape snapshot carries this locale's translatable
+    // values instead of dropping them.
+    localizedFieldValues: Record<string, unknown>;
   } | null> {
     if (!this.localization) return null;
     const companion =
@@ -378,6 +383,7 @@ export class CollectionMutationService extends BaseService {
 
     const writeLocale = resolveRequestedLocale(this.localization, locale);
     const companionData: Record<string, unknown> = {};
+    const localizedFieldValues: Record<string, unknown> = {};
     for (const field of companion.localizedFields) {
       // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
       // field names. Accept either; always store under the snake_case companion column.
@@ -388,6 +394,8 @@ export class CollectionMutationService extends BaseService {
           : null;
       if (key !== null) {
         companionData[field.column] = entryData[key];
+        // Keep a field-name-keyed copy for the version snapshot (read shape).
+        localizedFieldValues[field.name] = entryData[key];
         delete entryData[key]; // migrated main table has no localized columns
       }
     }
@@ -416,7 +424,114 @@ export class CollectionMutationService extends BaseService {
       companionTableName: companion.companionTableName,
       writeLocale,
       companionData,
+      localizedFieldValues,
     };
+  }
+
+  /**
+   * Return a shallow copy of `row` with JSON-backed field values (richtext,
+   * blocks, array, group, json) parsed from their stored string form, matching
+   * the read shape so a version snapshot equals a normal read. Non-JSON and
+   * already-parsed values pass through; a parse failure keeps the raw string.
+   * Never mutates the input.
+   */
+  private deserializeJsonFieldsForSnapshot(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const out = { ...row };
+    for (const field of fields) {
+      const value = out[field.name];
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof value === "string" &&
+        value
+      ) {
+        try {
+          out[field.name] = JSON.parse(value);
+        } catch {
+          // Not valid JSON — keep the raw string.
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Build the COMPLETE component-subtree and many-to-many id maps for an entry's
+   * version snapshot. A partial update only carries the fields present in the
+   * request, so the written maps cover just those; unchanged component/relation
+   * fields are read from the current committed state and overlaid, so a
+   * scalar-only edit does not drop existing components or relations from the
+   * snapshot (which a later restore would otherwise lose). Reads run on the
+   * pooled connection — unchanged fields are untouched by the in-flight write,
+   * so their committed value is correct — and written values always win.
+   */
+  private async buildFullSnapshotRelations(
+    entryId: string,
+    collectionName: string,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    writtenComponents: Record<string, unknown>,
+    writtenM2M: Record<string, string[]>
+  ): Promise<{
+    components: Record<string, unknown>;
+    manyToMany: Record<string, string[]>;
+  }> {
+    const components: Record<string, unknown> = {};
+    if (this.componentDataService) {
+      const componentFields = fields.filter(isComponentField);
+      // Only read when a component field was omitted from the write (else the
+      // written map is already complete).
+      const hasOmitted = componentFields.some(
+        f => writtenComponents[f.name] === undefined
+      );
+      if (hasOmitted) {
+        try {
+          const populated =
+            await this.componentDataService.populateComponentData({
+              entry: { id: entryId },
+              parentTable: getTableName(collectionName),
+              fields: fields as unknown as FieldConfig[],
+            });
+          for (const f of componentFields) {
+            if (populated[f.name] !== undefined) {
+              components[f.name] = populated[f.name];
+            }
+          }
+        } catch {
+          // Best-effort: a read failure just omits those fields from the snapshot.
+        }
+      }
+    }
+    // Written component values win over the read-back.
+    Object.assign(components, writtenComponents);
+
+    const manyToMany: Record<string, string[]> = {};
+    const hasOmittedM2M = manyToManyFields.some(
+      f => writtenM2M[f.name] === undefined
+    );
+    if (hasOmittedM2M) {
+      for (const field of manyToManyFields) {
+        if (writtenM2M[field.name] !== undefined) continue;
+        try {
+          const relatedRows =
+            await this.relationshipService.fetchManyToManyRelations(
+              collectionName,
+              entryId,
+              field
+            );
+          manyToMany[field.name] = relatedRows.map(
+            r => (r as { id: string }).id
+          );
+        } catch {
+          // Best-effort: skip on read failure.
+        }
+      }
+    }
+    Object.assign(manyToMany, writtenM2M);
+
+    return { components, manyToMany };
   }
 
   /**
@@ -1241,7 +1356,17 @@ export class CollectionMutationService extends BaseService {
         // collection opts into versioning. Runs after components + m2m so the
         // snapshot is the full assembled document (the read-shape). History-only
         // here: the entry's status maps to a VersionStatus inside captureInTx.
+        // A create provides all field values, so componentFieldData/
+        // manyToManyData are already complete; only the parent needs read-shape
+        // normalization (parse JSON-backed fields; strip password hashes so they
+        // never enter durable history). `entry` is reused after the tx for hooks
+        // and the response, so snapshot a copy.
         if (versionsConfig?.enabled) {
+          const snapshotParent = this.deserializeJsonFieldsForSnapshot(
+            entry,
+            fields
+          );
+          stripPasswordFieldValues(snapshotParent, fields);
           await captureInTx(tx, this.versionCapture, {
             ref: {
               scopeKind: "collection",
@@ -1250,7 +1375,7 @@ export class CollectionMutationService extends BaseService {
             },
             contentStatus: (entry as { status?: unknown }).status,
             parts: {
-              parentRow: entry,
+              parentRow: snapshotParent,
               components: componentFieldData,
               manyToMany: manyToManyData,
             },
@@ -2032,16 +2157,46 @@ export class CollectionMutationService extends BaseService {
 
           // Capture a version snapshot of the post-update document atomically
           // with the write when the collection opts into versioning. The parent
-          // is the pre-image (camelCased) overlaid with the changed values;
-          // components and m2m overlay it in assembleDocument to form the full
-          // read-shape snapshot. Status prefers the new value, else the prior one.
+          // is re-read fresh here (not the pre-transaction `existingEntry`) so a
+          // conflict retry — which re-runs this closure — picks up a concurrent
+          // winner's committed columns instead of recording a stale pre-image;
+          // the current row is then overlaid with this write's changed values,
+          // this locale's translatable values, JSON-backed fields are parsed to
+          // the read shape, and password hashes are stripped. Components and m2m
+          // are completed from current state so a scalar-only edit does not drop
+          // existing relations. Status prefers the new value, else the prior one.
           if (versionsConfig?.enabled) {
+            const freshRows = await this.db
+              .select()
+              .from(schema)
+              .where(eq(schema.id, params.entryId))
+              .limit(1);
+            const currentRow = (freshRows[0] ?? existingEntry) as Record<
+              string,
+              unknown
+            >;
             const preImage: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(
-              existingEntry as Record<string, unknown>
-            )) {
+            for (const [key, value] of Object.entries(currentRow)) {
               preImage[toCamelCase(key)] = value;
             }
+            const parentRow = this.deserializeJsonFieldsForSnapshot(
+              {
+                ...preImage,
+                ...finalData,
+                ...(localizedUpdate?.localizedFieldValues ?? {}),
+              },
+              fields
+            );
+            stripPasswordFieldValues(parentRow, fields);
+            const { components: snapshotComponents, manyToMany: snapshotM2M } =
+              await this.buildFullSnapshotRelations(
+                params.entryId,
+                params.collectionName,
+                fields,
+                manyToManyFields,
+                componentFieldData,
+                manyToManyData
+              );
             await captureInTx(tx, this.versionCapture, {
               ref: {
                 scopeKind: "collection",
@@ -2052,9 +2207,9 @@ export class CollectionMutationService extends BaseService {
                 (finalData as { status?: unknown }).status ??
                 (preImage as { status?: unknown }).status,
               parts: {
-                parentRow: { ...preImage, ...finalData },
-                components: componentFieldData,
-                manyToMany: manyToManyData,
+                parentRow,
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
               },
               createdBy: params.user?.id ?? null,
             });

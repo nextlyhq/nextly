@@ -8,7 +8,14 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  component,
+  defineCollection,
+  defineComponent,
+  defineSingle,
+  json,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -96,6 +103,87 @@ describe("version capture on update (integration)", () => {
     const latest = rows[rows.length - 1];
     expect(latest.scopeKind).toBe("single");
     expect((latest.snapshot as { title?: string }).title).toBe("hello");
+  });
+
+  it("preserves an omitted component subtree in a scalar-only update snapshot", async () => {
+    // A partial update carries only the fields in the request. Without reading
+    // the current component state the snapshot would drop the untouched
+    // component, silently losing it on a later restore.
+    current = await createTestNextly({
+      components: [
+        defineComponent({
+          slug: "hero",
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            component({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "v1", hero: { heading: "Welcome" } }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Scalar-only update — the component field is NOT in the payload.
+    await handler.updateEntry(
+      { collectionName: "pages", entryId: id, overrideAccess: true },
+      { title: "v2" }
+    );
+
+    const rows = await versions(current, "pages");
+    expect(rows).toHaveLength(2);
+    const latest = rows[1].snapshot as {
+      title?: string;
+      hero?: { heading?: string };
+    };
+    expect(latest.title).toBe("v2");
+    // The untouched component survives into the new version.
+    expect(latest.hero?.heading).toBe("Welcome");
+  });
+
+  it("captures JSON-backed fields parsed to the read shape, not as strings", async () => {
+    // On SQLite a json/richtext/group field is stored as a string; the snapshot
+    // must parse it so a restored version equals a normal read.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "docs",
+          versions: true,
+          fields: [text({ name: "title" }), json({ name: "meta" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "docs", overrideAccess: true },
+      { title: "d1", meta: { views: 3, tags: ["a", "b"] } }
+    );
+    const id = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "docs", entryId: id, overrideAccess: true },
+      { title: "d2", meta: { views: 4, tags: ["c"] } }
+    );
+
+    const rows = await versions(current, "docs");
+    const latest = rows[rows.length - 1].snapshot as {
+      meta?: unknown;
+    };
+    // Parsed object, not a JSON string.
+    expect(latest.meta).toEqual({ views: 4, tags: ["c"] });
   });
 
   it("records no version when the schema does not opt in", async () => {

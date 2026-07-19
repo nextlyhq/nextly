@@ -63,6 +63,7 @@ import {
   buildSingleErrorResult,
   normalizeUploadFields,
   serializeJsonFields,
+  shouldTreatAsJson,
 } from "./single-utils";
 
 /**
@@ -367,6 +368,52 @@ export class SingleMutationService extends BaseService {
               // response is redacted separately (stripPasswordFieldValues at the
               // return), which does not cover this snapshot.
               stripPasswordFieldValues(parentRow, fieldConfigs);
+              // Parse JSON-backed fields (richtext, group, json, ...) to the read
+              // shape: on SQLite the returned row holds them as strings, so an
+              // unparsed snapshot would not match a normal read on restore.
+              for (const field of fieldConfigs) {
+                if (!("name" in field) || !field.name) continue;
+                const value = parentRow[field.name];
+                if (shouldTreatAsJson(field) && typeof value === "string") {
+                  try {
+                    parentRow[field.name] = JSON.parse(value);
+                  } catch {
+                    // Not valid JSON — keep the raw string.
+                  }
+                }
+              }
+              // Complete the component subtrees: a partial update only carries
+              // changed components, so read current state for omitted component
+              // fields and overlay the written ones, so a scalar-only edit does
+              // not drop existing components from the snapshot.
+              const components: Record<string, unknown> = {};
+              if (this.componentDataService) {
+                const componentFields = fieldConfigs.filter(
+                  (f): f is typeof f & { name: string } =>
+                    isComponentField(f) && !!f.name
+                );
+                const hasOmitted = componentFields.some(
+                  f => componentFieldData[f.name] === undefined
+                );
+                if (hasOmitted) {
+                  try {
+                    const populated =
+                      await this.componentDataService.populateComponentData({
+                        entry: { id: existingDoc.id },
+                        parentTable: singleMeta.tableName,
+                        fields: fieldConfigs,
+                      });
+                    for (const f of componentFields) {
+                      if (populated[f.name] !== undefined) {
+                        components[f.name] = populated[f.name];
+                      }
+                    }
+                  } catch {
+                    // Best-effort: a read failure just omits those from the snapshot.
+                  }
+                }
+              }
+              Object.assign(components, componentFieldData);
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "single",
@@ -374,7 +421,7 @@ export class SingleMutationService extends BaseService {
                   entryId: existingDoc.id,
                 },
                 contentStatus: (parentRow as { status?: unknown }).status,
-                parts: { parentRow, components: componentFieldData },
+                parts: { parentRow, components },
                 createdBy: options.user?.id ?? null,
               });
             }
