@@ -1371,6 +1371,10 @@ export class CollectionMutationService extends BaseService {
             fields
           );
           stripPasswordFieldValues(snapshotParent, fields);
+          // Strip the system owner column (created_by) too: normal reads/
+          // responses redact it, so history must not durably retain a stable
+          // owner id or let a restore overwrite ownership from old history.
+          stripSystemOwnerField(snapshotParent);
           await captureInTx(tx, this.versionCapture, {
             ref: {
               scopeKind: "collection",
@@ -2223,6 +2227,8 @@ export class CollectionMutationService extends BaseService {
               fields
             );
             stripPasswordFieldValues(parentRow, fields);
+            // Strip the system owner column (created_by) — see create path.
+            stripSystemOwnerField(parentRow);
             const { components: snapshotComponents, manyToMany: snapshotM2M } =
               await this.buildFullSnapshotRelations(
                 params.entryId,

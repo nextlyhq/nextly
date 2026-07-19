@@ -365,16 +365,22 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      // Only treat a fields write as a schema change (bump schema_version +
-      // re-flag pending migration) when the schema hash actually differs. A
-      // metadata-only sync (versions/localized/status/labels) re-sends the
-      // unchanged fields, and must not force a spurious pending-migration cycle
-      // on a physically-unchanged table. Without a provided hash we cannot tell,
-      // so fall back to the prior always-bump behavior.
+      // Bump schema_version + re-flag pending migration only on a PHYSICAL
+      // schema change: fields (by hash), or a status / localized toggle (which
+      // add/remove the status column or the companion localization schema). A
+      // pure-metadata sync (versions/labels/admin) re-sends unchanged fields and
+      // must not force a spurious pending-migration cycle. Without a hash we
+      // cannot compare fields, so fall back to the prior always-bump behavior.
       const fieldsActuallyChanged =
         data.schemaHash === undefined ||
         !schemaHashesMatch(data.schemaHash, existing.schemaHash);
-      if (fieldsActuallyChanged) {
+      const statusToggled =
+        data.status !== undefined &&
+        (data.status === true) !== (existing.status === true);
+      const localizedToggled =
+        data.localized !== undefined &&
+        (data.localized === true) !== (existing.localized === true);
+      if (fieldsActuallyChanged || statusToggled || localizedToggled) {
         updateData.schema_version = existing.schemaVersion + 1;
         updateData.migration_status = "pending";
       }

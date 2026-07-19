@@ -40,6 +40,7 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -333,10 +334,16 @@ export class SingleMutationService extends BaseService {
               return rows;
             }
 
+            // Clone per attempt: saveComponentDataInTransaction mutates the data
+            // in place (hashing passwords, assigning ids), so a conflict retry
+            // must start from the user's original values, and the snapshot below
+            // uses this post-save copy (ids populated) rather than the raw input.
+            const attemptComponentData = structuredClone(componentFieldData);
+
             // 9.5. Save component field data to separate comp_{slug} tables
             if (
               this.componentDataService &&
-              Object.keys(componentFieldData).length > 0
+              Object.keys(attemptComponentData).length > 0
             ) {
               await this.componentDataService.saveComponentDataInTransaction(
                 tx,
@@ -344,7 +351,7 @@ export class SingleMutationService extends BaseService {
                   parentId: existingDoc.id,
                   parentTable: singleMeta.tableName,
                   fields: fieldConfigs,
-                  data: componentFieldData,
+                  data: attemptComponentData,
                 }
               );
             }
@@ -368,6 +375,10 @@ export class SingleMutationService extends BaseService {
               // response is redacted separately (stripPasswordFieldValues at the
               // return), which does not cover this snapshot.
               stripPasswordFieldValues(parentRow, fieldConfigs);
+              // Strip the system owner column (created_by) too, matching the
+              // read/response redaction, so history does not retain a stable
+              // owner id or let a restore overwrite ownership.
+              stripSystemOwnerField(parentRow);
               // Parse JSON-backed fields (richtext, group, json, ...) to the read
               // shape: on SQLite the returned row holds them as strings, so an
               // unparsed snapshot would not match a normal read on restore.
@@ -393,7 +404,7 @@ export class SingleMutationService extends BaseService {
                     isComponentField(f) && !!f.name
                 );
                 const hasOmitted = componentFields.some(
-                  f => componentFieldData[f.name] === undefined
+                  f => attemptComponentData[f.name] === undefined
                 );
                 if (hasOmitted) {
                   try {
@@ -413,7 +424,7 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              Object.assign(components, componentFieldData);
+              Object.assign(components, attemptComponentData);
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "single",

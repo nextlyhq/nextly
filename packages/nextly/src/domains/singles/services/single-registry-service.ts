@@ -370,8 +370,24 @@ export class SingleRegistryService extends BaseRegistryService<
 
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      updateData.schema_version = existing.schemaVersion + 1;
-      updateData.migration_status = data.migrationStatus || "pending";
+      // Bump schema_version + re-flag pending migration only on a PHYSICAL
+      // schema change: fields (by hash), or a status / localized toggle. A
+      // pure-metadata sync (versions/label/description) re-sends unchanged
+      // fields and must not force a spurious pending-migration cycle. Without a
+      // hash we cannot compare fields, so fall back to the prior always-bump.
+      const fieldsActuallyChanged =
+        data.schemaHash === undefined ||
+        !schemaHashesMatch(data.schemaHash, existing.schemaHash);
+      const statusToggled =
+        data.status !== undefined &&
+        (data.status === true) !== (existing.status === true);
+      const localizedToggled =
+        data.localized !== undefined &&
+        (data.localized === true) !== (existing.localized === true);
+      if (fieldsActuallyChanged || statusToggled || localizedToggled) {
+        updateData.schema_version = existing.schemaVersion + 1;
+        updateData.migration_status = data.migrationStatus || "pending";
+      }
     }
 
     if (data.admin !== undefined) {
