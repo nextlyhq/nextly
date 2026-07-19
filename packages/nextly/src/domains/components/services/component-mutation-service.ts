@@ -119,7 +119,48 @@ export class ComponentMutationService extends BaseService {
       data,
       schema.localizedFields
     );
-    return { schema, main, companion };
+    // The main row goes through serializeComponentRow, but the companion is upserted directly.
+    // Serialize the companion values the same way so a JSON-backed localized field (richText/
+    // group/json) is JSON-stringified and a Date is stored as text, not written as a raw object.
+    return {
+      schema,
+      main,
+      companion: this.serializeCompanionValues(companion, schema, meta.fields),
+    };
+  }
+
+  /**
+   * Serialize a localized component's companion payload (keyed by snake_case column) so its
+   * values match the storage form serializeComponentRow produces for the main row: object
+   * values for JSON-backed fields become JSON strings; Date values become ISO strings.
+   */
+  private serializeCompanionValues(
+    companion: Record<string, unknown>,
+    schema: NonNullable<ReturnType<typeof buildCompanionSchema>>,
+    fields: FieldConfig[]
+  ): Record<string, unknown> {
+    const fieldByColumn = new Map<string, FieldConfig>();
+    for (const lf of schema.localizedFields) {
+      const field = fields.find(f => "name" in f && f.name === lf.name);
+      if (field) fieldByColumn.set(lf.column, field);
+    }
+    const out: Record<string, unknown> = {};
+    for (const [column, value] of Object.entries(companion)) {
+      const field = fieldByColumn.get(column);
+      if (value instanceof Date) {
+        out[column] = value.toISOString();
+      } else if (
+        field &&
+        shouldTreatAsJson(field) &&
+        value != null &&
+        typeof value === "object"
+      ) {
+        out[column] = JSON.stringify(value);
+      } else {
+        out[column] = value;
+      }
+    }
+    return out;
   }
 
   /**
