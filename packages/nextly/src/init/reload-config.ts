@@ -313,6 +313,7 @@ export async function reloadNextlyConfig(opts?: {
     tableName: string;
     fields: MinimalField[];
     status?: boolean;
+    localized?: boolean;
   }> = [];
   for (const s of newConfig.singles ?? []) {
     if (!s.slug) continue;
@@ -324,6 +325,9 @@ export async function reloadNextlyConfig(opts?: {
       tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
       fields: (s.fields ?? []) as MinimalField[],
       status: s.status === true,
+      // i18n: carry `localized` so the HMR diff omits translatable columns from the
+      // single's main table and registers its companion, mirroring the collection path.
+      localized: (s as { localized?: boolean }).localized === true,
     });
   }
 
@@ -332,6 +336,7 @@ export async function reloadNextlyConfig(opts?: {
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    localized?: boolean;
   }> = [];
   for (const c of newConfig.components ?? []) {
     if (!c.slug) continue;
@@ -342,6 +347,9 @@ export async function reloadNextlyConfig(opts?: {
         .replace(/[^a-z0-9]+/g, "_")
         .replace(/^_+|_+$/g, "")}`,
       fields: (c.fields ?? []) as MinimalField[],
+      // i18n: carry `localized` so the HMR diff omits translatable columns from the
+      // component's main table and registers its companion.
+      localized: (c as { localized?: boolean }).localized === true,
     });
   }
 
@@ -421,7 +429,10 @@ export async function reloadNextlyConfig(opts?: {
         dialect,
         // i18n: omit translatable columns from the main table's desired snapshot
         // so the HMR diff doesn't re-add them (they live in the companion). H2.
-        { hasStatus: target.status === true, localized: target.localized === true }
+        {
+          hasStatus: target.status === true,
+          localized: target.localized === true,
+        }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -459,6 +470,7 @@ export async function reloadNextlyConfig(opts?: {
       tableName: target.tableName,
       fields: target.fields as DesiredSingle["fields"],
       status: target.status === true,
+      localized: target.localized === true,
     };
     try {
       const live = liveByTable.has(target.tableName)
@@ -468,7 +480,10 @@ export async function reloadNextlyConfig(opts?: {
         target.tableName,
         target.fields,
         dialect,
-        { hasStatus: target.status === true }
+        {
+          hasStatus: target.status === true,
+          localized: target.localized === true,
+        }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -504,6 +519,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: target.slug,
       tableName: target.tableName,
       fields: target.fields as DesiredComponent["fields"],
+      localized: target.localized === true,
     };
     try {
       const live = liveByTable.has(target.tableName)
@@ -512,7 +528,8 @@ export async function reloadNextlyConfig(opts?: {
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
         target.fields,
-        dialect
+        dialect,
+        { localized: target.localized === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
