@@ -186,6 +186,66 @@ describe("version capture on update (integration)", () => {
     expect(latest.meta).toEqual({ views: 4, tags: ["c"] });
   });
 
+  it("preserves an untouched localized field for the write locale in a partial translatable update snapshot", async () => {
+    // A partial translatable update carries only the changed localized value in
+    // the patch. The write locale's other companion fields (set on an earlier
+    // write, untouched here) must still appear in the snapshot — otherwise a
+    // later restore silently drops this locale's other translations. The main
+    // row never holds the translatable values, so they are read back from the
+    // companion inside the write transaction.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          versions: true,
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "body", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+    };
+    // Companion tables are migration-owned; seed it. The main table keeps its
+    // localized columns (a fully-migrated collection hits an unrelated,
+    // pre-existing updateEntry limitation that is out of scope here).
+    await adapter.executeQuery(
+      'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "title" text, "body" text, PRIMARY KEY ("_parent","_locale"))'
+    );
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "t1", body: "b1" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Partial translatable update for the same locale — `body` is NOT in the patch.
+    await handler.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { title: "t2" }
+    );
+
+    const rows = await versions(current, "pages");
+    const latest = rows[rows.length - 1].snapshot as {
+      title?: string;
+      body?: string;
+    };
+    expect(latest.title).toBe("t2");
+    // The untouched localized field survives into the new version.
+    expect(latest.body).toBe("b1");
+  });
+
   it("records no version when the schema does not opt in", async () => {
     current = await createTestNextly({
       collections: [

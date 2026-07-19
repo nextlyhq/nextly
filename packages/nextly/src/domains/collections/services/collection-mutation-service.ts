@@ -60,6 +60,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { populateCompanionFields } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -2372,10 +2373,46 @@ export class CollectionMutationService extends BaseService {
               // timestamp and cannot persist forged system values — `preImage`
               // keeps the real committed system columns.
               const companionStatus = localizedUpdate?.companionData?._status;
+              // A partial translatable update only carries the *changed*
+              // localized values in `localizedFieldValues`; the write locale's
+              // other companion fields (set by a prior write, untouched here)
+              // would otherwise be dropped from the snapshot, since the main
+              // `preImage` never holds translatable values. Read the full
+              // localized field set for the write locale from the companion,
+              // tx-visibly (read-your-writes, #226) so the just-upserted row is
+              // included, with no locale fallback so the snapshot records
+              // exactly this locale. The just-written values still overlay on
+              // top. Undefined companion values are skipped so an untranslated
+              // field is not written as `undefined` over the main value.
+              const priorLocalizedValues: Record<string, unknown> = {};
+              if (localizedUpdate) {
+                const companion = await this.fileManager.loadCompanionSchema(
+                  params.collectionName
+                );
+                if (companion) {
+                  const localizedRow: Record<string, unknown> = {
+                    id: params.entryId,
+                  };
+                  await populateCompanionFields({
+                    db: tx.getDrizzle<
+                      Parameters<typeof populateCompanionFields>[0]["db"]
+                    >(),
+                    companionTable: companion.table,
+                    localizedFields: companion.localizedFields,
+                    rows: [localizedRow],
+                    localeChain: [localizedUpdate.writeLocale],
+                  });
+                  for (const f of companion.localizedFields) {
+                    const v = localizedRow[f.name];
+                    if (v !== undefined) priorLocalizedValues[f.name] = v;
+                  }
+                }
+              }
               const parentRow = this.deserializeJsonFieldsForSnapshot(
                 {
                   ...preImage,
                   ...updatePayload,
+                  ...priorLocalizedValues,
                   ...(localizedUpdate?.localizedFieldValues ?? {}),
                 },
                 fields
