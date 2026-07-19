@@ -13,6 +13,7 @@
 import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
+import { VersionConflictError, isUniqueViolation } from "./version-conflict";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /** Input to capture a durable version. */
@@ -49,17 +50,31 @@ export class VersionCaptureService {
   ): Promise<CaptureResult> {
     const repo = new VersionsRepository(db);
     const versionNo = (await repo.getMaxVersionNo(input.ref)) + 1;
-    await repo.insertVersion({
-      ref: input.ref,
-      versionNo,
-      status: input.status,
-      isAutosave: false,
-      snapshot: input.snapshot,
-      label: input.label ?? null,
-      locale: input.locale ?? null,
-      sourceVersionNo: input.sourceVersionNo ?? null,
-      createdBy: input.createdBy ?? null,
-    });
+    try {
+      await repo.insertVersion({
+        ref: input.ref,
+        versionNo,
+        status: input.status,
+        isAutosave: false,
+        snapshot: input.snapshot,
+        label: input.label ?? null,
+        locale: input.locale ?? null,
+        sourceVersionNo: input.sourceVersionNo ?? null,
+        createdBy: input.createdBy ?? null,
+      });
+    } catch (err) {
+      // The only unique index on nextly_versions is the version_no sequence, so
+      // a unique violation here is a lost allocation race (concurrent capture on
+      // the same document read the same max). The tx-context insert throws the
+      // RAW driver error (not yet normalized to a DbError), so isUniqueViolation
+      // recognizes raw driver codes / the adapter DatabaseError too. Surface it
+      // as a distinct error so the write path retries the whole transaction;
+      // anything else propagates.
+      if (isUniqueViolation(err)) {
+        throw new VersionConflictError(err);
+      }
+      throw err;
+    }
     return { versionNo };
   }
 }

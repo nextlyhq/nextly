@@ -50,23 +50,39 @@ const wrapperOf = () =>
 
 describe("FieldWrapper RTL direction", () => {
   it("flips a translatable field RTL in a right-to-left language", () => {
-    renderField(textField, { locale: "ar", rtl: true, collectionLocalized: true });
+    renderField(textField, {
+      locale: "ar",
+      rtl: true,
+      collectionLocalized: true,
+    });
     expect(wrapperOf()).toHaveAttribute("dir", "rtl");
   });
 
   it("leaves dir unset for LTR locales", () => {
-    renderField(textField, { locale: "en", rtl: false, collectionLocalized: true });
+    renderField(textField, {
+      locale: "en",
+      rtl: false,
+      collectionLocalized: true,
+    });
     expect(wrapperOf()).not.toHaveAttribute("dir");
   });
 
   it("does NOT flip a shared field even in an RTL language", () => {
     // `number` is shared → language-neutral → stays LTR.
-    renderField(numberField, { locale: "ar", rtl: true, collectionLocalized: true });
+    renderField(numberField, {
+      locale: "ar",
+      rtl: true,
+      collectionLocalized: true,
+    });
     expect(wrapperOf()).not.toHaveAttribute("dir");
   });
 
   it("applies dir=rtl in horizontal layout for a translatable field", () => {
-    renderField(textField, { locale: "ar", rtl: true, collectionLocalized: true }, true);
+    renderField(
+      textField,
+      { locale: "ar", rtl: true, collectionLocalized: true },
+      true
+    );
     expect(wrapperOf()).toHaveAttribute("dir", "rtl");
   });
 

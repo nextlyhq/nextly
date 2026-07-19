@@ -57,9 +57,9 @@ async function readStatuses(
   const res = await adapter.executeQuery(
     `SELECT "_locale", "_status" FROM "dc_pages_locales" WHERE "_parent" = '${parent}'`
   );
-  const rows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows) as
-    | Array<{ _locale: string; _status: string }>
-    | undefined;
+  const rows = (
+    Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows
+  ) as Array<{ _locale: string; _status: string }> | undefined;
   const out: Record<string, string> = {};
   for (const r of rows ?? []) out[r._locale] = r._status;
   return out;

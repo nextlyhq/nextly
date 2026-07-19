@@ -151,12 +151,22 @@ describe("updateEntry — localized write routing (M5a)", () => {
 
     // Update the German heading (upsert existing row).
     await handler.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { heading: "Hallo2" }
     );
     // Update the English heading (insert a new companion row).
     await handler.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "en", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      },
       { heading: "Hi" }
     );
 

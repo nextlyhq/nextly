@@ -14,10 +14,7 @@ import { join, resolve } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  generateMigration,
-  type MinimalConfigEntity,
-} from "../generate";
+import { generateMigration, type MinimalConfigEntity } from "../generate";
 import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-07-09T12:00:00.000Z");

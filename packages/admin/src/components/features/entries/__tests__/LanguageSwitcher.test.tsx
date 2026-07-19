@@ -36,7 +36,9 @@ describe("LanguageSwitcher", () => {
       locales: {
         defaultLocale: "en",
         fallback: true,
-        locales: [{ code: "en", label: "English", rtl: false, fallbackLocale: [] }],
+        locales: [
+          { code: "en", label: "English", rtl: false, fallbackLocale: [] },
+        ],
       },
     });
     const { container } = render(

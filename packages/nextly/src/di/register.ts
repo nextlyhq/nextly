@@ -56,6 +56,7 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
+import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -1165,6 +1166,10 @@ async function syncCodeFirstCollections(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,
+      // Resolve + forward the versioning config so it persists to
+      // dynamic_collections.versions. `status: true` aliases to a versioned
+      // config, so pass both to the resolver.
+      versions: resolveVersionsConfig(collection.versions, collection.status),
       // Forward the i18n master switch (mirrors status) so the boot sync persists
       // dynamic_collections.localized — the read path keys companion resolution off it.
       localized: collection.localized === true,
@@ -1634,6 +1639,13 @@ async function syncCodeFirstSingles(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_singles.status.
       status: single.status === true,
+      // Forward the i18n flag so a code-first single with localized:true
+      // persists it to dynamic_singles.localized at boot (parity with
+      // collections; previously dropped here).
+      localized: single.localized === true,
+      // Resolve + forward the versioning config so it persists to
+      // dynamic_singles.versions (status:true aliases to a versioned config).
+      versions: resolveVersionsConfig(single.versions, single.status),
     }));
 
   try {

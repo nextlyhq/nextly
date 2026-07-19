@@ -7,6 +7,10 @@
 export const DocumentEvents = {
   Published: "document.published",
   StatusChanged: "document.statusChanged",
+  // General "the status field changed" seam: fires on every status transition
+  // (carries previousStatus/status), where Published/StatusChanged are the
+  // narrower events. Enumerated so plugins can subscribe without string casts.
+  StatusTransition: "document.statusTransition",
 } as const;
 
 export const AuthEvents = {

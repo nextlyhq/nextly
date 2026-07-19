@@ -13,9 +13,15 @@ export function safeEmit(name: string, payload: unknown): void {
   }
 }
 
-/** @experimental D69 document-level lifecycle events. */
+/**
+ * @experimental D69 document-level lifecycle events.
+ *
+ * `statusTransition` is the general "the status field changed" event (fires for
+ * every transition, carrying `previousStatus`/`status`); `published` and
+ * `statusChanged` remain the specific events existing subscribers listen on.
+ */
 export function emitDocumentEvent(
-  event: "published" | "statusChanged",
+  event: "published" | "statusChanged" | "statusTransition",
   collection: string,
   payload: Record<string, unknown>
 ): void {

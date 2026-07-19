@@ -111,14 +111,24 @@ describe("write companion _status (M6b)", () => {
 
     // Content-only update → still published.
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { heading: "H2" }
     );
     expect(await companionStatus(t, "de")).toBe("published");
 
     // Explicit status change → draft.
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { status: "draft" }
     );
     expect(await companionStatus(t, "de")).toBe("draft");

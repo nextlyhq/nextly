@@ -342,8 +342,11 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
 
     // i18n M7: the language filter is available on a localized collection when the app has
     // localization configured (more than one language).
-    const { enabled: localizationEnabled, locales, defaultLocale } =
-      useLocalization();
+    const {
+      enabled: localizationEnabled,
+      locales,
+      defaultLocale,
+    } = useLocalization();
     const hasLanguageFilter =
       localizationEnabled &&
       collection.localized === true &&

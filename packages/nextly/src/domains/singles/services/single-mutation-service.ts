@@ -29,6 +29,7 @@ import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -40,8 +41,12 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
   SingleDocument,
   SingleResult,
@@ -60,6 +65,7 @@ import {
   buildSingleErrorResult,
   normalizeUploadFields,
   serializeJsonFields,
+  shouldTreatAsJson,
 } from "./single-utils";
 
 /**
@@ -75,6 +81,12 @@ export class SingleMutationService extends BaseService {
 
   /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
   private readonly accessControlService: AccessControlService;
+
+  /**
+   * Stateless version-capture service. Records a durable version snapshot
+   * inside the update transaction when the single opts into versioning.
+   */
+  private readonly versionCapture = new VersionCaptureService();
 
   constructor(
     adapter: DrizzleAdapter,
@@ -294,11 +306,6 @@ export class SingleMutationService extends BaseService {
         string,
         unknown
       >;
-      const updatePayload = {
-        ...snakeCaseData,
-        updated_at: new Date(),
-      };
-
       // Commit the scalar update and the component subtree writes atomically so
       // a component-save failure rolls back the scalar update (no partial single
       // state). The scalar row and comp_ tables both write on the same tx. The
@@ -306,35 +313,155 @@ export class SingleMutationService extends BaseService {
       // so the value read below is only ever the committed result.
       let updatedRows: SingleDocument[];
       try {
-        updatedRows = await this.adapter.transaction(async tx => {
-          const rows = await tx.update<SingleDocument>(
-            singleMeta.tableName,
-            updatePayload,
-            this.whereEq("id", existingDoc.id),
-            { returning: "*" }
-          );
+        // Retry the whole update+capture transaction on a version_no allocation
+        // race; the re-run re-reads the max. The single UPDATE is deterministic.
+        updatedRows = await withVersionConflictRetry(() =>
+          this.adapter.transaction(async tx => {
+            // Build the payload inside the closure so a retried attempt after a
+            // concurrent winner stamps a FRESH `updated_at`, rather than reusing
+            // a timestamp created before the first attempt (which could commit an
+            // older time than the winning write and reverse row/snapshot order).
+            const updatePayload = {
+              ...snakeCaseData,
+              updated_at: new Date(),
+            };
+            const rows = await tx.update<SingleDocument>(
+              singleMeta.tableName,
+              updatePayload,
+              this.whereEq("id", existingDoc.id),
+              { returning: "*" }
+            );
 
-          // Nothing updated: return the empty result; the 500 is surfaced after
-          // the (empty) transaction, and the component write is skipped.
-          if (rows.length === 0) {
+            // Nothing updated: return the empty result; the 500 is surfaced after
+            // the (empty) transaction, and the component write is skipped.
+            if (rows.length === 0) {
+              return rows;
+            }
+
+            // Clone per attempt: saveComponentDataInTransaction mutates the data
+            // in place (hashing passwords, assigning ids), so a conflict retry
+            // must start from the user's original values, and the snapshot below
+            // uses this post-save copy (ids populated) rather than the raw input.
+            const attemptComponentData = structuredClone(componentFieldData);
+
+            // 9.5. Save component field data to separate comp_{slug} tables
+            if (
+              this.componentDataService &&
+              Object.keys(attemptComponentData).length > 0
+            ) {
+              await this.componentDataService.saveComponentDataInTransaction(
+                tx,
+                {
+                  parentId: existingDoc.id,
+                  parentTable: singleMeta.tableName,
+                  fields: fieldConfigs,
+                  data: attemptComponentData,
+                }
+              );
+            }
+
+            // Capture a version snapshot atomically with the write when the single
+            // opts into versioning. Singles have no many-to-many fields; the
+            // updated parent row (top-level keys camelCased to the read shape) plus
+            // component subtrees form the snapshot.
+            const versionsConfig = singleMeta.versions;
+            if (versionsConfig?.enabled) {
+              // Match the read shape: keep user field keys (field.name, which
+              // may contain underscores like `site_title`) exactly, converting
+              // only the timestamp columns — camel-casing every key would rewrite
+              // those fields and diverge from a normal read.
+              const parentRow = convertTimestampsToCamelCase({
+                ...(rows[0] as Record<string, unknown>),
+              });
+              // Never let password hashes into durable version history: the row
+              // carries bcrypt hashes (hashPasswordFieldValues ran before the
+              // write), and a later password change would otherwise leave the
+              // superseded hash permanently recoverable via the snapshot. The
+              // response is redacted separately (stripPasswordFieldValues at the
+              // return), which does not cover this snapshot.
+              stripPasswordFieldValues(parentRow, fieldConfigs);
+              // Strip the system owner column (created_by) too, matching the
+              // read/response redaction, so history does not retain a stable
+              // owner id or let a restore overwrite ownership.
+              stripSystemOwnerField(parentRow);
+              // Parse JSON-backed fields (richtext, group, json, ...) to the read
+              // shape: on SQLite the returned row holds them as strings, so an
+              // unparsed snapshot would not match a normal read on restore.
+              for (const field of fieldConfigs) {
+                if (!("name" in field) || !field.name) continue;
+                const value = parentRow[field.name];
+                if (shouldTreatAsJson(field) && typeof value === "string") {
+                  try {
+                    parentRow[field.name] = JSON.parse(value);
+                  } catch {
+                    // Not valid JSON — keep the raw string.
+                  }
+                }
+              }
+              // Complete the component subtrees: a partial update only carries
+              // changed components, so read current state for omitted component
+              // fields and overlay the written ones, so a scalar-only edit does
+              // not drop existing components from the snapshot.
+              const components: Record<string, unknown> = {};
+              if (this.componentDataService) {
+                const componentFields = fieldConfigs.filter(
+                  (f): f is typeof f & { name: string } =>
+                    isComponentField(f) && !!f.name
+                );
+                const hasOmitted = componentFields.some(
+                  f => attemptComponentData[f.name] === undefined
+                );
+                if (hasOmitted) {
+                  try {
+                    const populated =
+                      await this.componentDataService.populateComponentData({
+                        entry: { id: existingDoc.id },
+                        parentTable: singleMeta.tableName,
+                        fields: fieldConfigs,
+                      });
+                    for (const f of componentFields) {
+                      if (populated[f.name] !== undefined) {
+                        components[f.name] = populated[f.name];
+                      }
+                    }
+                  } catch (err) {
+                    // Fail the capture rather than persist a knowingly-incomplete
+                    // snapshot: silently dropping omitted components would
+                    // reintroduce the partial-update data loss this read prevents,
+                    // and the whole tx rolls back so the write is retriable.
+                    this.logger.error(
+                      "Version snapshot: failed to read existing single components; failing the write instead of capturing an incomplete snapshot",
+                      {
+                        slug,
+                        error: err instanceof Error ? err.message : String(err),
+                      }
+                    );
+                    throw NextlyError.internal({
+                      cause: err instanceof Error ? err : undefined,
+                      logContext: {
+                        reason: "version-snapshot-single-component-read",
+                        slug,
+                      },
+                    });
+                  }
+                }
+              }
+              Object.assign(components, attemptComponentData);
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                contentStatus: (parentRow as { status?: unknown }).status,
+                parts: { parentRow, components },
+                createdBy: options.user?.id ?? null,
+              });
+            }
+
             return rows;
-          }
-
-          // 9.5. Save component field data to separate comp_{slug} tables
-          if (
-            this.componentDataService &&
-            Object.keys(componentFieldData).length > 0
-          ) {
-            await this.componentDataService.saveComponentDataInTransaction(tx, {
-              parentId: existingDoc.id,
-              parentTable: singleMeta.tableName,
-              fields: fieldConfigs,
-              data: componentFieldData,
-            });
-          }
-
-          return rows;
-        });
+          })
+        );
       } catch (error) {
         // A component validation failure (NextlyError) thrown inside the
         // transaction callback is re-wrapped as a database error by the adapter;

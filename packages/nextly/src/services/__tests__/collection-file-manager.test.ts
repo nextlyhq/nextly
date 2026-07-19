@@ -38,7 +38,9 @@ describe("CollectionFileManager.loadCompanionSchema (i18n M4)", () => {
     const companion = await localizedFm().loadCompanionSchema("pages");
     expect(companion).not.toBeNull();
     expect(companion!.companionTableName).toBe("dc_pages_locales");
-    expect(companion!.localizedFields).toEqual([{ name: "body", column: "body" }]);
+    expect(companion!.localizedFields).toEqual([
+      { name: "body", column: "body" },
+    ]);
     expect(companion!.table).toBeDefined();
   });
 

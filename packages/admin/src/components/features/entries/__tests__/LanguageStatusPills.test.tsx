@@ -45,7 +45,9 @@ describe("LanguageStatusPills", () => {
 
   it("renders one pill per configured language", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguageStatusPills translations={TRANSLATIONS} activeLocale="en" />);
+    render(
+      <LanguageStatusPills translations={TRANSLATIONS} activeLocale="en" />
+    );
     expect(screen.getByRole("button", { name: /English/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /German/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Arabic/ })).toBeInTheDocument();
@@ -53,15 +55,25 @@ describe("LanguageStatusPills", () => {
 
   it("labels each pill with its translation state", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguageStatusPills translations={TRANSLATIONS} activeLocale="en" />);
-    expect(screen.getByRole("button", { name: /English — published/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /German — draft/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Arabic — not translated/ })).toBeInTheDocument();
+    render(
+      <LanguageStatusPills translations={TRANSLATIONS} activeLocale="en" />
+    );
+    expect(
+      screen.getByRole("button", { name: /English — published/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /German — draft/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Arabic — not translated/ })
+    ).toBeInTheDocument();
   });
 
   it("marks the active locale as pressed", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguageStatusPills translations={TRANSLATIONS} activeLocale="de" />);
+    render(
+      <LanguageStatusPills translations={TRANSLATIONS} activeLocale="de" />
+    );
     expect(screen.getByRole("button", { name: /German/ })).toHaveAttribute(
       "aria-pressed",
       "true"

@@ -111,7 +111,9 @@ describe("CopyFromLanguageMenu", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     render(<Harness />);
     await userEvent.click(
-      screen.getByRole("button", { name: /copy content from another language/i })
+      screen.getByRole("button", {
+        name: /copy content from another language/i,
+      })
     );
     // Active locale (de) excluded; English offered.
     expect(
@@ -126,9 +128,13 @@ describe("CopyFromLanguageMenu", () => {
     render(<Harness defaults={{ title: "", body: "" }} />);
 
     await userEvent.click(
-      screen.getByRole("button", { name: /copy content from another language/i })
+      screen.getByRole("button", {
+        name: /copy content from another language/i,
+      })
     );
-    await userEvent.click(await screen.findByRole("menuitem", { name: "English" }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "English" })
+    );
     // Confirm dialog
     await userEvent.click(
       await screen.findByRole("button", { name: /^Copy from English$/ })

@@ -4,9 +4,9 @@ import { resolveLocalizedValue } from "./companion-join";
 
 describe("resolveLocalizedValue (fallback chain, blank = untranslated)", () => {
   it("returns the requested locale's value when present", () => {
-    expect(resolveLocalizedValue({ de: "Hallo", en: "Hello" }, ["de", "en"])).toBe(
-      "Hallo"
-    );
+    expect(
+      resolveLocalizedValue({ de: "Hallo", en: "Hello" }, ["de", "en"])
+    ).toBe("Hallo");
   });
 
   it("falls back to the next chain locale when the requested value is blank (empty string)", () => {
@@ -24,7 +24,11 @@ describe("resolveLocalizedValue (fallback chain, blank = untranslated)", () => {
 
   it("walks a multi-locale chain to the first non-blank value", () => {
     expect(
-      resolveLocalizedValue({ "de-CH": "", de: "", en: "Hi" }, ["de-CH", "de", "en"])
+      resolveLocalizedValue({ "de-CH": "", de: "", en: "Hi" }, [
+        "de-CH",
+        "de",
+        "en",
+      ])
     ).toBe("Hi");
     expect(
       resolveLocalizedValue({ "de-CH": "", de: "Hallo", en: "Hi" }, [

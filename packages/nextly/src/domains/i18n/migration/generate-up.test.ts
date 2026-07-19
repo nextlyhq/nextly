@@ -73,10 +73,11 @@ describe("per-locale _status column (i18n M6)", () => {
   });
 
   it("emits a per-locale _status column when status is enabled", () => {
-    const sql = buildCompanionCreateOnlySql({ ...spec("sqlite"), status: true });
-    expect(sql).toContain(
-      `"_status" VARCHAR(20) NOT NULL DEFAULT 'draft'`
-    );
+    const sql = buildCompanionCreateOnlySql({
+      ...spec("sqlite"),
+      status: true,
+    });
+    expect(sql).toContain(`"_status" VARCHAR(20) NOT NULL DEFAULT 'draft'`);
   });
 
   it("carries the main row's status into the seed on an enable transition", () => {

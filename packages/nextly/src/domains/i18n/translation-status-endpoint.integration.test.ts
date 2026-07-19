@@ -146,7 +146,9 @@ describe("translation-status overview endpoint (M7)", () => {
 
     expect(res.success).toBe(true);
     const docs = res.data?.docs ?? [];
-    const byId = new Map(docs.map(d => [d.id, d._translations as TranslationsMap]));
+    const byId = new Map(
+      docs.map(d => [d.id, d._translations as TranslationsMap])
+    );
     expect(byId.get(a)?.de.translated).toBe(true);
     expect(byId.get(b)?.de.translated).toBe(false);
     // fr never seeded → untranslated for both
