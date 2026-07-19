@@ -58,6 +58,7 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
+  isValidLocale,
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -411,6 +412,20 @@ export class SingleQueryService extends BaseService {
         };
       }
 
+      // 6.9. i18n: resolve translatable fields from the companion `_locales` table for the
+      // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
+      // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
+      // so the overlay must land before those transforms run (matching the collection read path).
+      // No-op when localization is off or the single isn't localized.
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        options.fallbackLocale,
+        statusFilter ? statusFilter.value : undefined
+      );
+
       // 7. Deserialize JSON fields
       doc = this.deserializeJsonFields(doc, singleMeta.fields);
 
@@ -436,18 +451,6 @@ export class SingleQueryService extends BaseService {
           locale: options.locale,
         })) as SingleDocument;
       }
-
-      // 7.8. i18n: resolve translatable fields from the companion `_locales` table
-      // for the requested locale (with fallback). No-op when localization is off or
-      // the single isn't localized. Mirrors the collection read path.
-      await this.populateLocalized(
-        slug,
-        singleMeta,
-        doc,
-        options.locale,
-        options.fallbackLocale,
-        statusFilter ? statusFilter.value : undefined
-      );
 
       // i18n M7: attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
@@ -556,7 +559,9 @@ export class SingleQueryService extends BaseService {
       // admin/status=all passes undefined (no filter). Only meaningful when the
       // companion carries a per-locale `_status`.
       statusValue:
-        companion.hasStatus && statusFilterValue ? statusFilterValue : undefined,
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
     });
   }
 
@@ -611,9 +616,18 @@ export class SingleQueryService extends BaseService {
     if (fallbackLocale === false || fallbackLocale === "none") {
       return [requested];
     }
-    // A per-request fallbackLocale string opts fallback back on even when it's globally off.
-    if (typeof fallbackLocale === "string") {
-      return resolveFallbackChain(this.localization, requested);
+    // A concrete per-request fallback locale overrides the configured chain: the requested
+    // locale first, then the NAMED fallback's own chain (deduped) — not the requested locale's
+    // chain. Mirrors the collection read path so `?locale=de&fallback-locale=en` falls back to en.
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
     }
     if (this.localization.fallback === false) return [requested];
     return resolveFallbackChain(this.localization, requested);

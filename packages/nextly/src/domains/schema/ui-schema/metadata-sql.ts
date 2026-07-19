@@ -235,6 +235,14 @@ export function buildComponentMetadataUpsert(
       update: true,
     },
     { name: "source", value: sqlStr("ui") },
+    {
+      // Persist the Builder localized flag so boot reads the component as localized and
+      // resolves/writes its companion `comp_<slug>_locales` fields; without it the registry
+      // row stays localized=false and embedded reads/writes target the omitted main columns.
+      name: "localized",
+      value: boolLiteral(entity.localized === true, dialect),
+      update: true,
+    },
     { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
     { name: "migration_status", value: sqlStr("applied") },
   ];

@@ -69,9 +69,17 @@ export async function loadDynamicTables(
       return await adapter.executeQuery<DynamicTableRow>(
         `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`
       );
-    } catch {
-      // `localized` column not present yet — retry without it. A genuinely
-      // missing table re-throws here and is handled by the outer catch.
+    } catch (err) {
+      // Only a MISSING `localized` column should trigger the fallback select. A transient,
+      // permission, or genuinely-missing-table error must propagate (to the outer catch)
+      // instead of being converted into a non-localized registration with the wrong runtime
+      // schema for a localized table.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        !/localized|no such column|does not exist|unknown column/i.test(msg)
+      ) {
+        throw err;
+      }
       return adapter.executeQuery<DynamicTableRow>(
         `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`
       );

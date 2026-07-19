@@ -59,7 +59,10 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { isValidLocale, resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  isValidLocale,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -1426,13 +1429,17 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
+      // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
+      // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
+      // as an integer Unix-seconds column (Drizzle `integer` timestamp mode), so `unixepoch()`
+      // keeps the value numeric; `CURRENT_TIMESTAMP` would write a text string and corrupt
+      // decoding/ordering. Postgres/MySQL use the native timestamp default.
+      const nowExpr =
+        this.dialect === "sqlite" ? "unixepoch()" : "CURRENT_TIMESTAMP";
       await this.adapter.transaction(async tx => {
         if (hasMainStatus) {
-          // i18n M7: bump `updated_at` alongside status so caches / revalidation see the
-          // change (a bare status flip left the timestamp stale). CURRENT_TIMESTAMP avoids
-          // dialect-specific Date binding in raw SQL.
           await tx.execute(
-            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = CURRENT_TIMESTAMP WHERE ${q("id")} = ${ph(2)}`,
+            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
             ["published", params.entryId]
           );
         }
