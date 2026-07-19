@@ -2072,12 +2072,30 @@ export class CollectionMutationService extends BaseService {
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
       // The content UPDATE is a deterministic SET, so re-applying it is safe.
+      // Committed pre-update status, refreshed each attempt: under a retry a
+      // concurrent winner may have changed the status, so the D69 status event
+      // below must report that as `previousStatus`, not the stale pre-tx value.
+      let committedPreviousStatus: string | null | undefined;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           const updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
           };
+
+          // Read the committed status before this attempt's UPDATE so the status
+          // event uses the true prior value even after a conflict retry. Only
+          // needed for versioned collections (the only ones that can retry).
+          if (versionsConfig?.enabled) {
+            const [preStatusRow] = await this.db
+              .select()
+              .from(schema)
+              .where(eq(schema.id, params.entryId))
+              .limit(1);
+            committedPreviousStatus = (
+              preStatusRow as { status?: unknown } | undefined
+            )?.status as string | null | undefined;
+          }
 
           // Dialect-aware identifier quoting and placeholder syntax.
           // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
@@ -2116,16 +2134,23 @@ export class CollectionMutationService extends BaseService {
             );
           }
 
+          // Clone per attempt: saveComponentDataInTransaction mutates the
+          // component data in place (hashing password fields, assigning row
+          // ids), so a conflict retry must start from the user's original
+          // values — not a previously-hashed copy — and the snapshot below uses
+          // this same post-save copy (ids populated) rather than the raw input.
+          const attemptComponentData = structuredClone(componentFieldData);
+
           // Save component field data to separate comp_{slug} tables
           if (
             this.componentDataService &&
-            Object.keys(componentFieldData).length > 0
+            Object.keys(attemptComponentData).length > 0
           ) {
             await this.componentDataService.saveComponentDataInTransaction(tx, {
               parentId: params.entryId,
               parentTable: tableName,
               fields: fields as unknown as FieldConfig[],
-              data: componentFieldData,
+              data: attemptComponentData,
             });
           }
 
@@ -2179,10 +2204,16 @@ export class CollectionMutationService extends BaseService {
             for (const [key, value] of Object.entries(currentRow)) {
               preImage[toCamelCase(key)] = value;
             }
+            // Overlay `updatePayload` (not raw `finalData`): it carries the
+            // `updatedAt` the write commits and has immutable system keys
+            // (id/createdAt/createdBy) stripped, so the snapshot records the new
+            // timestamp and cannot persist forged system values — `preImage`
+            // keeps the real committed system columns.
+            const companionStatus = localizedUpdate?.companionData?._status;
             const parentRow = this.deserializeJsonFieldsForSnapshot(
               {
                 ...preImage,
-                ...finalData,
+                ...updatePayload,
                 ...(localizedUpdate?.localizedFieldValues ?? {}),
               },
               fields
@@ -2194,7 +2225,7 @@ export class CollectionMutationService extends BaseService {
                 params.collectionName,
                 fields,
                 manyToManyFields,
-                componentFieldData,
+                attemptComponentData,
                 manyToManyData
               );
             await captureInTx(tx, this.versionCapture, {
@@ -2203,8 +2234,12 @@ export class CollectionMutationService extends BaseService {
                 scopeSlug: params.collectionName,
                 entryId: params.entryId,
               },
+              // Prefer the written status; for a localized status change it is
+              // moved to the companion `_status`, so fall back to that before the
+              // prior main-row status.
               contentStatus:
-                (finalData as { status?: unknown }).status ??
+                (updatePayload as { status?: unknown }).status ??
+                companionStatus ??
                 (preImage as { status?: unknown }).status,
               parts: {
                 parentRow,
@@ -2286,10 +2321,15 @@ export class CollectionMutationService extends BaseService {
       // emit only when a `status` field value actually changed on update.
       // `data` is shallow-snapshotted so async subscribers aren't exposed to the
       // in-place JSON-field deserialization that happens below for the response.
+      // Prefer the status re-read inside the transaction (fresh across retries)
+      // over the pre-transaction `existingEntry`, which a concurrent winner may
+      // have superseded.
       const previousStatus =
+        committedPreviousStatus ??
         ((existingEntry as Record<string, unknown>).status as
           | string
-          | undefined) ?? null;
+          | undefined) ??
+        null;
       const nextStatus = (updated as { status?: unknown }).status;
       if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
         this.transitionStatus({
