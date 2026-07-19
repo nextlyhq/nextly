@@ -31,7 +31,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionReconcileSql } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionReconcileStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -215,9 +215,13 @@ async function reconcileSingleCompanion(args: {
   if (!localized) return;
   const dialect = adapter.dialect;
 
-  const oldLocalizedNames = new Set(resolveLocalizedFieldNames(oldFields, true));
-  const newLocalizedNames = new Set(resolveLocalizedFieldNames(newFields, true));
-  const companionSQL = buildCompanionReconcileSql({
+  const oldLocalizedNames = new Set(
+    resolveLocalizedFieldNames(oldFields, true)
+  );
+  const newLocalizedNames = new Set(
+    resolveLocalizedFieldNames(newFields, true)
+  );
+  const companionStatements = buildCompanionReconcileStatements({
     slug,
     tableName,
     oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
@@ -226,9 +230,8 @@ async function reconcileSingleCompanion(args: {
     status,
     companionExists: await adapter.tableExists(`${tableName}_locales`),
   });
-  for (const stmt of companionSQL.split(";")) {
-    const s = stmt.trim();
-    if (s) await adapter.executeQuery(s);
+  for (const stmt of companionStatements) {
+    await adapter.executeQuery(stmt);
   }
 
   // Register the companion runtime table (best-effort — next boot re-registers it).
@@ -766,7 +769,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
       const wasLocalized = existing.localized === true;
-      const isLocalized = b.localized !== undefined ? b.localized === true : wasLocalized;
+      const isLocalized =
+        b.localized !== undefined ? b.localized === true : wasLocalized;
       const alterOmitLocalized = isLocalized || wasLocalized;
 
       let migrationStatus = existing.migrationStatus;
@@ -797,9 +801,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n: when the single is localized (in either state), translatable columns live on the
         // companion, never the main table — drop them from the ALTER input so the main-table diff
         // never tries to ADD/DROP them. `reconcileSingleCompanion` owns the companion side.
-        const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
+        const omitLocalized = (
+          fields: FieldDefinition[]
+        ): FieldDefinition[] => {
           if (!alterOmitLocalized) return fields;
-          const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
+          const localizedNames = new Set(
+            resolveLocalizedFieldNames(fields, true)
+          );
           return fields.filter(f => !localizedNames.has(f.name));
         };
         const existingFieldsForAlter = omitLocalized(existingFields);

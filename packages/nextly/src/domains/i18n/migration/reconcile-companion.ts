@@ -45,7 +45,23 @@ export interface ReconcileCompanionArgs {
  *
  * Returns "" when there is nothing to do, so callers can guard with `if (sql)`.
  */
-export function buildCompanionReconcileSql(args: ReconcileCompanionArgs): string {
+export function buildCompanionReconcileSql(
+  args: ReconcileCompanionArgs
+): string {
+  return buildCompanionReconcileStatements(args)
+    .map(stmt => `${stmt};`)
+    .join("\n");
+}
+
+/**
+ * Statement-array form of {@link buildCompanionReconcileSql}: each element is one complete DDL
+ * statement WITHOUT a trailing `;`. Runtime executors iterate these and run them individually,
+ * which is more robust than splitting the joined string on `;` (a semicolon inside a future
+ * column default or comment would otherwise fragment a statement). Empty when nothing to do.
+ */
+export function buildCompanionReconcileStatements(
+  args: ReconcileCompanionArgs
+): string[] {
   const { slug, tableName, oldLocalized, newLocalized, dialect, status } = args;
   const companionTable = `${tableName}_locales`;
 
@@ -62,7 +78,8 @@ export function buildCompanionReconcileSql(args: ReconcileCompanionArgs): string
       collectionLocalized: true,
       status,
     });
-    return spec ? buildCompanionCreateOnlySql(spec) : "";
+    // The create-only helper terminates with `;`; strip it so this stays a bare statement.
+    return spec ? [buildCompanionCreateOnlySql(spec).replace(/;\s*$/, "")] : [];
   }
 
   // Companion already exists — diff the localized columns and ADD/DROP the delta.
@@ -75,7 +92,7 @@ export function buildCompanionReconcileSql(args: ReconcileCompanionArgs): string
     const col = fieldToLocalizedColumnSpec(f, dialect);
     if (col) {
       stmts.push(
-        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)};`
+        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
       );
     }
   }
@@ -84,9 +101,9 @@ export function buildCompanionReconcileSql(args: ReconcileCompanionArgs): string
     const col = fieldToLocalizedColumnSpec(f, dialect);
     if (col) {
       stmts.push(
-        `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)};`
+        `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
       );
     }
   }
-  return stmts.join("\n");
+  return stmts;
 }

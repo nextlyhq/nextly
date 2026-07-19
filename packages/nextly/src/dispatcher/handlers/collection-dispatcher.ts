@@ -29,7 +29,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionReconcileSql } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionReconcileStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -639,7 +639,7 @@ const COLLECTIONS_METHODS: Record<
           const newLocalizedNames = new Set(
             resolveLocalizedFieldNames(newFields, true)
           );
-          const companionSQL = buildCompanionReconcileSql({
+          const companionStatements = buildCompanionReconcileStatements({
             slug: p.collectionName,
             tableName,
             oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
@@ -648,12 +648,10 @@ const COLLECTIONS_METHODS: Record<
             status: collection.status === true,
             companionExists: await adapter.tableExists(`${tableName}_locales`),
           });
-          // The reconciler emits self-generated, `;`-terminated statements with
-          // no string literals — safe to split on `;` and run one at a time
-          // (executeQuery is single-statement on some drivers, e.g. sqlite).
-          for (const stmt of companionSQL.split(";")) {
-            const s = stmt.trim();
-            if (s) await adapter.executeQuery(s);
+          // Run each statement individually (executeQuery is single-statement on
+          // some drivers, e.g. sqlite).
+          for (const stmt of companionStatements) {
+            await adapter.executeQuery(stmt);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

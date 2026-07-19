@@ -135,7 +135,8 @@ export async function upsertCompanionRow(
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
   const params: unknown[] = [];
-  const ph = () => (adapter.dialect === "postgresql" ? `$${params.length}` : "?");
+  const ph = () =>
+    adapter.dialect === "postgresql" ? `$${params.length}` : "?";
 
   const allCols = ["_parent", "_locale", ...cols];
   const valuePlaceholders = allCols
@@ -199,11 +200,13 @@ export async function ensureCompanionTable(
   try {
     if (await companionTableExists(adapter, companionTableName)) return;
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
-    const { buildCompanionReconcileSql } = await import(
+    const { buildCompanionReconcileStatements } = await import(
       "../migration/reconcile-companion"
     );
-    const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
-    const sql = buildCompanionReconcileSql({
+    const localizedNames = new Set(
+      resolveLocalizedFieldNames(args.fields, true)
+    );
+    const statements = buildCompanionReconcileStatements({
       slug: args.slug,
       tableName: args.tableName,
       oldLocalized: [],
@@ -212,9 +215,8 @@ export async function ensureCompanionTable(
       status: args.status === true,
       companionExists: false,
     });
-    for (const stmt of sql.split(";")) {
-      const s = stmt.trim();
-      if (s) await adapter.executeQuery(s);
+    for (const stmt of statements) {
+      await adapter.executeQuery(stmt);
     }
   } catch {
     // Best-effort: main table may not exist yet on a very first boot — the companion

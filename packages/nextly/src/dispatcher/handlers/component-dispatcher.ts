@@ -24,7 +24,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionReconcileSql } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionReconcileStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -147,7 +147,9 @@ function registerComponentRuntimeSchema(
           slug: tableName,
           tableName,
           fields: fields as { name: string; type: string }[],
-          dialect: dialect as Parameters<typeof buildCompanionRuntimeTable>[0]["dialect"],
+          dialect: dialect as Parameters<
+            typeof buildCompanionRuntimeTable
+          >[0]["dialect"],
           localized: true,
           status: false,
         })
@@ -212,9 +214,13 @@ async function reconcileComponentCompanion(args: {
   const { slug, tableName, oldFields, newFields, localized, adapter } = args;
   if (!localized) return;
   const dialect = adapter.dialect;
-  const oldLocalizedNames = new Set(resolveLocalizedFieldNames(oldFields, true));
-  const newLocalizedNames = new Set(resolveLocalizedFieldNames(newFields, true));
-  const companionSQL = buildCompanionReconcileSql({
+  const oldLocalizedNames = new Set(
+    resolveLocalizedFieldNames(oldFields, true)
+  );
+  const newLocalizedNames = new Set(
+    resolveLocalizedFieldNames(newFields, true)
+  );
+  const companionStatements = buildCompanionReconcileStatements({
     slug,
     tableName,
     oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
@@ -224,9 +230,8 @@ async function reconcileComponentCompanion(args: {
     status: false,
     companionExists: await adapter.tableExists(`${tableName}_locales`),
   });
-  for (const stmt of companionSQL.split(";")) {
-    const s = stmt.trim();
-    if (s) await adapter.executeQuery(s);
+  for (const stmt of companionStatements) {
+    await adapter.executeQuery(stmt);
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.
@@ -427,7 +432,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // i18n: persist the Internationalization toggle. `isLocalized` drives the companion
       // provisioning below (create when newly localized, ADD/DROP as translatable fields change).
       if (b?.localized !== undefined) updateData.localized = b.localized;
-      const wasLocalized = (existing as { localized?: boolean }).localized === true;
+      const wasLocalized =
+        (existing as { localized?: boolean }).localized === true;
       const isLocalized =
         b?.localized !== undefined ? b.localized === true : wasLocalized;
 

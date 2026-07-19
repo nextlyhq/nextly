@@ -20,8 +20,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray } from "drizzle-orm";
-
+import { and, eq } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { upsertCompanionRow } from "../runtime/companion-io";
@@ -108,7 +107,10 @@ export async function restoreI18nArchive(
 
   // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
   // language is written in a single upsert rather than once per field.
-  const grouped = new Map<string, { entryId: string; locale: string; data: Record<string, unknown> }>();
+  const grouped = new Map<
+    string,
+    { entryId: string; locale: string; data: Record<string, unknown> }
+  >();
   for (const r of rows) {
     const key = `${r.entryId}::${r.locale}`;
     let g = grouped.get(key);
@@ -130,21 +132,11 @@ export async function restoreI18nArchive(
   }
 
   if (args.purge) {
-    const ids = [...new Set(rows.map(r => r.entryId))];
-    await db
-      .delete(nextlyI18nArchive)
-      .where(
-        locale
-          ? and(
-              eq(nextlyI18nArchive.collection, collection),
-              eq(nextlyI18nArchive.locale, locale),
-              inArray(nextlyI18nArchive.entryId, ids)
-            )
-          : and(
-              eq(nextlyI18nArchive.collection, collection),
-              inArray(nextlyI18nArchive.entryId, ids)
-            )
-      );
+    // Purge exactly the rows that were just read and restored. `where` already scopes to
+    // this collection (and locale when given), so every archived row it matched has been
+    // replayed — reuse it directly. An `inArray` over every entry id would instead risk the
+    // SQL bind-parameter cap (SQLite defaults to 999) on a large collection.
+    await db.delete(nextlyI18nArchive).where(where);
   }
 
   return {
