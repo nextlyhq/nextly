@@ -187,6 +187,28 @@ export async function companionTableExists(
 }
 
 /**
+ * Whether an EXISTING companion physically has the per-locale `_status` column. Used by the
+ * runtime reconcile to decide whether a later Draft/Published toggle must ADD/DROP `_status`
+ * on an already-provisioned companion. A missing column throws on the probe select → false.
+ */
+export async function companionHasStatusColumn(
+  adapter: CompanionWriteAdapter,
+  companionTableName: string
+): Promise<boolean> {
+  const isMysql = adapter.dialect === "mysql";
+  const table = isMysql
+    ? `\`${companionTableName}\``
+    : `"${companionTableName}"`;
+  const col = isMysql ? "`_status`" : `"_status"`;
+  try {
+    await adapter.executeQuery(`SELECT ${col} FROM ${table} LIMIT 0`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Boot/db:sync helper: physically create the companion `<tableName>_locales` table if it does
  * not already exist. Idempotent and safe to run on every boot — a no-op once the table exists (or
  * when the entity has no translatable fields). This is the db:sync/dev-boot counterpart to the

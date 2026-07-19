@@ -1,9 +1,15 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isFieldLocalized } from "../classify-fields";
+
 import { ddlType, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
-import { buildCompanionCreateOnlySql } from "./generate-up";
+import { buildLocalizationDownStatements } from "./generate-down";
+import {
+  buildCompanionCreateOnlySql,
+  buildLocalizationUpStatements,
+} from "./generate-up";
 
 /** Minimal field shape the companion reconciler needs. Structurally compatible with FieldDefinition. */
 export interface CompanionFieldLike {
@@ -30,6 +36,14 @@ export interface ReconcileCompanionArgs {
    * stays pure and unit-testable.
    */
   companionExists: boolean;
+  /**
+   * Whether the EXISTING companion physically has the `_status` column. Only meaningful when
+   * `companionExists`. When provided and it disagrees with `status`, the reconcile ADDs `_status`
+   * (Draft/Published toggled on after the companion was created) or DROPs it (toggled off), so a
+   * later status change on an already-localized entity keeps the companion in step. The caller
+   * introspects it; omit it to leave `_status` untouched (backwards-compatible default).
+   */
+  companionHasStatus?: boolean;
 }
 
 /**
@@ -105,5 +119,171 @@ export function buildCompanionReconcileStatements(
       );
     }
   }
+
+  // Reconcile the per-locale `_status` column when Draft/Published was toggled AFTER the
+  // companion already existed (the create branch above already bakes it in per `status`). Only
+  // acts when the caller supplied the companion's current status-column state.
+  if (args.companionHasStatus !== undefined) {
+    if (status && !args.companionHasStatus) {
+      stmts.push(
+        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT 'draft'`
+      );
+    } else if (!status && args.companionHasStatus) {
+      stmts.push(
+        `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q("_status", dialect)}`
+      );
+    }
+  }
   return stmts;
+}
+
+/** Which localization transition a reconcile is performing. */
+export interface CompanionTransitionArgs {
+  slug: string;
+  tableName: string;
+  dialect: SupportedDialect;
+  /** Default locale — the language seeded onto/restored from the companion. */
+  defaultLocale: string;
+  /** Desired Draft/Published state (companion `_status`). */
+  status: boolean;
+  /** Localization state BEFORE this save (persisted). */
+  wasLocalized: boolean;
+  /** Localization state AFTER this save (requested). */
+  isLocalized: boolean;
+  /** All user fields BEFORE this save (used to pick the localized set for a disable). */
+  oldFields: CompanionFieldLike[];
+  /** All user fields AFTER this save (used to pick the localized set for enable/field-change). */
+  newFields: CompanionFieldLike[];
+  /** Whether the companion `<tableName>_locales` table currently exists. */
+  companionExists: boolean;
+  /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
+  companionHasStatus?: boolean;
+}
+
+/** The plan produced by {@link buildCompanionTransitionStatements}. */
+export interface CompanionTransitionPlan {
+  /** DDL/DML statements to run in order (no trailing `;`). */
+  statements: string[];
+  /** true when the plan writes to `nextly_i18n_archive` → the caller must ensure it exists first. */
+  needsArchive: boolean;
+  /** true when the companion table no longer exists afterwards (disable) → skip re-registration. */
+  companionDropped: boolean;
+}
+
+/**
+ * i18n: decide the runtime companion statements for ANY localization change on an EXISTING
+ * entity — the data-preserving counterpart of {@link buildCompanionReconcileStatements}, shared
+ * by the collection/single/component Schema-Builder toggle paths (which have no `nextly migrate`
+ * step, so the data move must run live).
+ *
+ *  - ENABLE (was off → on): seed the companion's default-locale rows from the existing main
+ *    columns, then drop those columns from main (no data loss). A fresh localized entity whose
+ *    main table never held the columns just CREATEs the companion.
+ *  - DISABLE (was on → off): restore the default locale onto main, archive the other languages
+ *    into `nextly_i18n_archive`, then drop the companion (recoverable via `nextly i18n:restore`).
+ *  - FIELD CHANGE (stayed localized): ADD/DROP the changed localized columns and reconcile
+ *    `_status`.
+ *  - No transition (stayed non-localized): nothing.
+ */
+export function buildCompanionTransitionStatements(
+  args: CompanionTransitionArgs
+): CompanionTransitionPlan {
+  const {
+    slug,
+    tableName,
+    dialect,
+    defaultLocale,
+    status,
+    wasLocalized,
+    isLocalized,
+    oldFields,
+    newFields,
+    companionExists,
+  } = args;
+
+  const none: CompanionTransitionPlan = {
+    statements: [],
+    needsArchive: false,
+    companionDropped: false,
+  };
+
+  // ENABLE — relocate the existing main columns into a seeded companion.
+  if (!wasLocalized && isLocalized) {
+    const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
+    const spec = deriveCompanionSpec({
+      slug,
+      dbName: tableName,
+      fields: localizedNew,
+      dialect,
+      defaultLocale,
+      collectionLocalized: true,
+      status,
+    });
+    // No translatable columns yet (or an already-present companion from a partial apply): fall
+    // back to the plain reconcile, which CREATEs an empty companion or no-ops.
+    if (!spec || companionExists) {
+      return {
+        statements: buildCompanionReconcileStatements({
+          slug,
+          tableName,
+          oldLocalized: [],
+          newLocalized: localizedNew,
+          dialect,
+          status,
+          companionExists,
+        }),
+        needsArchive: false,
+        companionDropped: false,
+      };
+    }
+    return {
+      statements: buildLocalizationUpStatements(spec),
+      needsArchive: false,
+      companionDropped: false,
+    };
+  }
+
+  // DISABLE — restore the default locale onto main, archive the rest, drop the companion.
+  if (wasLocalized && !isLocalized) {
+    const localizedOld = oldFields.filter(f => isFieldLocalized(f, true));
+    const spec = deriveCompanionSpec({
+      slug,
+      dbName: tableName,
+      fields: localizedOld,
+      dialect,
+      defaultLocale,
+      collectionLocalized: true,
+      status,
+    });
+    // Nothing to restore (no companion, or the entity had no translatable columns).
+    if (!spec || !companionExists) return none;
+    return {
+      statements: buildLocalizationDownStatements(spec),
+      needsArchive: true,
+      companionDropped: true,
+    };
+  }
+
+  // FIELD CHANGE while staying localized — ADD/DROP the changed localized columns + reconcile
+  // `_status`.
+  if (wasLocalized && isLocalized) {
+    const oldLocalized = oldFields.filter(f => isFieldLocalized(f, true));
+    const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
+    return {
+      statements: buildCompanionReconcileStatements({
+        slug,
+        tableName,
+        oldLocalized,
+        newLocalized,
+        dialect,
+        status,
+        companionExists,
+        companionHasStatus: args.companionHasStatus,
+      }),
+      needsArchive: false,
+      companionDropped: false,
+    };
+  }
+
+  return none;
 }

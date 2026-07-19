@@ -31,7 +31,8 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionReconcileStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -61,6 +62,7 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
 import {
   isSuperAdmin,
   listEffectivePermissions,
@@ -70,6 +72,7 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -207,55 +210,82 @@ async function reconcileSingleCompanion(args: {
   tableName: string;
   oldFields: FieldDefinition[];
   newFields: FieldDefinition[];
+  /** Localization state AFTER this save (requested). */
   localized: boolean;
+  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
+  wasLocalized: boolean;
   status: boolean;
   adapter: DrizzleAdapter;
 }): Promise<void> {
   const { slug, tableName, oldFields, newFields, localized, status, adapter } =
     args;
-  if (!localized) return;
-  const dialect = adapter.dialect;
+  const wasLocalized = args.wasLocalized;
+  // Nothing to do when the single was and remains non-localized.
+  if (!wasLocalized && !localized) return;
 
-  const oldLocalizedNames = new Set(
-    resolveLocalizedFieldNames(oldFields, true)
-  );
-  const newLocalizedNames = new Set(
-    resolveLocalizedFieldNames(newFields, true)
-  );
-  const companionStatements = buildCompanionReconcileStatements({
+  const dialect = adapter.dialect;
+  const companionTable = `${tableName}_locales`;
+  const companionExists = await adapter.tableExists(companionTable);
+  // Only introspect `_status` when it can matter: an existing companion that stays localized
+  // (a later Draft/Published toggle must ADD/DROP `_status`).
+  const companionHasStatus =
+    companionExists && wasLocalized && localized
+      ? await companionHasStatusColumn(adapter, companionTable)
+      : undefined;
+
+  // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
+  // read the configured default locale (falls back to "en" when localization isn't configured).
+  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  const plan = buildCompanionTransitionStatements({
     slug,
     tableName,
-    oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
-    newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
     dialect,
+    defaultLocale,
     status,
-    companionExists: await adapter.tableExists(`${tableName}_locales`),
+    wasLocalized,
+    isLocalized: localized,
+    oldFields,
+    newFields,
+    companionExists,
+    companionHasStatus,
   });
-  for (const stmt of companionStatements) {
+
+  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
+  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
+  if (plan.needsArchive) {
+    for (const stmt of getI18nArchiveDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+  }
+  for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
   }
 
-  // Register the companion runtime table (best-effort — next boot re-registers it).
-  try {
-    const companion = buildCompanionRuntimeTable({
-      slug,
-      tableName,
-      fields: newFields,
-      dialect,
-      localized: true,
-      status,
-    });
-    if (companion) {
-      getSchemaRegistryFromDI()?.registerDynamicSchema(
-        companion.companionTableName,
-        companion.table
+  // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
+  // the plan dropped the companion (disable) or the single is no longer localized.
+  if (!plan.companionDropped && localized) {
+    try {
+      const companion = buildCompanionRuntimeTable({
+        slug,
+        tableName,
+        fields: newFields,
+        dialect,
+        localized: true,
+        status,
+      });
+      if (companion) {
+        getSchemaRegistryFromDI()?.registerDynamicSchema(
+          companion.companionTableName,
+          companion.table
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
       );
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
-    );
   }
 }
 
@@ -429,6 +459,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 oldFields: [],
                 newFields: b.fields as unknown as FieldDefinition[],
                 localized: isLocalized,
+                // A brand-new single was never localized before, so a localized create is a
+                // create-only companion (no seed/drop) rather than an enable transition.
+                wasLocalized: false,
                 status: b.status === true,
                 adapter,
               });
@@ -912,10 +945,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               }
 
               // i18n: provision/alter the companion single_<slug>_locales table for the new
-              // localized field set (create when the single is newly localized, ADD/DROP columns
-              // as translatable fields change). No-op when not localized. See the note above:
-              // this does not move existing main-table rows into the companion — that is the
-              // `nextly migrate` enable/disable path.
+              // localized field set: CREATE + seed the default locale from main and drop those
+              // columns when newly localized (enable), restore + archive + drop on disable, or
+              // ADD/DROP columns as translatable fields change. `wasLocalized` drives the
+              // enable/disable detection.
               try {
                 await reconcileSingleCompanion({
                   slug,
@@ -924,6 +957,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   newFields: (b.fields ??
                     existing.fields) as unknown as FieldDefinition[],
                   localized: isLocalized,
+                  wasLocalized,
                   status: hasStatus,
                   adapter,
                 });
@@ -959,6 +993,72 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
 
         updateData.migrationStatus = migrationStatus;
+      } else if (
+        isLocalized !== wasLocalized ||
+        (b.status !== undefined && (isLocalized || wasLocalized))
+      ) {
+        // Flag-only save (no field changes) that still needs companion work: an i18n
+        // enable/disable transition, or a Draft/Published toggle on a localized single (which
+        // ADDs/DROPs the companion `_status`). Without this, a settings-only toggle persisted the
+        // flag while leaving the physical schema untouched — data would strand in the wrong table.
+        try {
+          if (container.has("adapter")) {
+            const adapter = container.get<DrizzleAdapter>("adapter");
+            const tableName = existing.tableName;
+            const existingFields =
+              existing.fields as unknown as FieldDefinition[];
+            const hasStatus =
+              b.status !== undefined
+                ? b.status === true
+                : (existing as { status?: boolean }).status === true;
+            await reconcileSingleCompanion({
+              slug,
+              tableName,
+              oldFields: existingFields,
+              newFields: existingFields,
+              localized: isLocalized,
+              wasLocalized,
+              status: hasStatus,
+              adapter,
+            });
+            // Re-register the main runtime table so it reflects the new column shape: a disable
+            // restores the translatable columns onto main, an enable omits them.
+            try {
+              const dialect = adapter.getCapabilities().dialect;
+              const { table: runtimeTable } = generateRuntimeSchema(
+                tableName,
+                existingFields,
+                dialect,
+                { status: hasStatus, localized: isLocalized }
+              );
+              const resolver = (
+                adapter as unknown as {
+                  tableResolver?: {
+                    registerDynamicSchema?: (
+                      name: string,
+                      table: unknown
+                    ) => void;
+                  };
+                }
+              ).tableResolver;
+              if (typeof resolver?.registerDynamicSchema === "function") {
+                resolver.registerDynamicSchema(tableName, runtimeTable);
+              }
+            } catch {
+              // Non-fatal: next boot re-registers the runtime table.
+            }
+            updateData.migrationStatus = "applied";
+          }
+        } catch (companionErr) {
+          const m =
+            companionErr instanceof Error
+              ? companionErr.message
+              : String(companionErr);
+          console.error(
+            `[Singles] Companion transition failed for "${existing.tableName}": ${m}`
+          );
+          updateData.migrationStatus = "failed";
+        }
       }
 
       const updated = await svc.registry.updateSingle(slug, updateData, {
@@ -1175,6 +1275,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           oldFields: single.fields as unknown as FieldDefinition[],
           newFields: fields as unknown as FieldDefinition[],
           localized: isLocalized,
+          // Detect an enable/disable transition against the persisted state so this apply
+          // seeds/restores existing rows rather than only creating an empty companion.
+          wasLocalized: (single as { localized?: boolean }).localized === true,
           status: single.status === true,
           adapter,
         });

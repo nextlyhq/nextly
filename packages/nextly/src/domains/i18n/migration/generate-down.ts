@@ -12,6 +12,19 @@ const ARCHIVE = "nextly_i18n_archive";
  *   4. DROP the companion table
  */
 export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
+  return buildLocalizationDownStatements(spec)
+    .map(s => `${s};`)
+    .join("\n\n");
+}
+
+/**
+ * Statement-array form of {@link buildLocalizationDownSql} (no trailing `;` per element). The
+ * runtime disable path (a Builder-entity localization toggle, which has no migration file) runs
+ * these individually via the adapter after ensuring `nextly_i18n_archive` exists.
+ */
+export function buildLocalizationDownStatements(
+  spec: CompanionMigrationSpec
+): string[] {
   const {
     dialect,
     mainTable,
@@ -55,5 +68,5 @@ export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
   // 4. drop the companion table
   stmts.push(`DROP TABLE ${q(companionTable, dialect)}`);
 
-  return stmts.map(s => `${s};`).join("\n\n");
+  return stmts;
 }
