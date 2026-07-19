@@ -44,4 +44,19 @@ describe("checkAdminStyles", () => {
     });
     expect(issues.some(i => /hardcoded color/.test(i.message))).toBe(true);
   });
+
+  it("rejects a literal color hidden in a var() fallback", () => {
+    const issues = checkAdminStyles({
+      css: ".nextly-admin .foo { color: var(--nx-x, #ff0000) }",
+    });
+    expect(issues.some(i => /hardcoded color/.test(i.message))).toBe(true);
+  });
+
+  it("passes a var() with a token fallback (no literal)", () => {
+    expect(
+      checkAdminStyles({
+        css: ".nextly-admin .foo { color: var(--nx-x, var(--nx-y)) }",
+      })
+    ).toEqual([]);
+  });
 });

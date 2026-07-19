@@ -18,8 +18,6 @@ export default [
         Buffer: "readonly",
         URL: "readonly",
         setTimeout: "readonly",
-        __dirname: "readonly",
-        __filename: "readonly",
       },
     },
   },

@@ -17,8 +17,11 @@ const COLOR_PROPS =
   "color|background|background-color|border-color|outline-color|fill|stroke|caret-color|text-decoration-color";
 // A literal color value: hex, or a color function that is NOT `var(...)`.
 const LITERAL_COLOR = String.raw`#[0-9a-fA-F]{3,8}\b|(?:rgb|rgba|hsl|hsla|oklch|oklab|lab|lch)\(`;
+// Match a literal color ANYWHERE in the property's value (up to the next `;` or
+// `}`), not just immediately after the colon, so a literal hidden in a `var()`
+// fallback — e.g. `color: var(--nx-x, #ff0000)` — is still caught.
 const HARDCODED_COLOR = new RegExp(
-  String.raw`(?:^|[;{]|\s)(?:${COLOR_PROPS})\s*:\s*(?:${LITERAL_COLOR})`,
+  String.raw`(?:^|[;{]|\s)(?:${COLOR_PROPS})\s*:[^;}]*(?:${LITERAL_COLOR})`,
   "i"
 );
 

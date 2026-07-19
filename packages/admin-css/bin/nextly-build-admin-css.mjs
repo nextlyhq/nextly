@@ -40,7 +40,11 @@ fs.mkdirSync(outDir, { recursive: true });
 const rawFile = path.join(outDir, ".nextly-admin-css.raw.css");
 const scopedFile = path.join(outDir, ".nextly-admin-css.scoped.css");
 
-try {
+// Return an exit code instead of calling process.exit() here: process.exit()
+// terminates immediately and skips the `finally` cleanup below, which would
+// leave the unscoped `rawFile` in the output directory — the exact unscoped CSS
+// a bundler must never pick up. The `finally` runs, then we exit at top level.
+function run() {
   runTailwind(["-i", input, "-o", rawFile]);
 
   const scoped = scopeCss(fs.readFileSync(rawFile, "utf-8"));
@@ -55,14 +59,21 @@ try {
           .map(i => `  - ${i.message}`)
           .join("\n")
     );
-    process.exit(1);
+    return 1;
   }
 
   fs.writeFileSync(scopedFile, scoped);
   runTailwind(["-i", scopedFile, "-o", output, "--minify"]);
   console.log(`✓ wrote scoped admin CSS → ${output}`);
+  return 0;
+}
+
+let code = 1;
+try {
+  code = run();
 } finally {
   for (const f of [rawFile, scopedFile]) {
     if (fs.existsSync(f)) fs.unlinkSync(f);
   }
 }
+process.exit(code);
