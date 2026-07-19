@@ -12,6 +12,9 @@ import {
 import "@nextlyhq/plugin-page-builder/styles/editor.css";
 // Load the form-builder admin components (side-effect: registerComponents).
 import "@nextlyhq/plugin-form-builder/admin";
+// Load the style-fixture plugin's admin component + its admin.styles
+// (side-effect: registerComponents + CSS import) for the plugin-styling e2e.
+import "../../../plugins/style-fixture/admin";
 
 // Reference the exports so the registration side-effect module is retained.
 void PageBuilderEditView;

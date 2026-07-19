@@ -25,6 +25,7 @@ import { defineConfig } from "nextly/config";
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
+import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 
@@ -53,8 +54,9 @@ export default defineConfig({
   },
   collections: [Posts, Categories, Tags],
   singles: [Homepage, LandingPage],
-  // Dev-harness plugins: page builder and form builder.
-  plugins: [pageBuilder(), formBuilderPlugin],
+  // Dev-harness plugins: page builder, form builder, and the styling fixture
+  // (exercises the plugin admin-styling layers for e2e).
+  plugins: [pageBuilder(), formBuilderPlugin, styleFixturePlugin],
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
