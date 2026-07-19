@@ -21,6 +21,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -210,12 +212,23 @@ describe("version capture on update (integration)", () => {
     const adapter = current.adapter as unknown as {
       executeQuery: (sql: string) => Promise<unknown>;
     };
-    // Companion tables are migration-owned; seed it. The main table keeps its
-    // localized columns (a fully-migrated collection hits an unrelated,
-    // pre-existing updateEntry limitation that is out of scope here).
-    await adapter.executeQuery(
-      'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "title" text, "body" text, PRIMARY KEY ("_parent","_locale"))'
-    );
+    // Companion tables are migration-owned; create it through the SAME
+    // production DDL path a migration uses (derive the spec from the collection,
+    // then the create-only companion statement) so the fixture can never drift
+    // from the real localized schema.
+    const spec = deriveCompanionSpec({
+      slug: "pages",
+      fields: [
+        { name: "title", type: "text", localized: true },
+        { name: "body", type: "text", localized: true },
+      ],
+      dialect: current.adapter.dialect,
+      defaultLocale: "en",
+      collectionLocalized: true,
+    });
+    if (!spec)
+      throw new Error("expected a companion spec for a localized collection");
+    await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 
