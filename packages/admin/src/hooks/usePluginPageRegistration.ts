@@ -32,6 +32,7 @@ export function usePluginPageRegistration(
     if (!plugins || plugins.length === 0) return;
 
     const componentPaths: string[] = [];
+    let registeredAnyPage = false;
     for (const plugin of plugins) {
       const slug = toSlug(plugin.name);
       if (plugin.pages && plugin.pages.length > 0) {
@@ -43,6 +44,7 @@ export function usePluginPageRegistration(
             requiredPermission: page.requiredPermission,
           }))
         );
+        registeredAnyPage = true;
         for (const page of plugin.pages) componentPaths.push(page.component);
       }
       if (plugin.settings?.component) {
@@ -65,6 +67,17 @@ export function usePluginPageRegistration(
 
     if (componentPaths.length > 0) {
       void autoRegisterPluginComponents(componentPaths);
+    }
+
+    // The plugin page routes are registered here, in an effect that runs after
+    // admin-meta (branding) loads — later than `useRouter`'s one-time initial
+    // route resolution. On a deep link or hard refresh to a plugin page, that
+    // first `resolveRoute` ran before the registry was populated and returned a
+    // 404, and `useRouter` only re-resolves on navigation or a `locationchange`
+    // event. Emit that event now so the router re-resolves the current path
+    // against the just-registered routes and the page renders instead of 404ing.
+    if (registeredAnyPage && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("locationchange"));
     }
   }, [plugins]);
 }
