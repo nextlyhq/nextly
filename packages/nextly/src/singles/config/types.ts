@@ -18,6 +18,8 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { HookHandler } from "../../hooks/types";
+// Builder-facing content-versioning options surfaced on the Single config.
+import type { VersionsConfig } from "../../schemas/versions/types";
 
 // ============================================================
 // Single Labels
@@ -329,6 +331,34 @@ export interface SingleConfig {
    * @default false
    */
   status?: boolean;
+
+  /**
+   * Enable content versioning (revision history) for this Single.
+   *
+   * Currently active: when enabled, every update records a restorable snapshot
+   * of the assembled document in the global `nextly_versions` table, written
+   * inside the same transaction as the write. Omitted = unversioned.
+   *
+   * Reserved (accepted but NOT yet enforced): the `drafts`, `autosave`, and
+   * `maxPerDoc` retention settings on {@link VersionsConfig} are parsed and
+   * persisted for forward compatibility, but are not wired up yet, so enabling
+   * versioning is capture/history only regardless of those settings. The
+   * deprecated `status: true` alias does not yet drive a version draft
+   * lifecycle; use the separate `status` option for the draft/published column.
+   *
+   * @default undefined (unversioned)
+   */
+  versions?: boolean | VersionsConfig;
+
+  /**
+   * Enable multilingual content for this Single. When `true`, translatable
+   * fields store a value per configured locale (text-like fields localize by
+   * default; override per field with the field's `localized` flag). Requires a
+   * `localization` block in the app config.
+   *
+   * @default false
+   */
+  localized?: boolean;
 
   /**
    * Admin panel configuration options.

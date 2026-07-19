@@ -147,6 +147,7 @@ describe("F8 matrix — SQLite — add field", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL
       )
     `);
@@ -216,6 +217,7 @@ describe("F8 matrix — SQLite — drop field", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL,
         "obsolete_field" text
       )
@@ -285,6 +287,7 @@ describe("F8 matrix — SQLite — rename field preserves data", () => {
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "body" text NOT NULL
       )
     `);
@@ -368,6 +371,7 @@ describe("F8 matrix — SQLite — NOT-NULL coercion via provide_default", () =>
         "slug" text NOT NULL,
         "created_at" integer,
         "updated_at" integer,
+        "created_by" text,
         "total" text
       )
     `);

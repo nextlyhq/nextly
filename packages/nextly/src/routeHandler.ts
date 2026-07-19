@@ -429,6 +429,7 @@ const COLLECTION_ENTRY_METHODS = new Set([
   "bulkUpdateByQuery",
   "countEntries",
   "duplicateEntry",
+  "publishAllLocales",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -974,6 +975,16 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // Same resolver the schema-mutation endpoints enforce with, so what the
   // admin renders and what the API accepts can never disagree.
   payload.showBuilder = isBuilderEnabled();
+
+  // Content-localization config for the admin (present only when i18n is enabled).
+  const localization = config?.localization;
+  if (localization) {
+    payload.locales = {
+      defaultLocale: localization.defaultLocale,
+      fallback: localization.fallback,
+      locales: localization.locales,
+    };
+  }
 
   const colors = branding?.colors;
   if (colors) {

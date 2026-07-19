@@ -53,6 +53,7 @@
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@nextlyhq/admin-css": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",
@@ -67,8 +68,8 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.0.8",
-    "@vitest/ui": "^4.0.8",
+    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/ui": "^4.1.0",
     "autoprefixer": "^10.4.21",
     "chokidar": "^5.0.0",
     "eslint": "^9.39.1",
@@ -82,7 +83,7 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

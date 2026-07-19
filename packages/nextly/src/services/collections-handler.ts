@@ -7,6 +7,7 @@ import { getHookRegistry } from "@nextly/hooks/hook-registry";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -59,7 +60,9 @@ export class CollectionsHandler {
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
     logger: Logger = consoleLogger,
-    consumerAppRoot?: string
+    consumerAppRoot?: string,
+    /** Normalized localization config (i18n M4) — enables companion-aware reads. */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
@@ -81,6 +84,7 @@ export class CollectionsHandler {
           fields: string;
           tableName: string;
           status: boolean | number | null;
+          localized: boolean | number | null;
         }>("dynamic_collections", {
           where: {
             and: [{ column: "slug", op: "=", value: collectionName }],
@@ -97,6 +101,8 @@ export class CollectionsHandler {
             tableName: result.tableName,
             // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
+            // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
+            localized: result.localized === true || result.localized === 1,
           };
         }
       } catch (error) {
@@ -141,7 +147,9 @@ export class CollectionsHandler {
       this.relationshipService,
       hookRegistry,
       accessControlService,
-      componentDataService
+      componentDataService,
+      undefined,
+      this.localization
     );
   }
 
@@ -152,12 +160,15 @@ export class CollectionsHandler {
    * the entry service expects `user: { id }`. This bridges the gap so that
    * activity-log hooks receive a valid user and are not silently skipped.
    *
-   * We also set `overrideAccess: true` because the routeHandler has already
-   * performed collection-level auth/authorization. `routeAuthorized` marks
-   * that this override came from route auth (not a trusted server context),
-   * so the entry service still redacts the response to what this user may
-   * read — the route pre-check authorizes the operation, not access to every
-   * field.
+   * `routeAuthorized: true` marks that the route middleware
+   * (`requireCollectionAccess`) already performed the coarse RBAC / code-access
+   * gate, so the entry service skips re-running only THAT check. It is NOT a
+   * trusted-server context: `overrideAccess` stays `false` so the stored
+   * collection access rules (owner-only / role-based / authenticated / custom)
+   * and field-level write access are still enforced with the real user — the
+   * route pre-check authorizes the operation, not access to every record or
+   * field. Trusted-server bypass is a separate, explicit `overrideAccess: true`
+   * (seeds, plugin `as:'system'`), never inferred from route auth.
    */
   private resolveUserParam<
     T extends {
@@ -181,9 +192,27 @@ export class CollectionsHandler {
           // Carry the authenticated role set so role-based access rules and
           // field-level access.read evaluate against the real user.
           roles: userRoles,
+          // Also expose a singular `role` so field-level access callbacks that
+          // read the documented `req.user.role` (rather than the role set) see
+          // an authorized value instead of stripping fields for a legitimate
+          // caller. A representative slug; role-set-aware rules use `roles`.
+          role: userRoles?.[0],
         },
-        overrideAccess: true,
-        routeAuthorized: true,
+        // Default the bridged route caller to enforced access, but never
+        // clobber an explicit trusted-server override (overrideAccess: true)
+        // if one was passed alongside the userId.
+        overrideAccess: rest.overrideAccess ?? false,
+        // Route authorization is NEVER inferred from a userId being present:
+        // the RBAC/database-permission gate may only be skipped when the caller
+        // explicitly attests the route middleware already ran it (the REST
+        // dispatcher passes `routeAuthorized: true`). Any other caller that
+        // merely attributes a userId for hooks/audit gets `false`, so the gate
+        // still runs and a rule-less collection is not mutated without the
+        // permission check. A trusted override forces it false regardless, so
+        // it never defeats the response redaction guard
+        // (`overrideAccess && !routeAuthorized`).
+        routeAuthorized:
+          !(rest.overrideAccess ?? false) && !!rest.routeAuthorized,
       };
     }
     return rest;
@@ -363,6 +392,12 @@ export class CollectionsHandler {
      * pass 'all' to see drafts too. Forwarded to query service as-is.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to each row. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -388,13 +423,21 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values stored for this language. */
+      locale?: string;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>
   ) {
     return this.entryService.createEntry(
-      this.resolveUserParam(params),
+      { ...this.resolveUserParam(params), locale: params.locale },
       body,
       params.depth
     );
@@ -429,6 +472,12 @@ export class CollectionsHandler {
      * pass 'all' to see drafts too. Forwarded to query service as-is.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
+    /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -454,6 +503,10 @@ export class CollectionsHandler {
      * === true). Same semantics as listEntries.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -480,16 +533,49 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values updated for this language. */
+      locale?: string;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>
   ) {
     return this.entryService.updateEntry(
-      this.resolveUserParam(params),
+      { ...this.resolveUserParam(params), locale: params.locale },
       body,
       params.depth
     );
+  }
+
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10). Sets the main status and,
+   * for localized+draft collections, every companion `_status` to published, atomically.
+   */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
+    user?: UserContext;
+    /** When true, bypass all access control checks */
+    overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran the
+     * RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId.
+     */
+    routeAuthorized?: boolean;
+  }) {
+    return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
 
   /**
@@ -508,6 +594,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -532,6 +625,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -557,6 +657,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {
@@ -615,6 +722,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Set by the REST dispatcher to attest the route middleware already ran
+       * the RBAC/code-access gate, so the entry service skips only that
+       * redundant re-check. Never inferred from a userId.
+       */
+      routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
     },
@@ -645,6 +758,13 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran
+     * the RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId — a caller attributing a user for
+     * hooks/audit must still pass the permission gate.
+     */
+    routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }) {

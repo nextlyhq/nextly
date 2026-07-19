@@ -52,6 +52,8 @@ import {
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+// Normalized versioning config persisted on the registry `versions` column.
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   SingleSource,
@@ -179,6 +181,17 @@ export const dynamicSinglesPg = pgTable(
      * collections postgres schema for full semantics.
      */
     status: boolean("status").default(false).notNull(),
+    /** Single-level i18n master switch (mirrors `status`). */
+    localized: boolean("localized").default(false).notNull(),
+
+    /**
+     * Resolved content-versioning config for this single, or null when
+     * unversioned. Stores the normalized `ResolvedVersionsConfig` (produced by
+     * resolveVersionsConfig) so every consumer reads one canonical shape and
+     * later stages (drafts, autosave, retention) read more fields without a
+     * re-migration. Mirrors the collections schema.
+     */
+    versions: jsonb("versions").$type<ResolvedVersionsConfig>(),
 
     /**
      * Path to the config file (code-first Singles only).

@@ -92,6 +92,50 @@ export const parseSelectParam = (
  * The key[op]=value query-param format is parsed elsewhere via
  * `parseWhereQuery` -- this helper handles the JSON form.
  */
+/**
+ * System owner column (both the snake_case name and the camelCase alias). It is
+ * stripped from response payloads, so a client must not be able to filter, sort,
+ * or otherwise address rows by it either — otherwise a caller who knows/guesses
+ * a user id could learn or target rows by creator through the query controls.
+ */
+export const OWNER_QUERY_COLUMNS = new Set(["created_by", "createdBy"]);
+
+/**
+ * Remove any owner-column condition from a client-supplied `where` tree
+ * (recursing through `and`/`or`), so a REST caller cannot filter/count by the
+ * system owner column. The service's own owner-only constraint is added
+ * separately, downstream of this, and is unaffected.
+ */
+const stripOwnerFromWhere = (node: unknown): unknown => {
+  if (Array.isArray(node)) {
+    return node
+      .map(stripOwnerFromWhere)
+      .filter(
+        n => n != null && (typeof n !== "object" || Object.keys(n).length > 0)
+      );
+  }
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      node as Record<string, unknown>
+    )) {
+      // Drop an owner-column filter. A dotted key like `created_by.any` still
+      // targets the owner column because the query builder keys on the first
+      // path segment (`column.split(".")[0]`), so match on that segment — not
+      // just the exact key — or the dotted form would slip through.
+      if (OWNER_QUERY_COLUMNS.has(key.split(".")[0])) continue;
+      if (key === "and" || key === "or") {
+        const arr = stripOwnerFromWhere(value);
+        if (Array.isArray(arr) && arr.length > 0) out[key] = arr;
+      } else {
+        out[key] = value; // a field condition — its op object is not a field
+      }
+    }
+    return out;
+  }
+  return node;
+};
+
 export const parseWhereParam = (
   whereParam?: string
 ): WhereFilter | undefined => {
@@ -106,11 +150,23 @@ export const parseWhereParam = (
     ) {
       return undefined;
     }
-    return parsed as WhereFilter;
+    return stripOwnerFromWhere(parsed) as WhereFilter;
   } catch {
     return undefined;
   }
 };
+
+/**
+ * Strip owner-column conditions from an already-parsed client `where` object.
+ * The JSON query-string path goes through {@link parseWhereParam}; this covers
+ * the request-body path (e.g. the bulk-update-by-query handler reads
+ * `body.where` directly) so a client cannot target rows by the system owner
+ * column via the body either. Returns `undefined` unchanged.
+ */
+export const stripOwnerColumnsFromWhere = (
+  where: WhereFilter | undefined
+): WhereFilter | undefined =>
+  where === undefined ? undefined : (stripOwnerFromWhere(where) as WhereFilter);
 
 // ============================================================
 // Rich text format validation
@@ -137,4 +193,15 @@ export const parseRichTextFormat = (
     return normalized;
   }
   return undefined;
+};
+
+/**
+ * Coerce a boolean-ish query param (`?flag=1`, `?flag=true`) to `true`. Query values arrive as
+ * strings; `1`/`true`/`yes` (any case) are truthy, everything else (including absent) is `false`.
+ */
+export const isTruthyParam = (value?: unknown): boolean => {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  const v = value.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
 };

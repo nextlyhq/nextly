@@ -34,10 +34,16 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type {
+  AccessControlService,
+  CollectionAccessRules,
+} from "../../../services/access";
+import { isSuperAdminContext } from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -45,8 +51,12 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
   GetSingleOptions,
   SingleDocument,
@@ -106,13 +116,21 @@ export function buildSingleHookContext<T>(
 }
 
 /**
- * Check RBAC access for a Single operation.
+ * Check access for a Single operation.
  *
  * Evaluation order:
  * 1. `overrideAccess` bypass → null (allow)
- * 2. No RBAC service or no user → null (skip)
- * 3. RBAC check (super-admin → code-defined → DB permissions)
- * 4. Fail-secure on unexpected errors
+ * 2. Super-admin (by authorized role) bypass → null (allow)
+ * 3. Stored access rules (`accessRules[operation]`: public / authenticated /
+ *    role-based / owner-only / custom) — denies with 403 when they fail. UI
+ *    Singles persist these, so they must be enforced on every transport, not
+ *    just the coarse RBAC permission.
+ * 4. `routeAuthorized` with a verified user → null: the route middleware
+ *    already ran the RBAC gate, so skip only that redundant re-check (the
+ *    stored rules above still ran).
+ * 5. No RBAC service or no user → null (skip)
+ * 6. RBAC check (super-admin → code-defined → DB permissions)
+ * 7. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
@@ -121,7 +139,17 @@ export async function checkSingleAccess(params: {
   operation: "read" | "update";
   user?: UserContext;
   overrideAccess?: boolean;
+  routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  /** Evaluator for the Single's stored access rules. */
+  accessControlService?: AccessControlService;
+  /** The Single's stored access rules (from the registry metadata). */
+  accessRules?: CollectionAccessRules;
+  /**
+   * The current Single document, when loaded. Owner-only rules need it to
+   * compare ownership; without it they allow (deferring to the DB-level check).
+   */
+  document?: Record<string, unknown>;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -129,11 +157,80 @@ export async function checkSingleAccess(params: {
     operation,
     user,
     overrideAccess,
+    routeAuthorized,
     rbacAccessControlService,
+    accessControlService,
+    accessRules,
+    document,
     logger,
   } = params;
 
   if (overrideAccess) {
+    return null;
+  }
+
+  // Super-admins bypass the stored rules on every transport, keyed on the
+  // authorized role set (never the account id).
+  if (isSuperAdminContext(user)) {
+    return null;
+  }
+
+  // Evaluate the Single's stored access rules (owner-only is degenerate for a
+  // single global document; public / authenticated / role-based / custom all
+  // apply). This runs for both route-authorized and Direct API callers so a
+  // caller holding the coarse `update-<single>` permission but failing a
+  // stored rule is still denied.
+  if (accessControlService && accessRules) {
+    // Owner-only with no loaded document: ownership cannot be evaluated (there
+    // is nothing to compare against), and evaluateOwnerAccess would otherwise
+    // ALLOW the write for lack of a document — letting a caller with only the
+    // coarse permission perform the first PATCH to an owner-only Single without
+    // any ownership check. Fail closed; a legitimate first write goes through a
+    // trusted `overrideAccess` seed.
+    if (accessRules[operation]?.type === "owner-only" && !document) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: ${operation} on single "${slug}" requires an existing owned document`,
+      };
+    }
+    // A stored `custom` rule may key on the document id, so forward it (from
+    // the loaded document) alongside the document itself.
+    const documentId =
+      typeof document?.id === "string" ? document.id : undefined;
+    const result = await accessControlService.evaluateAccess(
+      accessRules,
+      operation,
+      {
+        user: user
+          ? {
+              id: user.id,
+              role: user.role,
+              roles: user.roles,
+              email: user.email,
+            }
+          : undefined,
+      },
+      documentId,
+      document
+    );
+    if (!result.allowed) {
+      return {
+        success: false,
+        statusCode: 403,
+        message:
+          result.reason ??
+          `Access denied: ${operation} on single "${slug}" is not permitted`,
+      };
+    }
+  }
+
+  // The route middleware already ran this exact RBAC gate; skip the redundant
+  // re-check — but only when a verified user is present, so a caller that sets
+  // routeAuthorized without authenticating cannot silently allow an anonymous
+  // write. The stored rules above already ran; field-level write access still
+  // applies downstream (overrideAccess is false).
+  if (routeAuthorized && user) {
     return null;
   }
 
@@ -186,6 +283,9 @@ export async function checkSingleAccess(params: {
  * service can reuse them without duplication.
  */
 export class SingleQueryService extends BaseService {
+  /** Persists version snapshots; used when a versioned Single is auto-created. */
+  private readonly versionCapture = new VersionCaptureService();
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -224,7 +324,12 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 1.5. RBAC access check (after metadata, before hooks/DB operations)
+      // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
+      // Stored read-rule enforcement is intentionally NOT wired here yet: the
+      // REST read handlers do not forward the authenticated user, so evaluating
+      // a `read: authenticated` / role-based rule would reject every REST caller
+      // as anonymous. It lands with read-path user forwarding in the follow-up
+      // read PR (hence no `accessRules` passed).
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
@@ -273,10 +378,14 @@ export class SingleQueryService extends BaseService {
         {}
       );
 
-      // 6. Auto-create if document doesn't exist
+      // 6. Auto-create if document doesn't exist. Capture the initial version
+      // when the Single is versioned so a first-read materialization still
+      // starts a history (the mutation path records its own first version).
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocument(singleMeta);
+        doc = await this.createDefaultDocument(singleMeta, {
+          captureInitialVersion: true,
+        });
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -397,9 +506,16 @@ export class SingleQueryService extends BaseService {
    * Applies default values from field configurations. Always includes
    * the system columns (id, title, slug, created_at, updated_at) that
    * the schema generator adds to every Single table.
+   *
+   * `captureInitialVersion` records the materialized default as the Single's
+   * first version snapshot (v1), atomically with the insert. The read path opts
+   * in so a versioned Single that is auto-created on first read still starts a
+   * history; the mutation path does NOT, because its subsequent update records
+   * the first version itself (opting in there would double-version a first edit).
    */
   async createDefaultDocument(
-    singleMeta: DynamicSingleRecord
+    singleMeta: DynamicSingleRecord,
+    options?: { captureInitialVersion?: boolean }
   ): Promise<SingleDocument> {
     const now = new Date();
     const id = crypto.randomUUID();
@@ -434,17 +550,76 @@ export class SingleQueryService extends BaseService {
       string,
       unknown
     >;
-    const inserted = await this.adapter.insert<SingleDocument>(
-      singleMeta.tableName,
-      snakeCaseDefaults,
-      { returning: "*" }
+
+    const versionsConfig = singleMeta.versions;
+    const shouldCapture =
+      options?.captureInitialVersion === true &&
+      versionsConfig?.enabled === true;
+
+    if (!shouldCapture) {
+      const inserted = await this.adapter.insert<SingleDocument>(
+        singleMeta.tableName,
+        snakeCaseDefaults,
+        { returning: "*" }
+      );
+      this.logger.debug("Created default Single document", {
+        slug: singleMeta.slug,
+        id,
+      });
+      return inserted;
+    }
+
+    // Versioned Single: insert the default row and record its v1 snapshot in one
+    // transaction, so the Single never ends up with a live row but no history.
+    // Retry on a version_no allocation race, mirroring the write paths.
+    const inserted = await withVersionConflictRetry(() =>
+      this.adapter.transaction(async tx => {
+        const row = await tx.insert<SingleDocument>(
+          singleMeta.tableName,
+          snakeCaseDefaults,
+          { returning: "*" }
+        );
+        // Match the read shape: keep user field keys (which may contain
+        // underscores like `site_title`) exactly, converting only the timestamp
+        // columns; strip password hashes and the system owner column so history
+        // never retains them; parse JSON-backed fields (stored as strings on
+        // SQLite) so a restore equals a normal read. A freshly materialized
+        // default has no component subtrees yet, so components is empty.
+        const parentRow = convertTimestampsToCamelCase({
+          ...(row as Record<string, unknown>),
+        });
+        stripPasswordFieldValues(parentRow, singleMeta.fields);
+        stripSystemOwnerField(parentRow);
+        for (const field of singleMeta.fields) {
+          if (!("name" in field) || !field.name) continue;
+          const value = parentRow[field.name];
+          if (shouldTreatAsJson(field) && typeof value === "string") {
+            try {
+              parentRow[field.name] = JSON.parse(value);
+            } catch {
+              // Not valid JSON — keep the raw string.
+            }
+          }
+        }
+        await captureInTx(tx, this.versionCapture, {
+          ref: {
+            scopeKind: "single",
+            scopeSlug: singleMeta.slug,
+            entryId: (row as { id: string }).id,
+          },
+          contentStatus: (parentRow as { status?: unknown }).status,
+          // System-materialized default: no authoring user.
+          parts: { parentRow, components: {} },
+          createdBy: null,
+        });
+        return row;
+      })
     );
 
     this.logger.debug("Created default Single document", {
       slug: singleMeta.slug,
       id,
     });
-
     return inserted;
   }
 

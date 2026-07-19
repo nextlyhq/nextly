@@ -49,6 +49,9 @@ import {
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
 import { ZodGenerator, TypeGenerator } from "../../schema";
+// Resolve the versioning config so the CLI `db:sync` path persists it too
+// (parity with the boot/HMR registry sync).
+import { resolveVersionsConfig } from "../../versions/resolve-config";
 
 import {
   CollectionRegistryService,
@@ -641,6 +644,14 @@ export class CollectionSyncService extends BaseService {
       description: config.description,
       tableName: config.dbName ?? config.slug.replace(/-/g, "_"),
       timestamps: config.timestamps ?? true,
+      // Persist Draft/Published, i18n, and the resolved versioning config through
+      // `db:sync` (status:true also aliases to a versioned config), matching the
+      // boot/HMR registry sync. status/localized must be forwarded too, else the
+      // sync would register status-enabled collections with status=0 (or toggle
+      // existing ones off) since it reads these off the payload.
+      status: config.status === true,
+      localized: config.localized === true,
+      versions: resolveVersionsConfig(config.versions, config.status),
       admin: config.admin
         ? {
             group: config.admin.group,
@@ -835,6 +846,8 @@ export class CollectionSyncService extends BaseService {
         // Why: status from defineCollection() input if present, otherwise false.
         // Code-first authors opt in by setting `status: true` on the config.
         status: (config as { status?: boolean }).status === true,
+        // Collection-level i18n master switch (mirrors `status`).
+        localized: (config as { localized?: boolean }).localized === true,
         admin: config.admin
           ? {
               group: config.admin.group,

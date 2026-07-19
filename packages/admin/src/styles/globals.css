@@ -14,6 +14,11 @@
 /* Design-system source of truth: tokens, @theme mappings, dark variant, base reset. */
 @import "../../../ui/src/styles/theme.css";
 
+/* Layer-2 plugin utility safelist: token-driven utilities always present in the
+ * compiled sheet so third-party plugin components can use them with no build
+ * step (they cannot add themselves to the @source scans below). */
+@import "./plugin-safelist.css";
+
 /* Scan @nextlyhq/ui source so Tailwind includes utility classes used by extracted components */
 @source "../../../ui/src";
 

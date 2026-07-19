@@ -44,6 +44,7 @@ import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
+import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
 import { schemaEventsTables } from "./schema-events";
@@ -54,6 +55,7 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 
 // =============================================================================
@@ -85,6 +87,15 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     // drizzle-kit 0.31.10 can't round-trip one, drizzle-team/drizzle-orm#4688),
     // so declaring it here is a no-op when the on-disk table already matches.
     ...Object.values(schemaEventsTables(dialect)),
+    // `nextly_i18n_archive` — holds non-default-locale translations removed when
+    // localization is disabled (recoverable backup). Bootstrapped out-of-band via
+    // `getI18nArchiveDdl` for existing DBs; declared here for fresh installs.
+    ...Object.values(nextlyI18nArchiveTables(dialect)),
+    // `nextly_versions` is a first-class managed system table. It has no
+    // bootstrap-ordering constraint (nothing records into it before it exists,
+    // unlike the migration ledger), so declaring it here is sufficient:
+    // core-reconcile creates it on fresh and existing databases.
+    ...Object.values(versionsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
   ];
 
@@ -164,6 +175,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "nextly_schema_events",
+  "nextly_i18n_archive",
+  "nextly_versions",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
@@ -217,6 +230,10 @@ export { auditLog, activityLog } from "./audit/postgres";
 export { nextlyMeta } from "./nextly-meta/postgres";
 // Plan B — schema-events bookkeeping table. PG re-export for direct-query callers.
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "./schema-events/postgres";
+
+// Content-versioning store. PG re-export for direct-query callers, matching the
+// other managed core tables listed in CORE_TABLE_NAMES.
+export { nextlyVersionsPg as nextlyVersions } from "./versions/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 // Plan A Task 11 — apiKeys (Drizzle). PG re-exports for direct-query callers.

@@ -24,6 +24,18 @@ describe("drizzleTableNames", () => {
   });
 });
 
+describe("filterUnsafeStatements — companion tables", () => {
+  it("blocks a companion _locales DROP SILENTLY (migration-owned)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = filterUnsafeStatements(
+      ['DROP TABLE "dc_pages_locales";'],
+      ["dc_pages"] // companion not in desired
+    );
+    expect(out).toEqual([]); // blocked
+    expect(warn).not.toHaveBeenCalled(); // silently, no noise
+  });
+});
+
 describe("filterUnsafeStatements", () => {
   it("blocks DROP TABLE for a table NOT in the desired set", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

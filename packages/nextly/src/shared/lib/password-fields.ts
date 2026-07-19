@@ -162,3 +162,21 @@ export function hasPasswordField(fields: NamedField[]): boolean {
       (Boolean(field.fields) && hasPasswordField(field.fields!))
   );
 }
+
+/** System owner column, in the snake_case column form and the camelCase form. */
+const OWNER_COLUMN_KEYS = ["created_by", "createdBy"] as const;
+
+/**
+ * Remove the system owner column (`created_by`) from a response row, in place.
+ *
+ * The owner column holds the creator's stable user id. Owner-only access
+ * filters on it in SQL, so its value never needs to leave the server; returning
+ * it would leak a stable user id to any caller who can read a collection whose
+ * rows were created by other users. Callers strip it on the read/mutation
+ * response boundary, the same place password values are cleared.
+ */
+export function stripSystemOwnerField(entry: Record<string, unknown>): void {
+  for (const key of OWNER_COLUMN_KEYS) {
+    if (key in entry) delete entry[key];
+  }
+}

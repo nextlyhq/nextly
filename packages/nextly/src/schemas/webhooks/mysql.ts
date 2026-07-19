@@ -38,8 +38,15 @@ export const nextlyEvents = mysqlTable(
     createdAt: datetime("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Set by the drain's fan-out pass once delivery rows exist for this event;
+    // NULL means the event still needs fan-out.
+    fannedOutAt: datetime("fanned_out_at"),
   },
-  t => [index("nextly_events_type_created_at_idx").on(t.type, t.createdAt)]
+  t => [
+    index("nextly_events_type_created_at_idx").on(t.type, t.createdAt),
+    // The fan-out pass scans for events still needing fan-out, oldest first.
+    index("nextly_events_fanned_out_at_idx").on(t.fannedOutAt, t.createdAt),
+  ]
 );
 
 export const nextlyWebhooks = mysqlTable(

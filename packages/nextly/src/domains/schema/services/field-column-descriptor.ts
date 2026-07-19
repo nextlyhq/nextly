@@ -203,6 +203,14 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "relationship":
     case "upload": {
+      // A many-to-many relationship stores its links in a dedicated junction
+      // table, not on the parent row, so the parent needs no column (mirrors
+      // component fields, which return "skip"). Emitting an fkSingle column
+      // here produced a phantom parent column the junction-only physical
+      // schema never has, so the runtime table object disagreed with the DB.
+      const relationType = (field as { options?: { relationType?: string } })
+        .options?.relationType;
+      if (relationType === "manyToMany") return "skip";
       // hasMany or array-target relationships are stored as JSON
       // arrays of FK ids. Single-target -> plain FK column.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
@@ -345,6 +353,14 @@ export interface SystemColumnSet {
    * never leaks during the migration that adds the column.
    */
   hasStatus?: boolean;
+  /**
+   * True for a Single's table. Singles are a single global row with no
+   * per-user owner, so the `created_by` owner column is NOT injected (owner-only
+   * access is a collection concept). Keeps the runtime schema, the diff input,
+   * and the DDL in lockstep — otherwise a Single's runtime schema would select
+   * a column its physical table never gets.
+   */
+  isSingle?: boolean;
 }
 
 export interface SystemColumnDescriptor {
@@ -405,6 +421,18 @@ export function getSystemColumnDescriptors(
       primaryKey: false,
       default: "now()",
     });
+    // Owner of the row, stamped with the creating user's id. Collections only
+    // (never singles). Nullable: existing rows and system/seed creates have no
+    // user. Mirrors runtime-schema-generator's pgText("created_by") (text,
+    // matching the id column type).
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "text",
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       // Must mirror runtime-schema-generator's
       // pgVarchar("status", { length: 20 }).notNull().default("draft").
@@ -458,6 +486,20 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    // Owner of the row (creating user's id, NOT the row id). Collections only
+    // (never singles). Sized to match the MySQL users.id column (varchar(191),
+    // Auth.js-compatible), not the varchar(36) row id — a longer user id would
+    // otherwise be truncated. Nullable; mirrors runtime-schema-generator's
+    // created_by column.
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "varchar(191)",
+        length: 191,
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       cols.push({
         name: "status",
@@ -504,6 +546,17 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    // Owner of the row (creating user's id). Collections only (never singles).
+    // Nullable; mirrors runtime-schema-generator's sqliteText("created_by")
+    // (matching the id column type).
+    if (!opts.isSingle) {
+      cols.push({
+        name: "created_by",
+        dialectType: "text",
+        nullable: true,
+        primaryKey: false,
+      });
+    }
     if (opts.hasStatus) {
       cols.push({
         name: "status",

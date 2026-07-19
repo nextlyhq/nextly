@@ -162,6 +162,14 @@ export function buildCollectionMetadataUpsert(
       value: boolLiteral(entity.status === true, dialect),
       update: true,
     },
+    {
+      // Persist the localization flag so boot's loadDynamicTables registers the
+      // companion runtime table; without it the registry row stays localized=false
+      // and a Builder-localized collection never resolves its _locales fields.
+      name: "localized",
+      value: boolLiteral(entity.localized === true, dialect),
+      update: true,
+    },
     { name: "migration_status", value: sqlStr("applied") },
   ];
   if (entity.admin !== undefined) {
@@ -197,6 +205,13 @@ export function buildSingleMetadataUpsert(
     {
       name: "status",
       value: boolLiteral(entity.status === true, dialect),
+      update: true,
+    },
+    {
+      // Mirror the collection upsert: persist the flag so the registry row and
+      // boot-time companion registration reflect the single's config.
+      name: "localized",
+      value: boolLiteral(entity.localized === true, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },

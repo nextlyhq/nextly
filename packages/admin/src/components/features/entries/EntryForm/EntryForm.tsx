@@ -15,15 +15,21 @@
  * @since 1.0.0
  */
 
+import { resolveLocalizedFieldNames } from "nextly/config";
+import { useMemo } from "react";
+
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   takeoverControllerNames,
   takeoverTypesFromBranding,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+
+import { EntryLocaleProvider } from "../EntryLocaleContext";
 
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
@@ -62,6 +68,15 @@ export interface EntryFormProps {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
+  /** Active content locale (i18n M7) — saves target this language. */
+  locale?: string;
+  /** Called when the user switches the active content language (i18n M7). */
+  onLocaleChange?: (locale: string) => void;
+  /**
+   * Default-language field values (i18n M7). Provided while translating a non-default language
+   * so each translatable field can show its source text inline. Keyed by field name (camelCase).
+   */
+  sourceValues?: Record<string, unknown>;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -159,6 +174,9 @@ export function EntryForm({
   onError,
   onDelete,
   onCancel,
+  locale,
+  onLocaleChange,
+  sourceValues,
   embedded = false,
   className,
 }: EntryFormProps) {
@@ -173,6 +191,7 @@ export function EntryForm({
     collection,
     entry,
     mode,
+    locale,
     onSuccess: data => {
       onSuccess?.(data);
     },
@@ -180,6 +199,47 @@ export function EntryForm({
     onDelete,
     onCancel,
   });
+
+  // i18n M7: content-locale context for field components — the active locale's writing
+  // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
+  // field can tell whether it is translatable), and whether the active language differs from
+  // the app default (per-field affordances only apply while translating a non-default language).
+  // All inert for LTR / non-localized editors — the plain path is unchanged.
+  const { getLocale, defaultLocale } = useLocalization();
+  const localeCtx = useMemo(() => {
+    const collectionLocalized = collection.localized === true;
+    return {
+      locale,
+      // `locale` is undefined while editing the implicit default language, so
+      // resolve the default explicitly — otherwise a default-locale that is RTL
+      // would render its translatable fields left-to-right until explicitly picked.
+      rtl: getLocale(locale ?? defaultLocale)?.rtl ?? false,
+      collectionLocalized,
+      isNonDefaultLocale:
+        !!locale && !!defaultLocale && locale !== defaultLocale,
+      sourceValues,
+      onLocaleChange,
+      collectionSlug: collection.slug ?? collection.name,
+      entryId: entry?.id ?? undefined,
+      // The translatable-field set, for the field-scoped copy-from-language action.
+      localizedFieldNames: resolveLocalizedFieldNames(
+        getCollectionFields(collection).map(f => ({
+          type: (f as { type?: string }).type ?? "",
+          name: (f as { name?: string }).name ?? "",
+          localized: (f as { localized?: boolean }).localized,
+        })),
+        collectionLocalized
+      ),
+    };
+  }, [
+    locale,
+    getLocale,
+    defaultLocale,
+    collection,
+    sourceValues,
+    onLocaleChange,
+    entry?.id,
+  ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in
   // their own header card (this PR keeps the existing title/slug special-case;
@@ -292,23 +352,24 @@ export function EntryForm({
   // and (optional) right rail. No breadcrumbs, no DocumentTabs, no separate
   // page title h1; the title input lives inside EntrySystemHeader.
   return (
-    <EntryFormContextProvider
-      entryId={entry?.id}
-      collectionSlug={collection.name}
-      isCreateMode={mode === "create"}
-    >
-      <div className={cn("space-y-0", className)}>
-        <EntryFormProvider form={form} onSubmit={handleSubmit}>
-          <FormErrorSummary
-            errors={errors}
-            submitCount={submitCount}
-            className="mx-6 mt-3"
-          />
+    <EntryLocaleProvider value={localeCtx}>
+      <EntryFormContextProvider
+        entryId={entry?.id}
+        collectionSlug={collection.name}
+        isCreateMode={mode === "create"}
+      >
+        <div className={cn("space-y-0", className)}>
+          <EntryFormProvider form={form} onSubmit={handleSubmit}>
+            <FormErrorSummary
+              errors={errors}
+              submitCount={submitCount}
+              className="mx-6 mt-3"
+            />
 
-          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
-            {/* Main column */}
-            <div className="flex-1 min-w-0 flex flex-col">
-              {/* Why: the parent flex's @4xl/content:-m-8 already cancels
+            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+              {/* Main column */}
+              <div className="flex-1 min-w-0 flex flex-col">
+                {/* Why: the parent flex's @4xl/content:-m-8 already cancels
                   PageContainer's px-8 padding so the form runs edge-to-edge
                   once the panel is wide enough. Wrapping the system
                   header / meta strip in another -mx-8 doubled the negative
@@ -316,61 +377,63 @@ export function EntryForm({
                   each side — clipping the title's first character on the
                   left and the rail toggle / right-edge buttons on the right.
                   Letting them fill the Main column naturally fixes that. */}
-              <EntrySystemHeader
-                mode={mode}
-                titleField={titleField}
-                hasStatus={hasStatus}
-                isSubmitting={isSubmitting}
-                isDirty={isDirty}
-                entry={entry}
-                collectionSlug={collection.name}
-                toolbarSlot={
-                  <EntryFormToolbarSlots
-                    context="collection"
-                    controllerField={controllerNames[0]}
-                  />
-                }
-                onSaveDraft={() => {
-                  void handleSubmit(undefined, "save-draft");
-                }}
-                onPublish={() => {
-                  void handleSubmit(undefined, "publish");
-                }}
-                onSaveChanges={() => {
-                  void handleSubmit(undefined, "save-changes");
-                }}
-                onUnpublish={() => {
-                  void handleSubmit(undefined, "unpublish");
-                }}
-                onCancel={handleCancel}
-                onDelete={handleDelete}
-                isRailCollapsed={railCollapsed}
-                onToggleRail={mode === "edit" ? toggleRail : undefined}
-              />
-              <EntryMetaStrip
-                slugField={slugField}
-                hasStatus={hasStatus}
-                status={(entry?.status as string | undefined) ?? "draft"}
-                isRailCollapsed={railCollapsed}
-              />
+                <EntrySystemHeader
+                  mode={mode}
+                  titleField={titleField}
+                  hasStatus={hasStatus}
+                  isSubmitting={isSubmitting}
+                  isDirty={isDirty}
+                  entry={entry}
+                  collectionSlug={collection.name}
+                  locale={locale}
+                  onLocaleChange={onLocaleChange}
+                  toolbarSlot={
+                    <EntryFormToolbarSlots
+                      context="collection"
+                      controllerField={controllerNames[0]}
+                    />
+                  }
+                  onSaveDraft={() => {
+                    void handleSubmit(undefined, "save-draft");
+                  }}
+                  onPublish={() => {
+                    void handleSubmit(undefined, "publish");
+                  }}
+                  onSaveChanges={() => {
+                    void handleSubmit(undefined, "save-changes");
+                  }}
+                  onUnpublish={() => {
+                    void handleSubmit(undefined, "unpublish");
+                  }}
+                  onCancel={handleCancel}
+                  onDelete={handleDelete}
+                  isRailCollapsed={railCollapsed}
+                  onToggleRail={mode === "edit" ? toggleRail : undefined}
+                />
+                <EntryMetaStrip
+                  slugField={slugField}
+                  hasStatus={hasStatus}
+                  status={(entry?.status as string | undefined) ?? "draft"}
+                  isRailCollapsed={railCollapsed}
+                />
 
-              {mainFields.length > 0 && (
-                <div className="@4xl/content:p-8 pt-6">
-                  {/* Forward the form mode: in edit mode a blank password
+                {mainFields.length > 0 && (
+                  <div className="@4xl/content:p-8 pt-6">
+                    {/* Forward the form mode: in edit mode a blank password
                       field means "keep the current password" rather than a
                       required-field violation (see note on the layout form
                       above). */}
-                  <EntryFormContent
-                    fields={mainFields}
-                    disabled={isSubmitting}
-                    withCard
-                    mode={mode}
-                  />
-                </div>
-              )}
-            </div>
+                    <EntryFormContent
+                      fields={mainFields}
+                      disabled={isSubmitting}
+                      withCard
+                      mode={mode}
+                    />
+                  </div>
+                )}
+              </div>
 
-            {/* Rail (collapsible). Width 320px. Hidden until the content panel
+              {/* Rail (collapsible). Width 320px. Hidden until the content panel
                 is wide enough (@4xl) to fit it beside the main column, until a
                 future mobile sheet ships.
 
@@ -380,21 +443,22 @@ export function EntryForm({
                 strip down the right side of the page (item 7 of
                 07-admin-bugs-feedback). Skip the whole block until the
                 entry exists. */}
-            {mode === "edit" && !railCollapsed && (
-              <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                  <EntryFormSidebar
-                    mode={mode}
-                    entry={entry}
-                    hasStatus={hasStatus}
-                    isDirty={isDirty}
-                  />
+              {mode === "edit" && !railCollapsed && (
+                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                  <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                    <EntryFormSidebar
+                      mode={mode}
+                      entry={entry}
+                      hasStatus={hasStatus}
+                      isDirty={isDirty}
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        </EntryFormProvider>
-      </div>
-    </EntryFormContextProvider>
+              )}
+            </div>
+          </EntryFormProvider>
+        </div>
+      </EntryFormContextProvider>
+    </EntryLocaleProvider>
   );
 }

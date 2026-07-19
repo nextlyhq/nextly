@@ -91,6 +91,7 @@ const POST_045_TABLES = [
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
+  "nextly_versions",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the
@@ -118,6 +119,28 @@ const ADDITIVE_STATEMENT =
 
 const isPost045TableStatement = (stmt: string): boolean =>
   ADDITIVE_STATEMENT.test(stmt.trim()) && namesPost045Table(stmt);
+
+// The `created_by` system owner column is nullable with no default, so on a
+// schema captured before it existed the v1 upgrade legitimately emits one
+// additive `ADD COLUMN created_by` per pre-existing collection table (the
+// zero-backfill upgrade the feature promises). That add names a table outside
+// the post-0.45 allowlist, so it is accepted here explicitly rather than being
+// mistaken for a phantom diff. Tolerant of pg ("created_by") and MySQL
+// (`created_by`) quoting and the optional COLUMN keyword.
+const addsOwnerColumn = (stmt: string): boolean =>
+  /^ALTER TABLE .+ ADD (COLUMN )?[`"]?created_by[`"]?\b/i.test(stmt.trim());
+
+// The `versions` config column is additive (nullable) on the pre-existing
+// dynamic_collections / dynamic_singles registry tables, so a v1 upgrade of a
+// schema captured before it emits one additive `ADD COLUMN versions` per table.
+// Accept it like the owner column above rather than mistaking it for a phantom
+// diff. Scoped to the two registry tables (versions is added nowhere else) so
+// an unrelated `ADD versions` on some other table can't mask a regression.
+// Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+const addsVersionsColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?versions[`"]?\b/i.test(
+    stmt.trim()
+  );
 
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
@@ -220,7 +243,12 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           schemas: ["public"],
         });
         for (const s of first.sqlStatements) {
-          expect(isPost045TableStatement(s), `phantom diff: ${s}`).toBe(true);
+          expect(
+            isPost045TableStatement(s) ||
+              addsOwnerColumn(s) ||
+              addsVersionsColumn(s),
+            `phantom diff: ${s}`
+          ).toBe(true);
         }
         for (const t of POST_045_TABLES) {
           expect(
@@ -288,7 +316,10 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               s
             );
           expect(
-            isDefaultReconcile || isPost045TableStatement(s),
+            isDefaultReconcile ||
+              isPost045TableStatement(s) ||
+              addsOwnerColumn(s) ||
+              addsVersionsColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

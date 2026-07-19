@@ -47,6 +47,14 @@ export interface PopulateComponentDataParams {
    * When provided, only component fields with `select[fieldName] === true` are populated.
    */
   select?: Record<string, boolean>;
+
+  /**
+   * Optional transaction-bound executor. When supplied, component-table reads
+   * run on the transaction's connection (read-your-writes, #226) so a version
+   * snapshot assembled inside the write transaction sees the components just
+   * written in it. Omitted for ordinary reads (pooled connection).
+   */
+  executor?: unknown;
 }
 
 /**
@@ -101,6 +109,7 @@ export class ComponentQueryService extends BaseService {
       depth = DEFAULT_COMPONENT_DEPTH,
       currentDepth = 0,
       select,
+      executor,
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -123,7 +132,8 @@ export class ComponentQueryService extends BaseService {
             fieldName,
             field,
             depth,
-            currentDepth
+            currentDepth,
+            executor
           );
         } else if (field.component) {
           if (field.repeatable) {
@@ -133,7 +143,8 @@ export class ComponentQueryService extends BaseService {
               fieldName,
               field.component,
               depth,
-              currentDepth
+              currentDepth,
+              executor
             );
           } else {
             result[fieldName] = await this.populateSingleField(
@@ -142,7 +153,8 @@ export class ComponentQueryService extends BaseService {
               fieldName,
               field.component,
               depth,
-              currentDepth
+              currentDepth,
+              executor
             );
           }
         }
@@ -260,7 +272,8 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     componentSlug: string,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    executor?: unknown
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -268,7 +281,8 @@ export class ComponentQueryService extends BaseService {
       meta.tableName,
       parentId,
       parentTable,
-      fieldName
+      fieldName,
+      executor
     );
 
     if (rows.length === 0) return null;
@@ -291,7 +305,8 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     componentSlug: string,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    executor?: unknown
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -299,7 +314,8 @@ export class ComponentQueryService extends BaseService {
       meta.tableName,
       parentId,
       parentTable,
-      fieldName
+      fieldName,
+      executor
     );
 
     let dataArray = rows.map(row =>
@@ -323,7 +339,8 @@ export class ComponentQueryService extends BaseService {
     fieldName: string,
     field: ComponentFieldConfig,
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    executor?: unknown
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -339,7 +356,8 @@ export class ComponentQueryService extends BaseService {
           meta.tableName,
           parentId,
           parentTable,
-          fieldName
+          fieldName,
+          executor
         );
         for (const row of rows) {
           allRows.push({ row, fields: meta.fields, slug });
@@ -515,17 +533,26 @@ export class ComponentQueryService extends BaseService {
     tableName: string,
     parentId: string,
     parentTable: string,
-    fieldName: string
+    fieldName: string,
+    // Optional transaction-bound executor. When supplied the read runs on the
+    // transaction's connection (read-your-writes, #226), so a version snapshot
+    // captured inside the write transaction sees the components just written in
+    // it. Omitted for ordinary reads, which use the pooled connection.
+    executor?: unknown
   ): Promise<ComponentRow[]> {
     try {
-      return await this.adapter.select<ComponentRow>(tableName, {
-        where: this.whereAnd({
-          _parent_id: parentId,
-          _parent_table: parentTable,
-          _parent_field: fieldName,
-        }),
-        orderBy: [{ column: "_order", direction: "asc" }],
-      });
+      return await this.adapter.select<ComponentRow>(
+        tableName,
+        {
+          where: this.whereAnd({
+            _parent_id: parentId,
+            _parent_table: parentTable,
+            _parent_field: fieldName,
+          }),
+          orderBy: [{ column: "_order", direction: "asc" }],
+        },
+        executor
+      );
     } catch (error) {
       this.logger.debug("Could not query component table", {
         tableName,

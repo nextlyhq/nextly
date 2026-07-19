@@ -54,11 +54,10 @@ export function AdvancedTab({
       <SwitchRow
         ariaLabel="Localized"
         label="Localized"
-        help="Store different values per locale."
-        checked={false}
-        disabled
-        badge="Coming Soon"
-        onChange={() => {}}
+        help="Store a different value per language. Requires the collection's Internationalization setting and a migration to create the translations table."
+        checked={adv.localized === true}
+        disabled={readOnly}
+        onChange={v => setAdv({ localized: v })}
       />
     </div>
   );

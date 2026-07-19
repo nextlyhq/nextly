@@ -14,9 +14,18 @@
  */
 import { z } from "zod";
 
+import { NextlyError } from "../errors/nextly-error";
 import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
 
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+/**
+ * The collection owner column (`created_by`) — plus the camelCase alias config
+ * validation accepts, which snake-cases to the same column. Reserved only for
+ * collections: single/component tables have no owner column, so these are legal
+ * field names there.
+ */
+const COLLECTION_OWNER_RESERVED = new Set(["created_by", "createdBy"]);
 
 // The ui-schema.json entity validator rejects duplicate field names, so the
 // shared payload validator must too — otherwise a payload could pass the
@@ -43,10 +52,34 @@ const fieldsArraySchema = z
 /**
  * Throw `NextlyError.validation` (with per-field paths) unless `fields`
  * satisfies the manifest field rules.
+ *
+ * @param opts.kind - Entity being validated. For `"collection"`, the owner
+ *   column name (`created_by` / `createdBy`) is additionally reserved, since it
+ *   only exists on collection tables. Singles and components have no owner
+ *   column, so those names stay valid there.
  */
-export function assertValidFieldsPayload(fields: unknown): void {
+export function assertValidFieldsPayload(
+  fields: unknown,
+  opts: { kind?: "collection" | "single" | "component" } = {}
+): void {
   const parsed = fieldsArraySchema.safeParse(fields);
   if (!parsed.success) {
     throw nextlyValidationFromZod(parsed.error);
+  }
+  if (opts.kind === "collection" && Array.isArray(fields)) {
+    fields.forEach((field, index) => {
+      const name = (field as { name?: unknown } | null)?.name;
+      if (typeof name === "string" && COLLECTION_OWNER_RESERVED.has(name)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `${index}.name`,
+              code: "RESERVED",
+              message: `field name '${name}' is reserved`,
+            },
+          ],
+        });
+      }
+    });
   }
 }

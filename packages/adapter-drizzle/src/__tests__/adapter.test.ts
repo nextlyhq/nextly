@@ -110,6 +110,9 @@ class MockAdapter extends DrizzleAdapter {
       ): Promise<U> => {
         return this.upsert<U>(table, data, options);
       },
+      // Required by the TransactionContext contract; this mock does not run
+      // Drizzle queries, so return an empty stub.
+      getDrizzle: <U = unknown>(): U => ({}) as U,
     };
 
     return callback(ctx);

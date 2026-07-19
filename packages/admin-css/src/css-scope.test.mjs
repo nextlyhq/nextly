@@ -135,6 +135,14 @@ describe("findUnscopedRules", () => {
     expect(findUnscopedRules(".nextly-admin .card{color:red}")).toEqual([]);
   });
 
+  it("flags an unscoped part of a mixed comma-separated selector list", () => {
+    // The first part is scoped, the second escapes the wrapper; a whole-prelude
+    // substring check would wrongly accept the rule.
+    expect(
+      findUnscopedRules(".nextly-admin .a, .leak{color:red}")
+    ).toContain(".leak");
+  });
+
   it("does not mistake keyframe steps for escaped rules", () => {
     expect(
       findUnscopedRules("@keyframes spin{from{opacity:0}to{opacity:1}}")

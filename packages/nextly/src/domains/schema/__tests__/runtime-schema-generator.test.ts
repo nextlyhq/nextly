@@ -48,7 +48,7 @@ describe("generateRuntimeSchema", () => {
       expect(getTableName(result.table)).toBe("dc_products");
     });
 
-    it("includes system columns (id, slug, created_at, updated_at)", () => {
+    it("includes system columns (id, slug, created_at, updated_at, created_by)", () => {
       const result = generateRuntimeSchema(
         "dc_products",
         baseFields,
@@ -59,6 +59,34 @@ describe("generateRuntimeSchema", () => {
       expect(columns).toHaveProperty("slug");
       expect(columns).toHaveProperty("created_at");
       expect(columns).toHaveProperty("updated_at");
+      expect(columns).toHaveProperty("created_by");
+    });
+
+    it("emits a nullable created_by owner column on every dialect", () => {
+      for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+        const columns = getColumns(
+          generateRuntimeSchema("dc_products", baseFields, dialect).table
+        );
+        const createdBy = (columns as Record<string, { notNull?: boolean }>)
+          .created_by;
+        // Present, and nullable (no default) so existing rows and system/seed
+        // creates stay null rather than blocking the column add.
+        expect(createdBy).toBeDefined();
+        expect(createdBy.notNull).toBe(false);
+      }
+    });
+
+    it("omits created_by for a Single table (single_ prefix)", () => {
+      for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+        // A Single is one global row with no per-user owner — the collection
+        // owner column must not appear, or the runtime schema would select a
+        // column the Single's physical table never gets.
+        const columns = getColumns(
+          generateRuntimeSchema("single_site_settings", baseFields, dialect)
+            .table
+        );
+        expect(columns).not.toHaveProperty("created_by");
+      }
     });
 
     it("does not duplicate title/slug columns if user defines them", () => {

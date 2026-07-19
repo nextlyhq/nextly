@@ -33,6 +33,7 @@
  */
 
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
+import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -322,6 +323,60 @@ function validateNextlyConfig(config: NextlyConfig): void {
     );
     assertValidUserConfig(config.users, configUsersTypes);
   }
+
+  if (config.localization) {
+    validateLocalizationConfig(config.localization);
+  } else {
+    // Fail fast: a collection/single that declares localization (at the entity or
+    // field level) requires an app-level `localization` config. Without it,
+    // migrations would still move fields into companion tables while the runtime
+    // read/write services have no locale config to populate or split them, so the
+    // localized entity would silently break instead of failing at config time.
+    const localizedSlug = findLocalizedEntitySlug(config);
+    if (localizedSlug) {
+      throw new Error(
+        `Collection/single '${localizedSlug}' declares localized content but the app ` +
+          `has no \`localization\` config. Add a top-level \`localization\` block ` +
+          `(locales + defaultLocale) or remove the \`localized\` flags.`
+      );
+    }
+  }
+}
+
+/** True if any field in the tree opts into localization (`localized: true`). */
+function hasLocalizedField(fields: readonly unknown[] | undefined): boolean {
+  if (!fields) return false;
+  for (const field of fields) {
+    if (field && typeof field === "object") {
+      const rec = field as { localized?: unknown; fields?: unknown };
+      if (rec.localized === true) return true;
+      // Layout fields (row/tabs/collapsible) nest their children under `fields`.
+      if (Array.isArray(rec.fields) && hasLocalizedField(rec.fields))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The slug of the first collection or single that declares localization — either
+ * at the entity level (`localized: true`) or through a localized field — or null
+ * if none does. Used to reject localized content when the app has no localization
+ * config.
+ */
+function findLocalizedEntitySlug(config: NextlyConfig): string | null {
+  const entities = [...(config.collections ?? []), ...(config.singles ?? [])];
+  for (const entity of entities) {
+    const rec = entity as {
+      slug?: string;
+      localized?: unknown;
+      fields?: unknown[];
+    };
+    if (rec.localized === true || hasLocalizedField(rec.fields)) {
+      return rec.slug ?? "(unknown)";
+    }
+  }
+  return null;
 }
 
 /**

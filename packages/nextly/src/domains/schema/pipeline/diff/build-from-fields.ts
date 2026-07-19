@@ -27,6 +27,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -64,12 +65,20 @@ interface MinimalFieldDef {
   relationTo?: unknown;
   unique?: boolean;
   index?: boolean;
+  localized?: boolean;
 }
 
 /** Optional toggles that affect which system columns are injected. */
 export interface BuildDesiredTableOptions {
   /** When true, a `status` system column is injected (varchar/text NOT NULL DEFAULT 'draft'). */
   hasStatus?: boolean;
+  /**
+   * When true, this collection is localized: fields resolved as translatable are stored in the
+   * companion `_locales` table (migration-owned) and MUST be omitted from the main table's
+   * desired state, or the diff engine would try to re-add columns the localization migration
+   * dropped.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -87,6 +96,14 @@ export function buildDesiredTableFromFields(
   options: BuildDesiredTableOptions = {}
 ): TableSpec {
   const columns: ColumnSpec[] = [];
+
+  // Localized fields live in the companion `_locales` table (migration-owned); omit them
+  // from the main table's desired columns/indexes. A localized `title`/`slug` field is thus
+  // absent from main: the user field is skipped below, and the system column is not re-injected
+  // because `hasTitleField`/`hasSlugField` see the (localized) user field as present.
+  const localizedNames = options.localized
+    ? new Set(resolveLocalizedFieldNames(fields, true))
+    : new Set<string>();
 
   // A field materializes a parent column unless the descriptor skips it (a
   // component field stores its data in its own table). Column-less fields must
@@ -108,6 +125,9 @@ export function buildDesiredTableFromFields(
     hasTitleField,
     hasSlugField,
     hasStatus: options.hasStatus,
+    // Singles (`single_` prefix) get no owner column; collections (`dc_`) do.
+    // Keeps the diff input in lockstep with the runtime schema and DDL.
+    isSingle: tableName.startsWith("single_"),
   })) {
     columns.push({
       name: reserved.name,
@@ -122,6 +142,7 @@ export function buildDesiredTableFromFields(
   // User-defined fields — descriptor module handles layout-only filtering,
   // hasMany/relationTo promotion to JSON, and per-dialect token rendering.
   for (const field of fields) {
+    if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getColumnDescriptor(
       // The descriptor's input type is FieldDefinition; this util is
       // structurally compatible (same name/type/required/hasMany/relationTo
@@ -158,6 +179,7 @@ export function buildDesiredTableFromFields(
     });
   }
   for (const field of fields) {
+    if (localizedNames.has(field.name)) continue; // companion-owned; no main-table index
     const col = toSnakeCase(field.name);
     // Skip fields that materialize no column (e.g. component fields): a unique
     // or plain index on a nonexistent column is invalid DDL. Check the field

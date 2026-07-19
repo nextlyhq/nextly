@@ -26,8 +26,10 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -39,8 +41,12 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
   SingleDocument,
   SingleResult,
@@ -59,6 +65,7 @@ import {
   buildSingleErrorResult,
   normalizeUploadFields,
   serializeJsonFields,
+  shouldTreatAsJson,
 } from "./single-utils";
 
 /**
@@ -72,15 +79,27 @@ import {
 export class SingleMutationService extends BaseService {
   private readonly queryService: SingleQueryService;
 
+  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
+  private readonly accessControlService: AccessControlService;
+
+  /**
+   * Stateless version-capture service. Records a durable version snapshot
+   * inside the update transaction when the single opts into versioning.
+   */
+  private readonly versionCapture = new VersionCaptureService();
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
-    private readonly rbacAccessControlService?: RBACAccessControlService
+    private readonly rbacAccessControlService?: RBACAccessControlService,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
     this.queryService = new SingleQueryService(
       adapter,
       logger,
@@ -119,25 +138,31 @@ export class SingleMutationService extends BaseService {
         };
       }
 
-      // 1.5. RBAC access check (after metadata, before hooks/DB operations)
+      // 1.5. Load the current document first (no auto-create yet) so an
+      // owner-only stored rule can compare ownership, then run the access
+      // check (stored rules + RBAC) before any hooks/DB writes.
+      let existingDoc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "update",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        accessControlService: this.accessControlService,
+        accessRules: singleMeta.accessRules,
+        document: existingDoc ?? undefined,
         logger: this.logger,
       });
       if (accessDenied) {
         return accessDenied;
       }
 
-      // 2. Ensure document exists (auto-create if needed)
-      let existingDoc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
-
+      // 2. Ensure document exists (auto-create if it did not yet exist).
       if (!existingDoc) {
         this.logger.info("Auto-creating Single document before update", {
           slug,
@@ -281,17 +306,167 @@ export class SingleMutationService extends BaseService {
         string,
         unknown
       >;
-      const updatePayload = {
-        ...snakeCaseData,
-        updated_at: new Date(),
-      };
+      // Commit the scalar update and the component subtree writes atomically so
+      // a component-save failure rolls back the scalar update (no partial single
+      // state). The scalar row and comp_ tables both write on the same tx. The
+      // rows are RETURNED from the callback (not assigned to an outer variable),
+      // so the value read below is only ever the committed result.
+      let updatedRows: SingleDocument[];
+      try {
+        // Retry the whole update+capture transaction on a version_no allocation
+        // race; the re-run re-reads the max. The single UPDATE is deterministic.
+        updatedRows = await withVersionConflictRetry(() =>
+          this.adapter.transaction(async tx => {
+            // Build the payload inside the closure so a retried attempt after a
+            // concurrent winner stamps a FRESH `updated_at`, rather than reusing
+            // a timestamp created before the first attempt (which could commit an
+            // older time than the winning write and reverse row/snapshot order).
+            const updatePayload = {
+              ...snakeCaseData,
+              updated_at: new Date(),
+            };
+            const rows = await tx.update<SingleDocument>(
+              singleMeta.tableName,
+              updatePayload,
+              this.whereEq("id", existingDoc.id),
+              { returning: "*" }
+            );
 
-      const updatedRows = await this.adapter.update<SingleDocument>(
-        singleMeta.tableName,
-        updatePayload,
-        this.whereEq("id", existingDoc.id),
-        { returning: "*" }
-      );
+            // Nothing updated: return the empty result; the 500 is surfaced after
+            // the (empty) transaction, and the component write is skipped.
+            if (rows.length === 0) {
+              return rows;
+            }
+
+            // Clone per attempt: saveComponentDataInTransaction mutates the data
+            // in place (hashing passwords, assigning ids), so a conflict retry
+            // must start from the user's original values, and the snapshot below
+            // uses this post-save copy (ids populated) rather than the raw input.
+            const attemptComponentData = structuredClone(componentFieldData);
+
+            // 9.5. Save component field data to separate comp_{slug} tables
+            if (
+              this.componentDataService &&
+              Object.keys(attemptComponentData).length > 0
+            ) {
+              await this.componentDataService.saveComponentDataInTransaction(
+                tx,
+                {
+                  parentId: existingDoc.id,
+                  parentTable: singleMeta.tableName,
+                  fields: fieldConfigs,
+                  data: attemptComponentData,
+                }
+              );
+            }
+
+            // Capture a version snapshot atomically with the write when the single
+            // opts into versioning. Singles have no many-to-many fields; the
+            // updated parent row (top-level keys camelCased to the read shape) plus
+            // component subtrees form the snapshot.
+            const versionsConfig = singleMeta.versions;
+            if (versionsConfig?.enabled) {
+              // Match the read shape: keep user field keys (field.name, which
+              // may contain underscores like `site_title`) exactly, converting
+              // only the timestamp columns — camel-casing every key would rewrite
+              // those fields and diverge from a normal read.
+              const parentRow = convertTimestampsToCamelCase({
+                ...(rows[0] as Record<string, unknown>),
+              });
+              // Never let password hashes into durable version history: the row
+              // carries bcrypt hashes (hashPasswordFieldValues ran before the
+              // write), and a later password change would otherwise leave the
+              // superseded hash permanently recoverable via the snapshot. The
+              // response is redacted separately (stripPasswordFieldValues at the
+              // return), which does not cover this snapshot.
+              stripPasswordFieldValues(parentRow, fieldConfigs);
+              // Strip the system owner column (created_by) too, matching the
+              // read/response redaction, so history does not retain a stable
+              // owner id or let a restore overwrite ownership.
+              stripSystemOwnerField(parentRow);
+              // Parse JSON-backed fields (richtext, group, json, ...) to the read
+              // shape: on SQLite the returned row holds them as strings, so an
+              // unparsed snapshot would not match a normal read on restore.
+              for (const field of fieldConfigs) {
+                if (!("name" in field) || !field.name) continue;
+                const value = parentRow[field.name];
+                if (shouldTreatAsJson(field) && typeof value === "string") {
+                  try {
+                    parentRow[field.name] = JSON.parse(value);
+                  } catch {
+                    // Not valid JSON — keep the raw string.
+                  }
+                }
+              }
+              // Read the component subtrees from the TRANSACTION (read-your-
+              // writes, #226): the component save above just persisted them, so
+              // the read returns the complete, read-shaped, password-stripped
+              // subtrees with no in-memory overlay. A read failure fails the
+              // capture (rolls back) rather than persisting an incomplete snapshot.
+              const components: Record<string, unknown> = {};
+              if (this.componentDataService) {
+                const componentFields = fieldConfigs.filter(
+                  (f): f is typeof f & { name: string } =>
+                    isComponentField(f) && !!f.name
+                );
+                if (componentFields.length > 0) {
+                  try {
+                    const populated =
+                      await this.componentDataService.populateComponentData({
+                        entry: { id: existingDoc.id },
+                        parentTable: singleMeta.tableName,
+                        fields: fieldConfigs,
+                        executor: tx.getDrizzle(),
+                      });
+                    for (const f of componentFields) {
+                      if (populated[f.name] !== undefined) {
+                        components[f.name] = populated[f.name];
+                      }
+                    }
+                  } catch (err) {
+                    this.logger.error(
+                      "Version snapshot: failed to read single components; failing the write instead of capturing an incomplete snapshot",
+                      {
+                        slug,
+                        error: err instanceof Error ? err.message : String(err),
+                      }
+                    );
+                    throw NextlyError.internal({
+                      cause: err instanceof Error ? err : undefined,
+                      logContext: {
+                        reason: "version-snapshot-single-component-read",
+                        slug,
+                      },
+                    });
+                  }
+                }
+              }
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                contentStatus: (parentRow as { status?: unknown }).status,
+                parts: { parentRow, components },
+                createdBy: options.user?.id ?? null,
+              });
+            }
+
+            return rows;
+          })
+        );
+      } catch (error) {
+        // A component validation failure (NextlyError) thrown inside the
+        // transaction callback is re-wrapped as a database error by the adapter;
+        // recover it from the cause so an invalid component update still yields
+        // the original validation response (400) instead of a generic 500.
+        const cause = (error as { cause?: unknown } | null)?.cause;
+        if (cause instanceof NextlyError) {
+          throw cause;
+        }
+        throw error;
+      }
 
       if (updatedRows.length === 0) {
         return {
@@ -299,19 +474,6 @@ export class SingleMutationService extends BaseService {
           statusCode: 500,
           message: "Failed to update Single document",
         };
-      }
-
-      // 9.5. Save component field data to separate comp_{slug} tables
-      if (
-        this.componentDataService &&
-        Object.keys(componentFieldData).length > 0
-      ) {
-        await this.componentDataService.saveComponentData({
-          parentId: existingDoc.id,
-          parentTable: singleMeta.tableName,
-          fields: fieldConfigs,
-          data: componentFieldData,
-        });
       }
 
       let updatedDoc = updatedRows[0];

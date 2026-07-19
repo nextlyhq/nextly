@@ -43,7 +43,10 @@ import {
   resolveStatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
-import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import type {
+  CollectionFileManager,
+  CompanionSchema,
+} from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
   applyGeoFilters,
@@ -69,6 +72,7 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -78,6 +82,23 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  buildCompanionExists,
+  buildLocalizedOrderExpr,
+  buildTranslationStatusCondition,
+  populateCompanionFields,
+  populateCompanionFieldsAllLocales,
+  populateTranslationStatus,
+  type LocalizedFieldRef,
+  type TranslationStatusFilter,
+  type TranslationFilterState,
+} from "../../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  isValidLocale,
+  resolveFallbackChain,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -89,6 +110,27 @@ import {
   isJsonFieldType,
 } from "./collection-utils";
 
+/**
+ * Localized-query context (i18n M4c) threaded into the search/where builders so a localized
+ * field filters via a companion EXISTS on the requested locale instead of being silently
+ * dropped. `null`/absent → non-localized behavior (unchanged).
+ */
+interface LocalizedQueryContext {
+  companionTableName: string;
+  /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
+  localizedFields: LocalizedFieldRef[];
+  /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
+  mainIdColumn: unknown;
+  /** The locale to filter on (the requested locale — chain head). */
+  locale: string;
+  /**
+   * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
+   * single status and the collection has per-locale status, so localized where/search EXISTS
+   * checks only match companion rows in that state. Undefined = no status constraint.
+   */
+  statusValue?: string;
+}
+
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -98,9 +140,336 @@ export class CollectionQueryService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService
+    private readonly componentDataService?: ComponentDataService,
+    /**
+     * Normalized localization config (i18n M4). When set and a collection is localized,
+     * reads resolve translatable fields from the companion `_locales` table for the
+     * requested locale with fallback. Absent → non-localized behavior (unchanged).
+     */
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
+  }
+
+  // ============================================================
+  // i18n (M4) — companion-aware read helpers
+  // ============================================================
+
+  /**
+   * Resolve the fallback chain for a read request, or `null` when localization is off.
+   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale);
+   * otherwise the requested locale's configured chain + default locale is used (spec §8).
+   */
+  private resolveLocaleChain(
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): string[] | null {
+    // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
+    if (!this.localization || locale === "all") return null;
+    const requested = resolveRequestedLocale(this.localization, locale);
+    // A per-request opt-out disables fallback: return the requested language only.
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    // A concrete per-request fallback locale overrides the configured chain: the
+    // requested locale first, then the named fallback's own chain (deduped).
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
+    }
+    // The global localization.fallback switch (default true) disables fallback
+    // for ordinary reads when turned off.
+    if (!this.localization.fallback) {
+      return [requested];
+    }
+    return resolveFallbackChain(this.localization, requested);
+  }
+
+  /**
+   * `locale=all` populate (admin/export): set each localized field to a language-keyed object
+   * covering every configured locale. No-op when localization is off, the request isn't
+   * `locale=all`, or the collection isn't localized.
+   */
+  private async populateLocalizedAll(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    locale: string | undefined,
+    preloaded?: CompanionSchema | null,
+    statusFilterValue?: string | null
+  ): Promise<void> {
+    if (!this.localization || locale !== "all" || rows.length === 0) return;
+    const companion =
+      preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateCompanionFieldsAllLocales({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows,
+      locales: this.localization.locales.map(l => l.code),
+      // Only constrain by status on a status-enabled collection with a resolved
+      // single status, so a published locale=all read drops draft translations.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
+    });
+  }
+
+  /**
+   * Translation-status overview populate (i18n M7): attach a per-locale `_translations` map
+   * (which languages are translated + each one's draft/published status) to each row, for the
+   * admin's completeness badges / per-language pills / language filter. One batched query over
+   * the page. No-op when localization is off or the collection isn't localized.
+   */
+  private async populateTranslationMeta(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    preloaded?: CompanionSchema | null,
+    statusFilterValue?: string | null
+  ): Promise<void> {
+    if (!this.localization || rows.length === 0) return;
+    const companion =
+      preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateTranslationStatus({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows,
+      locales: this.localization.locales.map(l => l.code),
+      defaultLocale: this.localization.defaultLocale,
+      hasStatus: companion.hasStatus,
+      // On a status-scoped read, don't report a draft-only translation as present.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
+    });
+  }
+
+  /**
+   * Pull the reserved `_translated` key (i18n M7 language filter) out of a where object, returning
+   * the validated filter and a cleaned where without it (so the generic where-builder never sees
+   * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
+   */
+  private extractTranslationStatusFilter(where: WhereFilter | undefined): {
+    filter: TranslationStatusFilter | null;
+    cleanedWhere: WhereFilter | undefined;
+  } {
+    if (!where || typeof where !== "object") {
+      return { filter: null, cleanedWhere: where };
+    }
+    const raw = where as Record<string, unknown>;
+    if (!("_translated" in raw)) return { filter: null, cleanedWhere: where };
+    const { _translated, ...rest } = raw;
+    const cleanedWhere =
+      Object.keys(rest).length > 0 ? (rest as WhereFilter) : undefined;
+    const f = _translated as { locale?: unknown; state?: unknown };
+    const states: TranslationFilterState[] = [
+      "missing",
+      "translated",
+      "draft",
+      "published",
+    ];
+    if (
+      typeof f?.locale !== "string" ||
+      typeof f?.state !== "string" ||
+      !states.includes(f.state as TranslationFilterState)
+    ) {
+      return { filter: null, cleanedWhere };
+    }
+    return {
+      filter: { locale: f.locale, state: f.state as TranslationFilterState },
+      cleanedWhere,
+    };
+  }
+
+  /**
+   * Build the SQL condition for a `_translated` filter (i18n M7). Loads the companion (reusing a
+   * preloaded one) and delegates to {@link buildTranslationStatusCondition}. Returns `undefined`
+   * for non-localized collections or no-op filters.
+   */
+  private async buildTranslationStatusFilterCondition(
+    collectionName: string,
+    filter: TranslationStatusFilter,
+    mainIdColumn: unknown,
+    preloaded?: CompanionSchema | null
+  ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
+    if (!this.localization) return undefined;
+    const companion =
+      preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return undefined;
+    return buildTranslationStatusCondition({
+      companionTableName: companion.companionTableName,
+      mainIdColumn,
+      localizedColumns: companion.localizedFields.map(f => f.column),
+      hasStatus: companion.hasStatus,
+      defaultLocale: this.localization.defaultLocale,
+      filter,
+    });
+  }
+
+  /**
+   * Populate localized fields onto result rows from the companion `_locales` table for the
+   * resolved locale chain. No-op when localization is off (`localeChain === null`), there are no
+   * rows, or the collection is not localized (no companion). Shared by getEntry + listEntries.
+   */
+  private async populateLocalized(
+    collectionName: string,
+    rows: Record<string, unknown>[],
+    localeChain: string[] | null,
+    preloaded?: CompanionSchema | null,
+    /**
+     * Resolved status the read is scoped to (`"published"` / `"draft"`), or `null` for `all`.
+     * When the companion has per-locale status (i18n M6), a companion row whose `_status` differs
+     * is filtered out so a draft translation never leaks — the field falls back to the published
+     * default.
+     */
+    statusFilterValue?: string | null
+  ): Promise<void> {
+    if (!localeChain || rows.length === 0) return;
+    const companion =
+      preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
+    if (!companion) return;
+    await populateCompanionFields({
+      db: this.db as never,
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows,
+      localeChain,
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
+    });
+  }
+
+  /**
+   * Build a companion EXISTS condition for a where-filter on a localized field (i18n M4c).
+   * Maps the where operator to a SQL predicate on the companion column for the requested locale.
+   * Returns `undefined` for operators not supported over the companion (caller falls through).
+   */
+  private buildLocalizedWhereExists(
+    ctx: LocalizedQueryContext,
+    column: string,
+    op: string,
+    value: unknown,
+    dialect: string
+  ): ReturnType<typeof sql> | undefined {
+    const t = sql.identifier(ctx.companionTableName);
+    const col = sql.identifier(column);
+    let valueCondition: ReturnType<typeof sql> | undefined;
+    switch (op) {
+      case "=":
+        valueCondition = sql`${t}.${col} = ${value}`;
+        break;
+      case "!=":
+        valueCondition = sql`${t}.${col} <> ${value}`;
+        break;
+      case ">":
+        valueCondition = sql`${t}.${col} > ${value}`;
+        break;
+      case ">=":
+        valueCondition = sql`${t}.${col} >= ${value}`;
+        break;
+      case "<":
+        valueCondition = sql`${t}.${col} < ${value}`;
+        break;
+      case "<=":
+        valueCondition = sql`${t}.${col} <= ${value}`;
+        break;
+      case "LIKE":
+        valueCondition = sql`${t}.${col} LIKE ${value}`;
+        break;
+      case "ILIKE":
+        valueCondition =
+          dialect === "postgresql"
+            ? sql`${t}.${col} ILIKE ${value}`
+            : sql`${t}.${col} LIKE ${value}`;
+        break;
+      case "IS NULL": {
+        // A localized field is absent for the locale when no companion row holds
+        // a value — an untranslated entry usually has no companion row at all.
+        // Match those with NOT EXISTS(row with a value) rather than
+        // EXISTS(col IS NULL), which would require a companion row to exist.
+        const present = buildCompanionExists({
+          companionTableName: ctx.companionTableName,
+          mainIdColumn: ctx.mainIdColumn,
+          locale: ctx.locale,
+          valueCondition: sql`${t}.${col} IS NOT NULL`,
+          statusValue: ctx.statusValue,
+        });
+        return sql`NOT ${present}`;
+      }
+      case "IS NOT NULL":
+        valueCondition = sql`${t}.${col} IS NOT NULL`;
+        break;
+      case "IN":
+        if (Array.isArray(value) && value.length > 0) {
+          // Expand the array into an SQL list; a bare array bind would emit
+          // `col IN $1` and compare against the whole array as one value.
+          const inList = sql.join(
+            value.map(v => sql`${v}`),
+            sql`, `
+          );
+          valueCondition = sql`${t}.${col} IN (${inList})`;
+        }
+        break;
+      case "NOT IN":
+        if (Array.isArray(value) && value.length > 0) {
+          // Expand into an SQL list, mirroring the IN case; without this the
+          // localized not_in filter is silently dropped and excludes nothing.
+          const notInList = sql.join(
+            value.map(v => sql`${v}`),
+            sql`, `
+          );
+          valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
+        }
+        break;
+      default:
+        return undefined;
+    }
+    if (!valueCondition) return undefined;
+    return buildCompanionExists({
+      companionTableName: ctx.companionTableName,
+      mainIdColumn: ctx.mainIdColumn,
+      locale: ctx.locale,
+      valueCondition,
+      statusValue: ctx.statusValue,
+    });
+  }
+
+  /**
+   * Build the localized-query context for the search/where builders, or `null` when the
+   * collection isn't localized. Uses the requested locale (chain head) for EXISTS filtering.
+   */
+  private buildLocalizedQueryContext(
+    companion: CompanionSchema | null,
+    localeChain: string[] | null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
+    schema: any,
+    statusFilterValue?: string | null
+  ): LocalizedQueryContext | null {
+    if (!companion || !localeChain || localeChain.length === 0) return null;
+    return {
+      companionTableName: companion.companionTableName,
+      localizedFields: companion.localizedFields,
+      mainIdColumn: schema.id,
+      locale: localeChain[0],
+      // Only constrain by status when the collection has per-locale status and the
+      // read resolved to a single status; otherwise leave it unfiltered.
+      statusValue:
+        companion.hasStatus && statusFilterValue
+          ? statusFilterValue
+          : undefined,
+    };
   }
 
   // ============================================================
@@ -240,6 +609,15 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
+     * The route middleware already ran the RBAC gate for the authorizing
+     * operation, so skip only that redundant re-check while still evaluating
+     * the stored read rules (owner-only filter, custom queries). Used by the
+     * bulk-by-query writers to enumerate their targets: the route authorized
+     * the write, so an update/delete-only key must not be rejected by a read
+     * RBAC gate here — but owner-only scoping must still apply.
+     */
+    routeAuthorized?: boolean;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -248,6 +626,18 @@ export class CollectionQueryService extends BaseService {
      * Trusted callers (overrideAccess: true) default to 'all' if unset.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * resolved to this language (with fallback) from the companion `_locales` table.
+     */
+    locale?: string;
+    /** Fallback control. `false`/`"none"` disables fallback (raw requested language). */
+    fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to each
+     * row for the admin translation-status overview. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
@@ -265,7 +655,8 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -274,6 +665,18 @@ export class CollectionQueryService extends BaseService {
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
+
+      // i18n M4: resolve the locale chain + load the companion once, so both the sort
+      // block (in-query ORDER BY on a localized column) and the post-query populate reuse
+      // it. `null` when localization is off or the collection isn't localized.
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
+      const companion =
+        localeChain || params.locale === "all" || params.translationStatus
+          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          : null;
 
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
@@ -371,6 +774,16 @@ export class CollectionQueryService extends BaseService {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
 
+      // Build the localized-query context AFTER the status filter is resolved so
+      // localized where/search EXISTS checks constrain by the per-locale status too
+      // (a published read must not match a draft translation).
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema,
+        statusFilter?.value
+      );
+
       // Apply search filter if provided
       if (params.search) {
         // Get collection metadata for search configuration
@@ -388,12 +801,14 @@ export class CollectionQueryService extends BaseService {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
-            // Build search condition
+            // Build search condition (localizedCtx routes localized searchable fields to
+            // a companion EXISTS instead of dropping them).
             const searchCondition = this.buildSearchCondition(
               schema,
               searchableFields,
               params.search,
-              dialect
+              dialect,
+              localizedCtx
             );
 
             if (searchCondition) {
@@ -407,10 +822,27 @@ export class CollectionQueryService extends BaseService {
       // GEO FILTERING: Extract geo operators for post-query filtering
       // ============================================================
 
+      // i18n M7: pull the reserved `_translated` language filter out FIRST — the geo/component
+      // extractors below drop object-valued keys they don't recognize, so it must be removed
+      // before them and turned into a companion EXISTS/NOT EXISTS condition.
+      const { filter: translationFilter, cleanedWhere: whereAfterTranslation } =
+        this.extractTranslationStatusFilter(listQueryWhere);
+      if (translationFilter) {
+        const translationCondition =
+          await this.buildTranslationStatusFilterCondition(
+            params.collectionName,
+            translationFilter,
+            schema.id,
+            companion
+          );
+        if (translationCondition) whereConditions.push(translationCondition);
+      }
+
       // Extract geo filters (near, within) that must be applied in JS
       // These operators can't be translated to SQL for cross-database support
-      const { geoFilters, cleanedWhere: whereAfterGeo } =
-        extractGeoFilters(listQueryWhere);
+      const { geoFilters, cleanedWhere: whereAfterGeo } = extractGeoFilters(
+        whereAfterTranslation
+      );
       const hasGeoFilters = geoFilters.length > 0;
 
       // ============================================================
@@ -468,7 +900,8 @@ export class CollectionQueryService extends BaseService {
         const whereCondition = this.buildDrizzleCondition(
           internalWhere,
           schema,
-          dialect
+          dialect,
+          localizedCtx
         );
 
         if (whereCondition) {
@@ -502,11 +935,40 @@ export class CollectionQueryService extends BaseService {
 
         const sortFieldSnake = toSnakeCase(sortField);
 
+        // i18n M4: a localized sort field lives in the companion table (absent from the main
+        // schema). Order by a correlated subquery pulling the companion value for the requested
+        // locale (with fallback) so pagination is correct. Applied only when the collection is
+        // localized and this field is one of its translatable fields.
+        const localizedSortField =
+          companion && localeChain
+            ? companion.localizedFields.find(
+                f => f.name === sortField || f.column === sortFieldSnake
+              )
+            : undefined;
+
+        // The system owner column is stripped from responses, so it must not be
+        // sortable either — sorting by it would let a caller order/target rows
+        // by creator. Ignore an owner-column sort instead of resolving it.
+        const ownerSort =
+          sortField === "created_by" ||
+          sortField === "createdBy" ||
+          sortFieldSnake === "created_by";
+
         // Try both camelCase and snake_case versions of the field name
         // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-        const column = schema[sortField] || schema[sortFieldSnake];
+        const column = ownerSort
+          ? undefined
+          : schema[sortField] || schema[sortFieldSnake];
 
-        if (column) {
+        if (localizedSortField && companion && localeChain) {
+          const orderExpr = buildLocalizedOrderExpr({
+            companionTableName: companion.companionTableName,
+            mainIdColumn: schema.id,
+            column: localizedSortField.column,
+            localeChain,
+          });
+          query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
+        } else if (column) {
           query = query.orderBy(sortDesc ? desc(column) : asc(column));
         } else if (sortField) {
           // Log warning if sort field is not found in either format
@@ -553,7 +1015,19 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
-            where: cleanedWhere, // Use cleaned where (without geo operators)
+            // Re-attach the translation filter so the count applies the same
+            // companion predicate as the rows (countEntries re-extracts it);
+            // geo operators stay excluded via cleanedWhere. Without this the
+            // language filter paginates against the unfiltered total.
+            where: translationFilter
+              ? ({
+                  ...(cleanedWhere ?? {}),
+                  _translated: translationFilter,
+                } as WhereFilter)
+              : cleanedWhere,
+            // Forward locale so count mirrors any locale-scoped filter (M4b parity).
+            locale: params.locale,
+            fallbackLocale: params.fallbackLocale,
             // The count has to answer the same question as the rows beside it.
             // Both resolve the Draft/Published filter from these two, so
             // leaving them out counts published-only for every caller: a
@@ -561,6 +1035,11 @@ export class CollectionQueryService extends BaseService {
             // totalPages then hides the tail of its own result set.
             status: params.status,
             overrideAccess: params.overrideAccess,
+            // The count must answer the same access question as the rows, or a
+            // route-authorized update/delete-only caller gets its read gate
+            // denied here and totalDocs silently falls back to 0 — breaking the
+            // bulk-by-query limit guard and pagination.
+            routeAuthorized: params.routeAuthorized,
           }),
         ]);
 
@@ -571,6 +1050,34 @@ export class CollectionQueryService extends BaseService {
           countResult.success && countResult.data
             ? countResult.data.totalDocs
             : 0;
+      }
+
+      // i18n M4: resolve localized fields for the whole page from the companion table
+      // (batch — one query for all rows), with fallback, BEFORE relationship/component
+      // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
+      await this.populateLocalized(
+        params.collectionName,
+        entries,
+        localeChain,
+        companion,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
+      );
+      // `locale=all` → language-keyed values per localized field (admin/export).
+      await this.populateLocalizedAll(
+        params.collectionName,
+        entries,
+        params.locale,
+        companion,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
+      );
+      // i18n M7: per-locale translation-status map for the admin overview (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(
+          params.collectionName,
+          entries,
+          companion,
+          statusFilter?.value ?? null // i18n M6: per-locale published filter
+        );
       }
 
       // Get collection metadata to identify relation fields and hooks
@@ -664,6 +1171,12 @@ export class CollectionQueryService extends BaseService {
           stripPasswordFieldValues(entry, fields);
         }
       }
+      // Always strip the system owner column so a list readable by non-creators
+      // never leaks the creator's user id (unconditional — not gated on
+      // password fields).
+      for (const entry of expandedEntries) {
+        stripSystemOwnerField(entry);
+      }
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -725,15 +1238,31 @@ export class CollectionQueryService extends BaseService {
       // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
       finalData = (finalData as Record<string, unknown>[]).map(entry => {
         fields.forEach(field => {
-          if (
-            isJsonFieldType(field.type, field) &&
-            entry[field.name] &&
-            typeof entry[field.name] === "string"
-          ) {
+          if (!isJsonFieldType(field.type, field)) return;
+          const value = entry[field.name];
+          if (typeof value === "string") {
             try {
-              entry[field.name] = JSON.parse(entry[field.name] as string);
+              entry[field.name] = JSON.parse(value);
             } catch {
               // If parsing fails, keep as string
+            }
+          } else if (
+            params.locale === "all" &&
+            value !== null &&
+            typeof value === "object"
+          ) {
+            // locale=all yields a language-keyed map of raw companion values;
+            // parse each locale's JSON string so nested shapes match the
+            // parsed objects a single-locale read returns.
+            const keyed = value as Record<string, unknown>;
+            for (const code of Object.keys(keyed)) {
+              if (typeof keyed[code] === "string") {
+                try {
+                  keyed[code] = JSON.parse(keyed[code]);
+                } catch {
+                  // If parsing fails, keep as string
+                }
+              }
             }
           }
         });
@@ -773,6 +1302,14 @@ export class CollectionQueryService extends BaseService {
         finalData = (finalData as Record<string, unknown>[]).map(entry =>
           transformRichTextFields(entry, fieldConfig, params.richTextFormat)
         );
+      }
+
+      // Final owner-column strip at the response boundary — after every
+      // afterRead hook, field-level read access, and transform — so nothing
+      // downstream can re-expose the creator's user id. (The pre-hook strip
+      // above also keeps it out of hook inputs.)
+      for (const entry of finalData as Record<string, unknown>[]) {
+        stripSystemOwnerField(entry);
       }
 
       // Build paginated response with all metadata
@@ -853,10 +1390,26 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * The route middleware already ran the RBAC gate for the authorizing
+     * operation; skip only that redundant re-check while stored read rules
+     * (owner-only filter) still apply. Mirrors listEntries so the count
+     * beside a route-authorized enumeration answers the same question and
+     * does not fall back to 0 for update/delete-only callers.
+     */
+    routeAuthorized?: boolean;
+    /**
      * Draft/Published filter override (only effective when collection.status === true).
      * See listEntries for full semantics.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
+     * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
+     * effect on the count (localized display resolution is post-query).
+     */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -872,7 +1425,8 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
@@ -881,6 +1435,17 @@ export class CollectionQueryService extends BaseService {
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
+
+      // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
+      // counts the SAME rows the page returns (count==list parity).
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
+      const companion =
+        localeChain || params.locale === "all"
+          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          : null;
 
       // Build count query using Drizzle
       // Start with a base count query
@@ -925,6 +1490,16 @@ export class CollectionQueryService extends BaseService {
         whereConditions.push(eq(schema.status, statusFilter.value));
       }
 
+      // Build the localized-query context AFTER the status filter is resolved so
+      // localized where/search EXISTS checks constrain by the per-locale status too
+      // (a published read must not match a draft translation).
+      const localizedCtx = this.buildLocalizedQueryContext(
+        companion,
+        localeChain,
+        schema,
+        statusFilter?.value
+      );
+
       // Apply search filter if provided
       if (params.search) {
         // Get collection metadata for search configuration
@@ -942,12 +1517,14 @@ export class CollectionQueryService extends BaseService {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
-            // Build search condition
+            // Build search condition (localizedCtx routes localized searchable fields to
+            // a companion EXISTS instead of dropping them).
             const searchCondition = this.buildSearchCondition(
               schema,
               searchableFields,
               params.search,
-              dialect
+              dialect,
+              localizedCtx
             );
 
             if (searchCondition) {
@@ -979,9 +1556,28 @@ export class CollectionQueryService extends BaseService {
           components?: string[];
         }>;
 
+        // i18n M7: pull the `_translated` language filter out before the component extractor
+        // (which drops unrecognized object keys), for count==list parity.
+        const {
+          filter: countTranslationFilter,
+          cleanedWhere: whereWithoutTranslation,
+        } = this.extractTranslationStatusFilter(params.where);
+        if (countTranslationFilter) {
+          const translationCondition =
+            await this.buildTranslationStatusFilterCondition(
+              params.collectionName,
+              countTranslationFilter,
+              schema.id
+            );
+          if (translationCondition) whereConditions.push(translationCondition);
+        }
+
         // Extract component field conditions (e.g., 'seo.metaTitle')
         const { componentFilters, cleanedWhere } =
-          extractComponentFieldConditions(params.where, fieldsForFilters);
+          extractComponentFieldConditions(
+            whereWithoutTranslation,
+            fieldsForFilters
+          );
 
         // Get the table name for component subqueries
         const tableName = getTableName(params.collectionName);
@@ -1006,7 +1602,8 @@ export class CollectionQueryService extends BaseService {
           const whereCondition = this.buildDrizzleCondition(
             internalWhere,
             schema,
-            dialect
+            dialect,
+            localizedCtx
           );
 
           if (whereCondition) {
@@ -1109,6 +1706,22 @@ export class CollectionQueryService extends BaseService {
      * id, so visibility doesn't leak via response codes.
      */
     status?: StatusOption;
+    /**
+     * Requested content locale (i18n M4). For a localized collection, translatable fields are
+     * resolved to this language (with fallback) from the companion `_locales` table. Ignored
+     * for non-localized collections. Defaults to the configured default locale.
+     */
+    locale?: string;
+    /**
+     * Fallback control. `false` / `"none"` disables fallback (raw requested language, blank if
+     * untranslated). Otherwise the configured fallback chain + default locale is used.
+     */
+    fallbackLocale?: string | false;
+    /**
+     * i18n M7: when true, attach a per-locale `_translations` map (translated + status) to the
+     * entry for the admin translation-status pills. No-op for non-localized collections.
+     */
+    translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1216,6 +1829,34 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
+      // i18n M4: resolve localized fields from the companion `_locales` table for the
+      // requested language (with fallback) BEFORE relationship expansion / hooks, so every
+      // downstream consumer sees the translated values. No-op for non-localized collections.
+      await this.populateLocalized(
+        params.collectionName,
+        [entry as Record<string, unknown>],
+        this.resolveLocaleChain(params.locale, params.fallbackLocale),
+        undefined,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
+      );
+      // `locale=all` → language-keyed values per localized field (admin/export).
+      await this.populateLocalizedAll(
+        params.collectionName,
+        [entry as Record<string, unknown>],
+        params.locale,
+        undefined,
+        statusFilter?.value ?? null // i18n M6: per-locale published filter
+      );
+      // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
+      if (params.translationStatus) {
+        await this.populateTranslationMeta(
+          params.collectionName,
+          [entry as Record<string, unknown>],
+          undefined,
+          statusFilter?.value ?? null // i18n M6: per-locale published filter
+        );
+      }
+
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -1259,6 +1900,8 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(expandedEntry, fields);
       }
+      // Always strip the system owner column (see listEntries).
+      stripSystemOwnerField(expandedEntry);
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -1310,18 +1953,36 @@ export class CollectionQueryService extends BaseService {
       if (detailHasPassword) {
         stripPasswordFieldValues(finalData, fields);
       }
+      // Same defense in depth for the owner column.
+      stripSystemOwnerField(finalData);
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          finalData[field.name] &&
-          typeof finalData[field.name] === "string"
-        ) {
+        if (!isJsonFieldType(field.type, field)) return;
+        const value = finalData[field.name];
+        if (typeof value === "string") {
           try {
-            finalData[field.name] = JSON.parse(finalData[field.name] as string);
+            finalData[field.name] = JSON.parse(value);
           } catch {
             // If parsing fails, keep as string
+          }
+        } else if (
+          params.locale === "all" &&
+          value !== null &&
+          typeof value === "object"
+        ) {
+          // locale=all yields a language-keyed map of raw companion values;
+          // parse each locale's JSON string so nested shapes match the parsed
+          // objects a single-locale read returns.
+          const keyed = value as Record<string, unknown>;
+          for (const code of Object.keys(keyed)) {
+            if (typeof keyed[code] === "string") {
+              try {
+                keyed[code] = JSON.parse(keyed[code]);
+              } catch {
+                // If parsing fails, keep as string
+              }
+            }
           }
         }
       });
@@ -1355,6 +2016,11 @@ export class CollectionQueryService extends BaseService {
           params.richTextFormat
         );
       }
+
+      // Final owner-column strip at the response boundary — after the
+      // field-level afterRead hooks, read access, and rich-text transform — so
+      // nothing downstream can re-expose the creator's user id.
+      stripSystemOwnerField(finalData);
 
       return {
         success: true,
@@ -1394,7 +2060,8 @@ export class CollectionQueryService extends BaseService {
     schema: any,
     fields: string[],
     query: string,
-    dialect: string = "postgresql"
+    dialect: string = "postgresql",
+    localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof or> | undefined {
     if (!query || fields.length === 0) {
       return undefined;
@@ -1403,26 +2070,37 @@ export class CollectionQueryService extends BaseService {
     // Normalize and escape the search query
     const searchTerm = `%${query.trim().replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
-    // Build OR conditions for each searchable field
+    // Build OR conditions for each searchable field. A localized searchable field lives in the
+    // companion table (absent from the main schema); match it via a companion EXISTS on the
+    // requested locale instead of silently dropping it. Non-localized fields keep the
+    // main-table ILIKE/LIKE.
     const conditions = fields
-      .filter(fieldName => {
-        const column = schema[fieldName];
-        if (!column) return false;
-
-        // Try to avoid non-text columns if possible.
-        // Drizzle columns have different internal structures depending on the dialect,
-        // but often we can check the data type.
-        // For now, we trust getSearchableFields and explicit configurations,
-        // but we filter out missing columns to prevent crashes.
-        return true;
-      })
       .map(fieldName => {
-        // Use ILIKE for PostgreSQL, LIKE for others (MySQL/SQLite are case-insensitive)
-        if (dialect === "postgresql") {
-          return ilike(schema[fieldName], searchTerm);
+        const localizedField = localizedCtx?.localizedFields.find(
+          f => f.name === fieldName
+        );
+        if (localizedCtx && localizedField) {
+          const t = sql.identifier(localizedCtx.companionTableName);
+          const col = sql.identifier(localizedField.column);
+          const valueCondition =
+            dialect === "postgresql"
+              ? sql`${t}.${col} ILIKE ${searchTerm}`
+              : sql`${t}.${col} LIKE ${searchTerm}`;
+          return buildCompanionExists({
+            companionTableName: localizedCtx.companionTableName,
+            mainIdColumn: localizedCtx.mainIdColumn,
+            locale: localizedCtx.locale,
+            valueCondition,
+            statusValue: localizedCtx.statusValue,
+          });
         }
-        return like(schema[fieldName], searchTerm);
-      });
+        const column = schema[fieldName];
+        if (!column) return undefined; // not on main table and not localized → skip
+        return dialect === "postgresql"
+          ? ilike(column, searchTerm)
+          : like(column, searchTerm);
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
     if (conditions.length === 0) {
       return undefined;
@@ -1447,7 +2125,8 @@ export class CollectionQueryService extends BaseService {
     whereClause: ReturnType<typeof buildWhereClause>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    dialect: string = "postgresql"
+    dialect: string = "postgresql",
+    localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof and> | undefined {
     if (!whereClause) {
       return undefined;
@@ -1458,7 +2137,12 @@ export class CollectionQueryService extends BaseService {
     const buildSingleCondition = (condition: any): any => {
       // Check if it's a nested WhereClause (has and/or)
       if (condition.and || condition.or) {
-        return this.buildDrizzleCondition(condition, schema, dialect);
+        return this.buildDrizzleCondition(
+          condition,
+          schema,
+          dialect,
+          localizedCtx
+        );
       }
 
       // It's a WhereCondition
@@ -1466,6 +2150,24 @@ export class CollectionQueryService extends BaseService {
 
       // Get the column from schema (handle dot notation for nested fields)
       const columnParts = column.split(".");
+
+      // i18n M4c: a filter on a localized field targets the companion table (absent from the
+      // main schema). Resolve it to a companion EXISTS on the requested locale so the filter
+      // takes effect instead of being silently skipped.
+      const localizedWhereField = localizedCtx?.localizedFields.find(
+        f => f.name === columnParts[0]
+      );
+      if (localizedCtx && localizedWhereField) {
+        const localizedCond = this.buildLocalizedWhereExists(
+          localizedCtx,
+          localizedWhereField.column,
+          op,
+          value,
+          dialect
+        );
+        if (localizedCond) return localizedCond;
+      }
+
       const schemaColumn = schema[columnParts[0]];
 
       if (!schemaColumn) {

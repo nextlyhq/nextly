@@ -77,6 +77,7 @@ export type ValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // Field-specific errors
@@ -148,6 +149,20 @@ export interface ValidationResult {
 // public API surface for this file is unchanged.
 
 const RESERVED_SLUGS_SET: Set<string> = new Set<string>(RESERVED_SLUGS);
+
+// The owner column `created_by` is injected as a system column on every
+// collection table (both the snake_case name and its camelCase alias, which
+// snake-cases to the same column). A code-first collection therefore must not
+// declare a top-level field with either name, or its DDL would collide with the
+// injected column and the owner stamp / response strip would consume a user
+// field. Reserved for collections only — singles are a single global row and
+// components embed in JSON, so neither carries this column and both may use the
+// name freely. Nested repeater/group fields are stored inside JSON, not as
+// table columns, so the reservation applies to the top level only.
+const COLLECTION_RESERVED_FIELD_NAMES: Set<string> = new Set([
+  "created_by",
+  "createdBy",
+]);
 
 // ============================================================
 // Index Validation (collection-specific)
@@ -467,6 +482,21 @@ function validateFields(
     });
     return;
   }
+
+  // Block the injected owner column at the top level before per-field
+  // validation. Nested fields are validated recursively inside
+  // validateFieldsArray and are intentionally exempt (JSON-stored, no column).
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (typeof name === "string" && COLLECTION_RESERVED_FIELD_NAMES.has(name)) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved for the system owner column`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
 
   validateFieldsArray(fields, path, errors, allCollectionSlugs);
 }

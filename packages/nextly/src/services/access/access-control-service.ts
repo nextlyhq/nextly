@@ -52,7 +52,7 @@ import type {
   CollectionAccessRules,
   AccessEvaluationResult,
 } from "./types";
-import { DEFAULT_OWNER_FIELD } from "./types";
+import { GENERIC_DEFAULT_OWNER_FIELD } from "./types";
 
 /**
  * Signature for custom access functions.
@@ -200,7 +200,12 @@ export class AccessControlService {
     operation: AccessOperation,
     context: RequestContext,
     documentId?: string,
-    document?: Record<string, unknown>
+    document?: Record<string, unknown>,
+    // Owner field used for a rule-less `owner-only` default. Defaults to the
+    // generic camelCase `createdBy` so singles/components and any generic caller
+    // keep the historical behavior; collection callers pass DEFAULT_OWNER_FIELD
+    // (`created_by`) since collections carry the auto-stamped system column.
+    defaultOwnerField: string = GENERIC_DEFAULT_OWNER_FIELD
   ): Promise<AccessEvaluationResult> {
     const rule = rules?.[operation];
 
@@ -220,7 +225,13 @@ export class AccessControlService {
         return this.evaluateRoleBasedAccess(rule, context);
 
       case "owner-only":
-        return this.evaluateOwnerAccess(rule, operation, context, document);
+        return this.evaluateOwnerAccess(
+          rule,
+          operation,
+          context,
+          document,
+          defaultOwnerField
+        );
 
       case "custom":
         return this.evaluateCustomAccess(rule, context, documentId, document);
@@ -277,9 +288,10 @@ export class AccessControlService {
     rule: StoredAccessRule,
     operation: AccessOperation,
     context: RequestContext,
-    document?: Record<string, unknown>
+    document?: Record<string, unknown>,
+    defaultOwnerField: string = GENERIC_DEFAULT_OWNER_FIELD
   ): AccessEvaluationResult {
-    const ownerField = rule.ownerField ?? DEFAULT_OWNER_FIELD;
+    const ownerField = rule.ownerField ?? defaultOwnerField;
 
     if (!context.user) {
       return { allowed: false, reason: "Authentication required" };

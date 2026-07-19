@@ -78,11 +78,13 @@ import {
   unwrapServiceResult,
 } from "../helpers/service-envelope";
 import {
+  isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
   parseWhereParam,
   requireBody,
   requireParam,
+  stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -318,7 +320,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -459,7 +461,7 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { kind: "collection" });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -748,6 +750,11 @@ const COLLECTIONS_METHODS: Record<
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
         status,
+        // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
 
       type PaginatedShape = {
@@ -781,6 +788,9 @@ const COLLECTIONS_METHODS: Record<
         search: p.search,
         where: parseWhereParam(p.where),
         status,
+        // i18n M4: keep count in parity with listEntries' locale-scoped filtering.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
       });
       const data = unwrapServiceResult<{ totalDocs: number }>(result, {
         collectionName: p.collectionName,
@@ -806,7 +816,13 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` stores the translatable values for German.
+          locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -837,6 +853,12 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
+        // disables fallback. Non-localized collections ignore both.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -867,7 +889,13 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` updates only the German translatable values.
+          locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         body as Record<string, unknown>
       );
@@ -876,6 +904,43 @@ const COLLECTIONS_METHODS: Record<
         entryId: p.entryId,
       });
       return respondMutation(result.message ?? "Entry updated.", entry);
+    },
+  },
+  publishAllLocales: {
+    // i18n M7: publish every language of an entry at once (spec §10).
+    execute: async (svc, p) => {
+      if (!p.collectionName || !p.entryId) {
+        throw new Error("collectionName and entryId parameters are required");
+      }
+      const result = await svc.publishAllLocales({
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+        userId: p._authenticatedUserId
+          ? String(p._authenticatedUserId)
+          : undefined,
+        userName: p._authenticatedUserName
+          ? String(p._authenticatedUserName)
+          : undefined,
+        userEmail: p._authenticatedUserEmail
+          ? String(p._authenticatedUserEmail)
+          : undefined,
+        // Forward the authenticated role set so role-based access and stored
+        // rules evaluate against the real user (parity with the update handler);
+        // without it publish-all could be denied for a user the route authorized.
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
+      });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondMutation(
+        result.message ?? "All languages published.",
+        entry
+      );
     },
   },
   deleteEntry: {
@@ -897,6 +962,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -932,6 +1001,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -975,6 +1048,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const message =
         result.failures.length === 0
@@ -1015,7 +1092,13 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
-          where: b.where as WhereFilter,
+          // Strip owner-column conditions from the request body so a caller
+          // cannot target rows by the system owner column via `body.where`
+          // (mirrors parseWhereParam on the query-string path). The service's
+          // own owner constraint is added separately and is unaffected; a where
+          // that was only an owner filter becomes {} and stays bounded by the
+          // collection's access rules.
+          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)
@@ -1027,6 +1110,10 @@ const COLLECTIONS_METHODS: Record<
             ? String(p._authenticatedUserEmail)
             : undefined,
           userRoles: readAuthenticatedRoles(p),
+          // Route middleware already ran the RBAC/code-access gate; attest it
+          // so the handler skips only that redundant re-check (stored rules +
+          // field-level write access still run). Never inferred from userId.
+          routeAuthorized: true,
         },
         { limit: b.limit }
       );
@@ -1063,6 +1150,10 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

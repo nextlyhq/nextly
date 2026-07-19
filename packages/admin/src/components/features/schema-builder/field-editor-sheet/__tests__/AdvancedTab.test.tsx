@@ -57,16 +57,21 @@ describe("FieldEditorSheet — AdvancedTab", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders Localized as a disabled switch with a 'Coming Soon' chip", () => {
-    render(<Controlled initial={f} />);
+  it("toggles localized through onChange.advanced.localized", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={f} onChange={onChange} />);
     const sw = screen.getByRole("switch", { name: /^localized$/i });
-    expect(sw).toBeDisabled();
-    expect(screen.getByText("Coming Soon")).toBeInTheDocument();
+    expect(sw).not.toBeDisabled();
+    await user.click(sw);
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.advanced?.localized).toBe(true);
   });
 
   it("disables every editable switch in readOnly mode", () => {
     render(<Controlled initial={f} readOnly />);
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /^localized$/i })).toBeDisabled();
   });
 });
 

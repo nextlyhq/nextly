@@ -313,6 +313,23 @@ export class DynamicCollectionSchemaService {
       );
     }
 
+    // Owner column — COLLECTIONS ONLY. A single is one global row, so
+    // owner-only ownership is meaningless; singles never stamp or query it.
+    // Nullable with no default (matches getSystemColumnDescriptors) so existing
+    // rows and system creates stay null; sized to the users.id column on MySQL
+    // since it holds a user id, not the row id.
+    // Prefer the explicit flag, but also fall back to the `single_` table
+    // prefix so this stays in lockstep with the runtime schema / diff (which
+    // derive it from the name) even if a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+    if (!isSingleTable) {
+      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
+      );
+    }
+
     let sql = `-- Create dynamic collection: ${tableName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 ${allColumnDefs.join(",\n")}
@@ -387,6 +404,21 @@ ${allColumnDefs.join(",\n")}
       createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     }
     indexStatements.push(createdAtIndex);
+
+    // Index the owner column on collections. Owner-only reads/lists/counts and
+    // bulk-by-query enumeration all filter on `created_by`, so without an index
+    // a large owner-scoped collection would full-scan the primary access-control
+    // predicate. Collections only — singles/components never carry the column,
+    // mirroring the column gate above. Plain (non-unique) index; users cannot
+    // request one on this reserved field, so it is injected here.
+    if (!isSingleTable) {
+      const ownerIndexName = `idx_${tableName}_created_by`;
+      const ownerIndex =
+        this.dialect === "mysql"
+          ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
+          : `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`;
+      indexStatements.push(ownerIndex);
+    }
 
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
@@ -850,6 +882,12 @@ ${dropStatement}`;
       timestampDefault = "timestamp DEFAULT now() NOT NULL";
     }
 
+    // The result is split on `--> statement-breakpoint` and each part executed
+    // as one statement, so every part must be a complete, standalone statement:
+    // one CREATE TABLE (closed by its own `);`), then the two CREATE INDEX
+    // statements. The UNIQUE pair constraint belongs inside the CREATE TABLE
+    // body only; it must not appear again as a trailing fragment (a bare
+    // `CONSTRAINT ... );` is not valid SQL on any dialect).
     return `-- Junction table for many-to-many: ${sourceCollectionName}.${field.name} -> ${targetCollectionName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("id")} ${this.dialect === "mysql" ? "varchar(36)" : "text"} PRIMARY KEY NOT NULL,
@@ -858,9 +896,6 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
   ${this.quoteIdentifier("created_at")} ${timestampDefault},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${sourceCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${sourceCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(sourceTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
   CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${targetCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${targetCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(targetTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
-  CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
-);
---> statement-breakpoint
   CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
 );
 --> statement-breakpoint

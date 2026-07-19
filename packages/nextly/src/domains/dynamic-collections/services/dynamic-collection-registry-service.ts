@@ -3,6 +3,7 @@ import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 
@@ -21,6 +22,11 @@ export interface CollectionMetadata {
    * Draft / Publish split lights up.
    */
   status?: boolean;
+  /**
+   * Resolved content-versioning config, or null when unversioned. Backed by
+   * the `dynamic_collections.versions` JSON column.
+   */
+  versions?: ResolvedVersionsConfig | null;
   admin?: {
     group?: string;
     icon?: string;
@@ -136,6 +142,9 @@ export class DynamicCollectionRegistryService extends BaseService {
       // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
       // bool on postgres/mysql both accept a JS boolean here.
       status: metadata.status === true,
+      // Resolved versioning config (or null when unversioned). Stored as JSON
+      // the same way `admin` is; Drizzle serializes the object per dialect.
+      versions: metadata.versions ?? null,
       configPath: metadata.configPath,
       schemaHash: metadata.schemaHash,
       schemaVersion: metadata.schemaVersion ?? 1,

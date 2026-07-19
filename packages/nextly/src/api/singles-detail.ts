@@ -84,6 +84,13 @@ function throwFromSingleResult<T>(
     throw NextlyError.notFound({ logContext });
   }
 
+  // A stored Single access rule (or RBAC) denial surfaces as 403 now that
+  // route writes run with overrideAccess:false; map it to a forbidden error
+  // instead of letting it fall through to a 500.
+  if (result.statusCode === 403) {
+    throw NextlyError.forbidden({ logContext });
+  }
+
   if (result.statusCode === 400) {
     throw NextlyError.validation({
       errors: (result.errors ?? []).map(e => ({
@@ -189,10 +196,12 @@ export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     const { slug } = await context.params;
     // Capture the authorized identity so the update runs as this user. Route
-    // auth has already gated the operation, so `overrideAccess` skips the RBAC
-    // re-check; `routeAuthorized` keeps the response redacted to what this user
-    // may read. Without forwarding the user, the standalone route ran the
-    // update anonymously and diverged from the dispatcher's updateSingleDocument.
+    // auth already ran the coarse RBAC gate, so `routeAuthorized` skips only
+    // that re-check; `overrideAccess` stays false so stored single access rules
+    // and field-level write access are still enforced with this user, and the
+    // response stays redacted to what they may read. Without forwarding the
+    // user, the standalone route ran the update anonymously and diverged from
+    // the dispatcher's updateSingleDocument.
     const auth = await requireRouteCollectionAccess(request, "update", slug);
 
     const service = await getSingleEntryService();
@@ -206,18 +215,25 @@ export const PATCH = withErrorHandler(
     // the response under `routeAuthorized`) evaluates against the caller's
     // roles, matching the collection route path. Session auth carries role IDs,
     // so they are resolved; API-key auth already carries slugs.
+    const roles = await resolveRoleSlugs(auth);
     const user = {
       id: auth.userId,
       name: auth.userName,
       email: auth.userEmail,
-      roles: await resolveRoleSlugs(auth),
+      roles,
+      // A representative singular `role` so field-level `access.update`/
+      // `access.read` callbacks reading `req.user.role` see an authorized
+      // value instead of stripping fields for a legitimate caller.
+      role: roles?.[0],
     };
 
     const result = await service.update(slug, body, {
       locale,
       user,
-      overrideAccess: true,
-      routeAuthorized: true,
+      overrideAccess: false,
+      // Guard on a resolved user id (matches the dispatcher) so the
+      // RBAC-skip only applies to an authenticated caller.
+      routeAuthorized: !!user.id,
     });
 
     if (!result.success) {

@@ -173,3 +173,45 @@ describe("ui-schema field types (widened set)", () => {
     ).toBe(true);
   });
 });
+
+// The owner column (`created_by`) is injected only on collection tables, so the
+// manifest schema reserves that field name for collections alone — singles are a
+// single global row and components embed in JSON, so neither carries the column
+// and both may define `created_by` freely.
+describe("ui-schema manifest owner-column reservation (collections only)", () => {
+  // Build a full manifest (all three top-level kind arrays present) with the
+  // created_by field placed only on the target kind, so a parse failure can be
+  // attributed to the reservation and not to a missing manifest-shape array.
+  const withField = (kind: "collections" | "singles" | "components") => ({
+    version: 1 as const,
+    collections: [],
+    singles: [],
+    components: [],
+    [kind]: [
+      {
+        slug: "x",
+        fields: [{ name: "created_by", type: "text" }],
+      },
+    ],
+  });
+
+  it("rejects a created_by field on a collection with a reserved-field error", () => {
+    const r = uiSchemaManifest.safeParse(withField("collections"));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(
+        r.error.issues.some(i => /'created_by' is reserved/.test(i.message))
+      ).toBe(true);
+    }
+  });
+
+  it("allows a created_by field on a single (no owner column there)", () => {
+    expect(uiSchemaManifest.safeParse(withField("singles")).success).toBe(true);
+  });
+
+  it("allows a created_by field on a component", () => {
+    expect(uiSchemaManifest.safeParse(withField("components")).success).toBe(
+      true
+    );
+  });
+});

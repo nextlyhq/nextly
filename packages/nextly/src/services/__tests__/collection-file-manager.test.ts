@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import { CollectionFileManager } from "../collection-file-manager";
 import type { DatabaseInstance } from "../../types/database-operations";
 
@@ -16,6 +18,50 @@ function makeFileManager(): CollectionFileManager {
     migrationsDir: "/tmp/test-migrations",
   });
 }
+
+describe("CollectionFileManager.loadCompanionSchema (i18n M4)", () => {
+  function localizedFm(): CollectionFileManager {
+    const fm = makeFileManager();
+    fm.setAdapter({ dialect: "sqlite" } as unknown as DrizzleAdapter);
+    fm.setMetadataFetcher(async () => ({
+      fields: [
+        { name: "body", type: "longText", localized: true },
+        { name: "price", type: "number" },
+      ] as never,
+      tableName: "dc_pages",
+      localized: true,
+    }));
+    return fm;
+  }
+
+  it("returns the companion table + localized field names for a localized collection", async () => {
+    const companion = await localizedFm().loadCompanionSchema("pages");
+    expect(companion).not.toBeNull();
+    expect(companion!.companionTableName).toBe("dc_pages_locales");
+    expect(companion!.localizedFields).toEqual([
+      { name: "body", column: "body" },
+    ]);
+    expect(companion!.table).toBeDefined();
+  });
+
+  it("caches the companion table (same object on the second call)", async () => {
+    const fm = localizedFm();
+    const first = await fm.loadCompanionSchema("pages");
+    const second = await fm.loadCompanionSchema("pages");
+    expect(first!.table).toBe(second!.table);
+  });
+
+  it("returns null for a non-localized collection", async () => {
+    const fm = makeFileManager();
+    fm.setAdapter({ dialect: "sqlite" } as unknown as DrizzleAdapter);
+    fm.setMetadataFetcher(async () => ({
+      fields: [{ name: "price", type: "number" }] as never,
+      tableName: "dc_pages",
+      localized: false,
+    }));
+    expect(await fm.loadCompanionSchema("pages")).toBeNull();
+  });
+});
 
 describe("CollectionFileManager.invalidateSchema", () => {
   it("removes a previously registered schema so loadDynamicSchema can no longer return it from cache", async () => {

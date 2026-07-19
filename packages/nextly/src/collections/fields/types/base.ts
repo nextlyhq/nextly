@@ -104,6 +104,11 @@ export interface RequestContext {
   locale?: string;
 
   /**
+   * Fallback locale (or `false` to disable fallback) for localized reads.
+   */
+  fallbackLocale?: string | false;
+
+  /**
    * HTTP request metadata.
    * Available when the operation originates from an HTTP request.
    */
@@ -621,7 +626,9 @@ export interface BaseFieldConfig {
    * When `true`, the field stores separate values for each locale.
    * Requires localization to be enabled in the collection config.
    *
-   * @reserved Reserved for future implementation.
+   * Overrides the per-type smart default (text-like fields localize by default;
+   * value/structural fields are shared). `password` is never localizable.
+   *
    * @default false
    */
   localized?: boolean;

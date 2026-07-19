@@ -102,6 +102,11 @@ export interface CodeFirstSingleConfig {
 
   /** Whether the Single has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Whether single-level i18n is enabled (mirrors `status`). */
+  localized?: boolean;
+
+  /** Resolved content-versioning config (or null when unversioned). */
+  versions?: DynamicSingleInsert["versions"];
 
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
@@ -365,8 +370,25 @@ export class SingleRegistryService extends BaseRegistryService<
 
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      updateData.schema_version = existing.schemaVersion + 1;
-      updateData.migration_status = data.migrationStatus || "pending";
+      // Bump schema_version + re-flag pending migration only on a PHYSICAL
+      // schema change: fields (by hash) or a status toggle (adds/removes the
+      // status column). A pure-metadata sync (versions/localized/label/
+      // description) re-sends unchanged fields and must not force a spurious
+      // pending-migration cycle. Note `localized` is intentionally NOT included:
+      // Single localization is deferred (no companion/table DDL is generated for
+      // Singles), so a localized-only toggle has nothing to migrate and would
+      // otherwise leave the Single falsely pending forever. Without a hash we
+      // cannot compare fields, so fall back to the prior always-bump.
+      const fieldsActuallyChanged =
+        data.schemaHash === undefined ||
+        !schemaHashesMatch(data.schemaHash, existing.schemaHash);
+      const statusToggled =
+        data.status !== undefined &&
+        (data.status === true) !== (existing.status === true);
+      if (fieldsActuallyChanged || statusToggled) {
+        updateData.schema_version = existing.schemaVersion + 1;
+        updateData.migration_status = data.migrationStatus || "pending";
+      }
     }
 
     if (data.admin !== undefined) {
@@ -395,6 +417,17 @@ export class SingleRegistryService extends BaseRegistryService<
     // so admin updates that don't touch the flag don't reset it.
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
+    }
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
+
+    // Versioning config: when explicitly provided (including null to disable),
+    // write the resolved JSON; when undefined, leave the column unchanged.
+    if (data.versions !== undefined) {
+      updateData.versions = data.versions
+        ? JSON.stringify(data.versions)
+        : null;
     }
 
     try {
@@ -555,6 +588,9 @@ export class SingleRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first Singles that opt
             // in actually write the column on first sync.
             status: config.status === true,
+            // Forward the resolved versioning config on first sync.
+            versions: config.versions,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
@@ -562,7 +598,12 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.seedPermissionsForSingle(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true)
+          (config.status === true) !== (existing.status === true) ||
+          // Re-sync when the resolved versioning config changed (both sides are
+          // normalized JSON, so a stable string compare detects a real change).
+          JSON.stringify(config.versions ?? null) !==
+            JSON.stringify(existing.versions ?? null) ||
+          (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -578,6 +619,8 @@ export class SingleRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              versions: config.versions,
+              localized: config.localized === true,
             },
             { source: "code" }
           );
@@ -628,6 +671,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     const fields = r.fields as string | object;
     const admin = r.admin as string | object | null;
+    const versions = r.versions as string | object | null;
     const accessRules = (r.access_rules ?? r.accessRules) as
       | string
       | object
@@ -666,6 +710,15 @@ export class SingleRegistryService extends BaseRegistryService<
       // Why: read the new status meta-column, defaulting to false for legacy
       // rows written before the column existed.
       status: Boolean(r.status),
+      // Parse the resolved versioning config (JSON string on SQLite / raw
+      // inserts; already an object on pg/mysql). null when unversioned or on
+      // rows written before this column existed.
+      versions: versions
+        ? typeof versions === "string"
+          ? JSON.parse(versions)
+          : versions
+        : null,
+      localized: Boolean(r.localized),
       configPath,
       schemaHash,
       schemaVersion,
@@ -741,6 +794,10 @@ export class SingleRegistryService extends BaseRegistryService<
       // Persist Draft/Published flag so the Singles edit form shows the
       // Save Draft / Publish split when the schema opts in.
       status: data.status === true ? 1 : 0,
+      // Persist the resolved versioning config (JSON-serialized like admin) so
+      // the mutation service can read it back and capture version snapshots.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,

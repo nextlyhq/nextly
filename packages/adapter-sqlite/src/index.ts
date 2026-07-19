@@ -699,6 +699,15 @@ export class SqliteAdapter extends DrizzleAdapter {
   private createTransactionContext(db: Database.Database): TransactionContext {
     // better-sqlite3 is synchronous; the methods below are async to satisfy
     // the TransactionContext contract shared with truly-async dialect adapters.
+    // Bind a Drizzle instance to the transaction's connection so the delegated
+    // CRUD methods run inside it. better-sqlite3 is single-connection, so this
+    // is the same connection getDrizzle() would use, but binding explicitly
+    // keeps the three adapters consistent and correct if that ever changes.
+    // Built lazily and memoized: transactions that use only raw execute/insert
+    // never construct it.
+    const buildTxExecutor = () => drizzle({ client: db });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
@@ -732,27 +741,38 @@ export class SqliteAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const columns = Object.keys(data);
-        const values = Object.values(data).map(sanitizeSqliteValue);
+        const mapped = this.mapKeysToSqlColumns(
+          this.getTableObject(table),
+          data
+        );
+        const columns = Object.keys(mapped);
+        const values = Object.values(mapped).map(sanitizeSqliteValue);
         const placeholders = values.map(() => "?").join(", ");
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
+        if (returningEmpty) {
+          // No RETURNING clause: better-sqlite3's .all() rejects a statement
+          // that returns no columns, so run it and return nothing.
+          stmt.run(...values);
+          return undefined as T;
+        }
         const rows = stmt.all(...values) as T[];
-        return rows[0];
+        // Return JS property-named keys to match the non-transactional insert.
+        return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -763,11 +783,15 @@ export class SqliteAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const columns = Object.keys(data[0]);
+        const tableObj = this.getTableObject(table);
+        const mappedRecords = data.map(r =>
+          this.mapKeysToSqlColumns(tableObj, r)
+        );
+        const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
 
-        for (const record of data) {
+        for (const record of mappedRecords) {
           const placeholders: string[] = [];
           for (const col of columns) {
             allValues.push(sanitizeSqliteValue(record[col]));
@@ -778,36 +802,43 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
-        if (options?.returning) {
+        const ret = options?.returning;
+        const returningEmpty = Array.isArray(ret) && ret.length === 0;
+        if (!returningEmpty) {
           const returning =
-            options.returning === "*"
+            !ret || ret === "*"
               ? "*"
-              : options.returning
+              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
-        } else {
-          sql += " RETURNING *";
         }
 
         const stmt = db.prepare(sql);
-        return stmt.all(...allValues) as T[];
+        if (returningEmpty) {
+          stmt.run(...allValues);
+          return [];
+        }
+        return (stmt.all(...allValues) as T[]).map(r =>
+          this.mapRowKeysToJs(tableObj, r)
+        );
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's CRUD
-      // which uses Drizzle query API via the TableResolver.
+      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
+      // but pass the transaction-bound executor so they run inside this
+      // transaction rather than on the pool.
       select: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T[]> => {
-        return this.select<T>(table, options);
+        return this.select<T>(table, options, txDb());
       },
 
       selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
       ): Promise<T | null> => {
-        return this.selectOne<T>(table, options);
+        return this.selectOne<T>(table, options, txDb());
       },
 
       update: async <T = unknown>(
@@ -816,15 +847,15 @@ export class SqliteAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options);
+        return this.update<T>(table, data, where, options, txDb());
       },
 
       delete: async (
         table: string,
         where: WhereClause,
-        _options?: DeleteOptions
+        options?: DeleteOptions
       ): Promise<number> => {
-        return this.delete(table, where);
+        return this.delete(table, where, options, txDb());
       },
 
       upsert: async <T = unknown>(
@@ -832,7 +863,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options: UpsertOptions
       ): Promise<T> => {
-        return this.upsert<T>(table, data, options);
+        return this.upsert<T>(table, data, options, txDb());
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -849,6 +880,12 @@ export class SqliteAdapter extends DrizzleAdapter {
       releaseSavepoint: async (name: string): Promise<void> => {
         db.exec(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
+
+      // Expose the transaction-bound Drizzle instance so callers can run
+      // Drizzle sql templates inside this transaction (junction-table writes
+      // need this to be atomic with the entry write). Reuses the memoized
+      // txDb() built for the delegated CRUD methods.
+      getDrizzle: <T = unknown>(): T => txDb() as T,
     };
   }
 

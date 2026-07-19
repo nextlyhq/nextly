@@ -4,6 +4,10 @@ import * as path from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
+import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
+import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
+import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -30,7 +34,29 @@ export type CollectionMetadataFetcher = (collectionName: string) => Promise<{
   fields: FieldDefinition[];
   tableName: string;
   status?: boolean;
+  /**
+   * Whether content-localization is enabled for this collection (i18n M4). When true, the
+   * companion `<tableName>_locales` table holds the translatable columns and
+   * {@link CollectionFileManager.loadCompanionSchema} can build its queryable Drizzle table.
+   */
+  localized?: boolean;
 } | null>;
+
+/** The companion `_locales` runtime schema for a localized collection. */
+export interface CompanionSchema {
+  /** The queryable Drizzle table object for `<mainTable>_locales`. */
+  table: unknown;
+  /** Physical companion table name (e.g. `dc_pages_locales`). */
+  companionTableName: string;
+  /**
+   * The collection's translatable fields (they live on the companion). Each carries both the
+   * camelCase field name (row key) and the snake_case companion column, because the two differ
+   * for camelCase fields (`metaTitle` → `meta_title`).
+   */
+  localizedFields: LocalizedFieldRef[];
+  /** Whether the companion has a per-locale `_status` column (collection has Draft/Published). */
+  hasStatus: boolean;
+}
 
 export class CollectionFileManager {
   private migrationsDir: string;
@@ -226,7 +252,16 @@ export class CollectionFileManager {
             // collection / single has the lifecycle enabled. Boot path
             // in di/register.ts already does this; FileManager's lazy
             // fallback used to drop the option silently.
-            { status: metadata.status === true }
+            //
+            // Forward `localized` too: on a localized collection, migrations
+            // move translatable fields into `<table>_locales`, so the main-table
+            // schema must omit those columns. Without this, a lazy schema built
+            // after a restart/cache-miss would still declare the moved columns and
+            // `select().from(schema)` would reference columns that no longer exist.
+            {
+              status: metadata.status === true,
+              localized: metadata.localized === true,
+            }
           );
 
           this.schemaRegistry.set(schemaKey, runtimeSchema.table);
@@ -258,5 +293,57 @@ export class CollectionFileManager {
     throw new Error(
       `Schema for collection "${collectionName}" not found in registry. ${guidance}`
     );
+  }
+
+  /**
+   * Load (and cache) the companion `<table>_locales` runtime Drizzle schema for a localized
+   * collection (i18n M4). Returns `null` when the collection is not localized / has no localized
+   * fields — callers use that to take the unchanged non-localized read path.
+   *
+   * Built on-demand from the collection's field metadata (mirrors {@link loadDynamicSchema}'s
+   * fallback path) so the read path can JOIN the companion without a second table registry.
+   * The result is cached under the companion's SQL name so repeated reads reuse one table object.
+   */
+  async loadCompanionSchema(
+    collectionName: string
+  ): Promise<CompanionSchema | null> {
+    if (!this.adapter || !this.metadataFetcher) return null;
+    const metadata = await this.metadataFetcher(collectionName);
+    if (!metadata || metadata.localized !== true) return null;
+
+    const tableName =
+      metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
+    const companionTableName = `${tableName}_locales`;
+
+    const cached = this.schemaRegistry.get(companionTableName);
+    // Pair each translatable field's API name (camelCase row key) with its physical companion
+    // column (snake_case) — the same conversion the column descriptor applies to main columns.
+    const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
+      metadata.fields,
+      true
+    ).map(name => ({ name, column: toSnakeCase(name) }));
+    if (localizedFields.length === 0) return null;
+    const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
+    if (cached) {
+      return { table: cached, companionTableName, localizedFields, hasStatus };
+    }
+
+    const companion = buildCompanionRuntimeTable({
+      slug: collectionName,
+      tableName,
+      fields: metadata.fields,
+      dialect: this.adapter.dialect,
+      localized: true,
+      status: hasStatus,
+    });
+    if (!companion) return null;
+
+    this.schemaRegistry.set(companionTableName, companion.table);
+    return {
+      table: companion.table,
+      companionTableName,
+      localizedFields,
+      hasStatus,
+    };
   }
 }

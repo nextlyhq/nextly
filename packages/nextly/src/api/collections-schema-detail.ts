@@ -179,7 +179,7 @@ export const PATCH = withErrorHandler(
 
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields);
+      assertValidFieldsPayload(body.fields, { kind: "collection" });
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -196,6 +196,13 @@ export const PATCH = withErrorHandler(
     // can flip the status column without disturbing other admin fields.
     if (body.status !== undefined) {
       updateData.status = body.status === true;
+    }
+
+    // i18n toggle: forward the localization flag. The registry stores it and the
+    // companion `_locales` table is provisioned/removed on the next migrate
+    // (migration-gated, via the schema-change preview).
+    if (body.localized !== undefined) {
+      updateData.localized = body.localized === true;
     }
 
     // Admin fields: support both nested admin object and flat top-level
