@@ -67,6 +67,74 @@ Register components and reference admin contribution types through
 > primitive you need isn't yet exported from `@nextlyhq/ui`, open an issue so it can be
 > promoted to the kit rather than copied.
 
+## Styling your admin UI
+
+The admin ships a single, precompiled, isolated stylesheet (every rule scoped under
+`.nextly-admin`). Because it is built ahead of time, Tailwind cannot see utilities that
+live only in your package — so there are three ways to style a plugin, in order of
+preference:
+
+**1. Compose from the kit.** `@nextlyhq/ui` components are already styled by the admin
+sheet, so a plugin built from them needs no styling work at all. Reach for the layout
+primitives for common structure:
+
+```tsx
+import { Card, Stack, Grid, Stat } from "@nextlyhq/plugin-sdk/admin";
+
+<Card>
+  <Stack gap={4}>
+    <Grid cols={3} gap={4}>
+      <Stat label="Submissions" value={1280} />
+      <Stat label="This week" value={64} />
+      <Stat label="Conversion" value="4.2%" />
+    </Grid>
+  </Stack>
+</Card>;
+```
+
+**2. Use safelisted utility classes.** A curated, token-driven set of Tailwind utilities is
+always present in the admin sheet, so you can use them directly in your components with no
+build step: layout (`flex`, `grid`, `grid-cols-{1..6}`, `gap-{0..8}`, `items-*`,
+`justify-*`), spacing (`p-*`, `m-*`, `space-*`), sizing (`w-*`, `max-w-*`, `size-*`),
+typography (`text-{xs..2xl}`, `font-*`, `truncate`, `line-clamp-*`), token colors
+(`bg-primary`, `text-muted-foreground`, `border-border`, …), and borders/radius/shadow.
+These are **token-driven only** — no arbitrary values or raw colors, so your UI themes in
+light and dark automatically.
+
+**3. Ship your own CSS (`admin.styles`).** For anything beyond the safelist, compile a
+scoped, token-driven stylesheet with the `nextly-build-admin-css` CLI (from
+`@nextlyhq/admin-css`, add it as a devDependency) and declare it in your manifest:
+
+```css
+/* src/admin.css — author against the shared token preset */
+@import "tailwindcss";
+@import "@nextlyhq/ui/theme.css";
+@source "./src";
+```
+
+```jsonc
+// package.json
+{ "scripts": { "build:css": "nextly-build-admin-css src/admin.css dist/admin.css" } }
+```
+
+```ts
+// your plugin definition
+contributes: { admin: { styles: "@acme/plugin/dist/admin.css" } }
+```
+
+Then side-effect-import the built file from your admin entry so the host app's bundler
+loads it:
+
+```ts
+// src/admin/index.ts
+import "../../dist/admin.css";
+```
+
+The CLI compiles your Tailwind, **scopes every rule under `.nextly-admin`**, and refuses to
+emit if a rule would escape that wrapper or if it finds a hardcoded color — so your styles
+can never leak into the host page and always theme correctly. Use `--nx-*` tokens (via
+`var()` or the token utilities), never literal colors.
+
 ## Declarative contributions
 
 ```ts
