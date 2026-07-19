@@ -8,7 +8,7 @@ import { buildServiceConfig } from "../build-service-config";
  * `buildServiceConfig` assembles the DI service config from the loaded
  * `nextly.config.ts`. The localization block must survive this hop — if it is
  * dropped here, `ctx.config.localization` is undefined and every localized
- * read/write silently no-ops to the main table (findings H1).
+ * read/write silently no-ops to the main table.
  */
 describe("buildServiceConfig — localization carry-through", () => {
   const localization: SanitizedLocalizationConfig = {
@@ -38,7 +38,9 @@ describe("buildServiceConfig — localization carry-through", () => {
 
   it("prefers an explicitly provided localization over the config block", () => {
     const explicit: SanitizedLocalizationConfig = {
-      locales: [{ code: "fr", label: "French", rtl: false, fallbackLocale: [] }],
+      locales: [
+        { code: "fr", label: "French", rtl: false, fallbackLocale: [] },
+      ],
       defaultLocale: "fr",
       fallback: false,
     };

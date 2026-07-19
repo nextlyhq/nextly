@@ -84,7 +84,7 @@ async function ensureServicesInitialized(): Promise<void> {
       // i18n: carry the normalized localization block so the request-path boot
       // registers localization-aware data services, matching build-service-config.ts.
       // Omitting it makes ctx.config.localization undefined → localized reads/writes
-      // silently no-op to the main table (findings H1).
+      // silently no-op to the main table.
       if (nextlyConfig.localization)
         serviceConfig.localization = nextlyConfig.localization;
       if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;

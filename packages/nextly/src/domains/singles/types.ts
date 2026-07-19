@@ -63,7 +63,7 @@ export interface GetSingleOptions {
   /**
    * When true, attach a per-locale `_translations` map (translated + status)
    * to the document for the admin's per-language status pills. No-op when the
-   * Single isn't localized. Mirrors the collection read path (i18n M7).
+   * Single isn't localized. Mirrors the collection read path.
    */
   translationStatus?: boolean;
 

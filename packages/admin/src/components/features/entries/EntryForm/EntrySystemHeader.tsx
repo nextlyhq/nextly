@@ -186,7 +186,7 @@ export function EntrySystemHeader({
     required: !lockIdentity && titleRequired ? "Title is required" : false,
   });
 
-  // i18n L1: the title input bypasses FieldWrapper, so apply the same per-field RTL rule here —
+  // the title input bypasses FieldWrapper, so apply the same per-field RTL rule here —
   // flip to RTL only when the title is a translatable field AND the active locale is RTL (a
   // shared/LTR title stays LTR). Uses the same classifier as FieldWrapper for consistency.
   const titleRtl =
@@ -249,7 +249,7 @@ export function EntrySystemHeader({
           aria-label={titleLabel}
           disabled={isSubmitting}
           readOnly={lockIdentity}
-          // i18n L1: RTL for a translatable title edited in an RTL language.
+          // RTL for a translatable title edited in an RTL language.
           {...(titleRtl ? { dir: "rtl" as const } : {})}
           className={cn(
             "w-full text-[19px] font-semibold tracking-tight text-foreground",

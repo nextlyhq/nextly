@@ -214,7 +214,7 @@ function registerCommands(program: Command): void {
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 
-  // i18n recovery — replay translations archived by a localization disable (spec §5.3).
+  // i18n recovery — replay translations archived by a localization disable.
   registerI18nRestoreCommand(program);
 
   // Plan B — one-shot bookkeeping consolidation.

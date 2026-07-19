@@ -3,7 +3,7 @@
  *
  * Disabling localization on an entity is the one data-losing transition, so its migration
  * restores the default locale onto the main table and archives every OTHER language into
- * `nextly_i18n_archive` before dropping the companion (design §5.3, locked decision #6). This
+ * `nextly_i18n_archive` before dropping the companion. This
  * command is the recovery half: it replays those archived rows back onto the companion.
  *
  * Recovering from a mistaken disable:
@@ -22,6 +22,7 @@ import type { Command } from "commander";
 
 import { resolveEntityTable } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
@@ -68,10 +69,24 @@ export async function runI18nRestore(
     debug: options.verbose,
   });
 
-  const entity = resolveEntityTable(configResult.config, slug);
+  // Resolve the slug from the code config first, then fall back to the UI-built
+  // entities in ui-schema.json. A Builder-created collection/single/component is
+  // not in nextly.config.ts, but its disable migration still archives rows under
+  // its slug — so restore must resolve its table name from the manifest too,
+  // mirroring how migrate:create folds the manifest. Without this fallback,
+  // `--collection <ui-slug>` exits before replaying anything. An absent manifest
+  // is an empty one, so a code-only project keeps the previous behavior.
+  let entity = resolveEntityTable(configResult.config, slug);
+  if (!entity) {
+    const manifest = await loadUiSchema({
+      projectRoot: options.cwd ?? process.cwd(),
+      uiSchemaFile: configResult.config.db.uiSchemaFile,
+    });
+    entity = resolveEntityTable(manifest, slug);
+  }
   if (!entity) {
     logger.error(
-      `No collection, single, or component named "${slug}" was found in your config.`
+      `No collection, single, or component named "${slug}" was found in your config or ui-schema.json.`
     );
     process.exit(1);
   }

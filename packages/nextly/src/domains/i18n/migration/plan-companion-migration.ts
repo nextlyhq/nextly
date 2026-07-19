@@ -14,7 +14,7 @@ export interface CompanionMigrationPlan {
    *   just CREATE the companion (no seed, no drop). Reversible.
    * - `disable`: the entity was localized in the previous snapshot and is not anymore →
    *   restore the default locale onto main, archive the other languages, drop the companion
-   *   (spec §5.3, locked decision #6). Reversible (its DOWN re-enables).
+   *   Reversible (its DOWN re-enables).
    * - `none`: the companion already exists / nothing to relocate → emit nothing.
    */
   kind: "enable" | "create-only" | "disable" | "none";
@@ -29,12 +29,12 @@ export interface PlanCompanionArgs {
   /** Whether the companion table already existed in the previous snapshot. */
   companionExisted: boolean;
   /**
-   * i18n H5 — whether the entity is localized in the NEW config. Defaults to `true` (the
+   * Whether the entity is localized in the NEW config. Defaults to `true` (the
    * historical behavior: this planner was only ever called for localized entities).
    */
   localized?: boolean;
   /**
-   * i18n H5 — whether the PREVIOUS committed snapshot explicitly recorded this entity as
+   * Whether the PREVIOUS committed snapshot explicitly recorded this entity as
    * localized (`TableSpec.localized === true`). Only an explicit `true` here can produce a
    * DISABLE plan, so a pre-marker snapshot (undefined) never triggers a destructive
    * transition.
@@ -53,7 +53,7 @@ export function planCompanionMigration(
   const { spec, prevMainColumnNames, companionExisted } = args;
   const localized = args.localized ?? true;
 
-  // i18n H5 — DISABLE (spec §5.3): localization was on and is now off. The transition is
+  // DISABLE: localization was on and is now off. The transition is
   // gated on the previous snapshot's explicit marker, never inferred from column shape,
   // because "the main table gained columns" is also what a plain field-add looks like.
   if (!localized) {

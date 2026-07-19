@@ -34,7 +34,7 @@ export function TranslationCompletenessBadge({
     return <span className="text-muted-foreground">-</span>;
   }
 
-  // i18n L14: measure only the TRANSLATABLE locales (exclude the default — it is the source,
+  // measure only the TRANSLATABLE locales (exclude the default — it is the source,
   // always "translated"). This matches the list language filter, which also excludes the
   // default, and keeps `n/total` reachable regardless of whether the backend includes the
   // default key in the `_translations` map.

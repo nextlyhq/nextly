@@ -132,7 +132,7 @@ export async function previewDesiredSchema(
       // Forward `localized` so a localized collection's translatable columns are
       // omitted from the preview's desired snapshot (they live in the companion
       // `_locales` table); otherwise the diff reports them as missing and the
-      // SchemaChangeDialog tries to re-add them to the main table (findings H2).
+      // SchemaChangeDialog tries to re-add them to the main table.
       { hasStatus: c.status === true, localized: c.localized === true }
     )
   );

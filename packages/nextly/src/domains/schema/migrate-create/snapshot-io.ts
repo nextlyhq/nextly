@@ -166,7 +166,7 @@ export async function writeSnapshot(
                 ),
               }
             : {}),
-          // i18n H5: persist the localization marker only when the entity IS localized, so a
+          // persist the localization marker only when the entity IS localized, so a
           // non-localized table's JSON is byte-identical to a pre-marker snapshot (no churn).
           // The next migrate:create reads this to detect a `true → false` disable; an absent
           // marker reads as "unknown" and never triggers the destructive transition.

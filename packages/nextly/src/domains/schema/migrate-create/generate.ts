@@ -296,7 +296,7 @@ export async function generateMigration(
 }
 
 /**
- * i18n H5: build the companion spec for a DISABLE from the columns the PREVIOUS snapshot
+ * Build the companion spec for a DISABLE from the columns the PREVIOUS snapshot
  * recorded, rather than from the current config's classification.
  *
  * The snapshot's `localizedColumns` is the only trustworthy statement of what the `_locales`
@@ -361,7 +361,7 @@ function planCompanionMigrations(
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const c of entities) {
-    // i18n H5: derive the companion spec with `collectionLocalized: true` regardless of the
+    // Derive the companion spec with `collectionLocalized: true` regardless of the
     // entity's CURRENT flag. For a localized entity this describes the companion to create;
     // for one being DISABLED it is the starting point that the previous snapshot's recorded
     // column list then corrects (see below). Returns null when no field is translatable.
@@ -375,7 +375,7 @@ function planCompanionMigrations(
       status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
 
-    // i18n H5 — the DISABLE transition (localized `true → false`), spec §5.3 / decision #6.
+    // the DISABLE transition (localized `true → false`).
     // Detection is gated on the previous snapshot's explicit `localized: true` marker rather
     // than inferred from column shape: a shape-only heuristic cannot tell "this collection
     // was localized" apart from "someone added fields to a non-localized collection", and
@@ -436,7 +436,7 @@ function planCompanionMigrations(
 }
 
 /**
- * i18n H5: stamp the snapshot's localization marker on a desired table.
+ * Stamp the snapshot's localization marker on a desired table.
  *
  * Records both that the entity is localized AND which columns its companion holds. The column
  * list is what makes a later DISABLE exact: it states what is really in the `_locales` table at

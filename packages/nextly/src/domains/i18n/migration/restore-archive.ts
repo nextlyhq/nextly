@@ -1,7 +1,6 @@
 /**
  * Replay archived translations out of `nextly_i18n_archive` and back into a companion
- * `_locales` table (design §5.3 / roadmap M1: "a restore command/helper that replays archive
- * rows").
+ * `_locales` table.
  *
  * Disabling localization is the one data-losing transition, so its migration restores the
  * default locale onto the main table and archives every OTHER language into
@@ -20,7 +19,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { upsertCompanionRow } from "../runtime/companion-io";
@@ -59,6 +58,8 @@ export interface RestoreArchiveResult {
 }
 
 interface ArchiveRow {
+  /** Autoincrement PK — used to bound the purge to only the rows read here. */
+  id: number;
   entryId: string;
   locale: string;
   field: string;
@@ -93,6 +94,7 @@ export async function restoreI18nArchive(
 
   const rows = (await db
     .select({
+      id: nextlyI18nArchive.id,
       entryId: nextlyI18nArchive.entryId,
       locale: nextlyI18nArchive.locale,
       field: nextlyI18nArchive.field,
@@ -132,11 +134,21 @@ export async function restoreI18nArchive(
   }
 
   if (args.purge) {
-    // Purge exactly the rows that were just read and restored. `where` already scopes to
-    // this collection (and locale when given), so every archived row it matched has been
-    // replayed — reuse it directly. An `inArray` over every entry id would instead risk the
-    // SQL bind-parameter cap (SQLite defaults to 999) on a large collection.
-    await db.delete(nextlyI18nArchive).where(where);
+    // Purge exactly the rows that were just read and restored, and no others.
+    // Bound the delete to `id <= maxId` (the largest PK seen in the read): the
+    // autoincrement PK means any archive row inserted concurrently AFTER this read
+    // gets a higher id, so it is excluded and survives the purge — closing the
+    // read-then-delete race where a fresh archive write could be deleted without
+    // ever being restored. `where` still scopes to this collection (and locale when
+    // given). Bounding by a single scalar also avoids the SQL bind-parameter cap
+    // (SQLite defaults to 999) that an `inArray` over every entry id would risk.
+    const maxId = rows.reduce(
+      (max, r) => (r.id > max ? r.id : max),
+      rows[0].id
+    );
+    await db
+      .delete(nextlyI18nArchive)
+      .where(and(where, lte(nextlyI18nArchive.id, maxId)));
   }
 
   return {

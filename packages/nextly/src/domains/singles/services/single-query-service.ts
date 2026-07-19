@@ -452,7 +452,7 @@ export class SingleQueryService extends BaseService {
         })) as SingleDocument;
       }
 
-      // i18n M7: attach the per-locale `_translations` overview for the admin's language pills
+      // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
         await this.populateTranslationMeta(slug, singleMeta, doc);
@@ -566,7 +566,7 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
-   * i18n M7: attach a per-locale `_translations` map (which languages are translated + each
+   * Attach a per-locale `_translations` map (which languages are translated + each
    * one's draft/published status) to the document, for the admin editor's per-language status
    * pills. No-op when localization is off or the single isn't localized. Mirrors the collection
    * read path's `populateTranslationMeta`.

@@ -175,7 +175,7 @@ describe("generateMigration — localized companion emission", () => {
     expect(colNames).toContain("price");
   });
 
-  // i18n H5 — the DISABLE transition (spec §5.3 / locked decision #6). Detection hangs on the
+  // the DISABLE transition. Detection hangs on the
   // snapshot's `localized` marker, so these also pin the marker's round-trip.
   describe("DISABLE transition (localized true → false)", () => {
     const localizedPages: MinimalConfigEntity = {
@@ -189,7 +189,7 @@ describe("generateMigration — localized companion emission", () => {
     };
     /**
      * The same collection with the MASTER SWITCH flipped off — the realistic disable action
-     * (spec §3.2: the entity-level flag is the master switch; per-field flags go inert rather
+     * (the entity-level flag is the master switch; per-field flags go inert rather
      * than being hand-removed). The companion's columns are reconstructed from the fields that
      * still classify as translatable, which is what lets the transition be planned offline.
      */
@@ -278,7 +278,7 @@ describe("generateMigration — localized companion emission", () => {
       expect(disableFile).toBeDefined();
       const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
 
-      // The guarded, recoverable order from spec §5.3.
+      // The guarded, recoverable order.
       expect(sql).toContain(`ALTER TABLE "dc_pages" ADD COLUMN "body"`);
       expect(sql).toContain(`UPDATE "dc_pages"`); // restore the default locale
       expect(sql).toContain("nextly_i18n_archive"); // archive the other languages

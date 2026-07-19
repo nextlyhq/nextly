@@ -288,7 +288,7 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * i18n L2: reject an unrecognized write locale with a 400 instead of silently mapping it to
+   * reject an unrecognized write locale with a 400 instead of silently mapping it to
    * the default locale (which would write the translatable values into the DEFAULT companion
    * row, potentially overwriting real default content). Returns a 400 result, or null when the
    * locale is absent/valid or localization is off.
@@ -437,7 +437,7 @@ export class CollectionMutationService extends BaseService {
         companionData._status = "draft";
       }
 
-      // i18n H3: the main table's `status` gates entry-level visibility (the read
+      // the main table's `status` gates entry-level visibility (the read
       // path filters rows on it). A per-locale status change for a NON-default
       // locale must NOT clobber it — otherwise unpublishing e.g. German would
       // unpublish the whole entry (all locales). Only the default-locale write is
@@ -969,7 +969,7 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
-      // i18n L2: reject an unknown write locale before doing anything else.
+      // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
       if (badLocale) return badLocale;
 
@@ -1709,7 +1709,7 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // i18n M7: emit the post-commit "updated" reaction event (D8/D51) so cache
+      // emit the post-commit "updated" reaction event so cache
       // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
       // reaction failure must not fail the already-committed publish.
       try {
@@ -1767,7 +1767,7 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
-      // i18n L2: reject an unknown write locale before doing anything else.
+      // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
       if (badLocale) return badLocale;
 

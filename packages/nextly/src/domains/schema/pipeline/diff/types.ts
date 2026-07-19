@@ -42,7 +42,7 @@ export interface TableSpec {
   // undefined = "no index data tracked" (pre-C1 snapshots) — the diff/drift
   // index dimension is SKIPPED for such tables. [] = tracked, none.
   indexes?: IndexSpec[];
-  // i18n H5: `true` when this entity has content-localization enabled, so its
+  // `true` when this entity has content-localization enabled, so its
   // translatable columns live in the migration-owned companion `_locales` table
   // rather than here. Recorded ONLY when true — `undefined` means "not localized,
   // OR a pre-marker snapshot that never tracked this". Both read as "don't know
@@ -54,7 +54,7 @@ export interface TableSpec {
   // leave it undefined, so it is deliberately NOT part of the diff/drift
   // comparison — it only drives companion migration planning.
   localized?: boolean;
-  // i18n H5: the companion's column names at the time this snapshot was written, recorded
+  // the companion's column names at the time this snapshot was written, recorded
   // alongside `localized`. This is the AUTHORITATIVE answer to "what actually lives in the
   // `_locales` table", which a later DISABLE needs in order to bring exactly those columns
   // home. Re-deriving the list from the new config instead would be wrong in both directions:

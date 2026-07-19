@@ -152,7 +152,7 @@ export class SingleMutationService extends BaseService {
         };
       }
 
-      // 1.1. i18n L2: reject an unknown write locale rather than silently writing the
+      // 1.1. reject an unknown write locale rather than silently writing the
       // translatable values into the DEFAULT companion row (which would overwrite real
       // default content). Mirrors the collection write path.
       if (
@@ -401,7 +401,7 @@ export class SingleMutationService extends BaseService {
                   companion: {} as Record<string, unknown>,
                 };
 
-            // i18n H3: per-locale status. The status the companion row carries —
+            // per-locale status. The status the companion row carries —
             // from `updatePayload` (not `mainPayload`, which may have `status`
             // stripped just below). Captured so a status-only unpublish still
             // stamps the per-locale `_status`.

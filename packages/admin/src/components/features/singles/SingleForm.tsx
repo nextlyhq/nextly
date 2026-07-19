@@ -24,7 +24,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -370,20 +370,30 @@ export function SingleForm({
     mode: "onSubmit",
   });
 
-  // Reset form only when the actual document changes (different ID or new version).
-  // Reason: defaultValues and form.reset are intentionally excluded — React Query
-  // refetches produce new object references even for identical data, and including
-  // the full object would reset the form mid-edit, discarding unsaved changes.
-  // `locale` is a dep so switching to an already-cached language (no refetch, so no
-  // unmount/remount) still resets the form to that locale's values — otherwise the previous
-  // language's inputs would linger. A first-time switch refetches and remounts via the page's
-  // loading gate, which resets naturally.
+  // Keep the latest computed defaultValues in a ref so the reset effect can read
+  // them without depending on the `defaultValues` object identity: React Query
+  // refetches produce a fresh reference even for identical data, so depending on
+  // it would reset the form mid-edit and discard unsaved changes.
+  const defaultValuesRef = useRef(defaultValues);
+  defaultValuesRef.current = defaultValues;
+
+  // Reset the form only when the document's identity actually changes (different
+  // ID or new version) or the active locale changes — not on every refetch. The
+  // effect depends on the full reactive values (document, locale, form), but a
+  // last-applied key guards the reset so a refetch that returns the same
+  // id/updatedAt/locale is a no-op and preserves in-progress edits. `locale` is a
+  // trigger so switching to an already-cached language (no refetch, so no
+  // unmount/remount) still resets the form to that locale's values; otherwise the
+  // previous language's inputs would linger. A first-time switch refetches and
+  // remounts via the page's loading gate, which resets naturally.
+  const lastResetKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (document) {
-      form.reset(defaultValues);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document?.id, document?.updatedAt, locale]);
+    if (!document) return;
+    const resetKey = `${document.id}:${String(document.updatedAt)}:${locale}`;
+    if (lastResetKeyRef.current === resetKey) return;
+    lastResetKeyRef.current = resetKey;
+    form.reset(defaultValuesRef.current);
+  }, [document, locale, form]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -504,7 +514,7 @@ export function SingleForm({
     createdAt: (document as { createdAt?: string }).createdAt,
     updatedAt: document.updatedAt,
     title: (document as { title?: string }).title,
-    // i18n M7: forward the per-locale translation-status map so the rail's Document panel renders
+    // forward the per-locale translation-status map so the rail's Document panel renders
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: (document as { _translations?: unknown })._translations,
@@ -518,101 +528,100 @@ export function SingleForm({
     locale,
     rtl: getLocale(locale)?.rtl ?? false,
     collectionLocalized: schema.localized === true,
-    isNonDefaultLocale:
-      !!locale && !!defaultLocale && locale !== defaultLocale,
+    isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
     sourceValues,
     onLocaleChange,
   };
 
   return (
     <EntryLocaleProvider value={localeCtx}>
-    <div className={cn("space-y-0", className)}>
-      <EntryFormProvider form={form} onSubmit={handleSubmit}>
-        <FormErrorSummary
-          errors={errors}
-          submitCount={submitCount}
-          className="mx-6 mt-3"
-        />
+      <div className={cn("space-y-0", className)}>
+        <EntryFormProvider form={form} onSubmit={handleSubmit}>
+          <FormErrorSummary
+            errors={errors}
+            submitCount={submitCount}
+            className="mx-6 mt-3"
+          />
 
-        <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
-          {/* Main column */}
-          <div className="flex-1 min-w-0 flex flex-col">
-            {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
+          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+            {/* Main column */}
+            <div className="flex-1 min-w-0 flex flex-col">
+              {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
                 already cancels PageContainer's px-8, so wrapping the header / meta
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}
-            <EntrySystemHeader
-              mode="edit"
-              titleField={titleField}
-              hasStatus={hasStatus}
-              isSubmitting={isSubmitting}
-              isDirty={isDirty}
-              entry={entryLike}
-              collectionSlug={schema.slug}
-              toolbarSlot={
-                <EntryFormToolbarSlots
-                  context="single"
-                  controllerField={controllerNames[0]}
-                />
-              }
-              onSaveDraft={() => {
-                void handleSubmit(undefined, "save-draft");
-              }}
-              onPublish={() => {
-                void handleSubmit(undefined, "publish");
-              }}
-              onSaveChanges={() => {
-                void handleSubmit(undefined, "save-changes");
-              }}
-              onUnpublish={() => {
-                void handleSubmit(undefined, "unpublish");
-              }}
-              onCancel={handleCancel}
-              onViewApi={onViewApi}
-              /* Why: Singles share the Show JSON dialog with collections,
+              <EntrySystemHeader
+                mode="edit"
+                titleField={titleField}
+                hasStatus={hasStatus}
+                isSubmitting={isSubmitting}
+                isDirty={isDirty}
+                entry={entryLike}
+                collectionSlug={schema.slug}
+                toolbarSlot={
+                  <EntryFormToolbarSlots
+                    context="single"
+                    controllerField={controllerNames[0]}
+                  />
+                }
+                onSaveDraft={() => {
+                  void handleSubmit(undefined, "save-draft");
+                }}
+                onPublish={() => {
+                  void handleSubmit(undefined, "publish");
+                }}
+                onSaveChanges={() => {
+                  void handleSubmit(undefined, "save-changes");
+                }}
+                onUnpublish={() => {
+                  void handleSubmit(undefined, "unpublish");
+                }}
+                onCancel={handleCancel}
+                onViewApi={onViewApi}
+                /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-              scope="single"
-              lockIdentity
-              isRailCollapsed={railCollapsed}
-              onToggleRail={toggleRail}
-            />
-            <EntryMetaStrip
-              slugField={slugField}
-              hasStatus={hasStatus}
-              status={documentStatus}
-              isRailCollapsed={railCollapsed}
-              lockSlug
-            />
+                scope="single"
+                lockIdentity
+                isRailCollapsed={railCollapsed}
+                onToggleRail={toggleRail}
+              />
+              <EntryMetaStrip
+                slugField={slugField}
+                hasStatus={hasStatus}
+                status={documentStatus}
+                isRailCollapsed={railCollapsed}
+                lockSlug
+              />
 
-            {mainFields.length > 0 && (
-              <div className="@4xl/content:p-8 pt-6">
-                <EntryFormContent
-                  fields={mainFields}
-                  disabled={isSubmitting}
-                  withCard
-                />
+              {mainFields.length > 0 && (
+                <div className="@4xl/content:p-8 pt-6">
+                  <EntryFormContent
+                    fields={mainFields}
+                    disabled={isSubmitting}
+                    withCard
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Rail (collapsible). Same shape and width as collections. */}
+            {!railCollapsed && (
+              <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                  <EntryFormSidebar
+                    mode="edit"
+                    entry={entryLike}
+                    hasStatus={hasStatus}
+                    isDirty={isDirty}
+                  />
+                </div>
               </div>
             )}
           </div>
-
-          {/* Rail (collapsible). Same shape and width as collections. */}
-          {!railCollapsed && (
-            <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-              <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                <EntryFormSidebar
-                  mode="edit"
-                  entry={entryLike}
-                  hasStatus={hasStatus}
-                  isDirty={isDirty}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </EntryFormProvider>
-    </div>
+        </EntryFormProvider>
+      </div>
     </EntryLocaleProvider>
   );
 }

@@ -51,6 +51,9 @@ export function getI18nArchiveDdl(dialect: Dialect): string[] {
   "locale" TEXT NOT NULL,
   "field" TEXT NOT NULL,
   "value" TEXT,
+  -- Stamp new archive rows with the current Unix time in seconds. SQLite stores
+  -- this integer column in the same epoch-seconds encoding the app reads back,
+  -- so unixepoch() keeps the value decodable rather than the legacy 0 sentinel.
   "archived_at" INTEGER NOT NULL DEFAULT (unixepoch())
 )`,
         `CREATE INDEX IF NOT EXISTS "nextly_i18n_archive_lookup_idx" ON "nextly_i18n_archive" ("collection", "entry_id", "locale")`,

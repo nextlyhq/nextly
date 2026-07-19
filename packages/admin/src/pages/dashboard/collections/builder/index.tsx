@@ -56,7 +56,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         // tab. Code-first config can still set admin.group / admin.order;
         // we just don't surface them in the create modal.
         status: values.status === true,
-        // i18n H4: forward the wizard's Internationalization toggle so the new
+        // forward the wizard's Internationalization toggle so the new
         // collection is actually created as localized (was dropped here, so the
         // collection always persisted as non-localized regardless of the toggle).
         localized: values.i18n === true,
@@ -84,7 +84,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                     singularName: singular,
                     pluralName: plural,
                     status: values.status === true,
-                    // i18n H4: keep ui-schema.json in sync with the localized flag.
+                    // keep ui-schema.json in sync with the localized flag.
                     localized: values.i18n === true,
                   },
                   fields: [],

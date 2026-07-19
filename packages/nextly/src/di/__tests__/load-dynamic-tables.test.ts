@@ -138,11 +138,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 });
 
 describe("loadDynamicTables — SELECT shape", () => {
-  it("excludes status from the SELECT for dynamic_components", async () => {
+  it("excludes status but includes localized in the SELECT for dynamic_components", async () => {
     const { adapter, calls } = makeAdapter([]);
     await loadDynamicTables(adapter, "dynamic_components", vi.fn());
+    // Components have no Draft/Published status column, but they do carry the
+    // i18n `localized` flag, so it must be part of the select.
     expect(calls[0]).toBe(
-      "SELECT table_name, fields, slug FROM dynamic_components"
+      "SELECT table_name, fields, slug, localized FROM dynamic_components"
     );
   });
 
@@ -188,9 +190,9 @@ describe("loadDynamicTables — fault tolerance", () => {
     expect(register).toHaveBeenCalledTimes(2);
   });
 
-  // M8: an existing DB that predates the i18n `localized` column must not lose
-  // all its dynamic tables. The select falls back to one without `localized`
-  // rather than letting the missing column throw into the outer catch.
+  // An existing DB that predates the i18n `localized` column must not lose all
+  // its dynamic tables. The select falls back to one without `localized` rather
+  // than letting the missing column throw into the outer catch.
   it("falls back to a select without `localized` on a pre-i18n DB", async () => {
     const calls: string[] = [];
     const adapter = {
@@ -199,7 +201,9 @@ describe("loadDynamicTables — fault tolerance", () => {
         if (/,\s*localized\s+FROM/.test(sql)) {
           throw new Error('column "localized" does not exist');
         }
-        return [{ table_name: "dc_pages", fields: "[]", slug: "pages", status: 1 }];
+        return [
+          { table_name: "dc_pages", fields: "[]", slug: "pages", status: 1 },
+        ];
       }),
     } as unknown as Parameters<typeof loadDynamicTables>[0];
     const register = vi.fn(async () => {});

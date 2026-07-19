@@ -354,7 +354,7 @@ const COLLECTIONS_METHODS: Record<
         // companion `_locales` table). buildFullDesiredSchema already sets this
         // from the registry, but the splice above overwrites that entry, so we
         // must re-supply it or the preview would show translatable columns being
-        // added to the main table (findings H2).
+        // added to the main table.
         localized: (collection as { localized?: boolean }).localized === true,
       };
 
@@ -523,7 +523,7 @@ const COLLECTIONS_METHODS: Record<
         // i18n: carry the localized flag so the push diff omits translatable
         // columns from the main table (they live in the companion `_locales`
         // table, provisioned separately below). Without this the apply re-adds
-        // translatable columns to the main table (findings H2).
+        // translatable columns to the main table.
         localized: (collection as { localized?: boolean }).localized === true,
       };
 

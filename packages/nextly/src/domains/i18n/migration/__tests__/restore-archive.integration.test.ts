@@ -1,4 +1,4 @@
-// i18n H5 — the other half of the guarded disable (design §5.3 / roadmap M1): disabling
+// The other half of the guarded disable: disabling
 // localization archives every non-default translation into `nextly_i18n_archive`, and this
 // helper replays them back onto the companion so a mistaken disable is actually recoverable.
 // Runs against a real SQLite database so the upsert SQL and the archive round-trip are
@@ -170,6 +170,47 @@ describe("restoreI18nArchive", () => {
       purge: true,
     });
     expect(count()).toBe(0);
+  });
+
+  it("purge deletes only the rows read, leaving archive rows added after the read", async () => {
+    archive([["pages", "p1", "de", "title", "Hallo"]]);
+    const count = () =>
+      (
+        sqlite
+          .prepare(`SELECT COUNT(*) AS n FROM "nextly_i18n_archive"`)
+          .get() as { n: number }
+      ).n;
+
+    // Simulate a concurrent archive write landing between the restore's read and
+    // its purge. The read runs through Drizzle; the companion upserts run through
+    // executeQuery afterward, so injecting on the first executeQuery call adds a
+    // fresh higher-id row for the same collection after the read but before the
+    // delete.
+    const raceAdapter = makeAdapter();
+    const baseExec = raceAdapter.executeQuery;
+    let injected = false;
+    raceAdapter.executeQuery = (q: string, params?: unknown[]) => {
+      if (!injected) {
+        injected = true;
+        archive([["pages", "p2", "fr", "title", "Bonjour"]]);
+      }
+      return baseExec(q, params);
+    };
+
+    await restoreI18nArchive({
+      adapter: raceAdapter,
+      collection: "pages",
+      companionTableName: "dc_pages_locales",
+      purge: true,
+    });
+
+    // The row that existed at read time is purged; the concurrently-added row
+    // (higher autoincrement id) survives instead of being deleted unrestored.
+    expect(count()).toBe(1);
+    const survivor = sqlite
+      .prepare(`SELECT entry_id FROM "nextly_i18n_archive"`)
+      .get() as { entry_id: string };
+    expect(survivor.entry_id).toBe("p2");
   });
 
   it("no-ops cleanly when nothing was archived for the collection", async () => {

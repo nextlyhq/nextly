@@ -968,7 +968,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: schema.id,
             column: localizedSortField.column,
             localeChain,
-            statusValue: localizedCtx?.statusValue, // i18n L5: don't sort by draft translations
+            statusValue: localizedCtx?.statusValue, // don't sort by draft translations
           });
           query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
         } else if (column) {
@@ -1413,10 +1413,10 @@ export class CollectionQueryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     /**
-     * i18n M7 language filter, already extracted by the caller (listEntries). When present it is
+     * Language filter, already extracted by the caller (listEntries). When present it is
      * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
      * `_translated` from the where it forwards, so re-extraction would find nothing and the count
-     * would over-count (findings M3).
+     * would over-count.
      */
     translationFilter?: TranslationStatusFilter;
     /** Arbitrary data passed to hooks via context */
@@ -1542,7 +1542,7 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
-      // i18n M3: apply the `_translated` language filter regardless of `params.where` — when it
+      // apply the `_translated` language filter regardless of `params.where` — when it
       // is the ONLY filter, listEntries forwards `where: undefined` (the key having been stripped)
       // and passes the filter via `translationFilter`. Applying it here (not inside the
       // `if (params.where)` block below) keeps count == list so pagination totals stay correct.
@@ -1582,7 +1582,7 @@ export class CollectionQueryService extends BaseService {
         }>;
 
         // Strip the `_translated` key before the component extractor (which drops unrecognized
-        // object keys). The filter itself was already applied above (i18n M3).
+        // object keys). The filter itself was already applied above.
         const { cleanedWhere: whereWithoutTranslation } =
           this.extractTranslationStatusFilter(params.where);
 

@@ -68,8 +68,7 @@ export function writeLocalizationMigrationFile(
 export interface WriteCompanionMigrationOpts {
   /**
    * `enable` = create+seed+drop; `create-only` = bare CREATE for a fresh collection;
-   * `disable` = restore default onto main + archive other languages + drop the companion
-   * (i18n H5, spec §5.3).
+   * `disable` = restore default onto main + archive other languages + drop the companion.
    */
   kind: "enable" | "create-only" | "disable";
   /** Pre-planned UP SQL (from `planCompanionMigration`). */

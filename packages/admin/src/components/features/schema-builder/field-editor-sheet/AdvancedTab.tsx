@@ -56,7 +56,7 @@ export function AdvancedTab({
         ariaLabel="Localized"
         label="Localized"
         help="Store a different value per language. Text fields localize by default; toggle to override. Requires the collection's Internationalization setting and a migration to create the translations table."
-        // i18n H4: when the author hasn't set this explicitly, reflect the backend
+        // when the author hasn't set this explicitly, reflect the backend
         // smart default (text-like fields localize by default) so the switch shows
         // the effective state instead of always reading as off.
         checked={adv.localized ?? defaultLocalizedForType(field.type)}

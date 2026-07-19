@@ -247,9 +247,9 @@ export function buildLocalizedOrderExpr(args: {
   column: string;
   localeChain: string[];
   /**
-   * Per-locale status filter (i18n M6). When set, each subquery also requires
+   * Per-locale status filter. When set, each subquery also requires
    * `_status = statusValue`, so a public read never orders by a draft translation's
-   * value (an ordering-only leak otherwise). See findings L5.
+   * value (an ordering-only leak otherwise).
    */
   statusValue?: string;
 }): SQL {

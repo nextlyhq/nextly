@@ -44,7 +44,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           status: (c as { status?: boolean }).status === true,
           // i18n: carry the localized flag so the push/preview diff omits
           // translatable columns from the main table (they live in the
-          // companion `_locales` table) instead of re-adding them (findings H2).
+          // companion `_locales` table) instead of re-adding them.
           localized: (c as { localized?: boolean }).localized === true,
         };
       }

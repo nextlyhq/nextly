@@ -1066,8 +1066,8 @@ export class PushSchemaPipeline {
       // still carries the translatable columns and pushSchema ADDs them to the
       // main table, even though the snapshot diff (buildDesiredTableFromFields,
       // used only for rename detection) already omits them. Both views must agree
-      // or a localized collection's translatable columns leak onto main (findings
-      // H2). The companion `_locales` table is provisioned out-of-band.
+      // or a localized collection's translatable columns leak onto main. The
+      // companion `_locales` table is provisioned out-of-band.
       const { table } = generateRuntimeSchema(
         c.tableName,
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],

@@ -1,4 +1,4 @@
-// i18n M4: the admin read paths (`find` list + `findByID` detail) forward `?locale=` and
+// the admin read paths (`find` list + `findByID` detail) forward `?locale=` and
 // `?fallback-locale=` so the editor can request a single language and, with
 // `fallback-locale=none`, render untranslated fields empty instead of leaking the default
 // locale. Regression: these two calls previously emitted the camelCase `fallbackLocale`, which

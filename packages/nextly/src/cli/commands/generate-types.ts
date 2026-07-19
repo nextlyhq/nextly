@@ -404,6 +404,9 @@ function convertToComponentRecords(
     admin: component.admin,
     source: "code" as const,
     locked: true, // Code-first components are locked
+    // Preserve the component's localization flag in the generated record so the
+    // emitted types match the runtime schema (a localized component omits
+    // translatable columns from its main table and carries a companion table).
     localized: (component as { localized?: boolean }).localized === true,
     schemaHash: "", // Not needed for type generation
     schemaVersion: 1,

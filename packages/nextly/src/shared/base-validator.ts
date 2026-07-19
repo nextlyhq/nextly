@@ -214,7 +214,7 @@ export function validateSlugShared(
     });
   }
 
-  // i18n L11: a slug ending in `_locales` produces a physical table name
+  // a slug ending in `_locales` produces a physical table name
   // (`dc_<slug>_locales` / `single_<slug>_locales`) that collides with the localization
   // companion-table naming, so the schema-diff pipeline would treat the user's table as
   // migration-owned (excluded from diff, its DROP silently blocked). Reserve the suffix.

@@ -411,7 +411,7 @@ export async function reloadNextlyConfig(opts?: {
       status: c.status === true,
       // i18n: propagate the localized flag so the HMR diff omits translatable
       // columns from the main table and the runtime schema is regenerated with
-      // the companion split (findings H2).
+      // the companion split.
       localized: c.localized === true,
     });
   }
@@ -956,7 +956,7 @@ export async function reloadNextlyConfig(opts?: {
       for (const c of Object.values(desiredCollections)) {
         // `localized` now travels on the DesiredCollection entry (set above from
         // the config target), so the main table is regenerated without the
-        // translatable columns and the companion is registered (findings H2).
+        // translatable columns and the companion is registered.
         const localized = c.localized === true;
         const { table } = generateRuntimeSchema(
           c.tableName,
@@ -971,7 +971,7 @@ export async function reloadNextlyConfig(opts?: {
             tableName: c.tableName,
             fields: c.fields as { name: string; type: string }[],
             dialect,
-            // i18n M6: companion carries a per-locale `_status` column when the
+            // companion carries a per-locale `_status` column when the
             // collection has Draft/Published (mirrors loadCompanionSchema). M9.
             localized: true,
             status: c.status === true,

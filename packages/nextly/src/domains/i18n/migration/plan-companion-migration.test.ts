@@ -50,7 +50,7 @@ describe("planCompanionMigration", () => {
     expect(plan.downSql).toBe("");
   });
 
-  // i18n H5 — the DISABLE transition (spec §5.3 / locked decision #6).
+  // the DISABLE transition (localized true → false).
   describe("DISABLE (localized true → false)", () => {
     it("restores the default locale, archives the rest, then drops the companion", () => {
       const plan = planCompanionMigration({
