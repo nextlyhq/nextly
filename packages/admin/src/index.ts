@@ -229,6 +229,8 @@ export {
   CardTitle,
   cardVariants,
 } from "@nextlyhq/ui";
+export { Stack, Grid, Stat } from "@nextlyhq/ui";
+export type { StackProps, GridProps, StatProps } from "@nextlyhq/ui";
 export type {
   CardActionProps,
   CardContentProps,

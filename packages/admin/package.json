@@ -53,6 +53,7 @@
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@nextlyhq/admin-css": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",

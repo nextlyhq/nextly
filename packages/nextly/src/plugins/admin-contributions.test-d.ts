@@ -96,3 +96,8 @@ definePlugin({
     } satisfies PluginAdminContributions,
   },
 });
+
+// admin.styles declares precompiled plugin CSS; accepts one path or several.
+expectTypeOf<PluginAdminContributions["styles"]>().toEqualTypeOf<
+  string | string[] | undefined
+>();

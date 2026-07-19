@@ -1,0 +1,12 @@
+/**
+ * POC fixture: a third-party plugin's admin CSS entry.
+ *
+ * Authored the way a plugin author would — Tailwind plus the shared Nextly
+ * token preset — using a utility (grid-cols-12) and token-mapped colors that
+ * are NOT in the admin's built-in safelist, so this exercises the escape hatch.
+ * `nextly-build-admin-css` compiles + scopes this into the plugin's shipped
+ * `admin.styles`.
+ */
+@import "tailwindcss";
+@import "@nextlyhq/ui/theme.css";
+@source inline("grid-cols-12 bg-accent text-accent-foreground");

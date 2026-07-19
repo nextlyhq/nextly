@@ -1,0 +1,60 @@
+/**
+ * Layer-2 plugin utility safelist.
+ *
+ * Third-party plugins cannot be added to the admin's build-time `@source` scan,
+ * so their utility classes would be dropped from the compiled stylesheet. This
+ * force-generates a curated, token-driven set (no arbitrary values, no raw
+ * colors) that every plugin component may use with no build step. `@source
+ * inline(...)` is Tailwind v4's replacement for the `safelist` config option;
+ * the `{a,b}` syntax is brace-expanded. Keep this list token-driven and bounded
+ * — arbitrary utilities belong in a plugin's own `admin.styles`.
+ */
+
+/* Layout */
+@source inline("{flex,inline-flex,grid,block,inline-block,hidden}");
+@source inline("{flex-col,flex-row,flex-wrap}");
+@source inline("items-{start,center,end,stretch,baseline}");
+@source inline("justify-{start,center,end,between,around,evenly}");
+@source inline("grid-cols-{1,2,3,4,5,6}");
+@source inline("col-span-{1,2,3,4,5,6}");
+@source inline("gap-{0,1,2,3,4,5,6,8}");
+@source inline("gap-{x,y}-{0,1,2,3,4,5,6,8}");
+
+/* Spacing */
+@source inline("{p,px,py,pt,pr,pb,pl}-{0,1,2,3,4,5,6,8}");
+@source inline("{m,mx,my,mt,mr,mb,ml}-{0,1,2,3,4,5,6,8}");
+@source inline("space-{x,y}-{0,1,2,3,4,6}");
+
+/* Sizing */
+@source inline("w-{full,auto}");
+@source inline("w-{1/2,1/3,2/3,1/4,3/4}");
+@source inline("max-w-{sm,md,lg,xl,2xl,full}");
+@source inline("min-w-0");
+@source inline("h-{full,auto}");
+@source inline("size-{4,5,6,8}");
+
+/* Typography */
+@source inline("text-{xs,sm,base,lg,xl,2xl}");
+@source inline("font-{normal,medium,semibold,bold}");
+@source inline("leading-{none,tight,normal,relaxed}");
+@source inline("tracking-{tight,normal,wide}");
+@source inline("text-{left,center,right}");
+@source inline("truncate");
+@source inline("line-clamp-{1,2,3}");
+
+/* Color — token-mapped only, with hover/focus-visible for interactive use */
+@source inline("bg-{background,card,popover,primary,secondary,muted,accent,destructive}");
+@source inline("hover:bg-{primary,secondary,muted,accent,destructive}");
+@source inline("text-{foreground,muted-foreground,primary,primary-foreground,secondary-foreground,accent-foreground,destructive-foreground}");
+@source inline("border-{border,input,primary,destructive}");
+
+/* Border / radius / shadow / ring */
+@source inline("border");
+@source inline("border-{0,2}");
+@source inline("border-{t,r,b,l}");
+@source inline("rounded");
+@source inline("rounded-{sm,md,lg,xl,full}");
+@source inline("shadow-{sm,md,lg}");
+@source inline("ring-{0,1,2}");
+@source inline("ring-{border,primary}");
+@source inline("focus-visible:ring-2");
