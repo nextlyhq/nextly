@@ -43,7 +43,10 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { isValidLocale, resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  isValidLocale,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   splitLocalizedWrite,
@@ -348,6 +351,31 @@ export class SingleMutationService extends BaseService {
         ? splitLocalizedWrite(updatePayload, companion.localizedFields)
         : { main: updatePayload, companion: {} as Record<string, unknown> };
 
+      // i18n H3: per-locale status. The write locale, and the status value the companion row
+      // should carry — taken from `updatePayload` (not `mainPayload`, which may have `status`
+      // stripped just below). Captured before the transaction so a status-only unpublish still
+      // stamps the per-locale `_status`.
+      const writeLocale =
+        companion && this.localization
+          ? resolveRequestedLocale(this.localization, options.locale)
+          : undefined;
+      const companionStatus =
+        companion?.hasStatus &&
+        typeof (updatePayload as Record<string, unknown>).status === "string"
+          ? ((updatePayload as Record<string, unknown>).status as string)
+          : undefined;
+      // The main table's `status` is the single's entry-level (default-locale) publish state,
+      // so a per-locale write for a NON-default locale must not clobber it — that language's
+      // draft/publish lives on the companion `_status` (stamped by the upsert after commit).
+      if (
+        writeLocale !== undefined &&
+        this.localization &&
+        writeLocale !== this.localization.defaultLocale &&
+        Object.prototype.hasOwnProperty.call(mainPayload, "status")
+      ) {
+        delete (mainPayload as Record<string, unknown>).status;
+      }
+
       // Commit the scalar update and the component subtree writes atomically so
       // a component-save failure rolls back the scalar update (no partial single
       // state). The scalar row and comp_ tables both write on the same tx. The
@@ -410,26 +438,22 @@ export class SingleMutationService extends BaseService {
       }
 
       // 8.6. i18n: upsert the companion row for the write's locale with the translatable
-      // values. Stamps the per-locale `_status` from the (shared) status column when the
-      // single has Draft/Published, so publishing carries into the edited language. Runs
-      // after the scalar/component transaction commits — the companion write uses the
-      // adapter's own connection rather than the transaction.
-      if (companion && Object.keys(companionData).length > 0) {
-        const writeLocale = resolveRequestedLocale(
-          this.localization!,
-          options.locale
-        );
+      // values, stamping the per-locale `_status`. Runs after the scalar/component
+      // transaction commits — the companion write uses the adapter's own connection rather
+      // than the transaction. Fires even when only the status changed (companionData empty)
+      // so a per-locale unpublish updates the companion `_status` instead of leaving it stale.
+      if (
+        companion &&
+        writeLocale !== undefined &&
+        (Object.keys(companionData).length > 0 || companionStatus !== undefined)
+      ) {
         await upsertCompanionRow(
           this.adapter,
           companion.companionTableName,
           existingDoc.id,
           writeLocale,
           companionData,
-          companion.hasStatus
-            ? ((mainPayload as Record<string, unknown>)["status"] as
-                | string
-                | undefined)
-            : undefined
+          companionStatus
         );
       }
 
