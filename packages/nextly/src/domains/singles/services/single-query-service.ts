@@ -43,6 +43,7 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -50,8 +51,12 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
   GetSingleOptions,
   SingleDocument,
@@ -278,6 +283,9 @@ export async function checkSingleAccess(params: {
  * service can reuse them without duplication.
  */
 export class SingleQueryService extends BaseService {
+  /** Persists version snapshots; used when a versioned Single is auto-created. */
+  private readonly versionCapture = new VersionCaptureService();
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -370,10 +378,14 @@ export class SingleQueryService extends BaseService {
         {}
       );
 
-      // 6. Auto-create if document doesn't exist
+      // 6. Auto-create if document doesn't exist. Capture the initial version
+      // when the Single is versioned so a first-read materialization still
+      // starts a history (the mutation path records its own first version).
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocument(singleMeta);
+        doc = await this.createDefaultDocument(singleMeta, {
+          captureInitialVersion: true,
+        });
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -494,9 +506,16 @@ export class SingleQueryService extends BaseService {
    * Applies default values from field configurations. Always includes
    * the system columns (id, title, slug, created_at, updated_at) that
    * the schema generator adds to every Single table.
+   *
+   * `captureInitialVersion` records the materialized default as the Single's
+   * first version snapshot (v1), atomically with the insert. The read path opts
+   * in so a versioned Single that is auto-created on first read still starts a
+   * history; the mutation path does NOT, because its subsequent update records
+   * the first version itself (opting in there would double-version a first edit).
    */
   async createDefaultDocument(
-    singleMeta: DynamicSingleRecord
+    singleMeta: DynamicSingleRecord,
+    options?: { captureInitialVersion?: boolean }
   ): Promise<SingleDocument> {
     const now = new Date();
     const id = crypto.randomUUID();
@@ -531,17 +550,76 @@ export class SingleQueryService extends BaseService {
       string,
       unknown
     >;
-    const inserted = await this.adapter.insert<SingleDocument>(
-      singleMeta.tableName,
-      snakeCaseDefaults,
-      { returning: "*" }
+
+    const versionsConfig = singleMeta.versions;
+    const shouldCapture =
+      options?.captureInitialVersion === true &&
+      versionsConfig?.enabled === true;
+
+    if (!shouldCapture) {
+      const inserted = await this.adapter.insert<SingleDocument>(
+        singleMeta.tableName,
+        snakeCaseDefaults,
+        { returning: "*" }
+      );
+      this.logger.debug("Created default Single document", {
+        slug: singleMeta.slug,
+        id,
+      });
+      return inserted;
+    }
+
+    // Versioned Single: insert the default row and record its v1 snapshot in one
+    // transaction, so the Single never ends up with a live row but no history.
+    // Retry on a version_no allocation race, mirroring the write paths.
+    const inserted = await withVersionConflictRetry(() =>
+      this.adapter.transaction(async tx => {
+        const row = await tx.insert<SingleDocument>(
+          singleMeta.tableName,
+          snakeCaseDefaults,
+          { returning: "*" }
+        );
+        // Match the read shape: keep user field keys (which may contain
+        // underscores like `site_title`) exactly, converting only the timestamp
+        // columns; strip password hashes and the system owner column so history
+        // never retains them; parse JSON-backed fields (stored as strings on
+        // SQLite) so a restore equals a normal read. A freshly materialized
+        // default has no component subtrees yet, so components is empty.
+        const parentRow = convertTimestampsToCamelCase({
+          ...(row as Record<string, unknown>),
+        });
+        stripPasswordFieldValues(parentRow, singleMeta.fields);
+        stripSystemOwnerField(parentRow);
+        for (const field of singleMeta.fields) {
+          if (!("name" in field) || !field.name) continue;
+          const value = parentRow[field.name];
+          if (shouldTreatAsJson(field) && typeof value === "string") {
+            try {
+              parentRow[field.name] = JSON.parse(value);
+            } catch {
+              // Not valid JSON — keep the raw string.
+            }
+          }
+        }
+        await captureInTx(tx, this.versionCapture, {
+          ref: {
+            scopeKind: "single",
+            scopeSlug: singleMeta.slug,
+            entryId: (row as { id: string }).id,
+          },
+          contentStatus: (parentRow as { status?: unknown }).status,
+          // System-materialized default: no authoring user.
+          parts: { parentRow, components: {} },
+          createdBy: null,
+        });
+        return row;
+      })
     );
 
     this.logger.debug("Created default Single document", {
       slug: singleMeta.slug,
       id,
     });
-
     return inserted;
   }
 
