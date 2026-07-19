@@ -711,7 +711,7 @@ importers:
         version: 4.3.2
     devDependencies:
       '@eslint/js':
-        specifier: ^9.39.1
+        specifier: ^9.34.0
         version: 9.39.1
       '@nextlyhq/ui':
         specifier: workspace:*
