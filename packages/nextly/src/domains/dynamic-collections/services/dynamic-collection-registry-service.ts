@@ -3,6 +3,7 @@ import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 
@@ -27,6 +28,11 @@ export interface CollectionMetadata {
    * live in the companion `<table>_locales` table and the admin edits per-language.
    */
   localized?: boolean;
+  /**
+   * Resolved content-versioning config, or null when unversioned. Backed by
+   * the `dynamic_collections.versions` JSON column.
+   */
+  versions?: ResolvedVersionsConfig | null;
   admin?: {
     group?: string;
     icon?: string;
@@ -146,6 +152,9 @@ export class DynamicCollectionRegistryService extends BaseService {
       // fields to the companion table and the admin shows per-language editing. Without
       // it, a UI-created localized collection is stored as non-localized (shared).
       localized: metadata.localized === true,
+      // Resolved versioning config (or null when unversioned). Stored as JSON
+      // the same way `admin` is; Drizzle serializes the object per dialect.
+      versions: metadata.versions ?? null,
       configPath: metadata.configPath,
       schemaHash: metadata.schemaHash,
       schemaVersion: metadata.schemaVersion ?? 1,

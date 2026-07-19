@@ -42,6 +42,8 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+// Normalized versioning config persisted on the registry `versions` column.
+import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {
   SingleSource,
@@ -173,6 +175,15 @@ export const dynamicSinglesSqlite = sqliteTable(
     localized: integer("localized", { mode: "boolean" })
       .default(false)
       .notNull(),
+
+    /**
+     * Resolved content-versioning config for this single, or null when
+     * unversioned. Mirrors the collections schema; stores the normalized
+     * `ResolvedVersionsConfig` so every consumer reads one canonical shape.
+     */
+    versions: text("versions", {
+      mode: "json",
+    }).$type<ResolvedVersionsConfig>(),
 
     /**
      * Path to the config file (code-first Singles only).

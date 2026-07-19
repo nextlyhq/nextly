@@ -14,10 +14,7 @@ import { join, resolve } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  generateMigration,
-  type MinimalConfigEntity,
-} from "../generate";
+import { generateMigration, type MinimalConfigEntity } from "../generate";
 import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-07-09T12:00:00.000Z");
@@ -228,7 +225,9 @@ describe("generateMigration — localized companion emission", () => {
       const snap = JSON.parse(
         await readFile(resolve(metaDir, files[files.length - 1]), "utf-8")
       );
-      return snap.snapshot.tables.find((t: { name: string }) => t.name === name);
+      return snap.snapshot.tables.find(
+        (t: { name: string }) => t.name === name
+      );
     }
 
     it("records the `localized` marker on a localized table, and omits it otherwise", async () => {
@@ -273,7 +272,9 @@ describe("generateMigration — localized companion emission", () => {
       expect(result).not.toBeNull();
 
       const files = await listSqlFiles(migrationsDir);
-      const disableFile = files.find(f => f.includes("disable_localization_pages"));
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
       expect(disableFile).toBeDefined();
       const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
 
@@ -293,7 +294,9 @@ describe("generateMigration — localized companion emission", () => {
       // The new snapshot drops the marker and puts `body` back on the main table.
       const pages = await latestSnapshotTable("dc_pages");
       expect(pages.localized).toBeUndefined();
-      expect(pages.columns.map((c: { name: string }) => c.name)).toContain("body");
+      expect(pages.columns.map((c: { name: string }) => c.name)).toContain(
+        "body"
+      );
     });
 
     it("restores a field whose explicit `localized: true` was removed in the same edit", async () => {
@@ -338,7 +341,9 @@ describe("generateMigration — localized companion emission", () => {
       });
 
       const files = await listSqlFiles(migrationsDir);
-      const disableFile = files.find(f => f.includes("disable_localization_pages"));
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
       expect(disableFile).toBeDefined();
       const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
       expect(sql).toContain(`"views"`); // still restored + archived
@@ -368,7 +373,9 @@ describe("generateMigration — localized companion emission", () => {
       });
 
       const files = await listSqlFiles(migrationsDir);
-      const disableFile = files.find(f => f.includes("disable_localization_pages"));
+      const disableFile = files.find(f =>
+        f.includes("disable_localization_pages")
+      );
       expect(disableFile).toBeDefined();
       const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
       // `body` was in the companion → restored. `summary` was not → never read from it.

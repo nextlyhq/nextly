@@ -89,6 +89,8 @@ export interface CodeFirstCollectionConfig {
   timestamps?: boolean;
   /** Whether the collection has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Resolved content-versioning config (or null when unversioned). */
+  versions?: DynamicCollectionInsert["versions"];
   /** Whether collection-level i18n is enabled (mirrors `status`). */
   localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
@@ -260,6 +262,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       // `timestamps` and `locked` are written in this code path; the
       // SQLite/postgres/mysql Drizzle column types accept either form.
       status: data.status === true ? 1 : 0,
+      // Persist the resolved versioning config as JSON (or null), the same way
+      // `admin`/`hooks` are written on this raw-insert path.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
@@ -360,8 +365,25 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      updateData.schema_version = existing.schemaVersion + 1;
-      updateData.migration_status = "pending";
+      // Bump schema_version + re-flag pending migration only on a PHYSICAL
+      // schema change: fields (by hash), or a status / localized toggle (which
+      // add/remove the status column or the companion localization schema). A
+      // pure-metadata sync (versions/labels/admin) re-sends unchanged fields and
+      // must not force a spurious pending-migration cycle. Without a hash we
+      // cannot compare fields, so fall back to the prior always-bump behavior.
+      const fieldsActuallyChanged =
+        data.schemaHash === undefined ||
+        !schemaHashesMatch(data.schemaHash, existing.schemaHash);
+      const statusToggled =
+        data.status !== undefined &&
+        (data.status === true) !== (existing.status === true);
+      const localizedToggled =
+        data.localized !== undefined &&
+        (data.localized === true) !== (existing.localized === true);
+      if (fieldsActuallyChanged || statusToggled || localizedToggled) {
+        updateData.schema_version = existing.schemaVersion + 1;
+        updateData.migration_status = "pending";
+      }
     }
     if (data.timestamps !== undefined) {
       updateData.timestamps = data.timestamps;
@@ -386,6 +408,13 @@ export class CollectionRegistryService extends BaseRegistryService<
     // `timestamps` and `locked` are written elsewhere in this service.
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
+    }
+    // Versioning config: when explicitly provided (including null to disable),
+    // write the resolved JSON; when undefined, leave the column unchanged.
+    if (data.versions !== undefined) {
+      updateData.versions = data.versions
+        ? JSON.stringify(data.versions)
+        : null;
     }
     if (data.localized !== undefined) {
       updateData.localized = data.localized === true ? 1 : 0;
@@ -492,6 +521,8 @@ export class CollectionRegistryService extends BaseRegistryService<
             // Forward Draft/Published flag so code-first collections that
             // opt in actually write the column on first sync.
             status: config.status === true,
+            // Forward the resolved versioning config on first sync.
+            versions: config.versions,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -501,6 +532,10 @@ export class CollectionRegistryService extends BaseRegistryService<
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.status === true) !== (existing.status === true) ||
+          // Re-sync when the resolved versioning config changed (both are
+          // normalized JSON, so a stable string compare detects a real change).
+          JSON.stringify(config.versions ?? null) !==
+            JSON.stringify(existing.versions ?? null) ||
           (config.localized === true) !== (existing.localized === true) ||
           desiredTableName !== existing.tableName
         ) {
@@ -526,6 +561,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              versions: config.versions,
               localized: config.localized === true,
               tableName: desiredTableName,
             },
@@ -592,6 +628,12 @@ export class CollectionRegistryService extends BaseRegistryService<
                 admin: config.admin,
                 source: config.source ?? "code",
                 locked: true,
+                status: config.status === true,
+                // Forward the i18n flag on the table_name-conflict recovery path
+                // too (parity with the primary register + update branches), so a
+                // collection recovered here does not silently lose localization.
+                localized: config.localized === true,
+                versions: config.versions,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,
               });
@@ -661,6 +703,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       locked: (data.locked ?? isPipelineSource(data.source)) ? 1 : 0,
       // Same as registerCollection — persist Draft/Published as 0/1.
       status: data.status === true ? 1 : 0,
+      // Same as registerCollection — persist the resolved versioning config.
+      versions: data.versions ? JSON.stringify(data.versions) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
@@ -771,6 +815,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     const labels = (r.labels || r.labels) as string | object;
     const fields = (r.fields || r.fields) as string | object;
     const admin = (r.admin || r.admin) as string | object | null;
+    const versions = r.versions as string | object | null | undefined;
     const hooks = (r.hooks || r.hooks) as string | object | null;
     const tableName = (r.table_name || r.tableName) as string;
     const configPath = (r.config_path || r.configPath) as string | undefined;
@@ -809,6 +854,14 @@ export class CollectionRegistryService extends BaseRegistryService<
       // SQLite returns 0/1 even with mode:"boolean" in some driver/dialect
       // combinations, so accept both shapes.
       status: r.status === 1 || r.status === true,
+      // Parse the resolved versioning config (JSON string on the raw-insert
+      // path / SQLite; already an object on pg/mysql jsonb). null when
+      // unversioned or on rows written before this column existed.
+      versions: versions
+        ? typeof versions === "string"
+          ? JSON.parse(versions)
+          : versions
+        : null,
       localized: r.localized === 1 || r.localized === true,
       configPath,
       schemaHash,

@@ -55,7 +55,11 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+// Resolve the versioning config on the HMR sync path so a `versions` change
+// while `next dev` is running persists without a restart (parity with di/register).
+import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import type { VersionsConfig } from "../schemas/versions/types";
 import { ComponentSchemaService } from "../services/components/component-schema-service";
 
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
@@ -94,6 +98,8 @@ type CollectionDef = {
   status?: boolean;
   /** i18n: localized collections omit translatable cols from main + register a companion. */
   localized?: boolean;
+  /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
+  versions?: boolean | VersionsConfig;
 };
 
 type SingleDef = {
@@ -104,6 +110,10 @@ type SingleDef = {
   admin?: unknown;
   dbName?: string;
   status?: boolean;
+  /** i18n flag; persisted to dynamic_singles.localized. */
+  localized?: boolean;
+  /** Content-versioning option; persisted (resolved) to dynamic_singles.versions. */
+  versions?: boolean | VersionsConfig;
 };
 
 type ComponentDef = {
@@ -173,6 +183,105 @@ async function defaultResolver(name: string): Promise<unknown> {
   const { getService } = await import("../di/register");
   // The DI key types are a fixed map; we cast through the resolver edge.
   return getService(name as Parameters<typeof getService>[0]);
+}
+
+// Build the code-first registry-sync payload for collections. Shared by the
+// post-DDL sync and the metadata-only (no-DDL) HMR path so a change to
+// registry-only metadata (versions/localized/status/labels/description) reaches
+// the registry too, not just schema (DDL) changes.
+function buildCollectionSyncPayload(collections: CollectionDef[]) {
+  return collections
+    .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
+    .map(c => ({
+      slug: c.slug,
+      labels: {
+        singular: c.labels?.singular ?? c.slug,
+        plural: c.labels?.plural ?? `${c.slug}s`,
+      },
+      fields: c.fields ?? [],
+      description: c.description,
+      tableName: c.dbName,
+      timestamps: c.timestamps,
+      admin: c.admin,
+      // Draft/Published flag + versioning persisted to dynamic_collections so a
+      // code-first toggle reaches the registry.
+      status: c.status === true,
+      // i18n: forward the localized master switch. The reload apply pipeline
+      // carries `localized` into buildDesiredTableFromFields, so a localized
+      // toggle produces a real schema diff (main table drops translatable cols,
+      // companion table is created) and reaches this sync only AFTER the DDL
+      // path ran. On the metadata-only path localized is unchanged from the
+      // physical schema. Omitting it here would write `localized === undefined
+      // === true = false`, flipping a localized collection's flag OFF on every
+      // reload and desyncing the registry from the companion table.
+      localized: c.localized === true,
+      versions: resolveVersionsConfig(c.versions, c.status),
+    }));
+}
+
+// Build the code-first registry-sync payload for singles (see above).
+function buildSingleSyncPayload(singles: SingleDef[]) {
+  return singles
+    .filter((s): s is SingleDef & { slug: string } => !!s.slug)
+    .map(s => {
+      const labelStr =
+        typeof s.label === "string"
+          ? s.label
+          : (s.label?.singular ??
+            s.slug
+              .split(/[-_]/)
+              .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(" "));
+      return {
+        slug: s.slug,
+        label: labelStr,
+        fields: s.fields ?? [],
+        description: s.description,
+        tableName: s.dbName,
+        admin: s.admin,
+        status: s.status === true,
+        localized: s.localized === true,
+        versions: resolveVersionsConfig(s.versions, s.status),
+      };
+    });
+}
+
+// Metadata-only registry sync for the no-DDL HMR path: a `versions`/`localized`/
+// status/labels edit produces no schema operations, so the main flow's
+// `if (!hasChanges) return` would otherwise skip persistence until a restart.
+// The registry syncs change-detect internally and no-op when nothing changed;
+// this runs only when nextly.config.ts changes (not on every HMR tick).
+async function syncCodeFirstMetadataOnly(
+  resolve: ServiceResolver,
+  newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
+  logger?: LoggerLike
+): Promise<void> {
+  try {
+    const registry = (await resolve(
+      "collectionRegistryService"
+    )) as CollectionRegistrySurface;
+    const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
+    if (payload.length > 0) await registry.syncCodeFirstCollections(payload);
+  } catch (err) {
+    logger?.warn(
+      `[Nextly HMR] metadata-only collection sync failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  try {
+    const singleReg = (await resolve(
+      "singleRegistryService"
+    )) as SingleRegistrySurface;
+    const payload = buildSingleSyncPayload(newConfig.singles ?? []);
+    if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
+  } catch (err) {
+    logger?.warn(
+      `[Nextly HMR] metadata-only single sync failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -406,6 +515,12 @@ export async function reloadNextlyConfig(opts?: {
   // the user sees on a first-install where collections are synced before
   // singles.
   let hasChanges = false;
+  // True when a real schema diff existed but was NOT applied this cycle (an
+  // unsafe change needing review, or a diff that threw). In that state the
+  // registry's `fields` would disagree with the physical table, so the no-DDL
+  // metadata-only sync below must be skipped rather than persist unmigrated
+  // schema metadata; it retries on the next clean reload or restart.
+  let deferredSchemaChange = false;
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -449,6 +564,7 @@ export async function reloadNextlyConfig(opts?: {
             `data loss without explicit resolutions. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredCollections[target.slug] = entry;
         continue;
       }
@@ -459,6 +575,7 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
@@ -499,6 +616,7 @@ export async function reloadNextlyConfig(opts?: {
             `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredSingles[target.slug] = entry;
         continue;
       }
@@ -509,6 +627,7 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
@@ -545,6 +664,7 @@ export async function reloadNextlyConfig(opts?: {
             `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredComponents[target.slug] = entry;
         continue;
       }
@@ -555,11 +675,25 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
-  // Nothing to apply across collections, singles, or components.
-  if (!hasChanges) return;
+  // No schema (DDL) changes to apply. Registry-only metadata (versions,
+  // localized, status, labels, description) can still have changed, and it does
+  // not surface as a schema diff — so run the idempotent metadata sync before
+  // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
+  // not persist until the dev server restarts.
+  if (!hasChanges) {
+    // Only sync when the schema is genuinely in step (every entity had a zero-op
+    // diff). If a real schema change was deferred (unsafe/needs review) or a diff
+    // threw, syncing would persist `fields` that disagree with the physical
+    // table, so skip and let a later clean reload / restart reconcile.
+    if (!deferredSchemaChange) {
+      await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
+    }
+    return;
+  }
 
   // Preserve registered collections that aren't in the code config (e.g.
   // UI-created ones). HMR only knows nextly.config.ts, but SQLite/MySQL ignore
@@ -716,29 +850,9 @@ export async function reloadNextlyConfig(opts?: {
       const registry = (await resolve(
         "collectionRegistryService"
       )) as CollectionRegistrySurface;
-      const codeFirstConfigs = (newConfig.collections ?? [])
-        .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
-        .map(c => ({
-          slug: c.slug,
-          labels: {
-            singular: c.labels?.singular ?? c.slug,
-            plural: c.labels?.plural ?? `${c.slug}s`,
-          },
-          fields: c.fields ?? [],
-          description: c.description,
-          tableName: c.dbName,
-          timestamps: c.timestamps,
-          admin: c.admin,
-          // Forward the Draft/Published flag so a code-first toggle reaches
-          // syncCodeFirstCollections and persists to dynamic_collections.status.
-          status: c.status === true,
-          // i18n: forward the localized master switch too. Without it, config.localized
-          // is undefined here and the sync writes `localized = undefined === true = false`,
-          // flipping a localized collection's flag OFF on every HMR/boot config-reload —
-          // which desyncs the registry from the (correctly localized) physical schema and
-          // breaks companion read/write.
-          localized: (c as { localized?: boolean }).localized === true,
-        }));
+      const codeFirstConfigs = buildCollectionSyncPayload(
+        newConfig.collections ?? []
+      );
       await registry.syncCodeFirstCollections(codeFirstConfigs);
 
       // registerCollection defaults migration_status to 'pending'; the pipeline
@@ -766,31 +880,9 @@ export async function reloadNextlyConfig(opts?: {
       const singleReg = (await resolve(
         "singleRegistryService"
       )) as SingleRegistrySurface;
-      const codeFirstSingleConfigs = (newConfig.singles ?? [])
-        .filter((s): s is SingleDef & { slug: string } => !!s.slug)
-        .map(s => {
-          const labelStr =
-            typeof s.label === "string"
-              ? s.label
-              : (s.label?.singular ??
-                s.slug
-                  .split(/[-_]/)
-                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" "));
-          return {
-            slug: s.slug,
-            label: labelStr,
-            fields: s.fields ?? [],
-            description: s.description,
-            tableName: s.dbName,
-            admin: s.admin,
-            // Forward Draft/Published flag for code-first Singles too.
-            status: s.status === true,
-            // i18n: forward the localized master switch (see the collection sync above) —
-            // otherwise the reload flips a localized single's flag OFF every HMR/boot.
-            localized: (s as { localized?: boolean }).localized === true,
-          };
-        });
+      const codeFirstSingleConfigs = buildSingleSyncPayload(
+        newConfig.singles ?? []
+      );
       if (codeFirstSingleConfigs.length > 0) {
         await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
 

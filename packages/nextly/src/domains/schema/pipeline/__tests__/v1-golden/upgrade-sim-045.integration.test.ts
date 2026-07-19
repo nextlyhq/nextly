@@ -130,6 +130,18 @@ const isPost045TableStatement = (stmt: string): boolean =>
 const addsOwnerColumn = (stmt: string): boolean =>
   /^ALTER TABLE .+ ADD (COLUMN )?[`"]?created_by[`"]?\b/i.test(stmt.trim());
 
+// The `versions` config column is additive (nullable) on the pre-existing
+// dynamic_collections / dynamic_singles registry tables, so a v1 upgrade of a
+// schema captured before it emits one additive `ADD COLUMN versions` per table.
+// Accept it like the owner column above rather than mistaking it for a phantom
+// diff. Scoped to the two registry tables (versions is added nowhere else) so
+// an unrelated `ADD versions` on some other table can't mask a regression.
+// Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+const addsVersionsColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?versions[`"]?\b/i.test(
+    stmt.trim()
+  );
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -232,7 +244,9 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
         });
         for (const s of first.sqlStatements) {
           expect(
-            isPost045TableStatement(s) || addsOwnerColumn(s),
+            isPost045TableStatement(s) ||
+              addsOwnerColumn(s) ||
+              addsVersionsColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -304,7 +318,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           expect(
             isDefaultReconcile ||
               isPost045TableStatement(s) ||
-              addsOwnerColumn(s),
+              addsOwnerColumn(s) ||
+              addsVersionsColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

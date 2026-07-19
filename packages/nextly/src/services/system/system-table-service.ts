@@ -100,6 +100,10 @@ const POSTGRES_SQL = {
       "fields" JSONB NOT NULL,
       "timestamps" BOOLEAN NOT NULL DEFAULT true,
       "admin" JSONB,
+      -- Nullable content-versioning config (mirrors the canonical Drizzle
+      -- schema's versions jsonb column) so the mutation read path's
+      -- select-all does not fail on a table created via this fallback.
+      "versions" JSONB,
       "source" VARCHAR(20) NOT NULL DEFAULT 'ui',
       "locked" BOOLEAN NOT NULL DEFAULT false,
       "config_path" VARCHAR(500),
@@ -194,6 +198,10 @@ const MYSQL_SQL = {
       \`fields\` JSON NOT NULL,
       \`timestamps\` BOOLEAN NOT NULL DEFAULT true,
       \`admin\` JSON,
+      -- Nullable content-versioning config (mirrors the canonical Drizzle
+      -- schema's \`versions\` json column) so a table created via this fallback
+      -- carries the column the mutation read path's select-all expects.
+      \`versions\` JSON,
       \`source\` VARCHAR(20) NOT NULL DEFAULT 'ui',
       \`locked\` BOOLEAN NOT NULL DEFAULT false,
       \`config_path\` VARCHAR(500),
@@ -285,6 +293,10 @@ const SQLITE_SQL = {
       "fields" TEXT NOT NULL,
       "timestamps" INTEGER NOT NULL DEFAULT 1,
       "admin" TEXT,
+      -- Nullable content-versioning config (mirrors the canonical Drizzle
+      -- schema's JSON-mode versions text column) so a table created via this
+      -- fallback carries the column the mutation read path's select-all expects.
+      "versions" TEXT,
       "source" TEXT NOT NULL DEFAULT 'ui',
       "locked" INTEGER NOT NULL DEFAULT 0,
       "config_path" TEXT,

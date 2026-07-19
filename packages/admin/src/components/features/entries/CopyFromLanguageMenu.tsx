@@ -163,9 +163,9 @@ export function CopyFromLanguageMenu() {
             <AlertDialogTitle>Copy from {pendingLabel}?</AlertDialogTitle>
             <AlertDialogDescription>
               This fills {activeLabel}&rsquo;s translatable fields with{" "}
-              {pendingLabel}&rsquo;s values, overwriting anything already entered
-              for {activeLabel}. Shared fields are untouched. Nothing is saved
-              until you save the form, so you can review or discard first.
+              {pendingLabel}&rsquo;s values, overwriting anything already
+              entered for {activeLabel}. Shared fields are untouched. Nothing is
+              saved until you save the form, so you can review or discard first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

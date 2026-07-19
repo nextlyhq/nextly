@@ -32,3 +32,54 @@ export function isVersionStatus(v: unknown): v is VersionStatus {
     typeof v === "string" && (VERSION_STATUSES as readonly string[]).includes(v)
   );
 }
+
+/**
+ * Per-collection / per-single versioning options (the code-first + Schema
+ * Builder config surface). Three orthogonal concerns are nested so invalid
+ * combinations are unrepresentable: history is always on when versioning is
+ * enabled; drafts add a draft/publish lifecycle; autosave coalesces the
+ * in-progress draft. See the design spec section 3.
+ *
+ * NOTE (current stage): only history/capture is enforced today. `drafts`,
+ * `autosave`, and `maxPerDoc` are parsed and persisted but not yet acted upon
+ * (draft/publish split, autosave coalescing, and retention pruning are later
+ * stages), so any versioning-enabled entity captures history only for now.
+ */
+export interface VersionsConfig {
+  /**
+   * Add a draft / published lifecycle. `false` = history-only (every write is
+   * a restorable version, no draft state). An object configures autosave and
+   * the reserved timed-publish flag.
+   */
+  drafts?:
+    | boolean
+    | {
+        /** Coalesced autosave of the in-progress draft. Default 1000ms when on. */
+        autosave?: boolean | { intervalMs?: number };
+        /** Reserve the `scheduled` status for future timed publish. */
+        schedulePublish?: boolean;
+      };
+  /** Durable (non-autosave) versions kept per document. `false` = unlimited. Default 50. */
+  maxPerDoc?: number | false;
+}
+
+/**
+ * The canonical, fully-defaulted shape every versioning consumer reads (the
+ * mutation service, admin, plugin surface). `resolveVersionsConfig` produces
+ * it; `null` means the entity is unversioned.
+ */
+export interface ResolvedVersionsConfig {
+  /** Always true on a resolved config (null represents "disabled"). */
+  enabled: true;
+  drafts: {
+    /** Draft/publish lifecycle on. `false` = history-only. */
+    enabled: boolean;
+    autosave: {
+      enabled: boolean;
+      intervalMs: number;
+    };
+    schedulePublish: boolean;
+  };
+  /** Durable versions retained per document; `false` = unlimited. */
+  maxPerDoc: number | false;
+}

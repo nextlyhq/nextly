@@ -34,6 +34,7 @@
 import type { HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { FieldConfig } from "../fields/types";
 
@@ -754,6 +755,27 @@ export interface CollectionConfig {
    * @default false
    */
   status?: boolean;
+
+  /**
+   * Enable content versioning (revision history) for this collection.
+   *
+   * Currently active: when enabled, every create/update records a restorable
+   * snapshot of the assembled document in the global `nextly_versions` table,
+   * written inside the same transaction as the write. Omitted = unversioned
+   * (zero cost).
+   *
+   * Reserved (accepted but NOT yet enforced): the `drafts`, `autosave`, and
+   * `maxPerDoc` retention settings on {@link VersionsConfig} are parsed and
+   * persisted for forward compatibility, but the draft/publish split, autosave
+   * coalescing, and retention pruning are not wired up yet, so at this stage
+   * enabling versioning is capture/history only regardless of those settings.
+   * The deprecated `status: true` alias likewise does not yet drive a version
+   * draft lifecycle; use the separate `status` option for the draft/published
+   * column.
+   *
+   * @default undefined (unversioned)
+   */
+  versions?: boolean | VersionsConfig;
 
   /**
    * Enable multilingual content for this collection. When `true`, translatable

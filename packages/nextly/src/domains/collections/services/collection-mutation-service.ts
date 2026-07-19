@@ -35,6 +35,7 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
   CollectionRelationshipService,
@@ -43,6 +44,7 @@ import type {
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -63,6 +65,9 @@ import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { captureInTx } from "../../versions/capture-in-tx";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -211,6 +216,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Stateless version-capture service. Records a durable version snapshot
+   * inside the write transaction when the collection opts into versioning, so
+   * the version commits atomically with the content write.
+   */
+  private readonly versionCapture = new VersionCaptureService();
+
+  /**
+   * Emit the document-level status events for one transition (post-commit).
+   *
+   * Fires the general `statusTransition` event (the seam workflows/item 9 build
+   * on) plus the specific `statusChanged` / `published` events existing
+   * subscribers already listen on, so current behavior is preserved. Create as
+   * `published` has no prior status to change from, so it passes
+   * `emitStatusChanged: false` to keep emitting only `published` (and now the
+   * general transition), never `statusChanged`.
+   */
+  private transitionStatus(args: {
+    collection: string;
+    id: unknown;
+    data: Record<string, unknown>;
+    user?: UserContext;
+    previousStatus: string | null;
+    status: string;
+    emitStatusChanged: boolean;
+  }): void {
+    const docBase = { id: args.id, data: args.data, user: args.user };
+    emitDocumentEvent("statusTransition", args.collection, {
+      ...docBase,
+      previousStatus: args.previousStatus,
+      status: args.status,
+    });
+    if (args.emitStatusChanged) {
+      emitDocumentEvent("statusChanged", args.collection, {
+        ...docBase,
+        previousStatus: args.previousStatus,
+        status: args.status,
+      });
+    }
+    if (args.status === "published" && args.previousStatus !== "published") {
+      emitDocumentEvent("published", args.collection, docBase);
+    }
+  }
+
+  /**
    * Build the locale-aware inputs for {@link validateEntryData} on a localized-collection write
    * (i18n M5b). `required` on a localized field is enforced only for the default-language row so the
    * "publish default now, translate later" workflow proceeds; shared required fields are always
@@ -339,6 +388,11 @@ export class CollectionMutationService extends BaseService {
     companionTableName: string;
     writeLocale: string;
     companionData: Record<string, unknown>;
+    // The same written localized values, keyed by FIELD NAME (companionData is
+    // keyed by snake_case column). A version snapshot merges these onto the
+    // parent so the read-shape snapshot carries this locale's translatable
+    // values instead of dropping them.
+    localizedFieldValues: Record<string, unknown>;
   } | null> {
     if (!this.localization) return null;
     const companion =
@@ -354,6 +408,7 @@ export class CollectionMutationService extends BaseService {
 
     const writeLocale = resolveRequestedLocale(this.localization, locale);
     const companionData: Record<string, unknown> = {};
+    const localizedFieldValues: Record<string, unknown> = {};
     for (const field of companion.localizedFields) {
       // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
       // field names. Accept either; always store under the snake_case companion column.
@@ -364,6 +419,8 @@ export class CollectionMutationService extends BaseService {
           : null;
       if (key !== null) {
         companionData[field.column] = entryData[key];
+        // Keep a field-name-keyed copy for the version snapshot (read shape).
+        localizedFieldValues[field.name] = entryData[key];
         delete entryData[key]; // migrated main table has no localized columns
       }
     }
@@ -398,7 +455,157 @@ export class CollectionMutationService extends BaseService {
       companionTableName: companion.companionTableName,
       writeLocale,
       companionData,
+      localizedFieldValues,
     };
+  }
+
+  /**
+   * Return a shallow copy of `row` with JSON-backed field values (richtext,
+   * blocks, array, group, json) parsed from their stored string form, matching
+   * the read shape so a version snapshot equals a normal read. Non-JSON and
+   * already-parsed values pass through; a parse failure keeps the raw string.
+   * Never mutates the input.
+   */
+  private deserializeJsonFieldsForSnapshot(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const out = { ...row };
+    for (const field of fields) {
+      const value = out[field.name];
+      if (
+        isJsonFieldType(field.type, field) &&
+        typeof value === "string" &&
+        value
+      ) {
+        try {
+          out[field.name] = JSON.parse(value);
+        } catch {
+          // Not valid JSON — keep the raw string.
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Build the COMPLETE component-subtree and many-to-many id maps for an entry's
+   * version snapshot. A partial update only carries the fields present in the
+   * request, so the written maps cover just those; unchanged component/relation
+   * fields are read from the current committed state and overlaid, so a
+   * scalar-only edit does not drop existing components or relations from the
+   * snapshot (which a later restore would otherwise lose). Reads run on the
+   * pooled connection — unchanged fields are untouched by the in-flight write,
+   * so their committed value is correct — and written values always win.
+   */
+  private async buildFullSnapshotRelations(
+    entryId: string,
+    collectionName: string,
+    parentTable: string,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    writtenComponents: Record<string, unknown>,
+    writtenM2M: Record<string, string[]>
+  ): Promise<{
+    components: Record<string, unknown>;
+    manyToMany: Record<string, string[]>;
+  }> {
+    const components: Record<string, unknown> = {};
+    if (this.componentDataService) {
+      const componentFields = fields.filter(isComponentField);
+      // Only read when a component field was omitted from the write (else the
+      // written map is already complete).
+      const hasOmitted = componentFields.some(
+        f => writtenComponents[f.name] === undefined
+      );
+      if (hasOmitted) {
+        try {
+          const populated =
+            await this.componentDataService.populateComponentData({
+              entry: { id: entryId },
+              // Use the resolved parent table (custom `dbName` collections do not
+              // match getTableName(slug)); it must equal the table the component
+              // rows were written under, or the read finds nothing.
+              parentTable,
+              fields: fields as unknown as FieldConfig[],
+            });
+          for (const f of componentFields) {
+            if (populated[f.name] !== undefined) {
+              components[f.name] = populated[f.name];
+            }
+          }
+        } catch (err) {
+          // Fail the capture rather than persist a knowingly-incomplete snapshot:
+          // silently dropping the omitted components would reintroduce the exact
+          // partial-update data loss this read exists to prevent, and a version
+          // that looks complete but isn't is worse than a failed, retriable write
+          // (the whole tx rolls back atomically).
+          this.logger.error(
+            "Version snapshot: failed to read existing components; failing the write instead of capturing an incomplete snapshot",
+            {
+              collection: collectionName,
+              entryId,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          );
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              reason: "version-snapshot-component-read",
+              collection: collectionName,
+              entryId,
+            },
+          });
+        }
+      }
+    }
+    // Written component values win over the read-back.
+    Object.assign(components, writtenComponents);
+
+    const manyToMany: Record<string, string[]> = {};
+    const hasOmittedM2M = manyToManyFields.some(
+      f => writtenM2M[f.name] === undefined
+    );
+    if (hasOmittedM2M) {
+      for (const field of manyToManyFields) {
+        if (writtenM2M[field.name] !== undefined) continue;
+        try {
+          const relatedRows =
+            await this.relationshipService.fetchManyToManyRelations(
+              collectionName,
+              entryId,
+              field
+            );
+          manyToMany[field.name] = relatedRows.map(
+            r => (r as { id: string }).id
+          );
+        } catch (err) {
+          // Same reasoning as the component read above: fail the capture rather
+          // than record a snapshot that silently omits an existing relationship.
+          this.logger.error(
+            "Version snapshot: failed to read existing many-to-many relations; failing the write instead of capturing an incomplete snapshot",
+            {
+              collection: collectionName,
+              entryId,
+              field: field.name,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          );
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              reason: "version-snapshot-m2m-read",
+              collection: collectionName,
+              entryId,
+              field: field.name,
+            },
+          });
+        }
+      }
+    }
+    Object.assign(manyToMany, writtenM2M);
+
+    return { components, manyToMany };
   }
 
   /**
@@ -1150,6 +1357,11 @@ export class CollectionMutationService extends BaseService {
 
       // Wrap entry insert and component data save in a transaction so that
       // a component save failure rolls back the entry — no partial state.
+      // Resolved versioning config persisted on the collection (or null when
+      // unversioned); read once so the in-tx capture below can skip cheaply.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+
       const entry: Record<string, unknown> = {};
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
@@ -1220,6 +1432,48 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+
+        // Record a durable version snapshot atomically with the write when the
+        // collection opts into versioning. Runs after components + m2m so the
+        // snapshot is the full assembled document (the read-shape). History-only
+        // here: the entry's status maps to a VersionStatus inside captureInTx.
+        // A create provides all field values, so componentFieldData/
+        // manyToManyData are already complete; only the parent needs read-shape
+        // normalization (parse JSON-backed fields; strip password hashes so they
+        // never enter durable history). `entry` is reused after the tx for hooks
+        // and the response, so snapshot a copy.
+        if (versionsConfig?.enabled) {
+          const snapshotParent = this.deserializeJsonFieldsForSnapshot(
+            entry,
+            fields
+          );
+          stripPasswordFieldValues(snapshotParent, fields);
+          // Strip the system owner column (created_by) too: normal reads/
+          // responses redact it, so history must not durably retain a stable
+          // owner id or let a restore overwrite ownership from old history.
+          stripSystemOwnerField(snapshotParent);
+          // A junction relationship with no rows reads as an empty array, so
+          // seed every m2m field to [] before overlaying the written ids —
+          // otherwise a create that omits a m2m field records a snapshot missing
+          // it, and a later restore/audit can't tell "empty" from "absent".
+          const snapshotM2M: Record<string, string[]> = {};
+          for (const f of manyToManyFields) snapshotM2M[f.name] = [];
+          Object.assign(snapshotM2M, manyToManyData);
+          await captureInTx(tx, this.versionCapture, {
+            ref: {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: entry.id as string,
+            },
+            contentStatus: (entry as { status?: unknown }).status,
+            parts: {
+              parentRow: snapshotParent,
+              components: componentFieldData,
+              manyToMany: snapshotM2M,
+            },
+            createdBy: params.user?.id ?? null,
+          });
+        }
       });
 
       // Execute afterCreate hooks (code-registered)
@@ -1255,10 +1509,14 @@ export class CollectionMutationService extends BaseService {
       // (No statusChanged on create — there is no prior status to transition from.)
       const createdStatus = (entry as { status?: unknown }).status;
       if (createdStatus === "published") {
-        emitDocumentEvent("published", params.collectionName, {
+        this.transitionStatus({
+          collection: params.collectionName,
           id: (entry as { id?: unknown }).id,
           data: { ...entry },
           user: params.user,
+          previousStatus: null,
+          status: "published",
+          emitStatusChanged: false,
         });
       }
 
@@ -1930,91 +2188,207 @@ export class CollectionMutationService extends BaseService {
       // a component save failure rolls back the entry update — no partial state.
       // tx.execute() is used for the UPDATE so it runs on the same DB client
       // as the transaction (unlike tx.update() which delegates to the pool).
-      await this.adapter.transaction(async tx => {
-        const updatePayload = {
-          ...stripImmutableSystemFields(finalData),
-          updatedAt: new Date(),
-        };
+      // Resolved versioning config persisted on the collection (or null when
+      // unversioned); read once so the in-tx capture below can skip cheaply.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
 
-        // Dialect-aware identifier quoting and placeholder syntax.
-        // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
-        const isMysql = this.dialect === "mysql";
-        const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-        const sqlParams: unknown[] = [];
-        const makePlaceholder = () =>
-          this.dialect === "postgresql"
-            ? `$${sqlParams.length}` // length already incremented by push below
-            : "?";
+      // Retry the whole content+capture transaction on a version_no allocation
+      // race (concurrent updates to the same doc); the re-run re-reads the max.
+      // The content UPDATE is a deterministic SET, so re-applying it is safe.
+      // Committed pre-update status, refreshed each attempt: under a retry a
+      // concurrent winner may have changed the status, so the D69 status event
+      // below must report that as `previousStatus`, not the stale pre-tx value.
+      let committedPreviousStatus: string | null | undefined;
+      await withVersionConflictRetry(() =>
+        this.adapter.transaction(async tx => {
+          const updatePayload = {
+            ...stripImmutableSystemFields(finalData),
+            updatedAt: new Date(),
+          };
 
-        const setClauses = Object.entries(updatePayload)
-          .map(([key, val]) => {
-            sqlParams.push(val);
-            return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
-          })
-          .join(", ");
-        sqlParams.push(params.entryId);
-        await tx.execute(
-          `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-          sqlParams as (string | number | boolean | Date | null | undefined)[]
-        );
+          // Read the committed status before this attempt's UPDATE so the status
+          // event uses the true prior value even after a conflict retry. Only
+          // needed for versioned collections (the only ones that can retry).
+          if (versionsConfig?.enabled) {
+            const [preStatusRow] = await this.db
+              .select()
+              .from(schema)
+              .where(eq(schema.id, params.entryId))
+              .limit(1);
+            committedPreviousStatus = (
+              preStatusRow as { status?: unknown } | undefined
+            )?.status as string | null | undefined;
+          }
 
-        // i18n M5: upsert the translatable values into the companion row for the write's locale
-        // (same transaction). Only the provided localized columns are touched.
-        if (
-          localizedUpdate &&
-          Object.keys(localizedUpdate.companionData).length > 0
-        ) {
-          await this.upsertCompanionRow(
-            tx,
-            localizedUpdate.companionTableName,
-            params.entryId,
-            localizedUpdate.writeLocale,
-            localizedUpdate.companionData
+          // Dialect-aware identifier quoting and placeholder syntax.
+          // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
+          const isMysql = this.dialect === "mysql";
+          const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+          const sqlParams: unknown[] = [];
+          const makePlaceholder = () =>
+            this.dialect === "postgresql"
+              ? `$${sqlParams.length}` // length already incremented by push below
+              : "?";
+
+          const setClauses = Object.entries(updatePayload)
+            .map(([key, val]) => {
+              sqlParams.push(val);
+              return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
+            })
+            .join(", ");
+          sqlParams.push(params.entryId);
+          await tx.execute(
+            `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
+            sqlParams as (string | number | boolean | Date | null | undefined)[]
           );
-        }
 
-        // Save component field data to separate comp_{slug} tables
-        if (
-          this.componentDataService &&
-          Object.keys(componentFieldData).length > 0
-        ) {
-          await this.componentDataService.saveComponentDataInTransaction(tx, {
-            parentId: params.entryId,
-            parentTable: tableName,
-            fields: fields as unknown as FieldConfig[],
-            data: componentFieldData,
-            // i18n: thread the write locale so an embedded localized component writes
-            // translatable fields to its companion within the same transaction.
-            locale: params.locale,
-          });
-        }
-
-        // Replace many-to-many junction rows inside the transaction so a
-        // junction failure rolls back the update (atomic write). The entry is
-        // already known to exist (validated before the transaction). The
-        // tx-scoped Drizzle handle binds the junction writes to this tx.
-        const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-        for (const field of manyToManyFields) {
-          if (manyToManyData[field.name] !== undefined) {
-            await this.relationshipService.deleteManyToManyRelations(
-              params.collectionName,
+          // i18n M5: upsert the translatable values into the companion row for the write's locale
+          // (same transaction). Only the provided localized columns are touched.
+          if (
+            localizedUpdate &&
+            Object.keys(localizedUpdate.companionData).length > 0
+          ) {
+            await this.upsertCompanionRow(
+              tx,
+              localizedUpdate.companionTableName,
               params.entryId,
-              field,
-              txExecutor
+              localizedUpdate.writeLocale,
+              localizedUpdate.companionData
             );
-            const relatedIds = manyToManyData[field.name];
-            if (relatedIds.length > 0) {
-              await this.relationshipService.insertManyToManyRelations(
+          }
+
+          // Clone per attempt: saveComponentDataInTransaction mutates the
+          // component data in place (hashing password fields, assigning row
+          // ids), so a conflict retry must start from the user's original
+          // values — not a previously-hashed copy — and the snapshot below uses
+          // this same post-save copy (ids populated) rather than the raw input.
+          const attemptComponentData = structuredClone(componentFieldData);
+
+          // Save component field data to separate comp_{slug} tables
+          if (
+            this.componentDataService &&
+            Object.keys(attemptComponentData).length > 0
+          ) {
+            await this.componentDataService.saveComponentDataInTransaction(tx, {
+              parentId: params.entryId,
+              parentTable: tableName,
+              fields: fields as unknown as FieldConfig[],
+              data: attemptComponentData,
+              // i18n: thread the write locale so an embedded localized component writes
+              // translatable fields to its companion within the same transaction.
+              locale: params.locale,
+            });
+          }
+
+          // Replace many-to-many junction rows inside the transaction so a
+          // junction failure rolls back the update (atomic write). The entry is
+          // already known to exist (validated before the transaction). The
+          // tx-scoped Drizzle handle binds the junction writes to this tx.
+          const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+          for (const field of manyToManyFields) {
+            if (manyToManyData[field.name] !== undefined) {
+              await this.relationshipService.deleteManyToManyRelations(
                 params.collectionName,
                 params.entryId,
                 field,
-                relatedIds,
                 txExecutor
               );
+              const relatedIds = manyToManyData[field.name];
+              if (relatedIds.length > 0) {
+                await this.relationshipService.insertManyToManyRelations(
+                  params.collectionName,
+                  params.entryId,
+                  field,
+                  relatedIds,
+                  txExecutor
+                );
+              }
             }
           }
-        }
-      });
+
+          // Capture a version snapshot of the post-update document atomically
+          // with the write when the collection opts into versioning. The parent
+          // is re-read fresh here (not the pre-transaction `existingEntry`) so a
+          // conflict retry — which re-runs this closure — picks up a concurrent
+          // winner's committed columns instead of recording a stale pre-image;
+          // the current row is then overlaid with this write's changed values,
+          // this locale's translatable values, JSON-backed fields are parsed to
+          // the read shape, and password hashes are stripped. Components and m2m
+          // are completed from current state so a scalar-only edit does not drop
+          // existing relations. Status prefers the new value, else the prior one.
+          if (versionsConfig?.enabled) {
+            const freshRows = await this.db
+              .select()
+              .from(schema)
+              .where(eq(schema.id, params.entryId))
+              .limit(1);
+            // If the row is gone (deleted between the pre-read and this tx), the
+            // UPDATE affected nothing and the method returns 404 below — do NOT
+            // record a version for a write that did not commit. (No stale
+            // fall-back to the pre-transaction existingEntry.)
+            const currentRow = freshRows[0] as
+              | Record<string, unknown>
+              | undefined;
+            if (currentRow) {
+              // Match the read shape: keep user field keys (field.name, which may
+              // contain underscores like `meta_title`) exactly, converting only
+              // the timestamp columns — camel-casing every key would rewrite
+              // those fields and diverge from a normal read.
+              const preImage = convertTimestampsToCamelCase({ ...currentRow });
+              // Overlay `updatePayload` (not raw `finalData`): it carries the
+              // `updatedAt` the write commits and has immutable system keys
+              // (id/createdAt/createdBy) stripped, so the snapshot records the new
+              // timestamp and cannot persist forged system values — `preImage`
+              // keeps the real committed system columns.
+              const companionStatus = localizedUpdate?.companionData?._status;
+              const parentRow = this.deserializeJsonFieldsForSnapshot(
+                {
+                  ...preImage,
+                  ...updatePayload,
+                  ...(localizedUpdate?.localizedFieldValues ?? {}),
+                },
+                fields
+              );
+              stripPasswordFieldValues(parentRow, fields);
+              // Strip the system owner column (created_by) — see create path.
+              stripSystemOwnerField(parentRow);
+              const {
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
+              } = await this.buildFullSnapshotRelations(
+                params.entryId,
+                params.collectionName,
+                tableName,
+                fields,
+                manyToManyFields,
+                attemptComponentData,
+                manyToManyData
+              );
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                // Prefer the written status; for a localized status change it is
+                // moved to the companion `_status`, so fall back to that before the
+                // prior main-row status.
+                contentStatus:
+                  (updatePayload as { status?: unknown }).status ??
+                  companionStatus ??
+                  (preImage as { status?: unknown }).status,
+                parts: {
+                  parentRow,
+                  components: snapshotComponents,
+                  manyToMany: snapshotM2M,
+                },
+                createdBy: params.user?.id ?? null,
+              });
+            }
+          }
+        })
+      );
 
       // Fetch the updated entry to return it and use in hooks
       const [updated] = await this.db
@@ -2085,25 +2459,26 @@ export class CollectionMutationService extends BaseService {
       // emit only when a `status` field value actually changed on update.
       // `data` is shallow-snapshotted so async subscribers aren't exposed to the
       // in-place JSON-field deserialization that happens below for the response.
+      // Prefer the status re-read inside the transaction (fresh across retries)
+      // over the pre-transaction `existingEntry`, which a concurrent winner may
+      // have superseded.
       const previousStatus =
+        committedPreviousStatus ??
         ((existingEntry as Record<string, unknown>).status as
           | string
-          | undefined) ?? null;
+          | undefined) ??
+        null;
       const nextStatus = (updated as { status?: unknown }).status;
       if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
-        const docBase = {
+        this.transitionStatus({
+          collection: params.collectionName,
           id: (updated as { id?: unknown }).id,
           data: { ...(updated as Record<string, unknown>) },
           user: params.user,
-        };
-        emitDocumentEvent("statusChanged", params.collectionName, {
-          ...docBase,
           previousStatus,
           status: nextStatus,
+          emitStatusChanged: true,
         });
-        if (nextStatus === "published" && previousStatus !== "published") {
-          emitDocumentEvent("published", params.collectionName, docBase);
-        }
       }
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
