@@ -309,13 +309,16 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const row = result[0] as Record<string, unknown>;
-    // Why: SQLite returns `status` as 0|1 even with `mode: "boolean"` in some
-    // driver/dialect combinations; postgres returns native boolean. Coerce
-    // here so the API contract is dialect-agnostic and the admin's
-    // `collection.status === true` gate works everywhere.
+    // Why: SQLite returns `status`/`localized` as 0|1 even with `mode: "boolean"` in
+    // some driver/dialect combinations; postgres returns native boolean. Coerce here so
+    // the API contract is dialect-agnostic and the `=== true` gates work everywhere.
+    // Without coercing `localized`, a SQLite `localized: 1` fails the `=== true` check and
+    // a later field-only update treats the collection as non-localized, emitting main-table
+    // alters for columns that live in the companion.
     return {
       ...row,
       status: row.status === 1 || row.status === true,
+      localized: row.localized === 1 || row.localized === true,
     };
   }
 

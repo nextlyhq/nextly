@@ -115,7 +115,10 @@ export class ComponentMutationService extends BaseService {
       status: false,
     });
     if (!schema) return { schema: null, main: data, companion: {} };
-    const { main, companion } = splitLocalizedWrite(data, schema.localizedFields);
+    const { main, companion } = splitLocalizedWrite(
+      data,
+      schema.localizedFields
+    );
     return { schema, main, companion };
   }
 
@@ -327,13 +330,6 @@ export class ComponentMutationService extends BaseService {
       const tableName = componentMeta.tableName;
       const componentFields = componentMeta.fields;
 
-      // i18n: split translatable values out of the main comp_ write — they live on the
-      // companion. `main === data` when the component isn't localized (unchanged path).
-      const { schema, main, companion } = this.splitLocalizedComponent(
-        componentMeta,
-        data
-      );
-
       const existing = await this.getExistingInstances(
         tableName,
         parentId,
@@ -341,19 +337,26 @@ export class ComponentMutationService extends BaseService {
         fieldName
       );
 
-      let instanceId: string;
+      // Hash/prepare password fields on `data` BEFORE splitting: splitLocalizedComponent
+      // copies `main`/`companion` from `data` by value, so hashing after the split would
+      // leave the pre-hash plaintext in `main` and write it to the comp_ row.
       await this.prepareInstanceForWrite(
         data,
         componentFields,
         existing.length > 0 ? "update" : "create"
       );
 
+      // i18n: split translatable values out of the main comp_ write — they live on the
+      // companion. `main === data` when the component isn't localized (unchanged path).
+      const { schema, main, companion } = this.splitLocalizedComponent(
+        componentMeta,
+        data
+      );
+
+      let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(
-          main,
-          componentFields
-        );
+        const updateData = this.serializeComponentRow(main, componentFields);
         updateData.updated_at = this.formatDateForDb();
 
         await this.adapter.update(
@@ -392,7 +395,12 @@ export class ComponentMutationService extends BaseService {
 
       // i18n: upsert the instance's translatable values into its companion for the locale.
       if (schema) {
-        await this.upsertLocalizedComponent(schema, instanceId, companion, locale);
+        await this.upsertLocalizedComponent(
+          schema,
+          instanceId,
+          companion,
+          locale
+        );
       }
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
@@ -424,12 +432,6 @@ export class ComponentMutationService extends BaseService {
       const tableName = componentMeta.tableName;
       const componentFields = componentMeta.fields;
 
-      // i18n: split translatable values out of the main comp_ write (companion-owned).
-      const { schema, main, companion } = this.splitLocalizedComponent(
-        componentMeta,
-        data
-      );
-
       const existing = await this.getExistingInstancesInTx(
         tx,
         tableName,
@@ -438,19 +440,25 @@ export class ComponentMutationService extends BaseService {
         fieldName
       );
 
-      let instanceId: string;
+      // Hash/prepare password fields on `data` BEFORE splitting: splitLocalizedComponent
+      // copies `main`/`companion` from `data` by value, so hashing after the split would
+      // leave the pre-hash plaintext in `main` and write it to the comp_ row.
       await this.prepareInstanceForWrite(
         data,
         componentFields,
         existing.length > 0 ? "update" : "create"
       );
 
+      // i18n: split translatable values out of the main comp_ write (companion-owned).
+      const { schema, main, companion } = this.splitLocalizedComponent(
+        componentMeta,
+        data
+      );
+
+      let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(
-          main,
-          componentFields
-        );
+        const updateData = this.serializeComponentRow(main, componentFields);
         updateData.updated_at = this.formatDateForDb();
 
         await tx.update(tableName, updateData, this.whereEq("id", instanceId), {
@@ -546,10 +554,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            main,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData.updated_at = this.formatDateForDb();
 
@@ -663,10 +668,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            main,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData.updated_at = this.formatDateForDb();
 
@@ -833,10 +835,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            main,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData._component_type = componentType;
           updateData.updated_at = this.formatDateForDb();
@@ -990,10 +989,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            main,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData._component_type = componentType;
           updateData.updated_at = this.formatDateForDb();

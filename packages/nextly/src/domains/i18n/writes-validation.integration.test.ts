@@ -43,8 +43,14 @@ async function migrate(t: TestNextly): Promise<void> {
   );
   try {
     await adapter.executeQuery('ALTER TABLE "dc_pages" DROP COLUMN "heading"');
-  } catch {
-    // Code-first already omits the translatable column from the main table.
+  } catch (err) {
+    // The code-first boot sync already omits the translatable column from the main table,
+    // so a missing-column error is expected. Any other failure (syntax, lock, dialect) means
+    // the test is running against an unintended schema — rethrow it.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/no such column|does not exist|unknown column/i.test(msg)) {
+      throw err;
+    }
   }
 }
 
