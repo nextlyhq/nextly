@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../../services/singles/single-registry-service";
 import { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
+// Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -175,6 +177,11 @@ export async function syncSingles(
       description: single.description,
       tableName: single.dbName,
       admin: single.admin,
+      // Persist Draft/Published, i18n, and resolved versioning through db:sync
+      // (parity with the boot/HMR registry sync).
+      status: single.status === true,
+      localized: single.localized === true,
+      versions: resolveVersionsConfig(single.versions, single.status),
       configPath: `singles/${single.slug}.ts`,
     })
   );

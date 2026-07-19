@@ -38,6 +38,8 @@ import { dirname, join, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { CollectionConfig } from "../../../collections/config/define-collection";
+// Resolve the versioning config so the CLI `db:sync` path persists it too
+// (parity with the boot/HMR registry sync).
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -49,6 +51,7 @@ import {
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
 import { ZodGenerator, TypeGenerator } from "../../schema";
+import { resolveVersionsConfig } from "../../versions/resolve-config";
 
 import {
   CollectionRegistryService,
@@ -641,6 +644,9 @@ export class CollectionSyncService extends BaseService {
       description: config.description,
       tableName: config.dbName ?? config.slug.replace(/-/g, "_"),
       timestamps: config.timestamps ?? true,
+      // Persist the resolved versioning config through `db:sync` (status:true
+      // aliases to a versioned config), matching the boot/HMR registry sync.
+      versions: resolveVersionsConfig(config.versions, config.status),
       admin: config.admin
         ? {
             group: config.admin.group,

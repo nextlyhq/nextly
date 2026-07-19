@@ -1375,6 +1375,13 @@ export class CollectionMutationService extends BaseService {
           // responses redact it, so history must not durably retain a stable
           // owner id or let a restore overwrite ownership from old history.
           stripSystemOwnerField(snapshotParent);
+          // A junction relationship with no rows reads as an empty array, so
+          // seed every m2m field to [] before overlaying the written ids —
+          // otherwise a create that omits a m2m field records a snapshot missing
+          // it, and a later restore/audit can't tell "empty" from "absent".
+          const snapshotM2M: Record<string, string[]> = {};
+          for (const f of manyToManyFields) snapshotM2M[f.name] = [];
+          Object.assign(snapshotM2M, manyToManyData);
           await captureInTx(tx, this.versionCapture, {
             ref: {
               scopeKind: "collection",
@@ -1385,7 +1392,7 @@ export class CollectionMutationService extends BaseService {
             parts: {
               parentRow: snapshotParent,
               components: componentFieldData,
-              manyToMany: manyToManyData,
+              manyToMany: snapshotM2M,
             },
             createdBy: params.user?.id ?? null,
           });

@@ -203,10 +203,14 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       tableName: c.dbName,
       timestamps: c.timestamps,
       admin: c.admin,
-      // Draft/Published flag, i18n, and versioning — persisted to
-      // dynamic_collections so a code-first toggle reaches the registry.
+      // Draft/Published flag + versioning persisted to dynamic_collections so a
+      // code-first toggle reaches the registry. `localized` is intentionally NOT
+      // forwarded here: the HMR reload diff does not carry localization into
+      // buildDesiredTableFromFields (no companion table is created/updated on
+      // reload), so marking the registry localized without the companion table
+      // would break lazy schema generation. A localized change persists on the
+      // next restart via the full boot sync instead.
       status: c.status === true,
-      localized: c.localized === true,
       versions: resolveVersionsConfig(c.versions, c.status),
     }));
 }
