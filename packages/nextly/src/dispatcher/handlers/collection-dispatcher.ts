@@ -52,6 +52,7 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
@@ -658,11 +659,15 @@ const COLLECTIONS_METHODS: Record<
           // Fatal to correctness (translatable values have nowhere to live), but
           // the main-table apply already committed — surface loudly rather than
           // silently leaving the collection half-migrated.
-          throw new Error(
-            `[applySchemaChanges] Companion table reconcile failed for ` +
-              `'${p.collectionName}': ${msg}. The main table was updated but the ` +
-              `localized companion is out of sync; re-apply to retry.`
-          );
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "companionReconcile",
+              collection: p.collectionName,
+              detail: msg,
+              note: "main table updated but localized companion out of sync; re-apply to retry",
+            },
+          });
         }
       }
 

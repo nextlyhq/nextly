@@ -61,7 +61,7 @@ export async function loadDynamicTables(
   // Read the rows, tolerating an existing DB that predates the i18n `localized`
   // column: try the full select first, and on failure fall back to one without
   // `localized`. Without this, the missing column throws and the outer catch
-  // below silently disables EVERY dynamic table app-wide (findings M8). The
+  // below silently disables EVERY dynamic table app-wide. The
   // column is added by the core-schema reconcile; until it runs, `localized`
   // defaults to false, which is correct for a pre-i18n database.
   const readRows = async (): Promise<DynamicTableRow[]> => {

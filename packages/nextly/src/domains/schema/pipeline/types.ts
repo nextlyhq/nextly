@@ -34,7 +34,7 @@ export interface DesiredCollection {
    * Whether the collection is localized (i18n). When true, translatable fields
    * are omitted from the main table's desired snapshot because they live in the
    * companion `_locales` table. Without this the push/HMR/preview diff re-adds
-   * the localized columns to the main table (findings H2).
+   * the localized columns to the main table.
    */
   localized?: boolean;
 }

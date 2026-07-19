@@ -688,9 +688,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `[applyComponentSchemaChanges] Companion reconcile failed for '${slug}': ${msg}.`
-        );
+        throw NextlyError.internal({
+          cause: err instanceof Error ? err : undefined,
+          logContext: { op: "componentCompanionReconcile", slug, detail: msg },
+        });
       }
 
       const newSchemaVersion = currentVersion + 1;

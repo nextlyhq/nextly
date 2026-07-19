@@ -57,6 +57,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -1179,9 +1180,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `[applySingleSchemaChanges] Companion reconcile failed for '${slug}': ${msg}.`
-        );
+        throw NextlyError.internal({
+          cause: err instanceof Error ? err : undefined,
+          logContext: { op: "singleCompanionReconcile", slug, detail: msg },
+        });
       }
 
       const newSchemaVersion = currentVersion + 1;

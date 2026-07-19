@@ -520,7 +520,7 @@ export class PushSchemaPipeline {
               // column when Draft/Published is enabled. Thread `localized` so a
               // localized collection's translatable columns are omitted from the
               // main table's desired snapshot (they live in the companion
-              // `_locales` table) rather than being re-added by the diff (H2).
+              // `_locales` table) rather than being re-added by the diff.
               { hasStatus: c.status === true, localized: c.localized === true }
             )
           ),
