@@ -11,6 +11,7 @@ import type { Logger } from "../../../shared/types";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
+  isValidLocale,
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -112,11 +113,11 @@ export class ComponentQueryService extends BaseService {
   private async overlayLocalizedComponent(
     meta: DynamicComponentRecord,
     dataArray: Record<string, unknown>[],
-    locale: string | undefined
+    locale: string | undefined,
+    fallbackLocale?: string | false
   ): Promise<void> {
     if (
       !this.localization ||
-      !locale ||
       locale === "all" ||
       meta.localized !== true ||
       dataArray.length === 0
@@ -132,11 +133,14 @@ export class ComponentQueryService extends BaseService {
       status: false,
     });
     if (!companion) return;
+    // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
+    // the default locale), so a default-locale read still overlays the component's companion
+    // values instead of returning the omitted main-table columns.
     const requested = resolveRequestedLocale(this.localization, locale);
-    const localeChain =
-      this.localization.fallback === false
-        ? [requested]
-        : resolveFallbackChain(this.localization, requested);
+    const localeChain = this.resolveComponentLocaleChain(
+      requested,
+      fallbackLocale
+    );
     await populateCompanionFields({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
@@ -145,6 +149,55 @@ export class ComponentQueryService extends BaseService {
       localeChain,
       idKey: "id",
     });
+    // JSON-backed localized fields (richText/group/repeater/json) are stored as serialized text
+    // in the companion; parse them back so reads return object shapes, matching the main-table
+    // deserialization the parent already ran before this overlay.
+    const jsonLocalized = companion.localizedFields.filter(lf => {
+      const def = meta.fields.find(f => "name" in f && f.name === lf.name);
+      return def ? shouldTreatAsJson(def) : false;
+    });
+    if (jsonLocalized.length > 0) {
+      for (const row of dataArray) {
+        for (const lf of jsonLocalized) {
+          const value = row[lf.name];
+          if (typeof value === "string") {
+            try {
+              row[lf.name] = JSON.parse(value);
+            } catch {
+              // A non-JSON string (or already-parsed value) stays as-is.
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Build the fallback chain for a component read, honoring a per-request `fallbackLocale`
+   * (`false`/`"none"` disables fallback; a named locale overrides the configured chain),
+   * mirroring the collection read path so the admin's no-fallback edit mode works for
+   * embedded components too.
+   */
+  private resolveComponentLocaleChain(
+    requested: string,
+    fallbackLocale: string | false | undefined
+  ): string[] {
+    if (!this.localization) return [requested];
+    if (fallbackLocale === false || fallbackLocale === "none") {
+      return [requested];
+    }
+    if (
+      typeof fallbackLocale === "string" &&
+      isValidLocale(this.localization, fallbackLocale)
+    ) {
+      const seen = new Set<string>();
+      return [
+        requested,
+        ...resolveFallbackChain(this.localization, fallbackLocale),
+      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
+    }
+    if (this.localization.fallback === false) return [requested];
+    return resolveFallbackChain(this.localization, requested);
   }
 
   setRelationshipService(service: CollectionRelationshipService): void {
@@ -544,15 +597,17 @@ export class ComponentQueryService extends BaseService {
     const grouped = new Map<string, Record<string, unknown>[]>();
     for (const { parentId, data } of entries) {
       if (!grouped.has(parentId)) grouped.set(parentId, []);
-      grouped.get(parentId)!.push(
-        await this.expandComponentRelationships(
-          data,
-          componentSlug,
-          componentFields,
-          depth,
-          currentDepth + 1
-        )
-      );
+      grouped
+        .get(parentId)!
+        .push(
+          await this.expandComponentRelationships(
+            data,
+            componentSlug,
+            componentFields,
+            depth,
+            currentDepth + 1
+          )
+        );
     }
     return grouped;
   }
