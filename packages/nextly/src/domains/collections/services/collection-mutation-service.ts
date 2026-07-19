@@ -1642,20 +1642,98 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      await this.adapter.transaction(async tx => {
-        if (hasMainStatus) {
-          await tx.execute(
-            `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
-            ["published", params.entryId]
-          );
-        }
-        if (companion && companionPublishable) {
-          await tx.execute(
-            `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
-            ["published", params.entryId]
-          );
-        }
-      });
+      // Resolved versioning config + field set for the in-transaction capture.
+      const versionsConfig = (publishCollection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      const fields = ((publishCollection as { fields?: unknown }).fields ??
+        []) as FieldDefinition[];
+      const manyToManyFields = fields.filter(
+        f =>
+          f.type === "relationship" && f.options?.relationType === "manyToMany"
+      );
+      const previousStatusRaw = (existingEntry as { status?: unknown }).status;
+      const previousStatus =
+        typeof previousStatusRaw === "string" ? previousStatusRaw : null;
+
+      // Retry the whole publish+capture transaction on a version_no allocation
+      // race, mirroring updateEntry.
+      await withVersionConflictRetry(() =>
+        this.adapter.transaction(async tx => {
+          if (hasMainStatus) {
+            await tx.execute(
+              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
+              ["published", params.entryId]
+            );
+          }
+          if (companion && companionPublishable) {
+            await tx.execute(
+              `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
+              ["published", params.entryId]
+            );
+          }
+
+          // Record a version snapshot for the publish: publishing changes the
+          // document's status, so history/audit should capture that state. The
+          // parent is the current row set to published; components + m2m are read
+          // from the transaction (read-your-writes). Status/owner/password
+          // handling matches the other capture paths.
+          if (versionsConfig?.enabled) {
+            const parentRow = convertTimestampsToCamelCase(
+              this.deserializeJsonFieldsForSnapshot(
+                {
+                  ...(existingEntry as Record<string, unknown>),
+                  status: "published",
+                },
+                fields
+              )
+            );
+            stripPasswordFieldValues(parentRow, fields);
+            stripSystemOwnerField(parentRow);
+            const { components: snapshotComponents, manyToMany: snapshotM2M } =
+              await this.buildFullSnapshotRelations(
+                tx,
+                params.entryId,
+                params.collectionName,
+                tableName,
+                fields,
+                manyToManyFields
+              );
+            await captureInTx(tx, this.versionCapture, {
+              ref: {
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: params.entryId,
+              },
+              contentStatus: "published",
+              parts: {
+                parentRow,
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
+              },
+              createdBy: params.user?.id ?? null,
+            });
+          }
+        })
+      );
+
+      // Post-commit status events: publishing is a real status transition, so
+      // workflow subscribers on statusTransition/published must see it (this
+      // path previously changed status without emitting anything). Skip when the
+      // main row was already published (no transition), matching updateEntry.
+      if (hasMainStatus && previousStatus !== "published") {
+        this.transitionStatus({
+          collection: params.collectionName,
+          id: params.entryId,
+          data: {
+            ...(existingEntry as Record<string, unknown>),
+            status: "published",
+          },
+          user: params.user,
+          previousStatus,
+          status: "published",
+          emitStatusChanged: true,
+        });
+      }
 
       return {
         success: true,
