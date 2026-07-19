@@ -44,6 +44,7 @@ import type {
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -2250,33 +2251,40 @@ export class CollectionMutationService extends BaseService {
               .from(schema)
               .where(eq(schema.id, params.entryId))
               .limit(1);
-            const currentRow = (freshRows[0] ?? existingEntry) as Record<
-              string,
-              unknown
-            >;
-            const preImage: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(currentRow)) {
-              preImage[toCamelCase(key)] = value;
-            }
-            // Overlay `updatePayload` (not raw `finalData`): it carries the
-            // `updatedAt` the write commits and has immutable system keys
-            // (id/createdAt/createdBy) stripped, so the snapshot records the new
-            // timestamp and cannot persist forged system values — `preImage`
-            // keeps the real committed system columns.
-            const companionStatus = localizedUpdate?.companionData?._status;
-            const parentRow = this.deserializeJsonFieldsForSnapshot(
-              {
-                ...preImage,
-                ...updatePayload,
-                ...(localizedUpdate?.localizedFieldValues ?? {}),
-              },
-              fields
-            );
-            stripPasswordFieldValues(parentRow, fields);
-            // Strip the system owner column (created_by) — see create path.
-            stripSystemOwnerField(parentRow);
-            const { components: snapshotComponents, manyToMany: snapshotM2M } =
-              await this.buildFullSnapshotRelations(
+            // If the row is gone (deleted between the pre-read and this tx), the
+            // UPDATE affected nothing and the method returns 404 below — do NOT
+            // record a version for a write that did not commit. (No stale
+            // fall-back to the pre-transaction existingEntry.)
+            const currentRow = freshRows[0] as
+              | Record<string, unknown>
+              | undefined;
+            if (currentRow) {
+              // Match the read shape: keep user field keys (field.name, which may
+              // contain underscores like `meta_title`) exactly, converting only
+              // the timestamp columns — camel-casing every key would rewrite
+              // those fields and diverge from a normal read.
+              const preImage = convertTimestampsToCamelCase({ ...currentRow });
+              // Overlay `updatePayload` (not raw `finalData`): it carries the
+              // `updatedAt` the write commits and has immutable system keys
+              // (id/createdAt/createdBy) stripped, so the snapshot records the new
+              // timestamp and cannot persist forged system values — `preImage`
+              // keeps the real committed system columns.
+              const companionStatus = localizedUpdate?.companionData?._status;
+              const parentRow = this.deserializeJsonFieldsForSnapshot(
+                {
+                  ...preImage,
+                  ...updatePayload,
+                  ...(localizedUpdate?.localizedFieldValues ?? {}),
+                },
+                fields
+              );
+              stripPasswordFieldValues(parentRow, fields);
+              // Strip the system owner column (created_by) — see create path.
+              stripSystemOwnerField(parentRow);
+              const {
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
+              } = await this.buildFullSnapshotRelations(
                 params.entryId,
                 params.collectionName,
                 tableName,
@@ -2285,26 +2293,27 @@ export class CollectionMutationService extends BaseService {
                 attemptComponentData,
                 manyToManyData
               );
-            await captureInTx(tx, this.versionCapture, {
-              ref: {
-                scopeKind: "collection",
-                scopeSlug: params.collectionName,
-                entryId: params.entryId,
-              },
-              // Prefer the written status; for a localized status change it is
-              // moved to the companion `_status`, so fall back to that before the
-              // prior main-row status.
-              contentStatus:
-                (updatePayload as { status?: unknown }).status ??
-                companionStatus ??
-                (preImage as { status?: unknown }).status,
-              parts: {
-                parentRow,
-                components: snapshotComponents,
-                manyToMany: snapshotM2M,
-              },
-              createdBy: params.user?.id ?? null,
-            });
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                // Prefer the written status; for a localized status change it is
+                // moved to the companion `_status`, so fall back to that before the
+                // prior main-row status.
+                contentStatus:
+                  (updatePayload as { status?: unknown }).status ??
+                  companionStatus ??
+                  (preImage as { status?: unknown }).status,
+                parts: {
+                  parentRow,
+                  components: snapshotComponents,
+                  manyToMany: snapshotM2M,
+                },
+                createdBy: params.user?.id ?? null,
+              });
+            }
           }
         })
       );

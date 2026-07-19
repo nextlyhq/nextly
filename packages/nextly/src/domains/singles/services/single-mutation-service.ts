@@ -25,10 +25,11 @@ import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { keysToSnakeCase, toCamelCase } from "../../../lib/case-conversion";
+import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -365,12 +366,13 @@ export class SingleMutationService extends BaseService {
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;
             if (versionsConfig?.enabled) {
-              const parentRow: Record<string, unknown> = {};
-              for (const [key, value] of Object.entries(
-                rows[0] as Record<string, unknown>
-              )) {
-                parentRow[toCamelCase(key)] = value;
-              }
+              // Match the read shape: keep user field keys (field.name, which
+              // may contain underscores like `site_title`) exactly, converting
+              // only the timestamp columns — camel-casing every key would rewrite
+              // those fields and diverge from a normal read.
+              const parentRow = convertTimestampsToCamelCase({
+                ...(rows[0] as Record<string, unknown>),
+              });
               // Never let password hashes into durable version history: the row
               // carries bcrypt hashes (hashPasswordFieldValues ran before the
               // write), and a later password change would otherwise leave the
