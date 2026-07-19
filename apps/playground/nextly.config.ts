@@ -4,10 +4,11 @@
  * Internal contributor playground for the Nextly monorepo. NOT a
  * template for end-user projects — see templates/blog for that.
  *
- * Five collections in scope: Posts, Categories, Tags (defined here)
- * plus Media and Users (core, registered automatically). No plugins,
- * no singles, no dynamic schemas — the playground stays minimal so a
- * broken plugin can't break the playground.
+ * Collections Posts, Categories, Tags (defined here) plus Media and
+ * Users (core, registered automatically), and two singles (Homepage,
+ * LandingPage). Dev-harness plugins — page builder, form builder, and a
+ * styling fixture — exercise the plugin surfaces; the playground otherwise
+ * stays minimal so a broken change is easy to spot.
  *
  * Storage falls through to the local-disk default when no cloud env
  * vars are set (handled by packages/nextly/src/storage/env-config.ts).

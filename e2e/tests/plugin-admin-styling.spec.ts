@@ -32,8 +32,14 @@ for (const theme of ["light", "dark"] as Theme[]) {
   }) => {
     await gotoAdmin(page, "/collections/posts", theme);
 
-    // Layer 1: the kit Card rendered (component registration + kit styling).
-    await expect(page.getByTestId("sf-card")).toBeVisible({ timeout: 30_000 });
+    // Layer 1: the kit Card paints a surface (component registration + the
+    // kit's own `bg-card` token) — assert the background, not just visibility,
+    // so a regressed surface token is caught like Layers 2 and 3.
+    const cardBg = await backgroundOf(page, "sf-card");
+    expect(
+      TRANSPARENT.has(cardBg),
+      `${theme}: kit Card surface did not paint (got ${cardBg})`
+    ).toBe(false);
 
     // Layer 2: a safelisted utility (bg-card) actually paints.
     const safelistBg = await backgroundOf(page, "sf-safelist");
