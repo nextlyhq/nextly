@@ -9,12 +9,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
 
@@ -112,5 +113,47 @@ describe("version capture on create (integration)", () => {
     // Two distinct documents, each with its own versionNo 1.
     expect(new Set(rows.map(r => r.entryId)).size).toBe(2);
     expect(rows.every(r => r.versionNo === 1)).toBe(true);
+  });
+
+  it("captures v1 when a versioned single is auto-created on first read", async () => {
+    // A versioned Single that has never been written materializes its default
+    // document on first read; that materialization must start the history so
+    // the live row is not left without any version.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "settings",
+          versions: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    const res = await singles.get("settings", { overrideAccess: true });
+    expect(res.success).toBe(true);
+
+    const rows = await versionRows(current, "settings");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].scopeKind).toBe("single");
+    expect(rows[0].versionNo).toBe(1);
+  });
+
+  it("does not version an unversioned single auto-created on read", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "settings",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.get("settings", { overrideAccess: true });
+
+    expect(await versionRows(current, "settings")).toHaveLength(0);
   });
 });

@@ -1803,7 +1803,13 @@ export class CollectionRelationshipService extends BaseService {
   async fetchManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    // Optional transaction-bound executor. When supplied, the junction lookup
+    // runs on the transaction's connection (read-your-writes, #226) so a version
+    // snapshot captured inside the write transaction sees the junction rows just
+    // written in it. The target-entry fetch stays on the pool: related rows live
+    // in another (already-committed) collection, so they need no tx visibility.
+    executor?: RelationshipDbExecutor
   ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
@@ -1831,7 +1837,10 @@ export class CollectionRelationshipService extends BaseService {
         WHERE ${sourceIdCol} = ${sourceEntryId}
       `;
 
-      const junctionResults = (await this.selectRawSql(junctionQuery)) as {
+      const junctionResults = (await this.selectRawSql(
+        junctionQuery,
+        executor
+      )) as {
         rows: Array<{ target_id: string }>;
       };
       const relatedIds = junctionResults.rows.map(row => row.target_id);
