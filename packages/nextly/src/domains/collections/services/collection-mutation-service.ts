@@ -1655,6 +1655,18 @@ export class CollectionMutationService extends BaseService {
       const previousStatus =
         typeof previousStatusRaw === "string" ? previousStatusRaw : null;
 
+      // The parent row for both the snapshot and the status-change event is
+      // re-read fresh inside the transaction (not the pre-transaction
+      // `existingEntry`), mirroring updateEntry: a conflict retry re-runs this
+      // closure, and any concurrent write committed before the tx began is then
+      // reflected, so neither the recorded snapshot nor the emitted event
+      // payload exposes a stale pre-image of the non-status columns. The closure
+      // sets it; it is read once after commit for the event.
+      let publishedParentRow: Record<string, unknown> | undefined;
+      const needsFreshParent =
+        !!versionsConfig?.enabled ||
+        (hasMainStatus && previousStatus !== "published");
+
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
@@ -1672,25 +1684,42 @@ export class CollectionMutationService extends BaseService {
             );
           }
 
-          // Record a version snapshot for the publish: publishing changes the
-          // document's status, so history/audit should capture that state. The
-          // parent is the current row set to published; components + m2m are read
-          // from the transaction (read-your-writes). Status/owner/password
-          // handling matches the other capture paths.
-          if (versionsConfig?.enabled) {
-            const parentRow = convertTimestampsToCamelCase(
-              this.deserializeJsonFieldsForSnapshot(
-                {
-                  ...(existingEntry as Record<string, unknown>),
-                  status: "published",
-                },
-                fields
-              )
-            );
-            stripPasswordFieldValues(parentRow, fields);
-            stripSystemOwnerField(parentRow);
-            const { components: snapshotComponents, manyToMany: snapshotM2M } =
-              await this.buildFullSnapshotRelations(
+          if (needsFreshParent) {
+            // Pool read, so it excludes this tx's own uncommitted status write —
+            // publish only mutates status, so overlaying "published" onto the
+            // fresh non-status columns reconstructs the committed post-publish
+            // state. On retry this re-reads a concurrent winner's columns.
+            const freshRows = await this.db
+              .select()
+              .from(schema)
+              .where(eq(schema.id, params.entryId))
+              .limit(1);
+            const currentRow = freshRows[0] as
+              | Record<string, unknown>
+              | undefined;
+            publishedParentRow = currentRow
+              ? { ...currentRow, status: "published" }
+              : undefined;
+
+            // Record a version snapshot for the publish: publishing changes the
+            // document's status, so history/audit should capture that state.
+            // Components + m2m are read from the transaction (read-your-writes).
+            // Status/owner/password handling matches the other capture paths. If
+            // the row was deleted concurrently, skip — nothing committed to
+            // snapshot.
+            if (versionsConfig?.enabled && publishedParentRow) {
+              const parentRow = convertTimestampsToCamelCase(
+                this.deserializeJsonFieldsForSnapshot(
+                  { ...publishedParentRow },
+                  fields
+                )
+              );
+              stripPasswordFieldValues(parentRow, fields);
+              stripSystemOwnerField(parentRow);
+              const {
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
+              } = await this.buildFullSnapshotRelations(
                 tx,
                 params.entryId,
                 params.collectionName,
@@ -1698,20 +1727,21 @@ export class CollectionMutationService extends BaseService {
                 fields,
                 manyToManyFields
               );
-            await captureInTx(tx, this.versionCapture, {
-              ref: {
-                scopeKind: "collection",
-                scopeSlug: params.collectionName,
-                entryId: params.entryId,
-              },
-              contentStatus: "published",
-              parts: {
-                parentRow,
-                components: snapshotComponents,
-                manyToMany: snapshotM2M,
-              },
-              createdBy: params.user?.id ?? null,
-            });
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                contentStatus: "published",
+                parts: {
+                  parentRow,
+                  components: snapshotComponents,
+                  manyToMany: snapshotM2M,
+                },
+                createdBy: params.user?.id ?? null,
+              });
+            }
           }
         })
       );
@@ -1720,11 +1750,13 @@ export class CollectionMutationService extends BaseService {
       // workflow subscribers on statusTransition/published must see it (this
       // path previously changed status without emitting anything). Skip when the
       // main row was already published (no transition), matching updateEntry.
+      // Prefer the fresh in-tx row; fall back to the pre-read only if the row
+      // vanished mid-publish.
       if (hasMainStatus && previousStatus !== "published") {
         this.transitionStatus({
           collection: params.collectionName,
           id: params.entryId,
-          data: {
+          data: publishedParentRow ?? {
             ...(existingEntry as Record<string, unknown>),
             status: "published",
           },
