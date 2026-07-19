@@ -1,0 +1,6 @@
+.nextly-admin .sf-panel {
+  background-color: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
