@@ -52,6 +52,7 @@ import {
   stripPasswordFieldValues,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
   populateTranslationStatus,
@@ -662,8 +663,22 @@ export class SingleQueryService extends BaseService {
       updated_at: now,
     };
 
+    // i18n: a localized single's main table omits translatable columns (they live in the
+    // companion `single_<slug>_locales`), so a required/defaulted translatable value must
+    // not be inserted here — it would target a column that only exists on the companion and
+    // fail the auto-create insert.
+    const localizedNames = new Set(
+      singleMeta.localized === true
+        ? resolveLocalizedFieldNames(
+            singleMeta.fields as { name: string; type: string }[],
+            true
+          )
+        : []
+    );
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
+      if (localizedNames.has(field.name)) continue;
 
       if ("defaultValue" in field && field.defaultValue !== undefined) {
         if (shouldTreatAsJson(field)) {
