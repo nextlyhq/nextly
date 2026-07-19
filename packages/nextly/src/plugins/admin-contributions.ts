@@ -127,6 +127,16 @@ export interface PluginAdminContributions {
   /** Per-collection view overrides + injection points, keyed by slug. */
   views?: Record<string, PluginCollectionView>;
   /**
+   * Precompiled, `.nextly-admin`-scoped, token-driven CSS this plugin ships for
+   * admin components whose utilities are not in the built-in safelist. A
+   * package-relative reference (or several), e.g. "@acme/plugin/dist/admin.css".
+   * The plugin's admin entry side-effect-imports the file so the consumer's
+   * bundler loads/dedups it; this declaration is the contract the plugin doctor
+   * and tooling key off. Omit when the plugin styles itself from SDK components
+   * plus safelisted utilities.
+   */
+  styles?: string | string[];
+  /**
    * @deprecated Use `header.slot`. A component rendered in the admin top bar /
    * header. The component self-gates on permission. Rendered inside the
    * plugin boundary. Still honored (folded into `header.slot`) for back-compat.
