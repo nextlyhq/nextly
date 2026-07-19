@@ -91,11 +91,19 @@ export function splitLocalizedWrite(
   data: Record<string, unknown>,
   localizedFields: LocalizedFieldRef[]
 ): { main: Record<string, unknown>; companion: Record<string, unknown> } {
-  const byName = new Map(localizedFields.map(f => [f.name, f.column]));
+  // Match a payload key by EITHER the camelCase field name or the snake_case companion column.
+  // Component writes pass camelCase field names; single/collection writes pass a payload that has
+  // already been `keysToSnakeCase`-converted, so a field like `metaTitle` arrives as `meta_title`.
+  // Recognizing both routes translatable values to the companion in every path.
+  const columnByKey = new Map<string, string>();
+  for (const f of localizedFields) {
+    columnByKey.set(f.name, f.column);
+    columnByKey.set(f.column, f.column);
+  }
   const main: Record<string, unknown> = {};
   const companion: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    const column = byName.get(key);
+    const column = columnByKey.get(key);
     if (column) {
       companion[column] = value;
     } else {

@@ -224,6 +224,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!this.fieldHasForeignKey(field)) continue;
 
       const columnName = this.toSnakeCase(field.name);
@@ -244,6 +246,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!("index" in field && field.index)) continue;
       if (this.fieldHasForeignKey(field)) continue;
 
@@ -265,6 +269,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!("unique" in field && field.unique)) continue;
 
       const columnName = this.toSnakeCase(field.name);

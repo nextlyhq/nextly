@@ -25,7 +25,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 
-
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -368,7 +367,9 @@ ${allColumnDefs.join(",\n")}
     const indexStatements: string[] = [];
 
     // essential for JOIN performance, PostgreSQL does NOT automatically index foreign keys!
-    fields.forEach(f => {
+    // Use mainFields so a localized relationship field (relocated to the companion) doesn't
+    // get an index on a column the main table no longer has.
+    mainFields.forEach(f => {
       if (
         f.type === "relationship" &&
         f.options?.relationType !== "manyToMany"
