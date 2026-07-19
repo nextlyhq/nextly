@@ -22,6 +22,10 @@
 
 Content version snapshots are now captured more faithfully: component subtrees and
 relations are read within the write transaction so just-written data is included
-correctly on every database (no leaked password hashes, no lost ids), and
+correctly on every database (no leaked password hashes, no lost ids), a partial
+translation edit keeps the language's other translated fields in the snapshot, and
 publishing all languages records a version and fires the status-change events like
-an ordinary publish.
+an ordinary publish. Publishing or changing the status of a single translation now
+also fires the document status-change events, tagged with the language. A versioned
+Single that is auto-created on its first read now starts its version history at that
+moment instead of leaving the live document without any version.
