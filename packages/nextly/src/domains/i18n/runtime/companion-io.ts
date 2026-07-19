@@ -13,6 +13,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { LocalizedFieldRef } from "../companion-join";
 
@@ -40,9 +41,15 @@ export interface CompanionSchema {
   hasStatus: boolean;
 }
 
-/** snake_case a camelCase field name for its physical companion column (`metaTitle` → `meta_title`). */
+/**
+ * snake_case a field name for its physical companion column (`metaTitle` → `meta_title`). Reuses
+ * the canonical descriptor conversion so the companion column name matches exactly what the
+ * DDL/runtime-schema path produces — otherwise a field with an uppercase acronym like `URLTitle`
+ * would be created as `u_r_l_title` by the DDL but looked up as `urltitle` here, and reads/writes
+ * would miss the companion column entirely.
+ */
 function toColumn(name: string): string {
-  return name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  return toCanonicalSnakeCase(name);
 }
 
 /**

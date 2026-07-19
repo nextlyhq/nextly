@@ -252,12 +252,25 @@ export class DynamicCollectionService extends BaseService {
       status: opts.status,
     });
     if (!spec) return migrationSQL;
-    return `${migrationSQL}\n\n${buildCompanionCreateOnlySql(spec)}`;
+    // Separate the companion CREATE from the main migration with the breakpoint marker so the
+    // runner executes it as its own statement (a multi-statement chunk is rejected by drivers
+    // with multi-statements disabled, e.g. MySQL).
+    return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
   private generateSchemaHash(fields: FieldDefinition[]): string {
     const fieldsJson = JSON.stringify(fields);
     return createHash("sha256").update(fieldsJson).digest("hex");
+  }
+
+  /**
+   * Join SQL statements for a migration file the way the runner expects: each statement is
+   * `;`-terminated and separated by `--> statement-breakpoint`, so the file splits into
+   * single-statement chunks (drivers with multi-statements disabled, e.g. MySQL, otherwise
+   * reject a multi-statement chunk).
+   */
+  private toBreakpointSql(statements: string[]): string {
+    return statements.map(s => `${s};`).join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -298,8 +311,13 @@ export class DynamicCollectionService extends BaseService {
       companionExists,
       companionHasStatus,
     });
-    const toSql = (arr: string[]) => arr.map(s => `${s};`).join("\n\n");
-    return { sql: toSql(plan.statements), needsArchive: plan.needsArchive };
+    // Separate statements with the migration-file breakpoint marker (not blank lines): the file
+    // is split on `--> statement-breakpoint` and each chunk is run as ONE statement, so a
+    // multi-statement chunk is rejected by drivers with multi-statements disabled (e.g. MySQL).
+    return {
+      sql: this.toBreakpointSql(plan.statements),
+      needsArchive: plan.needsArchive,
+    };
   }
 
   /**
@@ -482,9 +500,7 @@ export class DynamicCollectionService extends BaseService {
             status: hasStatus,
           });
         const archiveSQL = needsArchive
-          ? getI18nArchiveDdl(this.adapter.dialect)
-              .map(s => `${s};`)
-              .join("\n\n")
+          ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
           : "";
         // A disable re-adds the translatable columns to main (companionSQL), so run the companion
         // transition FIRST (after ensuring the archive table), then the shared ALTER. An enable /
@@ -492,7 +508,9 @@ export class DynamicCollectionService extends BaseService {
         const parts = collectionIsLocalized
           ? [mainSQL, companionSQL]
           : [archiveSQL, companionSQL, mainSQL];
-        migrationSQL = parts.filter(sql => sql && sql.trim()).join("\n\n");
+        migrationSQL = parts
+          .filter(sql => sql && sql.trim())
+          .join("\n--> statement-breakpoint\n");
       } else {
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
@@ -539,14 +557,14 @@ export class DynamicCollectionService extends BaseService {
           status: hasStatus,
         });
       const archiveSQL = needsArchive
-        ? getI18nArchiveDdl(this.adapter.dialect)
-            .map(s => `${s};`)
-            .join("\n\n")
+        ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
         : "";
       const parts = collectionIsLocalized
         ? [mainSQL, companionSQL]
         : [archiveSQL, companionSQL, mainSQL];
-      migrationSQL = parts.filter(sql => sql && sql.trim()).join("\n\n");
+      migrationSQL = parts
+        .filter(sql => sql && sql.trim())
+        .join("\n--> statement-breakpoint\n");
       migrationFileName = `${Date.now()}_i18n_${collectionName}.sql`;
     } else if (statusFlipped) {
       // No field changes, but status toggled — emit an alter that just
