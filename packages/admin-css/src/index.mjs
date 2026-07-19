@@ -13,3 +13,4 @@ export {
   scopeSelector,
   splitTopLevel,
 } from "./css-scope.mjs";
+export { checkAdminStyles } from "./check-admin-styles.mjs";

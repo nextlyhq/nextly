@@ -14,7 +14,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 
-import { findUnscopedRules, scopeCss } from "../src/index.mjs";
+import { checkAdminStyles, scopeCss } from "../src/index.mjs";
 
 const [input, output] = process.argv.slice(2);
 if (!input || !output) {
@@ -44,11 +44,16 @@ try {
   runTailwind(["-i", input, "-o", rawFile]);
 
   const scoped = scopeCss(fs.readFileSync(rawFile, "utf-8"));
-  const leaks = findUnscopedRules(scoped);
-  if (leaks.length > 0) {
+  const issues = checkAdminStyles({ css: scoped }).filter(
+    i => i.severity === "error"
+  );
+  if (issues.length > 0) {
     console.error(
-      `Refusing to emit: ${leaks.length} rule(s) are not scoped under .nextly-admin:\n` +
-        leaks.slice(0, 5).join("\n")
+      `Refusing to emit ${issues.length} issue(s):\n` +
+        issues
+          .slice(0, 5)
+          .map(i => `  - ${i.message}`)
+          .join("\n")
     );
     process.exit(1);
   }
