@@ -274,10 +274,24 @@ export async function generateMigration(
     sqlContent
   );
 
-  // 9. Emit the snapshot-less companion `.sql` files AFTER the main migration.
-  //    A fresh companion's FK references the main table, so it must sort/run
-  //    strictly after the main file — give each a timestamp a few ms later.
-  companionPlans.forEach(({ spec, plan }, i) => {
+  // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
+  //    - ENABLE / create-only: the companion's FK references the main table, so it must run
+  //      strictly AFTER the main file — give each a timestamp a few ms later.
+  //    - DISABLE: the companion migration RE-ADDS the formerly-localized columns to the main
+  //      table, so any main-migration DDL that references a restored column (e.g. an index on a
+  //      now-shared field) must run AFTER it — give each a timestamp a few ms BEFORE the main
+  //      file so `nextly migrate` restores the column before the main migration indexes it.
+  const disablePlans = companionPlans.filter(p => p.plan.kind === "disable");
+  const forwardPlans = companionPlans.filter(p => p.plan.kind !== "disable");
+  disablePlans.forEach(({ spec, plan }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, spec, {
+      kind: "disable",
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+      now: new Date(now.getTime() - (disablePlans.length - i)),
+    });
+  });
+  forwardPlans.forEach(({ spec, plan }, i) => {
     writeCompanionMigrationFile(args.migrationsDir, spec, {
       // `none` plans are filtered out by the planner, so the kind is always writable here.
       kind: plan.kind === "none" ? "create-only" : plan.kind,
