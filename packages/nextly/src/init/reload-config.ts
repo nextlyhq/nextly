@@ -494,6 +494,12 @@ export async function reloadNextlyConfig(opts?: {
   // the user sees on a first-install where collections are synced before
   // singles.
   let hasChanges = false;
+  // True when a real schema diff existed but was NOT applied this cycle (an
+  // unsafe change needing review, or a diff that threw). In that state the
+  // registry's `fields` would disagree with the physical table, so the no-DDL
+  // metadata-only sync below must be skipped rather than persist unmigrated
+  // schema metadata; it retries on the next clean reload or restart.
+  let deferredSchemaChange = false;
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -529,6 +535,7 @@ export async function reloadNextlyConfig(opts?: {
             `data loss without explicit resolutions. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredCollections[target.slug] = entry;
         continue;
       }
@@ -539,6 +546,7 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
@@ -575,6 +583,7 @@ export async function reloadNextlyConfig(opts?: {
             `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredSingles[target.slug] = entry;
         continue;
       }
@@ -585,6 +594,7 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
@@ -619,6 +629,7 @@ export async function reloadNextlyConfig(opts?: {
             `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        deferredSchemaChange = true;
         desiredComponents[target.slug] = entry;
         continue;
       }
@@ -629,6 +640,7 @@ export async function reloadNextlyConfig(opts?: {
       logger?.warn(
         `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
+      deferredSchemaChange = true;
     }
   }
 
@@ -638,7 +650,13 @@ export async function reloadNextlyConfig(opts?: {
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
   if (!hasChanges) {
-    await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
+    // Only sync when the schema is genuinely in step (every entity had a zero-op
+    // diff). If a real schema change was deferred (unsafe/needs review) or a diff
+    // threw, syncing would persist `fields` that disagree with the physical
+    // table, so skip and let a later clean reload / restart reconcile.
+    if (!deferredSchemaChange) {
+      await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
+    }
     return;
   }
 

@@ -470,6 +470,7 @@ export class CollectionMutationService extends BaseService {
   private async buildFullSnapshotRelations(
     entryId: string,
     collectionName: string,
+    parentTable: string,
     fields: FieldDefinition[],
     manyToManyFields: FieldDefinition[],
     writtenComponents: Record<string, unknown>,
@@ -491,7 +492,10 @@ export class CollectionMutationService extends BaseService {
           const populated =
             await this.componentDataService.populateComponentData({
               entry: { id: entryId },
-              parentTable: getTableName(collectionName),
+              // Use the resolved parent table (custom `dbName` collections do not
+              // match getTableName(slug)); it must equal the table the component
+              // rows were written under, or the read finds nothing.
+              parentTable,
               fields: fields as unknown as FieldConfig[],
             });
           for (const f of componentFields) {
@@ -2223,6 +2227,7 @@ export class CollectionMutationService extends BaseService {
               await this.buildFullSnapshotRelations(
                 params.entryId,
                 params.collectionName,
+                tableName,
                 fields,
                 manyToManyFields,
                 attemptComponentData,
