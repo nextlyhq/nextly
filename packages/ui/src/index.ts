@@ -32,6 +32,8 @@ export type {
   CardContentProps,
   CardFooterProps,
 } from "./components/card";
+export { Stack, Grid, Stat } from "./components/layout";
+export type { StackProps, GridProps, StatProps } from "./components/layout";
 export {
   Alert,
   AlertTitle,

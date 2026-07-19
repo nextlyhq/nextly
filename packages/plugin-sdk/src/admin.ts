@@ -16,6 +16,32 @@ export {
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * Token-driven layout primitives (@experimental). Compose plugin admin UI from
+ * these so it inherits the admin's design system with no plugin build step:
+ * `Card` (+ its parts) for surfaces, `Stack`/`Grid` for layout, `Stat` for
+ * labelled metrics. Prefer these over raw utilities; reach for the Layer-2
+ * safelist next, and a plugin's own `admin.styles` only for the rest.
+ */
+export {
+  Card,
+  CardHeader,
+  CardFooter,
+  CardTitle,
+  CardAction,
+  CardDescription,
+  CardContent,
+  Stack,
+  Grid,
+  Stat,
+} from "@nextlyhq/admin";
+export type {
+  CardProps,
+  StackProps,
+  GridProps,
+  StatProps,
+} from "@nextlyhq/admin";
+
+/**
  * The unified admin data table + its extension points (@experimental). Render
  * `DataTable` (batteries-included) or `DataTableView` (controlled) to match the
  * admin's lists, and contribute cell renderers, columns, column transforms, and
