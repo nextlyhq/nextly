@@ -413,14 +413,6 @@ export class SingleRegistryService extends BaseRegistryService<
         : null;
     }
 
-    // Versioning config: when explicitly provided (including null to disable),
-    // write the resolved JSON; when undefined, leave the column unchanged.
-    if (data.versions !== undefined) {
-      updateData.versions = data.versions
-        ? JSON.stringify(data.versions)
-        : null;
-    }
-
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
         this.registryTableName,
