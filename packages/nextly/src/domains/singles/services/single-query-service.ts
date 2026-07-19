@@ -447,8 +447,11 @@ export class SingleQueryService extends BaseService {
           fields: singleMeta.fields,
           depth: options.depth,
           // i18n: thread the read locale so an embedded localized component resolves
-          // its translatable fields per language.
+          // its translatable fields per language, and forward fallback control so a
+          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+          // fields blank instead of showing default-language text.
           locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
         })) as SingleDocument;
       }
 

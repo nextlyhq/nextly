@@ -1117,8 +1117,11 @@ export class CollectionQueryService extends BaseService {
             depth: params.depth,
             select: params.select,
             // i18n: thread the read locale so embedded localized components resolve
-            // per language across the list.
+            // per language across the list, and forward fallback control so the
+            // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
+            // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
+            fallbackLocale: params.fallbackLocale,
           });
       }
 
@@ -1905,8 +1908,11 @@ export class CollectionQueryService extends BaseService {
           depth: params.depth,
           select: params.select,
           // i18n: thread the read locale so an embedded localized component resolves
-          // its translatable fields per language.
+          // its translatable fields per language, and forward fallback control so a
+          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+          // fields blank rather than showing default-language text.
           locale: params.locale,
+          fallbackLocale: params.fallbackLocale,
         });
       }
 
