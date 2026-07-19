@@ -644,6 +644,8 @@ export class CollectionMetadataService extends BaseService {
       sidebarGroup?: string;
       /** Toggle Draft/Published. Honoured when defined; undefined leaves it unchanged. */
       status?: boolean;
+      /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
+      localized?: boolean;
       fields?: FieldDefinition[];
       hooks?: Record<string, unknown>[];
     }
@@ -675,7 +677,18 @@ export class CollectionMetadataService extends BaseService {
             );
             if (tableExists) {
               updateArtifacts.metadataUpdates.migrationStatus = "applied";
-              if (body.fields) {
+              // i18n: a localization enable/disable toggle changes the main table's column
+              // shape (drops or restores translatable columns) even with no field edit, so the
+              // runtime schema must be re-registered on a flag-only toggle too, not only when
+              // `body.fields` is present.
+              const wasLocalizedNow =
+                (existingCollection as { localized?: boolean }).localized ===
+                true;
+              const isLocalizedNow =
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalizedNow;
+              if (body.fields || wasLocalizedNow !== isLocalizedNow) {
                 // Resolve hasStatus from the update payload, falling back
                 // to the collection's existing flag so the runtime
                 // schema descriptor matches the table the migration
@@ -686,15 +699,14 @@ export class CollectionMetadataService extends BaseService {
                   body.status !== undefined ? body.status === true : wasStatus;
                 await this.registerRuntimeSchema(
                   existingCollection.tableName,
-                  body.fields,
+                  body.fields ??
+                    (existingCollection.fields as FieldDefinition[]),
                   {
                     hasStatus,
-                    // i18n: re-register the main table without translatable columns and
-                    // (re)register the companion after the update, so the current process
+                    // i18n: re-register the main table with the new localized shape and
+                    // (re)register/drop the companion after the update, so the current process
                     // resolves them correctly without a restart.
-                    localized:
-                      (existingCollection as { localized?: boolean })
-                        .localized === true,
+                    localized: isLocalizedNow,
                   }
                 );
               }

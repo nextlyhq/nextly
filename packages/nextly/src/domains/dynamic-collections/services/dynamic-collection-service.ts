@@ -9,12 +9,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
-import { buildCompanionReconcileSql } from "../../i18n/migration/reconcile-companion";
+import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
 
 import {
   DynamicCollectionRegistryService,
@@ -101,9 +103,16 @@ export class DynamicCollectionService extends BaseService {
   private validationService: DynamicCollectionValidationService;
   private schemaService: DynamicCollectionSchemaService;
   private registryService: DynamicCollectionRegistryService;
+  /**
+   * i18n: the app's default locale — the language seeded onto/restored from the companion when
+   * localization is enabled/disabled on an existing collection. Injected from the localization
+   * config; defaults to "en" for setups without localization (where transitions never run).
+   */
+  private readonly defaultLocale: string;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  constructor(adapter: DrizzleAdapter, logger: Logger, defaultLocale = "en") {
     super(adapter, logger);
+    this.defaultLocale = defaultLocale;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(
@@ -246,39 +255,51 @@ export class DynamicCollectionService extends BaseService {
     return `${migrationSQL}\n\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
-  /**
-   * i18n: SQL to evolve the companion `<table>_locales` when a localized collection's
-   * translatable fields change on update. Creates the companion on the first localized
-   * field (it isn't created for a fields-less localized collection), otherwise ADDs
-   * newly-translatable columns and DROPs removed ones. Returns "" when there is nothing
-   * to do (no localized fields yet and none added).
-   */
-  private async buildCompanionUpdateSQL(
-    slug: string,
-    tableName: string,
-    oldLocalized: FieldDefinition[],
-    newLocalized: FieldDefinition[],
-    status: boolean
-  ): Promise<string> {
-    // Delegate to the shared reconciler (single source of truth shared with the
-    // builder-canvas apply pipeline). We only own the live existence check here.
-    const companionExists = await this.adapter.tableExists(
-      `${tableName}_locales`
-    );
-    return buildCompanionReconcileSql({
-      slug,
-      tableName,
-      oldLocalized,
-      newLocalized,
-      dialect: this.adapter.dialect,
-      status,
-      companionExists,
-    });
-  }
-
   private generateSchemaHash(fields: FieldDefinition[]): string {
     const fieldsJson = JSON.stringify(fields);
     return createHash("sha256").update(fieldsJson).digest("hex");
+  }
+
+  /**
+   * i18n: build the data-preserving companion SQL for a localization enable/disable/field-change
+   * on an existing collection (empty when there's nothing to do). Enabling seeds the companion
+   * default locale from the existing main columns then drops them; disabling restores the default
+   * onto main, archives the other languages into `nextly_i18n_archive`, then drops the companion;
+   * a field change ADDs/DROPs localized columns. Returns `needsArchive` so the caller prepends the
+   * archive table's `CREATE IF NOT EXISTS` DDL before a disable's archive INSERT.
+   */
+  private async buildCompanionTransitionSQL(args: {
+    slug: string;
+    tableName: string;
+    oldFields: FieldDefinition[];
+    newFields: FieldDefinition[];
+    wasLocalized: boolean;
+    isLocalized: boolean;
+    status: boolean;
+  }): Promise<{ sql: string; needsArchive: boolean }> {
+    const companionTable = `${args.tableName}_locales`;
+    const companionExists = await this.adapter.tableExists(companionTable);
+    // Only introspect `_status` for a field change on a still-localized collection (a later
+    // Draft/Published toggle must ADD/DROP the companion `_status`).
+    const companionHasStatus =
+      companionExists && args.wasLocalized && args.isLocalized
+        ? await companionHasStatusColumn(this.adapter, companionTable)
+        : undefined;
+    const plan = buildCompanionTransitionStatements({
+      slug: args.slug,
+      tableName: args.tableName,
+      dialect: this.adapter.dialect,
+      defaultLocale: this.defaultLocale,
+      status: args.status,
+      wasLocalized: args.wasLocalized,
+      isLocalized: args.isLocalized,
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      companionExists,
+      companionHasStatus,
+    });
+    const toSql = (arr: string[]) => arr.map(s => `${s};`).join("\n\n");
+    return { sql: toSql(plan.statements), needsArchive: plan.needsArchive };
   }
 
   /**
@@ -359,6 +380,29 @@ export class DynamicCollectionService extends BaseService {
       updates.status !== undefined &&
       (updates.status === true) !== wasStatusForUpdate;
 
+    // i18n: detect a localization enable/disable transition against the persisted flag. A
+    // transition must run the data-preserving companion migration (seed on enable, restore +
+    // archive on disable) even on a flag-only save with no field changes, so content never
+    // strands in the wrong table.
+    const collectionWasLocalized =
+      (collection as { localized?: boolean }).localized === true;
+    const collectionIsLocalized =
+      updates.localized !== undefined
+        ? updates.localized === true
+        : collectionWasLocalized;
+    const localizedTransition =
+      collectionWasLocalized !== collectionIsLocalized;
+    const reservedForFields = [
+      "id",
+      "title",
+      "slug",
+      "created_at",
+      "updated_at",
+    ];
+    const existingUserFieldsForTransition = (collection.fields || []).filter(
+      (f: FieldDefinition) => !reservedForFields.includes(f.name)
+    );
+
     if (updates.fields) {
       const normalizedFields = updates.fields.map(f => ({
         ...f,
@@ -400,25 +444,25 @@ export class DynamicCollectionService extends BaseService {
         updates.localized !== undefined
           ? updates.localized === true
           : (collection as { localized?: boolean }).localized === true;
-      if (isLocalized) {
-        // i18n: a localized collection stores translatable fields in the companion
-        // `_locales` table. The main ALTER must only see SHARED fields; the
-        // translatable field changes are applied to the companion (created on first
-        // use). Without this, fields added through the builder land on the main table
-        // and every language shares one value.
-        const oldLocalizedNames = new Set(
-          resolveLocalizedFieldNames(oldUserFields, true)
+      if (isLocalized || localizedTransition) {
+        // i18n: a localized collection stores translatable fields on the companion `_locales`
+        // table, so the main ALTER must exclude every column that is localized in EITHER the old
+        // or new state — those are seeded (enable), restored (disable), or ADDed/DROPped by the
+        // companion transition below, never by the plain main diff. Using the correct per-state
+        // localized flag is what prevents an enable from treating existing main columns as
+        // already companion-owned (which would drop them without seeding).
+        const excludedLocalized = new Set([
+          ...resolveLocalizedFieldNames(oldUserFields, collectionWasLocalized),
+          ...resolveLocalizedFieldNames(
+            userDefinedFields,
+            collectionIsLocalized
+          ),
+        ]);
+        const oldShared = oldUserFields.filter(
+          f => !excludedLocalized.has(f.name)
         );
-        const newLocalizedNames = new Set(
-          resolveLocalizedFieldNames(userDefinedFields, true)
-        );
-        const oldShared = oldUserFields.filter(f => !oldLocalizedNames.has(f.name));
         const newShared = userDefinedFields.filter(
-          f => !newLocalizedNames.has(f.name)
-        );
-        const oldLocalized = oldUserFields.filter(f => oldLocalizedNames.has(f.name));
-        const newLocalized = userDefinedFields.filter(f =>
-          newLocalizedNames.has(f.name)
+          f => !excludedLocalized.has(f.name)
         );
 
         const mainSQL = this.schemaService.generateAlterTableMigration(
@@ -427,16 +471,28 @@ export class DynamicCollectionService extends BaseService {
           newShared,
           { wasStatus, hasStatus }
         );
-        const companionSQL = await this.buildCompanionUpdateSQL(
-          collectionName,
-          collection.tableName,
-          oldLocalized,
-          newLocalized,
-          hasStatus
-        );
-        migrationSQL = [mainSQL, companionSQL]
-          .filter(sql => sql && sql.trim())
-          .join("\n\n");
+        const { sql: companionSQL, needsArchive } =
+          await this.buildCompanionTransitionSQL({
+            slug: collectionName,
+            tableName: collection.tableName,
+            oldFields: oldUserFields,
+            newFields: userDefinedFields,
+            wasLocalized: collectionWasLocalized,
+            isLocalized: collectionIsLocalized,
+            status: hasStatus,
+          });
+        const archiveSQL = needsArchive
+          ? getI18nArchiveDdl(this.adapter.dialect)
+              .map(s => `${s};`)
+              .join("\n\n")
+          : "";
+        // A disable re-adds the translatable columns to main (companionSQL), so run the companion
+        // transition FIRST (after ensuring the archive table), then the shared ALTER. An enable /
+        // field change runs the shared ALTER first, then seeds + drops / ADD-DROPs the companion.
+        const parts = collectionIsLocalized
+          ? [mainSQL, companionSQL]
+          : [archiveSQL, companionSQL, mainSQL];
+        migrationSQL = parts.filter(sql => sql && sql.trim()).join("\n\n");
       } else {
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
@@ -449,6 +505,49 @@ export class DynamicCollectionService extends BaseService {
 
       metadataUpdates.fields = userDefinedFields;
       metadataUpdates.schemaHash = this.generateSchemaHash(userDefinedFields);
+    } else if (localizedTransition) {
+      // Flag-only save (no field changes) that toggles Internationalization: run the
+      // data-preserving companion transition on the existing field set so an enable seeds + drops
+      // the main columns and a disable restores + archives them, even without a field edit. A
+      // simultaneous status flip still emits its main ADD/DROP `status` column.
+      const oldUserFields = existingUserFieldsForTransition;
+      const hasStatus =
+        updates.status !== undefined
+          ? updates.status === true
+          : wasStatusForUpdate;
+      const excludedLocalized = new Set([
+        ...resolveLocalizedFieldNames(oldUserFields, collectionWasLocalized),
+        ...resolveLocalizedFieldNames(oldUserFields, collectionIsLocalized),
+      ]);
+      const shared = oldUserFields.filter(f => !excludedLocalized.has(f.name));
+      const mainSQL = statusFlipped
+        ? this.schemaService.generateAlterTableMigration(
+            collection.tableName,
+            shared,
+            shared,
+            { wasStatus: wasStatusForUpdate, hasStatus }
+          )
+        : "";
+      const { sql: companionSQL, needsArchive } =
+        await this.buildCompanionTransitionSQL({
+          slug: collectionName,
+          tableName: collection.tableName,
+          oldFields: oldUserFields,
+          newFields: oldUserFields,
+          wasLocalized: collectionWasLocalized,
+          isLocalized: collectionIsLocalized,
+          status: hasStatus,
+        });
+      const archiveSQL = needsArchive
+        ? getI18nArchiveDdl(this.adapter.dialect)
+            .map(s => `${s};`)
+            .join("\n\n")
+        : "";
+      const parts = collectionIsLocalized
+        ? [mainSQL, companionSQL]
+        : [archiveSQL, companionSQL, mainSQL];
+      migrationSQL = parts.filter(sql => sql && sql.trim()).join("\n\n");
+      migrationFileName = `${Date.now()}_i18n_${collectionName}.sql`;
     } else if (statusFlipped) {
       // No field changes, but status toggled — emit an alter that just
       // adds or drops the `status` column. Pass the existing field list
