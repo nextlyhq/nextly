@@ -59,4 +59,27 @@ describe("checkAdminStyles", () => {
       })
     ).toEqual([]);
   });
+
+  it("rejects a named color value", () => {
+    const issues = checkAdminStyles({
+      css: ".nextly-admin .foo { color: red }",
+    });
+    expect(issues.some(i => /hardcoded color/.test(i.message))).toBe(true);
+  });
+
+  it("does not flag a color word inside a token name", () => {
+    expect(
+      checkAdminStyles({
+        css: ".nextly-admin .foo { background-color: var(--nx-white) }",
+      })
+    ).toEqual([]);
+  });
+
+  it("ignores a literal color inside a CSS comment", () => {
+    expect(
+      checkAdminStyles({
+        css: ".nextly-admin .foo { /* was color: #fff */ color: var(--nx-x) }",
+      })
+    ).toEqual([]);
+  });
 });

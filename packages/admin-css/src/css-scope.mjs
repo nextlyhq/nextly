@@ -194,8 +194,17 @@ export function findUnscopedRules(css) {
       }
       if (prelude.startsWith("@")) {
         if (!skipAtRule.test(prelude)) walk(block.slice(open + 1, j));
-      } else if (prelude && !prelude.includes(".nextly-admin")) {
-        offenders.push(prelude.slice(0, 100));
+      } else if (prelude) {
+        // A comma-separated selector list is scoped only if EVERY part is
+        // scoped. Check each part independently — a whole-prelude substring
+        // test would accept `.nextly-admin .a, .leak` because the first part
+        // scopes it, letting `.leak` restyle the host page.
+        for (const part of splitTopLevel(prelude)) {
+          const trimmed = part.trim();
+          if (trimmed && !trimmed.includes(".nextly-admin")) {
+            offenders.push(trimmed.slice(0, 100));
+          }
+        }
       }
       i = j + 1;
     }

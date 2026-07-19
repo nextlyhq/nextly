@@ -11,12 +11,14 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import { findUnscopedRules } from "./src/index.mjs";
 
-const ROOT = path.resolve(import.meta.dirname);
+// import.meta.dirname requires Node 20.11+, above the repo's Node >=20 floor.
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 describe("nextly-build-admin-css (POC)", () => {
   it("compiles a plugin entry to scoped, token-driven CSS", () => {

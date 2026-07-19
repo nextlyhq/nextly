@@ -13,11 +13,13 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { scopeCss, findUnscopedRules } from "@nextlyhq/admin-css";
 import { describe, expect, it, beforeAll } from "vitest";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
+// import.meta.dirname requires Node 20.11+, above the repo's Node >=20 floor.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let scoped = "";
 
 beforeAll(() => {
