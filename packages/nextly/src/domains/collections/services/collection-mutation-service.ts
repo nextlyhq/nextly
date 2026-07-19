@@ -61,6 +61,7 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -1554,103 +1555,108 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
-      await this.adapter.transaction(async tx => {
-        const updatePayload = {
-          ...stripImmutableSystemFields(finalData),
-          updatedAt: new Date(),
-        };
+      // Retry the whole content+capture transaction on a version_no allocation
+      // race (concurrent updates to the same doc); the re-run re-reads the max.
+      // The content UPDATE is a deterministic SET, so re-applying it is safe.
+      await withVersionConflictRetry(() =>
+        this.adapter.transaction(async tx => {
+          const updatePayload = {
+            ...stripImmutableSystemFields(finalData),
+            updatedAt: new Date(),
+          };
 
-        // Dialect-aware identifier quoting and placeholder syntax.
-        // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
-        const isMysql = this.dialect === "mysql";
-        const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-        const sqlParams: unknown[] = [];
-        const makePlaceholder = () =>
-          this.dialect === "postgresql"
-            ? `$${sqlParams.length}` // length already incremented by push below
-            : "?";
+          // Dialect-aware identifier quoting and placeholder syntax.
+          // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
+          const isMysql = this.dialect === "mysql";
+          const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+          const sqlParams: unknown[] = [];
+          const makePlaceholder = () =>
+            this.dialect === "postgresql"
+              ? `$${sqlParams.length}` // length already incremented by push below
+              : "?";
 
-        const setClauses = Object.entries(updatePayload)
-          .map(([key, val]) => {
-            sqlParams.push(val);
-            return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
-          })
-          .join(", ");
-        sqlParams.push(params.entryId);
-        await tx.execute(
-          `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-          sqlParams as (string | number | boolean | Date | null | undefined)[]
-        );
+          const setClauses = Object.entries(updatePayload)
+            .map(([key, val]) => {
+              sqlParams.push(val);
+              return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
+            })
+            .join(", ");
+          sqlParams.push(params.entryId);
+          await tx.execute(
+            `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
+            sqlParams as (string | number | boolean | Date | null | undefined)[]
+          );
 
-        // Save component field data to separate comp_{slug} tables
-        if (
-          this.componentDataService &&
-          Object.keys(componentFieldData).length > 0
-        ) {
-          await this.componentDataService.saveComponentDataInTransaction(tx, {
-            parentId: params.entryId,
-            parentTable: tableName,
-            fields: fields as unknown as FieldConfig[],
-            data: componentFieldData,
-          });
-        }
+          // Save component field data to separate comp_{slug} tables
+          if (
+            this.componentDataService &&
+            Object.keys(componentFieldData).length > 0
+          ) {
+            await this.componentDataService.saveComponentDataInTransaction(tx, {
+              parentId: params.entryId,
+              parentTable: tableName,
+              fields: fields as unknown as FieldConfig[],
+              data: componentFieldData,
+            });
+          }
 
-        // Replace many-to-many junction rows inside the transaction so a
-        // junction failure rolls back the update (atomic write). The entry is
-        // already known to exist (validated before the transaction). The
-        // tx-scoped Drizzle handle binds the junction writes to this tx.
-        const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-        for (const field of manyToManyFields) {
-          if (manyToManyData[field.name] !== undefined) {
-            await this.relationshipService.deleteManyToManyRelations(
-              params.collectionName,
-              params.entryId,
-              field,
-              txExecutor
-            );
-            const relatedIds = manyToManyData[field.name];
-            if (relatedIds.length > 0) {
-              await this.relationshipService.insertManyToManyRelations(
+          // Replace many-to-many junction rows inside the transaction so a
+          // junction failure rolls back the update (atomic write). The entry is
+          // already known to exist (validated before the transaction). The
+          // tx-scoped Drizzle handle binds the junction writes to this tx.
+          const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+          for (const field of manyToManyFields) {
+            if (manyToManyData[field.name] !== undefined) {
+              await this.relationshipService.deleteManyToManyRelations(
                 params.collectionName,
                 params.entryId,
                 field,
-                relatedIds,
                 txExecutor
               );
+              const relatedIds = manyToManyData[field.name];
+              if (relatedIds.length > 0) {
+                await this.relationshipService.insertManyToManyRelations(
+                  params.collectionName,
+                  params.entryId,
+                  field,
+                  relatedIds,
+                  txExecutor
+                );
+              }
             }
           }
-        }
 
-        // Capture a version snapshot of the post-update document atomically
-        // with the write when the collection opts into versioning. The parent
-        // is the pre-image (camelCased) overlaid with the changed values;
-        // components and m2m overlay it in assembleDocument to form the full
-        // read-shape snapshot. Status prefers the new value, else the prior one.
-        if (versionsConfig?.enabled) {
-          const preImage: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(
-            existingEntry as Record<string, unknown>
-          )) {
-            preImage[toCamelCase(key)] = value;
+          // Capture a version snapshot of the post-update document atomically
+          // with the write when the collection opts into versioning. The parent
+          // is the pre-image (camelCased) overlaid with the changed values;
+          // components and m2m overlay it in assembleDocument to form the full
+          // read-shape snapshot. Status prefers the new value, else the prior one.
+          if (versionsConfig?.enabled) {
+            const preImage: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(
+              existingEntry as Record<string, unknown>
+            )) {
+              preImage[toCamelCase(key)] = value;
+            }
+            await captureInTx(tx, this.versionCapture, {
+              ref: {
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: params.entryId,
+              },
+              contentStatus:
+                (finalData as { status?: unknown }).status ??
+                (preImage as { status?: unknown }).status,
+              parts: {
+                parentRow: { ...preImage, ...finalData },
+                components: componentFieldData,
+                manyToMany: manyToManyData,
+              },
+              createdBy: params.user?.id ?? null,
+            });
           }
-          await captureInTx(tx, this.versionCapture, {
-            ref: {
-              scopeKind: "collection",
-              scopeSlug: params.collectionName,
-              entryId: params.entryId,
-            },
-            contentStatus:
-              (finalData as { status?: unknown }).status ??
-              (preImage as { status?: unknown }).status,
-            parts: {
-              parentRow: { ...preImage, ...finalData },
-              components: componentFieldData,
-              manyToMany: manyToManyData,
-            },
-            createdBy: params.user?.id ?? null,
-          });
-        }
-      });
+        })
+      );
 
       // Fetch the updated entry to return it and use in hooks
       const [updated] = await this.db

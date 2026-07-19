@@ -44,6 +44,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
+import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
   SingleDocument,
   SingleResult,
@@ -314,59 +315,66 @@ export class SingleMutationService extends BaseService {
       // so the value read below is only ever the committed result.
       let updatedRows: SingleDocument[];
       try {
-        updatedRows = await this.adapter.transaction(async tx => {
-          const rows = await tx.update<SingleDocument>(
-            singleMeta.tableName,
-            updatePayload,
-            this.whereEq("id", existingDoc.id),
-            { returning: "*" }
-          );
+        // Retry the whole update+capture transaction on a version_no allocation
+        // race; the re-run re-reads the max. The single UPDATE is deterministic.
+        updatedRows = await withVersionConflictRetry(() =>
+          this.adapter.transaction(async tx => {
+            const rows = await tx.update<SingleDocument>(
+              singleMeta.tableName,
+              updatePayload,
+              this.whereEq("id", existingDoc.id),
+              { returning: "*" }
+            );
 
-          // Nothing updated: return the empty result; the 500 is surfaced after
-          // the (empty) transaction, and the component write is skipped.
-          if (rows.length === 0) {
-            return rows;
-          }
-
-          // 9.5. Save component field data to separate comp_{slug} tables
-          if (
-            this.componentDataService &&
-            Object.keys(componentFieldData).length > 0
-          ) {
-            await this.componentDataService.saveComponentDataInTransaction(tx, {
-              parentId: existingDoc.id,
-              parentTable: singleMeta.tableName,
-              fields: fieldConfigs,
-              data: componentFieldData,
-            });
-          }
-
-          // Capture a version snapshot atomically with the write when the single
-          // opts into versioning. Singles have no many-to-many fields; the
-          // updated parent row (top-level keys camelCased to the read shape) plus
-          // component subtrees form the snapshot.
-          const versionsConfig = singleMeta.versions;
-          if (versionsConfig?.enabled) {
-            const parentRow: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(
-              rows[0] as Record<string, unknown>
-            )) {
-              parentRow[toCamelCase(key)] = value;
+            // Nothing updated: return the empty result; the 500 is surfaced after
+            // the (empty) transaction, and the component write is skipped.
+            if (rows.length === 0) {
+              return rows;
             }
-            await captureInTx(tx, this.versionCapture, {
-              ref: {
-                scopeKind: "single",
-                scopeSlug: slug,
-                entryId: existingDoc.id,
-              },
-              contentStatus: (parentRow as { status?: unknown }).status,
-              parts: { parentRow, components: componentFieldData },
-              createdBy: options.user?.id ?? null,
-            });
-          }
 
-          return rows;
-        });
+            // 9.5. Save component field data to separate comp_{slug} tables
+            if (
+              this.componentDataService &&
+              Object.keys(componentFieldData).length > 0
+            ) {
+              await this.componentDataService.saveComponentDataInTransaction(
+                tx,
+                {
+                  parentId: existingDoc.id,
+                  parentTable: singleMeta.tableName,
+                  fields: fieldConfigs,
+                  data: componentFieldData,
+                }
+              );
+            }
+
+            // Capture a version snapshot atomically with the write when the single
+            // opts into versioning. Singles have no many-to-many fields; the
+            // updated parent row (top-level keys camelCased to the read shape) plus
+            // component subtrees form the snapshot.
+            const versionsConfig = singleMeta.versions;
+            if (versionsConfig?.enabled) {
+              const parentRow: Record<string, unknown> = {};
+              for (const [key, value] of Object.entries(
+                rows[0] as Record<string, unknown>
+              )) {
+                parentRow[toCamelCase(key)] = value;
+              }
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                contentStatus: (parentRow as { status?: unknown }).status,
+                parts: { parentRow, components: componentFieldData },
+                createdBy: options.user?.id ?? null,
+              });
+            }
+
+            return rows;
+          })
+        );
       } catch (error) {
         // A component validation failure (NextlyError) thrown inside the
         // transaction callback is re-wrapped as a database error by the adapter;
