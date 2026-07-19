@@ -558,6 +558,12 @@ export function SingleForm({
                 isDirty={isDirty}
                 entry={entryLike}
                 collectionSlug={schema.slug}
+                /* i18n: forward the active locale + switch handler so a localized single shows
+                   the primary header language switcher (the sidebar pills are unavailable when
+                   the rail is collapsed or on narrow layouts). The switcher self-hides when the
+                   single isn't localized / localization isn't configured. */
+                locale={locale}
+                onLocaleChange={onLocaleChange}
                 toolbarSlot={
                   <EntryFormToolbarSlots
                     context="single"
