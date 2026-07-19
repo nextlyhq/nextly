@@ -211,6 +211,43 @@ export class CollectionMutationService extends BaseService {
   private readonly versionCapture = new VersionCaptureService();
 
   /**
+   * Emit the document-level status events for one transition (post-commit).
+   *
+   * Fires the general `statusTransition` event (the seam workflows/item 9 build
+   * on) plus the specific `statusChanged` / `published` events existing
+   * subscribers already listen on, so current behavior is preserved. Create as
+   * `published` has no prior status to change from, so it passes
+   * `emitStatusChanged: false` to keep emitting only `published` (and now the
+   * general transition), never `statusChanged`.
+   */
+  private transitionStatus(args: {
+    collection: string;
+    id: unknown;
+    data: Record<string, unknown>;
+    user?: UserContext;
+    previousStatus: string | null;
+    status: string;
+    emitStatusChanged: boolean;
+  }): void {
+    const docBase = { id: args.id, data: args.data, user: args.user };
+    emitDocumentEvent("statusTransition", args.collection, {
+      ...docBase,
+      previousStatus: args.previousStatus,
+      status: args.status,
+    });
+    if (args.emitStatusChanged) {
+      emitDocumentEvent("statusChanged", args.collection, {
+        ...docBase,
+        previousStatus: args.previousStatus,
+        status: args.status,
+      });
+    }
+    if (args.status === "published" && args.previousStatus !== "published") {
+      emitDocumentEvent("published", args.collection, docBase);
+    }
+  }
+
+  /**
    * Serialize hasMany relationship arrays to JSON strings before insert/update.
    *
    * Code-first `relationship({ hasMany: true })` fields are stored as a JSON
@@ -1037,10 +1074,14 @@ export class CollectionMutationService extends BaseService {
       // (No statusChanged on create — there is no prior status to transition from.)
       const createdStatus = (entry as { status?: unknown }).status;
       if (createdStatus === "published") {
-        emitDocumentEvent("published", params.collectionName, {
+        this.transitionStatus({
+          collection: params.collectionName,
           id: (entry as { id?: unknown }).id,
           data: { ...entry },
           user: params.user,
+          previousStatus: null,
+          status: "published",
+          emitStatusChanged: false,
         });
       }
 
@@ -1719,19 +1760,15 @@ export class CollectionMutationService extends BaseService {
           | undefined) ?? null;
       const nextStatus = (updated as { status?: unknown }).status;
       if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
-        const docBase = {
+        this.transitionStatus({
+          collection: params.collectionName,
           id: (updated as { id?: unknown }).id,
           data: { ...(updated as Record<string, unknown>) },
           user: params.user,
-        };
-        emitDocumentEvent("statusChanged", params.collectionName, {
-          ...docBase,
           previousStatus,
           status: nextStatus,
+          emitStatusChanged: true,
         });
-        if (nextStatus === "published" && previousStatus !== "published") {
-          emitDocumentEvent("published", params.collectionName, docBase);
-        }
       }
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
