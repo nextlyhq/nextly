@@ -433,14 +433,6 @@ export class CollectionQueryService extends BaseService {
           valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
         }
         break;
-      // i18n L6: support NOT IN on a localized field — previously it fell through to
-      // `undefined`, then the main-schema lookup missed the (companion-only) column and the
-      // condition was silently dropped, returning unfiltered rows.
-      case "NOT IN":
-        if (Array.isArray(value) && value.length > 0) {
-          valueCondition = sql`${t}.${col} NOT IN ${value}`;
-        }
-        break;
       default:
         return undefined;
     }
