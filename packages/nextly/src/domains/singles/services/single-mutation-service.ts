@@ -422,8 +422,25 @@ export class SingleMutationService extends BaseService {
                         components[f.name] = populated[f.name];
                       }
                     }
-                  } catch {
-                    // Best-effort: a read failure just omits those from the snapshot.
+                  } catch (err) {
+                    // Fail the capture rather than persist a knowingly-incomplete
+                    // snapshot: silently dropping omitted components would
+                    // reintroduce the partial-update data loss this read prevents,
+                    // and the whole tx rolls back so the write is retriable.
+                    this.logger.error(
+                      "Version snapshot: failed to read existing single components; failing the write instead of capturing an incomplete snapshot",
+                      {
+                        slug,
+                        error: err instanceof Error ? err.message : String(err),
+                      }
+                    );
+                    throw NextlyError.internal({
+                      cause: err instanceof Error ? err : undefined,
+                      logContext: {
+                        reason: "version-snapshot-single-component-read",
+                        slug,
+                      },
+                    });
                   }
                 }
               }

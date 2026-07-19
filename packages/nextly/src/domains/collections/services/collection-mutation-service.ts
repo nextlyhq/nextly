@@ -503,8 +503,28 @@ export class CollectionMutationService extends BaseService {
               components[f.name] = populated[f.name];
             }
           }
-        } catch {
-          // Best-effort: a read failure just omits those fields from the snapshot.
+        } catch (err) {
+          // Fail the capture rather than persist a knowingly-incomplete snapshot:
+          // silently dropping the omitted components would reintroduce the exact
+          // partial-update data loss this read exists to prevent, and a version
+          // that looks complete but isn't is worse than a failed, retriable write
+          // (the whole tx rolls back atomically).
+          this.logger.error(
+            "Version snapshot: failed to read existing components; failing the write instead of capturing an incomplete snapshot",
+            {
+              collection: collectionName,
+              entryId,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          );
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              reason: "version-snapshot-component-read",
+              collection: collectionName,
+              entryId,
+            },
+          });
         }
       }
     }
@@ -528,8 +548,27 @@ export class CollectionMutationService extends BaseService {
           manyToMany[field.name] = relatedRows.map(
             r => (r as { id: string }).id
           );
-        } catch {
-          // Best-effort: skip on read failure.
+        } catch (err) {
+          // Same reasoning as the component read above: fail the capture rather
+          // than record a snapshot that silently omits an existing relationship.
+          this.logger.error(
+            "Version snapshot: failed to read existing many-to-many relations; failing the write instead of capturing an incomplete snapshot",
+            {
+              collection: collectionName,
+              entryId,
+              field: field.name,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          );
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              reason: "version-snapshot-m2m-read",
+              collection: collectionName,
+              entryId,
+              field: field.name,
+            },
+          });
         }
       }
     }
