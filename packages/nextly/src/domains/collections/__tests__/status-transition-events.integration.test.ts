@@ -9,6 +9,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   createTestNextly,
   type TestNextly,
@@ -110,5 +112,126 @@ describe("document status-transition events (integration)", () => {
     expect(seen).toContain("document.statusChanged");
     expect(seen).toContain("document.published");
     expect(seen).toContain("document.statusTransition");
+  });
+
+  it("per-locale draft->published emits locale-tagged status events", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+    };
+    // Create the companion (with per-locale `_status`) through the production
+    // DDL path so the fixture matches the migrated schema.
+    const spec = deriveCompanionSpec({
+      slug: "pages",
+      fields: [{ name: "title", type: "text", localized: true }],
+      dialect: current.adapter.dialect,
+      defaultLocale: "en",
+      collectionLocalized: true,
+      status: true,
+    });
+    if (!spec) throw new Error("expected a companion spec");
+    // The code-first boot sync now provisions the companion for a localized collection, so only
+    // create it here if it isn't already present (older setups relied on this manual create).
+    if (!(await current.adapter.tableExists(spec.companionTable))) {
+      await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    }
+
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Capture the payloads so we can assert the locale + prev/next status.
+    const payloads: Record<string, Record<string, unknown>> = {};
+    for (const name of DOC_EVENTS) {
+      current.events.on(name, (e: unknown) => {
+        payloads[name] = (e as { payload: Record<string, unknown> }).payload;
+      });
+    }
+
+    // Publish only the German translation — main-row status is untouched.
+    await handler.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { status: "published" }
+    );
+
+    expect(payloads["document.statusTransition"]).toMatchObject({
+      locale: "de",
+      previousStatus: "draft",
+      status: "published",
+    });
+    expect(payloads["document.statusChanged"]).toMatchObject({ locale: "de" });
+    expect(payloads["document.published"]).toMatchObject({ locale: "de" });
+  });
+
+  it("re-publishing an already-published locale fires no status events", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+    };
+    const spec = deriveCompanionSpec({
+      slug: "pages",
+      fields: [{ name: "title", type: "text", localized: true }],
+      dialect: current.adapter.dialect,
+      defaultLocale: "en",
+      collectionLocalized: true,
+      status: true,
+    });
+    if (!spec) throw new Error("expected a companion spec");
+    // The code-first boot sync now provisions the companion for a localized collection, so only
+    // create it here if it isn't already present (older setups relied on this manual create).
+    if (!(await current.adapter.tableExists(spec.companionTable))) {
+      await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    }
+
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "t", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const seen = recordEvents(current);
+    // Re-publish the same locale — no status movement.
+    await handler.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { status: "published" }
+    );
+
+    expect(seen).toEqual([]);
   });
 });

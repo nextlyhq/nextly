@@ -554,26 +554,25 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              // Complete the component subtrees: a partial update only carries
-              // changed components, so read current state for omitted component
-              // fields and overlay the written ones, so a scalar-only edit does
-              // not drop existing components from the snapshot.
+              // Read the component subtrees from the TRANSACTION (read-your-
+              // writes, #226): the component save above just persisted them, so
+              // the read returns the complete, read-shaped, password-stripped
+              // subtrees with no in-memory overlay. A read failure fails the
+              // capture (rolls back) rather than persisting an incomplete snapshot.
               const components: Record<string, unknown> = {};
               if (this.componentDataService) {
                 const componentFields = fieldConfigs.filter(
                   (f): f is typeof f & { name: string } =>
                     isComponentField(f) && !!f.name
                 );
-                const hasOmitted = componentFields.some(
-                  f => attemptComponentData[f.name] === undefined
-                );
-                if (hasOmitted) {
+                if (componentFields.length > 0) {
                   try {
                     const populated =
                       await this.componentDataService.populateComponentData({
                         entry: { id: existingDoc.id },
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
+                        executor: tx.getDrizzle(),
                       });
                     for (const f of componentFields) {
                       if (populated[f.name] !== undefined) {
@@ -581,12 +580,8 @@ export class SingleMutationService extends BaseService {
                       }
                     }
                   } catch (err) {
-                    // Fail the capture rather than persist a knowingly-incomplete
-                    // snapshot: silently dropping omitted components would
-                    // reintroduce the partial-update data loss this read prevents,
-                    // and the whole tx rolls back so the write is retriable.
                     this.logger.error(
-                      "Version snapshot: failed to read existing single components; failing the write instead of capturing an incomplete snapshot",
+                      "Version snapshot: failed to read single components; failing the write instead of capturing an incomplete snapshot",
                       {
                         slug,
                         error: err instanceof Error ? err.message : String(err),
@@ -602,7 +597,6 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              Object.assign(components, attemptComponentData);
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "single",

@@ -17,7 +17,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { findUnscopedRules, scopeCss } from "./lib/css-scope.mjs";
+import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
