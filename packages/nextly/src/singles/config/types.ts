@@ -346,6 +346,16 @@ export interface SingleConfig {
   versions?: boolean | VersionsConfig;
 
   /**
+   * Enable multilingual content for this Single. When `true`, translatable
+   * fields store a value per configured locale (text-like fields localize by
+   * default; override per field with the field's `localized` flag). Requires a
+   * `localization` block in the app config.
+   *
+   * @default false
+   */
+  localized?: boolean;
+
+  /**
    * Admin panel configuration options.
    * Controls how the Single appears in the Admin UI.
    */

@@ -102,6 +102,8 @@ export interface CodeFirstSingleConfig {
 
   /** Whether the Single has the Draft/Published status feature enabled. */
   status?: boolean;
+  /** Whether single-level i18n is enabled (mirrors `status`). */
+  localized?: boolean;
 
   /** Resolved content-versioning config (or null when unversioned). */
   versions?: DynamicSingleInsert["versions"];
@@ -399,6 +401,9 @@ export class SingleRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
 
     // Versioning config: when explicitly provided (including null to disable),
     // write the resolved JSON; when undefined, leave the column unchanged.
@@ -576,6 +581,7 @@ export class SingleRegistryService extends BaseRegistryService<
             status: config.status === true,
             // Forward the resolved versioning config on first sync.
             versions: config.versions,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
@@ -587,7 +593,8 @@ export class SingleRegistryService extends BaseRegistryService<
           // Re-sync when the resolved versioning config changed (both sides are
           // normalized JSON, so a stable string compare detects a real change).
           JSON.stringify(config.versions ?? null) !==
-            JSON.stringify(existing.versions ?? null)
+            JSON.stringify(existing.versions ?? null) ||
+          (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -604,6 +611,7 @@ export class SingleRegistryService extends BaseRegistryService<
               locked: true,
               status: config.status === true,
               versions: config.versions,
+              localized: config.localized === true,
             },
             { source: "code" }
           );
@@ -701,6 +709,7 @@ export class SingleRegistryService extends BaseRegistryService<
           ? JSON.parse(versions)
           : versions
         : null,
+      localized: Boolean(r.localized),
       configPath,
       schemaHash,
       schemaVersion,
@@ -779,6 +788,7 @@ export class SingleRegistryService extends BaseRegistryService<
       // Persist the resolved versioning config (JSON-serialized like admin) so
       // the mutation service can read it back and capture version snapshots.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,

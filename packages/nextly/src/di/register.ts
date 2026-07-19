@@ -44,6 +44,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
   clearFieldTypes,
@@ -240,6 +241,13 @@ export interface NextlyServiceConfig {
    * Same rationale as admin: carried through so handlers can read it.
    */
   auth?: AuthConfig;
+
+  /**
+   * Content-localization configuration (i18n), normalized. Carried through so the
+   * collection read path can resolve a requested locale to its fallback chain when
+   * populating localized fields from the companion `_locales` table.
+   */
+  localization?: SanitizedLocalizationConfig;
 }
 
 // ============================================================
@@ -883,17 +891,38 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       "dynamic_collections",
-      async (tableName, fields, hasStatus) => {
+      async (tableName, fields, hasStatus, localized) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
+        // Localized collections omit their translatable columns from the main
+        // runtime table (they live in the companion) — mirror the migration.
         const { table } = generateRuntimeSchema(
           tableName,
           fields as FieldDefinition[],
           dialect,
-          { status: hasStatus === true }
+          { status: hasStatus === true, localized }
         );
         registry.registerDynamicSchema(tableName, table);
+        // Register the companion `_locales` table so queries can reach it (M4).
+        if (localized) {
+          const { buildCompanionRuntimeTable } = await import(
+            "../domains/i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: tableName,
+            tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect,
+            localized: true,
+          });
+          if (companion) {
+            registry.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     );
 
@@ -979,6 +1008,8 @@ async function registerConfigTablesInResolver(
       // adapter CRUD on Draft/Published collections can't read or write
       // the status column even though the physical table has it.
       const hasStatus = (collection as { status?: boolean }).status === true;
+      const localized =
+        (collection as { localized?: boolean }).localized === true;
       const { generateRuntimeSchema } = await import(
         "../domains/schema/services/runtime-schema-generator"
       );
@@ -986,9 +1017,28 @@ async function registerConfigTablesInResolver(
         tableName,
         fields as FieldDefinition[],
         dialect,
-        { status: hasStatus }
+        { status: hasStatus, localized }
       );
       registry.registerDynamicSchema(tableName, table);
+      // Register the companion `_locales` table for a localized collection (M4 reads).
+      if (localized) {
+        const { buildCompanionRuntimeTable } = await import(
+          "../domains/i18n/runtime/companion-registration"
+        );
+        const companion = buildCompanionRuntimeTable({
+          slug,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect,
+          localized: true,
+        });
+        if (companion) {
+          registry.registerDynamicSchema(
+            companion.companionTableName,
+            companion.table
+          );
+        }
+      }
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
@@ -1120,6 +1170,9 @@ async function syncCodeFirstCollections(
       // dynamic_collections.versions. `status: true` aliases to a versioned
       // config, so pass both to the resolver.
       versions: resolveVersionsConfig(collection.versions, collection.status),
+      // Forward the i18n master switch (mirrors status) so the boot sync persists
+      // dynamic_collections.localized — the read path keys companion resolution off it.
+      localized: collection.localized === true,
     }));
 
   const syncResult =

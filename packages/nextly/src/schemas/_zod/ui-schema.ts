@@ -128,6 +128,7 @@ export type FieldNode = {
   required?: boolean;
   unique?: boolean;
   index?: boolean;
+  localized?: boolean;
   hasMany?: boolean;
   relationTo?: string | string[];
   options?: { id?: string; label: string; value: string }[];
@@ -191,6 +192,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       required: z.boolean().optional(),
       unique: z.boolean().optional(),
       index: z.boolean().optional(),
+      localized: z.boolean().optional(),
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
       options: z.array(selectOption).optional(),
@@ -347,6 +349,7 @@ function entity(kind?: "collection" | "single" | "component") {
       labels: z.object({ singular: z.string(), plural: z.string() }).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
+      localized: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {

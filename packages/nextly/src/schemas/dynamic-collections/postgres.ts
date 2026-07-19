@@ -146,6 +146,8 @@ export const dynamicCollectionsPg = pgTable(
      * unpublished rows from public callers.
      */
     status: boolean("status").default(false).notNull(),
+    /** Collection-level i18n master switch (mirrors `status`). */
+    localized: boolean("localized").default(false).notNull(),
 
     /**
      * Resolved content-versioning config for this collection, or null when

@@ -37,6 +37,7 @@ import type {
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
+import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -81,7 +82,9 @@ export class CollectionEntryService extends BaseService {
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
     componentDataService?: ComponentDataService,
-    rbacAccessControlService?: RBACAccessControlService
+    rbacAccessControlService?: RBACAccessControlService,
+    /** Normalized localization config (i18n M4) — forwarded to the query service. */
+    localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
 
@@ -102,7 +105,8 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService
+      componentDataService,
+      localization
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -112,7 +116,8 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService
+      componentDataService,
+      localization
     );
     this.bulkService = new CollectionBulkService(
       adapter,
@@ -135,6 +140,10 @@ export class CollectionEntryService extends BaseService {
     richTextFormat?: RichTextOutputFormat;
     sort?: string;
     overrideAccess?: boolean;
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return this.queryService.listEntries(params);
@@ -146,6 +155,10 @@ export class CollectionEntryService extends BaseService {
     search?: string;
     where?: WhereFilter;
     overrideAccess?: boolean;
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
@@ -166,6 +179,10 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /** Requested content locale (i18n M4) — forwarded to the query service. */
+    locale?: string;
+    /** Fallback control (`false`/`"none"` disables fallback). */
+    fallbackLocale?: string | false;
     context?: Record<string, unknown>;
   }) {
     return this.queryService.getEntry(params);
@@ -176,6 +193,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values stored for this language. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
@@ -190,12 +209,24 @@ export class CollectionEntryService extends BaseService {
       entryId: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Write locale (i18n M5) — translatable values updated for this language. */
+      locale?: string;
       context?: Record<string, unknown>;
     },
     body: Record<string, unknown>,
     depth?: number
   ) {
     return this.mutationService.updateEntry(params, body, depth);
+  }
+
+  /** i18n M7: publish every language of an entry at once (spec §10). */
+  async publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+  }) {
+    return this.mutationService.publishAllLocales(params);
   }
 
   async deleteEntry(params: {

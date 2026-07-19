@@ -78,6 +78,7 @@ import {
   unwrapServiceResult,
 } from "../helpers/service-envelope";
 import {
+  isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
   parseWhereParam,
@@ -749,6 +750,11 @@ const COLLECTIONS_METHODS: Record<
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
         status,
+        // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
 
       type PaginatedShape = {
@@ -782,6 +788,9 @@ const COLLECTIONS_METHODS: Record<
         search: p.search,
         where: parseWhereParam(p.where),
         status,
+        // i18n M4: keep count in parity with listEntries' locale-scoped filtering.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
       });
       const data = unwrapServiceResult<{ totalDocs: number }>(result, {
         collectionName: p.collectionName,
@@ -807,6 +816,8 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` stores the translatable values for German.
+          locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
@@ -842,6 +853,12 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
+        // disables fallback. Non-localized collections ignore both.
+        locale: p.locale,
+        fallbackLocale: p["fallback-locale"],
+        // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
+        translationStatus: isTruthyParam(p["translation-status"]),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -872,6 +889,8 @@ const COLLECTIONS_METHODS: Record<
           userEmail: p._authenticatedUserEmail
             ? String(p._authenticatedUserEmail)
             : undefined,
+          // i18n M5: `?locale=de` updates only the German translatable values.
+          locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
@@ -885,6 +904,43 @@ const COLLECTIONS_METHODS: Record<
         entryId: p.entryId,
       });
       return respondMutation(result.message ?? "Entry updated.", entry);
+    },
+  },
+  publishAllLocales: {
+    // i18n M7: publish every language of an entry at once (spec §10).
+    execute: async (svc, p) => {
+      if (!p.collectionName || !p.entryId) {
+        throw new Error("collectionName and entryId parameters are required");
+      }
+      const result = await svc.publishAllLocales({
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+        userId: p._authenticatedUserId
+          ? String(p._authenticatedUserId)
+          : undefined,
+        userName: p._authenticatedUserName
+          ? String(p._authenticatedUserName)
+          : undefined,
+        userEmail: p._authenticatedUserEmail
+          ? String(p._authenticatedUserEmail)
+          : undefined,
+        // Forward the authenticated role set so role-based access and stored
+        // rules evaluate against the real user (parity with the update handler);
+        // without it publish-all could be denied for a user the route authorized.
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attest it so
+        // the handler skips only that redundant re-check (stored rules +
+        // field-level write access still run). Never inferred from userId.
+        routeAuthorized: true,
+      });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondMutation(
+        result.message ?? "All languages published.",
+        entry
+      );
     },
   },
   deleteEntry: {

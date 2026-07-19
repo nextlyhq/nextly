@@ -771,6 +771,16 @@ export interface CollectionConfig {
   versions?: boolean | VersionsConfig;
 
   /**
+   * Enable multilingual content for this collection. When `true`, translatable
+   * fields store a value per configured locale (text-like fields localize by
+   * default; override per field with the field's `localized` flag). Requires a
+   * `localization` block in the app config.
+   *
+   * @default false
+   */
+  localized?: boolean;
+
+  /**
    * Admin panel configuration options.
    */
   admin?: CollectionAdminOptions;
@@ -1023,6 +1033,10 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
       name: "title",
       label: "Title",
       required: true,
+      // i18n: auto-injected system title is SHARED by default (spec §9a — localizing
+      // title/slug is a deliberate opt-in via a user-defined localized field, not a
+      // side effect of text fields localizing by default).
+      localized: false,
     });
   }
 
@@ -1033,6 +1047,8 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
       label: "Slug",
       required: true,
       unique: true,
+      // i18n: auto-injected system slug is SHARED by default (see title above).
+      localized: false,
     });
   }
 

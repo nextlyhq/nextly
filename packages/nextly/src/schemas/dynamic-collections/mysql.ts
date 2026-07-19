@@ -145,6 +145,8 @@ export const dynamicCollectionsMysql = mysqlTable(
      * postgres schema for full semantics.
      */
     status: boolean("status").default(false).notNull(),
+    /** Collection-level i18n master switch (mirrors `status`). */
+    localized: boolean("localized").default(false).notNull(),
 
     /**
      * Resolved content-versioning config, or null when unversioned. Stores the

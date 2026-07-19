@@ -91,6 +91,8 @@ export interface CodeFirstCollectionConfig {
   status?: boolean;
   /** Resolved content-versioning config (or null when unversioned). */
   versions?: DynamicCollectionInsert["versions"];
+  /** Whether collection-level i18n is enabled (mirrors `status`). */
+  localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
   configPath?: string;
   /**
@@ -263,6 +265,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Persist the resolved versioning config as JSON (or null), the same way
       // `admin`/`hooks` are written on this raw-insert path.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -396,6 +399,9 @@ export class CollectionRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.versions)
         : null;
     }
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
+    }
     // Writeable so code-first sync can reconcile a changed `dbName`.
     if (data.tableName !== undefined) {
       updateData.table_name = this.ensureTableNamePrefix(data.tableName);
@@ -500,6 +506,7 @@ export class CollectionRegistryService extends BaseRegistryService<
             status: config.status === true,
             // Forward the resolved versioning config on first sync.
             versions: config.versions,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
@@ -512,6 +519,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           // normalized JSON, so a stable string compare detects a real change).
           JSON.stringify(config.versions ?? null) !==
             JSON.stringify(existing.versions ?? null) ||
+          (config.localized === true) !== (existing.localized === true) ||
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -537,6 +545,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               locked: true,
               status: config.status === true,
               versions: config.versions,
+              localized: config.localized === true,
               tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
@@ -675,6 +684,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       status: data.status === true ? 1 : 0,
       // Same as registerCollection — persist the resolved versioning config.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -831,6 +841,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           ? JSON.parse(versions)
           : versions
         : null,
+      localized: r.localized === 1 || r.localized === true,
       configPath,
       schemaHash,
       schemaVersion,

@@ -135,6 +135,10 @@ export const dynamicCollectionsSqlite = sqliteTable(
      * postgres schema for full semantics.
      */
     status: integer("status", { mode: "boolean" }).default(false).notNull(),
+    /** Collection-level i18n master switch (mirrors `status`). */
+    localized: integer("localized", { mode: "boolean" })
+      .default(false)
+      .notNull(),
 
     /**
      * Resolved content-versioning config, or null when unversioned. Stores the

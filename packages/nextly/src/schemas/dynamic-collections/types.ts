@@ -387,6 +387,9 @@ export interface DynamicCollectionInsert {
    */
   versions?: ResolvedVersionsConfig | null;
 
+  /** Collection-level i18n master switch. Default: false. */
+  localized?: boolean;
+
   /** Admin UI configuration options */
   admin?: CollectionAdminConfig;
 
@@ -539,6 +542,9 @@ export interface DynamicCollectionRecord extends DynamicCollectionInsert {
 
   /** Resolved content-versioning config, or null/undefined when unversioned. */
   versions?: ResolvedVersionsConfig | null;
+
+  /** Whether collection-level i18n is enabled (required, defaults to false) */
+  localized: boolean;
 
   /** Whether collection is locked from UI edits (required) */
   locked: boolean;

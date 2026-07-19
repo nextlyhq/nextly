@@ -44,6 +44,7 @@ import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
+import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
 import { schemaEventsTables } from "./schema-events";
@@ -86,6 +87,10 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     // drizzle-kit 0.31.10 can't round-trip one, drizzle-team/drizzle-orm#4688),
     // so declaring it here is a no-op when the on-disk table already matches.
     ...Object.values(schemaEventsTables(dialect)),
+    // `nextly_i18n_archive` — holds non-default-locale translations removed when
+    // localization is disabled (recoverable backup). Bootstrapped out-of-band via
+    // `getI18nArchiveDdl` for existing DBs; declared here for fresh installs.
+    ...Object.values(nextlyI18nArchiveTables(dialect)),
     // `nextly_versions` is a first-class managed system table. It has no
     // bootstrap-ordering constraint (nothing records into it before it exists,
     // unlike the migration ledger), so declaring it here is sufficient:
@@ -170,6 +175,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "nextly_schema_events",
+  "nextly_i18n_archive",
   "nextly_versions",
   "nextly_events",
   "nextly_webhooks",

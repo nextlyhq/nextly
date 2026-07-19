@@ -207,6 +207,14 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     defaultValue: field.defaultValue,
   };
 
+  // Forward the localized choice only when the editor actually set it; coercing
+  // an untouched switch to false would override the backend's per-type default
+  // (text-like fields localize when the collection opts in), pinning fields to
+  // shared. Omission means "use the default".
+  if (typeof field.advanced?.localized === "boolean") {
+    definition.localized = field.advanced.localized;
+  }
+
   // Validation rules
   if (field.validation) {
     const rules: FieldDefinition["validation"] = {};
@@ -366,6 +374,10 @@ export function convertToBuilderField(
     advanced: {
       unique: field.unique || false,
       index: field.index || false,
+      // Preserve an omitted (default-on) localized flag instead of coercing it
+      // to false, so editing and re-saving a default-localized field does not
+      // silently un-localize it.
+      localized: field.localized,
     },
     // Relationship properties
     relationTo: field.relationTo,

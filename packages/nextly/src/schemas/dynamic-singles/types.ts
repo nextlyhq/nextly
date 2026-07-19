@@ -202,6 +202,9 @@ export interface DynamicSingleInsert {
    */
   status?: boolean;
 
+  /** Single-level i18n master switch. Default: false. */
+  localized?: boolean;
+
   /**
    * Resolved content-versioning config (from `resolveVersionsConfig`), or null
    * when unversioned. Persisted on the `versions` column; the mutation service
@@ -318,6 +321,9 @@ export interface DynamicSingleRecord extends DynamicSingleInsert {
    * Whether Draft/Published status is enabled (required, defaults to false).
    */
   status: boolean;
+
+  /** Whether single-level i18n is enabled (required, defaults to false). */
+  localized: boolean;
 
   /**
    * When the Single was created.

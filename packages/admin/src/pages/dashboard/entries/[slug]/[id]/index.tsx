@@ -14,7 +14,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import Link from "next/link";
 import type React from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   EntryForm,
@@ -28,6 +28,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -220,6 +221,11 @@ export default function EditEntryPage({
   const slug = params?.slug;
   const id = params?.id;
 
+  // i18n M7: active content language for this editor. `undefined` = the app's default locale
+  // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
+  // routes saves to the chosen language (EntryForm → useUpdateEntry).
+  const [locale, setLocale] = useState<string | undefined>(undefined);
+
   // Fetch enriched collection schema (component fields are populated)
   const {
     data: collection,
@@ -229,6 +235,10 @@ export default function EditEntryPage({
 
   // Fetch entry data with relationship expansion
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)
+  // i18n M7: on a localized app, request the per-locale translation-status overview so the editor
+  // can show per-language status pills. Inert (param omitted) for non-localized apps.
+  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+
   const {
     data: entry,
     isLoading: isLoadingEntry,
@@ -237,6 +247,28 @@ export default function EditEntryPage({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
+    locale,
+    // Load the editable entry as this locale's raw translation. Disabling
+    // fallback yields empty fields for an untranslated language instead of the
+    // default-locale text, which a save would otherwise persist as this locale's
+    // translation. sourceEntry (below) supplies the default-language hint. For
+    // the default locale the chain is just itself, so this is a no-op there.
+    fallbackLocale: "none",
+    translationStatus: localizationEnabled,
+  });
+
+  // i18n M7: while translating a non-default language, also load the default-language entry so
+  // the editor can show the source text inline on each translatable field (spec §10). Gated so
+  // it only fires when actually translating another language; editing the default language reuses
+  // the primary fetch above (same cache key) and needs no source copy.
+  const isNonDefaultLocale =
+    !!locale && !!defaultLocale && locale !== defaultLocale;
+  const { data: sourceEntry } = useEntry({
+    collectionSlug: slug || "",
+    entryId: id,
+    depth: 2,
+    locale: defaultLocale,
+    enabled: isNonDefaultLocale,
   });
 
   // Auto-register plugin components when collection is loaded
@@ -429,6 +461,9 @@ export default function EditEntryPage({
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          locale={locale}
+          onLocaleChange={setLocale}
+          sourceValues={sourceEntry}
           onSuccess={handleSuccess}
           onDelete={handleDelete}
           onCancel={handleCancel}

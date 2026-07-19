@@ -53,11 +53,9 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
         <SwitchRow
           ariaLabel="Internationalization"
           label="Internationalization"
-          help="Per-locale field values."
-          checked={false}
-          onChange={() => {}}
-          disabled
-          badge="Coming Soon"
+          help="Store translatable fields per language. Text fields localize by default; toggle each field's Localized setting to override. Applying this runs a migration to create the translations table."
+          checked={values.i18n ?? false}
+          onChange={v => set("i18n", v)}
         />
       )}
 
