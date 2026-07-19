@@ -38,8 +38,6 @@ import { dirname, join, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { CollectionConfig } from "../../../collections/config/define-collection";
-// Resolve the versioning config so the CLI `db:sync` path persists it too
-// (parity with the boot/HMR registry sync).
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -51,6 +49,8 @@ import {
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
 import { ZodGenerator, TypeGenerator } from "../../schema";
+// Resolve the versioning config so the CLI `db:sync` path persists it too
+// (parity with the boot/HMR registry sync).
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 
 import {
