@@ -159,6 +159,9 @@ export interface DeliverResult {
   failed: number;
 }
 
+/** Which per-outcome counter a single attempt should increment. */
+type OutcomeBucket = "delivered" | "retried" | "failed";
+
 /**
  * Turn a stored event payload into the request body. The payload is the durable
  * envelope `recordEvent` wrote; a corrupt (non-object / unstringifiable) payload
@@ -272,6 +275,276 @@ async function finalizeDelivery(
 }
 
 /**
+ * Attempt one already-claimed delivery: load its endpoint and event, sign and
+ * send the request, and finalize the row with the outcome, returning which
+ * counter to increment. Every undeliverable precondition (deleted webhook,
+ * missing/unusable payload, missing or undecryptable secret) finalizes the row
+ * as a permanent failure. Throwing is reserved for the genuinely unexpected; the
+ * caller wraps this in a per-candidate boundary so one bad row cannot abort the
+ * batch or strand its lease.
+ */
+async function attemptDelivery(
+  deps: DeliverDeps,
+  row: DeliveryRow,
+  attemptCount: number,
+  claimedAt: Date
+): Promise<OutcomeBucket> {
+  const now = deps.now ?? (() => new Date());
+  const transport = deps.transport ?? safeFetch;
+  const timeoutMs = deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
+  // Load the endpoint and the event. A delivery for a deleted webhook or a
+  // missing event can never be sent, so mark it failed and move on.
+  const webhookRows = await deps.db.select<WebhookRow>("nextly_webhooks", {
+    where: { and: [{ column: "id", op: "=", value: row.webhookId }] },
+    limit: 1,
+  });
+  const webhook = webhookRows[0];
+  const eventRows = await deps.db.select<EventRow>("nextly_events", {
+    where: { and: [{ column: "id", op: "=", value: row.eventId }] },
+    limit: 1,
+  });
+  const event = eventRows[0];
+
+  if (!webhook || !event) {
+    const reason = !webhook ? "webhook deleted" : "event missing";
+    deps.logger?.warn(
+      `webhook delivery ${row.id} undeliverable (${reason}); marking failed`
+    );
+    await finalizeDelivery(deps, row, now(), {
+      status: "failed",
+      attempt_count: attemptCount,
+      next_attempt_at: null,
+      last_error: reason,
+      attempts: appendAttempt(row.attempts, {
+        at: claimedAt.toISOString(),
+        outcome: "failed",
+        error: reason,
+      }),
+    });
+    return "failed";
+  }
+
+  const body = payloadToBody(event.payload);
+  if (body === null) {
+    deps.logger?.warn(
+      `webhook delivery ${row.id} undeliverable (unusable event payload); marking failed`
+    );
+    await finalizeDelivery(deps, row, now(), {
+      status: "failed",
+      attempt_count: attemptCount,
+      next_attempt_at: null,
+      last_error: "unusable event payload",
+      attempts: appendAttempt(row.attempts, {
+        at: claimedAt.toISOString(),
+        outcome: "failed",
+        error: "unusable event payload",
+      }),
+    });
+    return "failed";
+  }
+
+  // A webhook with no stored secret can never be signed (buildSignatureHeaders
+  // rejects an empty secret list, which every conformant receiver would too).
+  // That is a permanent misconfiguration, so fail rather than throw uncaught
+  // and strand the leased row.
+  if (webhook.secretHash.length === 0) {
+    deps.logger?.warn(
+      `webhook delivery ${row.id} undeliverable (webhook has no signing secret); marking failed`
+    );
+    await finalizeDelivery(deps, row, now(), {
+      status: "failed",
+      attempt_count: attemptCount,
+      next_attempt_at: null,
+      last_error: "no signing secret",
+      attempts: appendAttempt(row.attempts, {
+        at: claimedAt.toISOString(),
+        outcome: "failed",
+        error: "no signing secret",
+      }),
+    });
+    return "failed";
+  }
+
+  // Decrypt the active signing secrets (primary first) and build the Standard
+  // Webhooks headers. The delivery id is the stable per-(webhook,event) message
+  // id, so a retried delivery reuses it and the receiver can dedupe.
+  const timestamp = Math.floor(claimedAt.getTime() / 1000).toString();
+  let secrets: string[];
+  try {
+    secrets = webhook.secretHash.map(ct => deps.decryptSecret(ct));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.logger?.warn(
+      `webhook delivery ${row.id} could not decrypt signing secret; marking failed`,
+      err
+    );
+    await finalizeDelivery(deps, row, now(), {
+      status: "failed",
+      attempt_count: attemptCount,
+      next_attempt_at: null,
+      last_error: `secret decrypt failed: ${message}`,
+      attempts: appendAttempt(row.attempts, {
+        at: claimedAt.toISOString(),
+        outcome: "failed",
+        error: "secret decrypt failed",
+      }),
+    });
+    return "failed";
+  }
+
+  const signatureHeaders = buildSignatureHeaders({
+    id: row.id,
+    timestamp,
+    body,
+    secrets,
+  });
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...(webhook.headers ?? {}),
+    ...signatureHeaders,
+  };
+
+  // Send with NO transaction open. Determine the attempt outcome from the HTTP
+  // status, or from the transport error if safeFetch threw.
+  let outcome: AttemptOutcome;
+  let statusCode: number | undefined;
+  let latencyMs: number | undefined;
+  let responseSnippet: string | undefined;
+  let errorMessage: string | undefined;
+
+  const sentAt = now();
+  try {
+    const response = await transport(webhook.url, {
+      method: "POST",
+      headers,
+      body,
+      maxResponseBytes: DEFAULT_MAX_RESPONSE_BYTES,
+      timeoutMs,
+    });
+    latencyMs = now().getTime() - sentAt.getTime();
+    statusCode = response.status;
+    outcome = classifyResponse(response.status);
+    try {
+      const text = await response.text();
+      responseSnippet = text.slice(0, RESPONSE_SNIPPET_LIMIT);
+    } catch {
+      // The status is what decides the outcome; a body we cannot read is not
+      // fatal and is simply not recorded.
+    }
+    if (outcome !== "delivered") {
+      errorMessage = `http ${response.status}`;
+    }
+  } catch (err) {
+    latencyMs = now().getTime() - sentAt.getTime();
+    const classified = classifyTransportError(err);
+    outcome = classified.outcome;
+    errorMessage = classified.message;
+  }
+
+  const decision = decideDelivery({
+    outcome,
+    attemptCount,
+    reason: errorMessage,
+  });
+  const attempts = appendAttempt(row.attempts, {
+    at: sentAt.toISOString(),
+    outcome,
+    statusCode,
+    latencyMs,
+    error: errorMessage,
+  });
+  const common = {
+    attempt_count: attemptCount,
+    last_status_code: statusCode ?? null,
+    last_latency_ms: latencyMs ?? null,
+    last_error: errorMessage ?? null,
+    last_response_snippet: responseSnippet ?? null,
+    attempts,
+  };
+
+  if (decision.status === "delivered") {
+    await finalizeDelivery(deps, row, now(), {
+      ...common,
+      status: "delivered",
+      next_attempt_at: null,
+    });
+    return "delivered";
+  }
+  if (decision.status === "retrying") {
+    await finalizeDelivery(deps, row, now(), {
+      ...common,
+      status: "retrying",
+      next_attempt_at: new Date(now().getTime() + decision.delayMs),
+    });
+    return "retried";
+  }
+  await finalizeDelivery(deps, row, now(), {
+    ...common,
+    status: "failed",
+    next_attempt_at: null,
+    last_error: decision.reason,
+  });
+  return "failed";
+}
+
+/**
+ * Recover a claimed delivery whose attempt threw unexpectedly. Records the throw
+ * as a transient failure so `attempt_count` advances (and the row eventually
+ * exhausts to `failed` rather than poison-looping) and releases the lease. A
+ * failure to even write this recovery is swallowed and logged: the lease will
+ * expire and the row is retried, which is strictly better than letting the throw
+ * escape and abort the whole drain.
+ */
+async function recoverUnexpectedFailure(
+  deps: DeliverDeps,
+  row: DeliveryRow,
+  attemptCount: number,
+  message: string
+): Promise<OutcomeBucket> {
+  const now = deps.now ?? (() => new Date());
+  const at = now();
+  const decision = decideDelivery({
+    outcome: "retry",
+    attemptCount,
+    reason: message,
+  });
+  const update =
+    decision.status === "retrying"
+      ? {
+          status: "retrying",
+          attempt_count: attemptCount,
+          next_attempt_at: new Date(at.getTime() + decision.delayMs),
+          last_error: message,
+          attempts: appendAttempt(row.attempts, {
+            at: at.toISOString(),
+            outcome: "retry",
+            error: message,
+          }),
+        }
+      : {
+          status: "failed",
+          attempt_count: attemptCount,
+          next_attempt_at: null,
+          last_error: decision.status === "failed" ? decision.reason : message,
+          attempts: appendAttempt(row.attempts, {
+            at: at.toISOString(),
+            outcome: "failed",
+            error: message,
+          }),
+        };
+  try {
+    await finalizeDelivery(deps, row, at, update);
+  } catch (err) {
+    deps.logger?.warn(
+      `webhook delivery ${row.id} could not be finalized after an unexpected error; lease will expire and it will be retried`,
+      err
+    );
+  }
+  return decision.status === "retrying" ? "retried" : "failed";
+}
+
+/**
  * Claim a batch of due deliveries and attempt each one. Returns per-outcome
  * counts. Bounded work per call (one batch); the caller loops until a pass
  * attempts nothing.
@@ -281,9 +554,7 @@ export async function deliverDueDeliveries(
 ): Promise<DeliverResult> {
   const batchSize = deps.batchSize ?? DEFAULT_DELIVER_BATCH;
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
-  const timeoutMs = deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const now = deps.now ?? (() => new Date());
-  const transport = deps.transport ?? safeFetch;
   const runnerId = deps.runnerId ?? crypto.randomUUID();
 
   const result: DeliverResult = {
@@ -328,207 +599,24 @@ export async function deliverDueDeliveries(
     );
     if (!row) continue; // lost the claim race, no longer due, or gone.
     result.attempted += 1;
-
-    // A permanent failure recorded from inside the attempt loop below.
     const attemptCount = row.attemptCount + 1;
 
-    // Load the endpoint and the event. A delivery for a deleted webhook or a
-    // missing event can never be sent, so mark it failed and move on.
-    const webhookRows = await deps.db.select<WebhookRow>("nextly_webhooks", {
-      where: { and: [{ column: "id", op: "=", value: row.webhookId }] },
-      limit: 1,
-    });
-    const webhook = webhookRows[0];
-    const eventRows = await deps.db.select<EventRow>("nextly_events", {
-      where: { and: [{ column: "id", op: "=", value: row.eventId }] },
-      limit: 1,
-    });
-    const event = eventRows[0];
-
-    if (!webhook || !event) {
-      const reason = !webhook ? "webhook deleted" : "event missing";
-      deps.logger?.warn(
-        `webhook delivery ${row.id} undeliverable (${reason}); marking failed`
-      );
-      await finalizeDelivery(deps, row, now(), {
-        status: "failed",
-        attempt_count: attemptCount,
-        next_attempt_at: null,
-        last_error: reason,
-        attempts: appendAttempt(row.attempts, {
-          at: claimedAt.toISOString(),
-          outcome: "failed",
-          error: reason,
-        }),
-      });
-      result.failed += 1;
-      continue;
-    }
-
-    const body = payloadToBody(event.payload);
-    if (body === null) {
-      deps.logger?.warn(
-        `webhook delivery ${row.id} undeliverable (unusable event payload); marking failed`
-      );
-      await finalizeDelivery(deps, row, now(), {
-        status: "failed",
-        attempt_count: attemptCount,
-        next_attempt_at: null,
-        last_error: "unusable event payload",
-        attempts: appendAttempt(row.attempts, {
-          at: claimedAt.toISOString(),
-          outcome: "failed",
-          error: "unusable event payload",
-        }),
-      });
-      result.failed += 1;
-      continue;
-    }
-
-    // A webhook with no stored secret can never be signed (buildSignatureHeaders
-    // rejects an empty secret list, which every conformant receiver would too).
-    // That is a permanent misconfiguration, so fail rather than throw uncaught
-    // and strand the leased row.
-    if (webhook.secretHash.length === 0) {
-      deps.logger?.warn(
-        `webhook delivery ${row.id} undeliverable (webhook has no signing secret); marking failed`
-      );
-      await finalizeDelivery(deps, row, now(), {
-        status: "failed",
-        attempt_count: attemptCount,
-        next_attempt_at: null,
-        last_error: "no signing secret",
-        attempts: appendAttempt(row.attempts, {
-          at: claimedAt.toISOString(),
-          outcome: "failed",
-          error: "no signing secret",
-        }),
-      });
-      result.failed += 1;
-      continue;
-    }
-
-    // Decrypt the active signing secrets (primary first) and build the Standard
-    // Webhooks headers. The delivery id is the stable per-(webhook,event) message
-    // id, so a retried delivery reuses it and the receiver can dedupe.
-    const timestamp = Math.floor(claimedAt.getTime() / 1000).toString();
-    let secrets: string[];
+    // Per-candidate boundary: a row that throws unexpectedly (a DB hiccup,
+    // malformed stored headers) is recorded as a transient failure and its lease
+    // released, so one bad row can neither abort the batch nor poison-loop by
+    // never advancing its attempt count toward the max-attempts cutoff.
+    let bucket: OutcomeBucket;
     try {
-      secrets = webhook.secretHash.map(ct => deps.decryptSecret(ct));
+      bucket = await attemptDelivery(deps, row, attemptCount, claimedAt);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.logger?.warn(
-        `webhook delivery ${row.id} could not decrypt signing secret; marking failed`,
+        `webhook delivery ${row.id} threw unexpectedly; recording as a transient failure`,
         err
       );
-      await finalizeDelivery(deps, row, now(), {
-        status: "failed",
-        attempt_count: attemptCount,
-        next_attempt_at: null,
-        last_error: `secret decrypt failed: ${message}`,
-        attempts: appendAttempt(row.attempts, {
-          at: claimedAt.toISOString(),
-          outcome: "failed",
-          error: "secret decrypt failed",
-        }),
-      });
-      result.failed += 1;
-      continue;
+      bucket = await recoverUnexpectedFailure(deps, row, attemptCount, message);
     }
-
-    const signatureHeaders = buildSignatureHeaders({
-      id: row.id,
-      timestamp,
-      body,
-      secrets,
-    });
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      ...(webhook.headers ?? {}),
-      ...signatureHeaders,
-    };
-
-    // Send with NO transaction open. Determine the attempt outcome from the HTTP
-    // status, or from the transport error if safeFetch threw.
-    let outcome: AttemptOutcome;
-    let statusCode: number | undefined;
-    let latencyMs: number | undefined;
-    let responseSnippet: string | undefined;
-    let errorMessage: string | undefined;
-
-    const sentAt = now();
-    try {
-      const response = await transport(webhook.url, {
-        method: "POST",
-        headers,
-        body,
-        maxResponseBytes: DEFAULT_MAX_RESPONSE_BYTES,
-        timeoutMs,
-      });
-      latencyMs = now().getTime() - sentAt.getTime();
-      statusCode = response.status;
-      outcome = classifyResponse(response.status);
-      try {
-        const text = await response.text();
-        responseSnippet = text.slice(0, RESPONSE_SNIPPET_LIMIT);
-      } catch {
-        // The status is what decides the outcome; a body we cannot read is not
-        // fatal and is simply not recorded.
-      }
-      if (outcome !== "delivered") {
-        errorMessage = `http ${response.status}`;
-      }
-    } catch (err) {
-      latencyMs = now().getTime() - sentAt.getTime();
-      const classified = classifyTransportError(err);
-      outcome = classified.outcome;
-      errorMessage = classified.message;
-    }
-
-    const decision = decideDelivery({
-      outcome,
-      attemptCount,
-      reason: errorMessage,
-    });
-    const attempts = appendAttempt(row.attempts, {
-      at: sentAt.toISOString(),
-      outcome,
-      statusCode,
-      latencyMs,
-      error: errorMessage,
-    });
-    const common = {
-      attempt_count: attemptCount,
-      last_status_code: statusCode ?? null,
-      last_latency_ms: latencyMs ?? null,
-      last_error: errorMessage ?? null,
-      last_response_snippet: responseSnippet ?? null,
-      attempts,
-    };
-
-    if (decision.status === "delivered") {
-      await finalizeDelivery(deps, row, now(), {
-        ...common,
-        status: "delivered",
-        next_attempt_at: null,
-      });
-      result.delivered += 1;
-    } else if (decision.status === "retrying") {
-      await finalizeDelivery(deps, row, now(), {
-        ...common,
-        status: "retrying",
-        next_attempt_at: new Date(now().getTime() + decision.delayMs),
-      });
-      result.retried += 1;
-    } else {
-      await finalizeDelivery(deps, row, now(), {
-        ...common,
-        status: "failed",
-        next_attempt_at: null,
-        last_error: decision.reason,
-      });
-      result.failed += 1;
-    }
+    result[bucket] += 1;
   }
 
   return result;

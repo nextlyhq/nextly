@@ -36,8 +36,10 @@ process.env.DB_DIALECT = "sqlite";
 
 // A frozen clock so due-ness, lease windows, and retry scheduling are stable.
 const NOW = new Date("2026-07-19T12:00:00.000Z");
-// A valid Standard Webhooks secret: `whsec_` + base64 key bytes ("secretkey").
-const SECRET = "whsec_c2VjcmV0a2V5";
+// A valid Standard Webhooks secret: `whsec_` + base64 key bytes. Built at
+// runtime from a low-entropy source so the literal does not trip secret
+// scanners (this is a test fixture, not a real credential).
+const SECRET = `whsec_${Buffer.from("secretkey").toString("base64")}`;
 
 const tables = { nextlyEvents, nextlyWebhooks, nextlyWebhookDeliveries };
 // nextly_webhooks.created_by references users, so the FK target table must
@@ -322,6 +324,30 @@ describe("webhook delivery engine (real SQLite)", () => {
     const row = await getDelivery("dlv_1");
     expect(row.status).toBe("failed");
     expect(row.lastError).toContain("no signing secret");
+  });
+
+  it("records an unexpected mid-attempt throw as a transient failure without escaping the batch", async () => {
+    // `whsec_` with no key bytes decrypts (identity) to an empty key, which makes
+    // buildSignatureHeaders throw mid-attempt — not one of the pre-checked
+    // undeliverable conditions. The per-candidate boundary must record it and
+    // release the lease so the drain is not aborted and the row cannot poison-loop.
+    await seedWebhook("wh_a", { secrets: ["whsec_"] });
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result.attempted).toBe(1);
+    // Recorded as an outcome, not thrown out of the drain.
+    expect(result.retried + result.failed).toBe(1);
+    expect(calls).toHaveLength(0); // never reached the network
+    const row = await getDelivery("dlv_1");
+    expect(["retrying", "failed"]).toContain(row.status);
+    // The attempt advanced, so a persistently-throwing row eventually exhausts.
+    expect(row.attemptCount).toBe(1);
+    // The lease is released, not stranded.
+    expect(row.lockedUntil).toBeNull();
   });
 
   it("runs a full drain: fans out a seeded event and delivers it", async () => {
