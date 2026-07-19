@@ -23,8 +23,7 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionReconcileStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -49,12 +48,14 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -208,29 +209,42 @@ async function reconcileComponentCompanion(args: {
   tableName: string;
   oldFields: FieldDefinition[];
   newFields: FieldDefinition[];
+  /** Localization state AFTER this save (requested). */
   localized: boolean;
+  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
+  wasLocalized: boolean;
   adapter: DrizzleAdapter;
 }): Promise<void> {
   const { slug, tableName, oldFields, newFields, localized, adapter } = args;
-  if (!localized) return;
+  const wasLocalized = args.wasLocalized;
+  // Nothing to do when the component was and remains non-localized.
+  if (!wasLocalized && !localized) return;
+
   const dialect = adapter.dialect;
-  const oldLocalizedNames = new Set(
-    resolveLocalizedFieldNames(oldFields, true)
-  );
-  const newLocalizedNames = new Set(
-    resolveLocalizedFieldNames(newFields, true)
-  );
-  const companionStatements = buildCompanionReconcileStatements({
+  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  const plan = buildCompanionTransitionStatements({
     slug,
     tableName,
-    oldLocalized: oldFields.filter(f => oldLocalizedNames.has(f.name)),
-    newLocalized: newFields.filter(f => newLocalizedNames.has(f.name)),
     dialect,
+    defaultLocale,
     // Components are never Draft/Published — companion has no `_status`.
     status: false,
+    wasLocalized,
+    isLocalized: localized,
+    oldFields,
+    newFields,
     companionExists: await adapter.tableExists(`${tableName}_locales`),
   });
-  for (const stmt of companionStatements) {
+
+  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
+  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
+  if (plan.needsArchive) {
+    for (const stmt of getI18nArchiveDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+  }
+  for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
@@ -323,6 +337,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
                 oldFields: [],
                 newFields: b.fields as unknown as FieldDefinition[],
                 localized: isLocalized,
+                // A brand-new component was never localized, so a localized create is a
+                // create-only companion rather than an enable transition.
+                wasLocalized: false,
                 adapter: diAdapter,
               });
             } catch (companionErr) {
@@ -440,7 +457,14 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       if (b?.fields) {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
+      }
 
+      // Run the companion reconcile when fields changed OR the Internationalization flag toggled
+      // (a flag-only save still needs the enable/disable data move: enabling seeds + drops main
+      // columns, disabling restores + archives them). Without the transition on a flag-only
+      // toggle, `localized` was persisted while the physical schema stayed put and content
+      // stranded in the wrong table.
+      if (b?.fields || isLocalized !== wasLocalized) {
         // Schema changes (rename, drop, add required column) must go through
         // applyComponentSchemaChanges which runs PushSchemaPipeline. Here we
         // only store the updated fields JSON — this path is reached when
@@ -448,24 +472,26 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // descriptions, or field reordering changed but no DDL is needed).
         if (container.has("adapter")) {
           const adapter = container.get<DrizzleAdapter>("adapter");
+          const newFields = b?.fields ?? existing.fields;
           registerComponentRuntimeSchema(
             adapter,
             adapter.getCapabilities().dialect,
             existing.tableName,
-            b.fields,
+            newFields,
             // i18n: main runtime table omits translatable columns when localized.
             isLocalized
           );
           // i18n: provision/alter the companion comp_<slug>_locales table for the new localized
-          // field set. See the helper note: does not move existing main-table rows into the
-          // companion (that is the `nextly migrate` enable/disable path).
+          // field set: enabling seeds the default locale from main then drops those columns,
+          // disabling restores + archives them, a field change ADDs/DROPs columns.
           try {
             await reconcileComponentCompanion({
               slug,
               tableName: existing.tableName,
               oldFields: existing.fields as unknown as FieldDefinition[],
-              newFields: b.fields as unknown as FieldDefinition[],
+              newFields: newFields as unknown as FieldDefinition[],
               localized: isLocalized,
+              wasLocalized,
               adapter,
             });
           } catch (companionErr) {
@@ -684,6 +710,10 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           oldFields: component.fields as unknown as FieldDefinition[],
           newFields: fields as unknown as FieldDefinition[],
           localized: isLocalized,
+          // Detect an enable/disable transition against the persisted state so this apply
+          // seeds/restores existing rows rather than only creating an empty companion.
+          wasLocalized:
+            (component as { localized?: boolean }).localized === true,
           adapter,
         });
       } catch (err) {
