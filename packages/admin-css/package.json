@@ -18,7 +18,11 @@
     "check-types": "tsc --noEmit || true",
     "lint": "eslint ."
   },
+  "dependencies": {
+    "@tailwindcss/cli": "^4.3.2"
+  },
   "devDependencies": {
+    "@nextlyhq/ui": "workspace:*",
     "vitest": "^4.1.0"
   }
 }
