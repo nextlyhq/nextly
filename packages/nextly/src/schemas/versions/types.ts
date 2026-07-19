@@ -39,6 +39,11 @@ export function isVersionStatus(v: unknown): v is VersionStatus {
  * combinations are unrepresentable: history is always on when versioning is
  * enabled; drafts add a draft/publish lifecycle; autosave coalesces the
  * in-progress draft. See the design spec section 3.
+ *
+ * NOTE (current stage): only history/capture is enforced today. `drafts`,
+ * `autosave`, and `maxPerDoc` are parsed and persisted but not yet acted upon
+ * (draft/publish split, autosave coalescing, and retention pruning are later
+ * stages), so any versioning-enabled entity captures history only for now.
  */
 export interface VersionsConfig {
   /**

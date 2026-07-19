@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { HookHandler } from "../../hooks/types";
+// Builder-facing content-versioning options surfaced on the Single config.
 import type { VersionsConfig } from "../../schemas/versions/types";
 
 // ============================================================
@@ -334,12 +335,16 @@ export interface SingleConfig {
   /**
    * Enable content versioning (revision history) for this Single.
    *
-   * When enabled, every update records a restorable snapshot of the assembled
-   * document in the global `nextly_versions` table, written inside the same
-   * transaction as the write. `true` turns on history + drafts + autosave;
-   * `{ drafts: false }` is history-only. Omitted = unversioned. `status: true`
-   * is a deprecated alias for `versions: { drafts: true }`; an explicit
-   * `versions` option wins.
+   * Currently active: when enabled, every update records a restorable snapshot
+   * of the assembled document in the global `nextly_versions` table, written
+   * inside the same transaction as the write. Omitted = unversioned.
+   *
+   * Reserved (accepted but NOT yet enforced): the `drafts`, `autosave`, and
+   * `maxPerDoc` retention settings on {@link VersionsConfig} are parsed and
+   * persisted for forward compatibility, but are not wired up yet, so enabling
+   * versioning is capture/history only regardless of those settings. The
+   * deprecated `status: true` alias does not yet drive a version draft
+   * lifecycle; use the separate `status` option for the draft/published column.
    *
    * @default undefined (unversioned)
    */

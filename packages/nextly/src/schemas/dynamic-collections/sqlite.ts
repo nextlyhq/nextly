@@ -34,6 +34,7 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 import type { FieldConfig } from "@nextly/collections";
 
 import { users } from "../users/sqlite";
+// Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {

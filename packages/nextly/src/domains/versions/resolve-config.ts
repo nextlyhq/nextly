@@ -43,7 +43,9 @@ export function resolveVersionsConfig(
         ? { drafts: true }
         : undefined;
 
-  if (effective === undefined || effective === false) {
+  // `null`/`false`/absent all mean unversioned. A falsy check (untyped JS could
+  // pass `versions: null`) keeps the object branch below from dereferencing null.
+  if (!effective) {
     return null;
   }
 
@@ -60,11 +62,15 @@ export function resolveVersionsConfig(
   let autosaveIntervalMs = DEFAULT_AUTOSAVE_INTERVAL_MS;
   let schedulePublish = false;
 
-  if (draftsEnabled && typeof draftsRaw === "object") {
+  // `typeof null === "object"`, so guard against null before dereferencing:
+  // options may arrive from untyped JS config or a Schema-Builder payload where
+  // `drafts: null` / `autosave: null` is possible, and must fall back to
+  // defaults rather than throw during boot.
+  if (draftsEnabled && typeof draftsRaw === "object" && draftsRaw !== null) {
     const autosaveRaw = draftsRaw.autosave;
     if (autosaveRaw === false) {
       autosaveEnabled = false;
-    } else if (typeof autosaveRaw === "object") {
+    } else if (typeof autosaveRaw === "object" && autosaveRaw !== null) {
       autosaveEnabled = true;
       if (typeof autosaveRaw.intervalMs === "number") {
         autosaveIntervalMs = autosaveRaw.intervalMs;

@@ -24,6 +24,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
+// Resolve the versioning config on the HMR sync path so a `versions` change
+// while `next dev` is running persists without a restart (parity with di/register).
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
@@ -55,7 +57,9 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import type { VersionsConfig } from "../schemas/versions/types";
 import { ComponentSchemaService } from "../services/components/component-schema-service";
 
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
@@ -94,6 +98,8 @@ type CollectionDef = {
   status?: boolean;
   /** i18n: localized collections omit translatable cols from main + register a companion. */
   localized?: boolean;
+  /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
+  versions?: boolean | VersionsConfig;
 };
 
 type SingleDef = {
@@ -104,6 +110,10 @@ type SingleDef = {
   admin?: unknown;
   dbName?: string;
   status?: boolean;
+  /** i18n flag; persisted to dynamic_singles.localized. */
+  localized?: boolean;
+  /** Content-versioning option; persisted (resolved) to dynamic_singles.versions. */
+  versions?: boolean | VersionsConfig;
 };
 
 type ComponentDef = {
@@ -702,6 +712,10 @@ export async function reloadNextlyConfig(opts?: {
           // Forward the Draft/Published flag so a code-first toggle reaches
           // syncCodeFirstCollections and persists to dynamic_collections.status.
           status: c.status === true,
+          // Forward i18n + versioning so a code-first change to either while
+          // `next dev` is running persists without a restart (parity with boot).
+          localized: c.localized === true,
+          versions: resolveVersionsConfig(c.versions, c.status),
         }));
       await registry.syncCodeFirstCollections(codeFirstConfigs);
 
@@ -750,6 +764,10 @@ export async function reloadNextlyConfig(opts?: {
             admin: s.admin,
             // Forward Draft/Published flag for code-first Singles too.
             status: s.status === true,
+            // Forward i18n + versioning so an HMR change persists without a
+            // restart (parity with the boot-time singles sync in di/register).
+            localized: s.localized === true,
+            versions: resolveVersionsConfig(s.versions, s.status),
           };
         });
       if (codeFirstSingleConfigs.length > 0) {

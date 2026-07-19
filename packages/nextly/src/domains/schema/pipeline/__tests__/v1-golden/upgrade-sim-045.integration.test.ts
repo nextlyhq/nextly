@@ -134,9 +134,13 @@ const addsOwnerColumn = (stmt: string): boolean =>
 // dynamic_collections / dynamic_singles registry tables, so a v1 upgrade of a
 // schema captured before it emits one additive `ADD COLUMN versions` per table.
 // Accept it like the owner column above rather than mistaking it for a phantom
-// diff. Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+// diff. Scoped to the two registry tables (versions is added nowhere else) so
+// an unrelated `ADD versions` on some other table can't mask a regression.
+// Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
 const addsVersionsColumn = (stmt: string): boolean =>
-  /^ALTER TABLE .+ ADD (COLUMN )?[`"]?versions[`"]?\b/i.test(stmt.trim());
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?versions[`"]?\b/i.test(
+    stmt.trim()
+  );
 
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).

@@ -360,6 +360,13 @@ export class SingleMutationService extends BaseService {
               )) {
                 parentRow[toCamelCase(key)] = value;
               }
+              // Never let password hashes into durable version history: the row
+              // carries bcrypt hashes (hashPasswordFieldValues ran before the
+              // write), and a later password change would otherwise leave the
+              // superseded hash permanently recoverable via the snapshot. The
+              // response is redacted separately (stripPasswordFieldValues at the
+              // return), which does not cover this snapshot.
+              stripPasswordFieldValues(parentRow, fieldConfigs);
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "single",

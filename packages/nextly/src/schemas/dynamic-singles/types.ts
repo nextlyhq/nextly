@@ -22,6 +22,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { StoredAccessRule } from "../../services/access/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+// Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 // ============================================================

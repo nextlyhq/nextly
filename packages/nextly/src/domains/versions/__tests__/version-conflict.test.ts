@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionsDbApi } from "../db-api";
 import { VersionCaptureService } from "../version-capture-service";
 import {
@@ -124,5 +125,54 @@ describe("VersionCaptureService.capture — conflict mapping", () => {
     await expect(
       service.capture(db, { ref, status: "published", snapshot: {} })
     ).rejects.toBe(other);
+  });
+
+  // The transaction-context insert throws the RAW driver error (it is not
+  // normalized to a DbError until it escapes the transaction), so capture must
+  // recognize the raw per-dialect unique codes and the adapter's own
+  // DatabaseError. Without this the retry is dead on Postgres/MySQL.
+  it.each([
+    ["raw pg 23505", { code: "23505", message: "duplicate key" }],
+    [
+      "raw sqlite constraint",
+      { code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed" },
+    ],
+    ["raw mysql errno", { errno: 1062, code: "ER_DUP_ENTRY" }],
+    [
+      "adapter DatabaseError",
+      { name: "DatabaseError", kind: "unique_violation" },
+    ],
+  ])(
+    "raises VersionConflictError on a %s from the tx-context insert",
+    async (_label, rawError) => {
+      const db: VersionsDbApi = {
+        select: async () => [],
+        insert: async () => {
+          throw rawError;
+        },
+      };
+      const service = new VersionCaptureService();
+      await expect(
+        service.capture(db, { ref, status: "published", snapshot: {} })
+      ).rejects.toBeInstanceOf(VersionConflictError);
+    }
+  );
+});
+
+describe("VersionConflictError — NextlyError contract", () => {
+  it("is a NextlyError with a CONFLICT (409) code", () => {
+    const err = new VersionConflictError();
+    expect(NextlyError.is(err)).toBe(true);
+    expect(err.code).toBe("CONFLICT");
+    expect(err.statusCode).toBe(409);
+    expect(err.name).toBe("VersionConflictError");
+  });
+
+  it("survives the adapter wrapping so the retry still detects it", () => {
+    // The dialect adapters re-wrap a callback error in a DatabaseError with the
+    // original as `cause`; the retry walks that chain by name.
+    const wrapped = new Error("transaction aborted");
+    (wrapped as { cause?: unknown }).cause = new VersionConflictError();
+    expect(hasVersionConflict(wrapped)).toBe(true);
   });
 });

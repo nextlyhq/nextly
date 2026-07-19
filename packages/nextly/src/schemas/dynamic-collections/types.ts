@@ -12,6 +12,7 @@
 import type { FieldConfig, IndexConfig } from "@nextly/collections";
 
 import type { CollectionAccessRules } from "../../services/access/types";
+// Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 /**

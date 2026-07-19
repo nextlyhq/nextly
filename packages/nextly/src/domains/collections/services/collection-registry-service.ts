@@ -612,6 +612,10 @@ export class CollectionRegistryService extends BaseRegistryService<
                 source: config.source ?? "code",
                 locked: true,
                 status: config.status === true,
+                // Forward the i18n flag on the table_name-conflict recovery path
+                // too (parity with the primary register + update branches), so a
+                // collection recovered here does not silently lose localization.
+                localized: config.localized === true,
                 versions: config.versions,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,

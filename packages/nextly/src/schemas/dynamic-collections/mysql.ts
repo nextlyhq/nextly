@@ -43,6 +43,7 @@ import {
 import type { FieldConfig } from "@nextly/collections";
 
 import { users } from "../users/mysql";
+// Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {

@@ -1639,6 +1639,10 @@ async function syncCodeFirstSingles(
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_singles.status.
       status: single.status === true,
+      // Forward the i18n flag so a code-first single with localized:true
+      // persists it to dynamic_singles.localized at boot (parity with
+      // collections; previously dropped here).
+      localized: single.localized === true,
       // Resolve + forward the versioning config so it persists to
       // dynamic_singles.versions (status:true aliases to a versioned config).
       versions: resolveVersionsConfig(single.versions, single.status),

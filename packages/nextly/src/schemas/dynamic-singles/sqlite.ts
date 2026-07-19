@@ -42,6 +42,7 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+// Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 import type {

@@ -65,12 +65,12 @@ export class VersionCaptureService {
     } catch (err) {
       // The only unique index on nextly_versions is the version_no sequence, so
       // a unique violation here is a lost allocation race (concurrent capture on
-      // the same document read the same max). Surface it as a distinct error so
-      // the write path retries the whole transaction; anything else propagates.
-      if (
-        isUniqueViolation(err) ||
-        isUniqueViolation((err as { cause?: unknown }).cause)
-      ) {
+      // the same document read the same max). The tx-context insert throws the
+      // RAW driver error (not yet normalized to a DbError), so isUniqueViolation
+      // recognizes raw driver codes / the adapter DatabaseError too. Surface it
+      // as a distinct error so the write path retries the whole transaction;
+      // anything else propagates.
+      if (isUniqueViolation(err)) {
         throw new VersionConflictError(err);
       }
       throw err;
