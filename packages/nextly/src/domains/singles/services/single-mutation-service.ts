@@ -305,11 +305,6 @@ export class SingleMutationService extends BaseService {
         string,
         unknown
       >;
-      const updatePayload = {
-        ...snakeCaseData,
-        updated_at: new Date(),
-      };
-
       // Commit the scalar update and the component subtree writes atomically so
       // a component-save failure rolls back the scalar update (no partial single
       // state). The scalar row and comp_ tables both write on the same tx. The
@@ -321,6 +316,14 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // Build the payload inside the closure so a retried attempt after a
+            // concurrent winner stamps a FRESH `updated_at`, rather than reusing
+            // a timestamp created before the first attempt (which could commit an
+            // older time than the winning write and reverse row/snapshot order).
+            const updatePayload = {
+              ...snakeCaseData,
+              updated_at: new Date(),
+            };
             const rows = await tx.update<SingleDocument>(
               singleMeta.tableName,
               updatePayload,
