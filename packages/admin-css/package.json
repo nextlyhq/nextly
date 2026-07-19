@@ -22,7 +22,9 @@
     "@tailwindcss/cli": "^4.3.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
     "@nextlyhq/ui": "workspace:*",
+    "eslint": "^9.39.1",
     "vitest": "^4.1.0"
   }
 }
