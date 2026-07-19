@@ -1,0 +1,355 @@
+/**
+ * Integration test for the webhook delivery engine (`deliverDueDeliveries` and
+ * `runDrain`) against a real SQLite database. Exercises the full claim -> sign
+ * -> send -> record path: a leased claim, Standard Webhooks signature headers on
+ * the outgoing request, and each terminal outcome (delivered / retrying / failed
+ * / exhausted), plus the lease guard and an end-to-end drain from a seeded event.
+ *
+ * Uses an in-memory SQLite database built from the production table definitions
+ * via drizzle-kit (never hand-copied CREATE TABLE; see
+ * .claude/rules/integration-tests.md). The HTTP transport and clock are injected
+ * so outcomes are deterministic and no real network access happens.
+ */
+
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
+import { SchemaRegistry } from "../../../database/schema-registry";
+import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
+import {
+  nextlyEvents,
+  nextlyWebhooks,
+  nextlyWebhookDeliveries,
+} from "../../../schemas/webhooks/sqlite";
+import { users } from "../../../schemas/users/sqlite";
+import { buildEnvelope } from "../envelope";
+import { recordEvent } from "../record-event";
+import { WebhookEndpointRegistry } from "../endpoint-registry";
+import { deliverDueDeliveries, type DeliverTransport } from "../deliver";
+import { runDrain } from "../run-drain";
+import { verifySignature } from "../signing";
+import { DEFAULT_MAX_ATTEMPTS } from "../delivery-policy";
+import type { WebhookEventType } from "../types";
+
+process.env.DB_DIALECT = "sqlite";
+
+// A frozen clock so due-ness, lease windows, and retry scheduling are stable.
+const NOW = new Date("2026-07-19T12:00:00.000Z");
+// A valid Standard Webhooks secret: `whsec_` + base64 key bytes ("secretkey").
+const SECRET = "whsec_c2VjcmV0a2V5";
+
+const tables = { nextlyEvents, nextlyWebhooks, nextlyWebhookDeliveries };
+// nextly_webhooks.created_by references users, so the FK target table must
+// exist for SQLite's foreign-key enforcement on webhook writes.
+const ddlTables = { ...tables, users };
+
+async function schemaDdl(): Promise<string[]> {
+  const kit = await getSQLiteDrizzleKit();
+  const statements = await kit.generateMigration(
+    await kit.generateDrizzleJson({}),
+    await kit.generateDrizzleJson(ddlTables)
+  );
+  return splitStatements(statements);
+}
+
+/** A fake transport that records each request and returns a fixed HTTP status. */
+function makeTransport(status: number): {
+  transport: DeliverTransport;
+  calls: Array<{ url: string; headers: Record<string, string>; body: string }>;
+} {
+  const calls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: string;
+  }> = [];
+  const transport: DeliverTransport = async (url, options) => {
+    calls.push({ url, headers: options.headers, body: options.body });
+    return new Response("ok", { status });
+  };
+  return { transport, calls };
+}
+
+describe("webhook delivery engine (real SQLite)", () => {
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeAll(async () => {
+    adapter = createSqliteAdapter({ memory: true });
+    await adapter.connect();
+    for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
+
+    const schemaRegistry = new SchemaRegistry();
+    schemaRegistry.registerStaticSchemas(tables);
+    adapter.setTableResolver(schemaRegistry);
+  });
+
+  afterAll(async () => {
+    try {
+      await adapter?.disconnect?.();
+    } catch {
+      // ignore teardown errors
+    }
+  });
+
+  beforeEach(async () => {
+    await adapter.executeQuery("DELETE FROM nextly_webhook_deliveries");
+    await adapter.executeQuery("DELETE FROM nextly_webhooks");
+    await adapter.executeQuery("DELETE FROM nextly_events");
+  });
+
+  async function seedWebhook(
+    id: string,
+    opts: {
+      secrets?: string[];
+      headers?: Record<string, string> | null;
+      eventTypes?: WebhookEventType[];
+    } = {}
+  ): Promise<void> {
+    await adapter.insert("nextly_webhooks", {
+      id,
+      name: id,
+      url: `https://example.com/${id}`,
+      enabled: true,
+      event_types: opts.eventTypes ?? ["entry.updated"],
+      filter: null,
+      headers: opts.headers ?? null,
+      secret_hash: opts.secrets ?? [SECRET],
+      secret_prefix: "whsec_",
+      field_allowlist: null,
+      created_by: null,
+      // Well before the seeded event time so the pre-subscription guard admits it.
+      created_at: new Date("2020-01-01T00:00:00.000Z"),
+      updated_at: NOW,
+    });
+  }
+
+  async function seedEvent(
+    id: string,
+    type: WebhookEventType = "entry.updated"
+  ): Promise<void> {
+    const envelope = buildEnvelope({
+      id,
+      type,
+      timestamp: new Date("2026-07-18T00:00:00.000Z"),
+      resource: { kind: "entry", collection: "posts", id: "p1" },
+      data: { id: "p1", title: "Hello" },
+    });
+    await adapter.transaction(async tx => recordEvent(tx, { envelope }));
+  }
+
+  async function seedDelivery(
+    id: string,
+    webhookId: string,
+    eventId: string,
+    opts: {
+      status?: string;
+      attemptCount?: number;
+      nextAttemptAt?: Date | null;
+      lockedUntil?: Date | null;
+    } = {}
+  ): Promise<void> {
+    await adapter.insert("nextly_webhook_deliveries", {
+      id,
+      webhook_id: webhookId,
+      event_id: eventId,
+      status: opts.status ?? "pending",
+      attempt_count: opts.attemptCount ?? 0,
+      next_attempt_at:
+        opts.nextAttemptAt === undefined ? NOW : opts.nextAttemptAt,
+      locked_by: null,
+      locked_until: opts.lockedUntil ?? null,
+      created_at: NOW,
+      updated_at: NOW,
+    });
+  }
+
+  interface DeliveryReadRow {
+    id: string;
+    status: string;
+    attemptCount: number;
+    nextAttemptAt: Date | null;
+    lockedBy: string | null;
+    lockedUntil: Date | null;
+    lastStatusCode: number | null;
+    lastError: string | null;
+  }
+
+  async function getDelivery(id: string): Promise<DeliveryReadRow> {
+    const rows = await adapter.select<DeliveryReadRow>(
+      "nextly_webhook_deliveries",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    return rows[0];
+  }
+
+  function deps(transport: DeliverTransport, overrides = {}) {
+    return {
+      db: adapter,
+      decryptSecret: (ciphertext: string) => ciphertext,
+      transport,
+      now: () => NOW,
+      runnerId: "runner-test",
+      ...overrides,
+    };
+  }
+
+  it("delivers a 2xx response and signs the request with Standard Webhooks headers", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, delivered: 1, failed: 0 });
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("delivered");
+    expect(row.attemptCount).toBe(1);
+    expect(row.nextAttemptAt).toBeNull();
+    // The lease is released once the row is finalized.
+    expect(row.lockedUntil).toBeNull();
+    expect(row.lockedBy).toBeNull();
+    expect(row.lastStatusCode).toBe(200);
+
+    // The outgoing request carried the three Standard Webhooks headers plus JSON
+    // content-type, and the signature verifies against the (identity-decrypted)
+    // secret over the exact body that was sent.
+    expect(calls).toHaveLength(1);
+    const { headers, body } = calls[0];
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers["webhook-id"]).toBe("dlv_1");
+    expect(headers["webhook-timestamp"]).toMatch(/^\d+$/);
+    expect(headers["webhook-signature"]).toMatch(/^v1,/);
+    expect(
+      verifySignature({
+        id: "dlv_1",
+        timestamp: headers["webhook-timestamp"],
+        body,
+        signatureHeader: headers["webhook-signature"],
+        secrets: [SECRET],
+        toleranceSeconds: Infinity,
+      })
+    ).toBe(true);
+  });
+
+  it("reschedules a 5xx response for a retry (transient)", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+    const { transport } = makeTransport(503);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, retried: 1, delivered: 0 });
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("retrying");
+    expect(row.attemptCount).toBe(1);
+    expect(row.nextAttemptAt).not.toBeNull();
+    // The next attempt is scheduled no earlier than now (jittered backoff >= 0).
+    expect(row.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+    expect(row.lockedUntil).toBeNull();
+    expect(row.lastStatusCode).toBe(503);
+  });
+
+  it("permanently fails a 4xx response (receiver must fix it)", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+    const { transport } = makeTransport(404);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, failed: 1, retried: 0 });
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("failed");
+    expect(row.attemptCount).toBe(1);
+    expect(row.nextAttemptAt).toBeNull();
+    expect(row.lastStatusCode).toBe(404);
+    expect(row.lastError).toContain("404");
+  });
+
+  it("marks a transient outcome failed once the attempt limit is reached", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    // One short of the cap and retrying, so this attempt reaches DEFAULT_MAX_ATTEMPTS.
+    await seedDelivery("dlv_1", "wh_a", "evt_1", {
+      status: "retrying",
+      attemptCount: DEFAULT_MAX_ATTEMPTS - 1,
+    });
+    const { transport } = makeTransport(503);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, failed: 1, retried: 0 });
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("failed");
+    expect(row.attemptCount).toBe(DEFAULT_MAX_ATTEMPTS);
+    expect(row.nextAttemptAt).toBeNull();
+    expect(row.lastError).toContain("exhausted");
+  });
+
+  it("does not claim a delivery that is leased within the lease window", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    // Locked by another runner until well after now: the drain must skip it.
+    await seedDelivery("dlv_1", "wh_a", "evt_1", {
+      lockedUntil: new Date(NOW.getTime() + 60_000),
+    });
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result.attempted).toBe(0);
+    expect(calls).toHaveLength(0);
+    const row = await getDelivery("dlv_1");
+    // Untouched: still pending, no attempt recorded.
+    expect(row.status).toBe("pending");
+    expect(row.attemptCount).toBe(0);
+  });
+
+  it("marks a delivery for a webhook with no signing secret failed without sending", async () => {
+    // A webhook with an empty secret list can never be signed, so the delivery
+    // is a permanent misconfiguration and must fail without a network attempt.
+    await seedWebhook("wh_a", { secrets: [] });
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, failed: 1 });
+    expect(calls).toHaveLength(0);
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("failed");
+    expect(row.lastError).toContain("no signing secret");
+  });
+
+  it("runs a full drain: fans out a seeded event and delivers it", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    const { transport, calls } = makeTransport(200);
+
+    const registry = new WebhookEndpointRegistry(adapter);
+    const result = await runDrain({
+      fanOut: {
+        db: adapter,
+        loadEndpoints: () => registry.getEnabledEndpoints(),
+        now: () => NOW,
+      },
+      deliver: deps(transport),
+    });
+
+    expect(result).toMatchObject({
+      eventsProcessed: 1,
+      deliveriesCreated: 1,
+      attempted: 1,
+      delivered: 1,
+    });
+    expect(calls).toHaveLength(1);
+    const rows = await adapter.select<{ status: string }>(
+      "nextly_webhook_deliveries"
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("delivered");
+  });
+});
