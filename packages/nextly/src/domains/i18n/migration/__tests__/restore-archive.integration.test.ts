@@ -51,12 +51,17 @@ function archive(rows: [string, string, string, string, string][]) {
 function companionRows() {
   return sqlite
     .prepare(`SELECT * FROM "dc_pages_locales" ORDER BY "_locale"`)
-    .all() as { _parent: string; _locale: string; title: string | null; body: string | null }[];
+    .all() as {
+    _parent: string;
+    _locale: string;
+    title: string | null;
+    body: string | null;
+  }[];
 }
 
 beforeEach(() => {
   sqlite = new Database(":memory:");
-  db = drizzle(sqlite);
+  db = drizzle({ client: sqlite });
   for (const stmt of getI18nArchiveDdl("sqlite")) sqlite.exec(stmt);
   createCompanion();
 });
