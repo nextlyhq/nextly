@@ -41,7 +41,7 @@ async function migrate(t: TestNextly): Promise<void> {
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "heading" text, PRIMARY KEY ("_parent","_locale"))'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
 }
 
@@ -121,14 +121,24 @@ describe("write companion _status (M6b)", () => {
 
     // Content-only update → still published.
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { heading: "H2" }
     );
     expect(await companionStatus(t, "de")).toBe("published");
 
     // Explicit status change → draft.
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { status: "draft" }
     );
     expect(await companionStatus(t, "de")).toBe("draft");
@@ -150,7 +160,12 @@ describe("write companion _status (M6b)", () => {
 
     // Unpublish the German translation only.
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { status: "draft" }
     );
     expect(await companionStatus(t, "de")).toBe("draft");
@@ -171,7 +186,12 @@ describe("write companion _status (M6b)", () => {
     expect(await mainStatus(t)).toBe("published");
 
     await h.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "en", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      },
       { status: "draft" }
     );
     expect(await mainStatus(t)).toBe("draft");

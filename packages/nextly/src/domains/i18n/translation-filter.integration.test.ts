@@ -16,7 +16,10 @@ const pages = () =>
   defineCollection({
     slug: "pages",
     localized: true,
-    fields: [text({ name: "title", localized: false }), text({ name: "heading" })],
+    fields: [
+      text({ name: "title", localized: false }),
+      text({ name: "heading" }),
+    ],
   });
 
 async function boot(): Promise<TestNextly> {
@@ -43,11 +46,11 @@ async function seedCompanion(
   for (const r of rows) {
     if (withStatus) {
       await adapter.executeQuery(
-        `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${r.parent}','${r.locale}','${r.status ?? "draft"}','${r.heading}')`
+        `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${r.parent}','${r.locale}','${r.status ?? "draft"}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "_status" = excluded."_status", "heading" = excluded."heading"`
       );
     } else {
       await adapter.executeQuery(
-        `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}')`
+        `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "heading" = excluded."heading"`
       );
     }
   }
@@ -102,7 +105,10 @@ describe("translation-status list filter (_translated) (M7)", () => {
       { parent: c, locale: "de", heading: "" }, // present but blank → untranslated
     ]);
 
-    const translatedDe = await listIds(t, { locale: "de", state: "translated" });
+    const translatedDe = await listIds(t, {
+      locale: "de",
+      state: "translated",
+    });
     expect(translatedDe).toEqual(new Set([a]));
 
     const missingDe = await listIds(t, { locale: "de", state: "missing" });
@@ -115,7 +121,10 @@ describe("translation-status list filter (_translated) (M7)", () => {
     await seedCompanion(t, [{ parent: a, locale: "en", heading: "A-en" }]);
 
     // Every entry is translated in the default locale...
-    const translatedEn = await listIds(t, { locale: "en", state: "translated" });
+    const translatedEn = await listIds(t, {
+      locale: "en",
+      state: "translated",
+    });
     expect(translatedEn.has(a)).toBe(true);
     // ...and none are missing.
     const missingEn = await listIds(t, { locale: "en", state: "missing" });

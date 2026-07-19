@@ -32,15 +32,20 @@ async function boot(): Promise<TestNextly> {
   return current;
 }
 
-/** Simulate the companion migration: create the companion + drop the localized col from main. */
+/** Ensure the migrated shape: companion exists + no localized col on main. The code-first boot
+ * sync already provisions both, so this only fills gaps and tolerates the column being absent. */
 async function migrate(t: TestNextly): Promise<void> {
   const adapter = t.adapter as unknown as {
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
-  await adapter.executeQuery('ALTER TABLE "dc_pages" DROP COLUMN "heading"');
+  try {
+    await adapter.executeQuery('ALTER TABLE "dc_pages" DROP COLUMN "heading"');
+  } catch {
+    // Code-first already omits the translatable column from the main table.
+  }
 }
 
 interface ValidationFieldError {

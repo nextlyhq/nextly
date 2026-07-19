@@ -39,11 +39,11 @@ async function seedCompanion(
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "meta_title" text)'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "meta_title" text, PRIMARY KEY ("_parent","_locale"))'
   );
   for (const r of rows) {
     await adapter.executeQuery(
-      `INSERT INTO "dc_pages_locales" ("_parent","_locale","meta_title") VALUES ('${r.parent}','${r.locale}','${r.metaTitle}')`
+      `INSERT INTO "dc_pages_locales" ("_parent","_locale","meta_title") VALUES ('${r.parent}','${r.locale}','${r.metaTitle}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "meta_title" = excluded."meta_title"`
     );
   }
 }

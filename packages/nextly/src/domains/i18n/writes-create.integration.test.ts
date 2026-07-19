@@ -38,7 +38,7 @@ async function createCompanionTable(t: TestNextly): Promise<void> {
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
 }
 
@@ -135,15 +135,22 @@ describe("createEntry — localized write routing (M5a)", () => {
   it("dev (no companion table): localized value stays on the main table, write succeeds", async () => {
     const t = await boot();
     const handler = handlerOf(t);
-    // No companion table created → dev/unmigrated path.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
+    };
+    // Recreate the pre-migration shape: the collection was just marked localized, so the
+    // main table still carries the translatable column and no companion exists yet. The
+    // code-first boot sync provisions the companion and drops the column from main, so undo
+    // that here to exercise the unmigrated fallback (values stay on main until migrate runs).
+    await adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
+    await adapter.executeQuery(
+      'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
+    );
     const res = await handler.createEntry(
       { collectionName: "pages", locale: "de", overrideAccess: true },
       { title: "T", heading: "Hallo" }
     );
     expect(res.success).toBe(true);
-    const adapter = t.adapter as unknown as {
-      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
-    };
     const rows = await adapter.executeQuery('SELECT "heading" FROM "dc_pages"');
     expect(rows).toEqual([{ heading: "Hallo" }]);
   });
@@ -170,12 +177,22 @@ describe("updateEntry — localized write routing (M5a)", () => {
 
     // Update the German heading (upsert existing row).
     await handler.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { heading: "Hallo2" }
     );
     // Update the English heading (insert a new companion row).
     await handler.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "en", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      },
       { heading: "Hi" }
     );
 

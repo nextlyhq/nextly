@@ -60,7 +60,7 @@ async function seed(
   );
   for (const r of rows) {
     await adapter.executeQuery(
-      `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${id}','${r.locale}','${r.status}','${r.heading}')`
+      `INSERT INTO "dc_pages_locales" ("_parent","_locale","_status","heading") VALUES ('${id}','${r.locale}','${r.status}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "_status" = excluded."_status", "heading" = excluded."heading"`
     );
   }
 }

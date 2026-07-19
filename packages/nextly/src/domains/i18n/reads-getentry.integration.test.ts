@@ -1,8 +1,8 @@
 // M4a: getEntry resolves localized fields from the companion table with fallback.
 //
-// Companion tables are migration-owned (Option B) and NOT created by the harness auto-sync,
-// so the test creates + seeds `dc_pages_locales` directly, then reads through the real service
-// stack (CollectionsHandler → EntryService → QueryService) with a locale.
+// The code-first boot sync provisions the companion `dc_pages_locales` table (Option B), so
+// the seed upserts per-locale rows into it and the test reads through the real service stack
+// (CollectionsHandler → EntryService → QueryService) with a locale.
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -48,11 +48,14 @@ async function seedCompanion(
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text)'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
   for (const r of rows) {
+    // Upsert: the code-first boot sync already provisioned the companion, and the
+    // default-locale create may have seeded its row, so a bare INSERT would collide
+    // on the (_parent, _locale) primary key.
     await adapter.executeQuery(
-      `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}')`
+      `INSERT INTO "dc_pages_locales" ("_parent","_locale","heading") VALUES ('${r.parent}','${r.locale}','${r.heading}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "heading" = excluded."heading"`
     );
   }
 }
