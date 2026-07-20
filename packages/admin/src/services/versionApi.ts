@@ -105,6 +105,11 @@ export const versionApi = {
   get: (scope: VersionScope, versionNo: number): Promise<VersionDetail> =>
     protectedApi.get<VersionDetail>(`${basePath(scope)}/${versionNo}`),
 
+  /**
+   * Put the document back to an earlier version. A write, not a read: the
+   * server resubmits the stored snapshot through the ordinary update path and
+   * records the result as a new version.
+   */
   restore: (
     scope: VersionScope,
     versionNo: number

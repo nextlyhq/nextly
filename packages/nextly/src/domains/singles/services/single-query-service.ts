@@ -779,9 +779,10 @@ export class SingleQueryService extends BaseService {
           // System-materialized default: no authoring user.
           parts: { parentRow, components: {} },
           createdBy: null,
-          // Materialization writes the default document, whose translatable
-          // values are the ones on the main row — the default locale's.
-          locale: this.localization?.defaultLocale ?? null,
+          // Left unlabelled: this snapshot is the main row alone, and a
+          // localized Single keeps its translatable values in the companion, so
+          // it holds no locale's content to claim.
+          locale: null,
           maxPerDoc: versionsConfig.maxPerDoc,
         });
         return row;
