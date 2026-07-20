@@ -67,6 +67,49 @@ describe("expandComponentFields", () => {
     expect(names).toContain("bSecret");
   });
 
+  it("resolves each component once even when several branches reference it", async () => {
+    // Resolution hits the component registry, so a repeated lookup is a repeated
+    // read on the write path.
+    const calls: string[] = [];
+    const counting: ComponentFieldResolver = async slug => {
+      calls.push(slug);
+      return [{ name: `${slug}Secret`, type: "password" }];
+    };
+
+    await expandComponentFields(
+      [
+        { name: "a", type: "component", component: "shared" },
+        { name: "b", type: "component", component: "shared" },
+        {
+          name: "group",
+          type: "group",
+          fields: [{ name: "c", type: "component", component: "shared" }],
+        },
+      ],
+      counting
+    );
+
+    expect(calls).toEqual(["shared"]);
+  });
+
+  it("caches an unresolvable slug so it is not re-fetched", async () => {
+    const calls: string[] = [];
+    const missing: ComponentFieldResolver = async slug => {
+      calls.push(slug);
+      return null;
+    };
+
+    await expandComponentFields(
+      [
+        { name: "a", type: "component", component: "ghost" },
+        { name: "b", type: "component", component: "ghost" },
+      ],
+      missing
+    );
+
+    expect(calls).toEqual(["ghost"]);
+  });
+
   it("leaves an unresolvable reference intact rather than throwing", async () => {
     // A write must not fail because a component record is missing.
     await expect(
