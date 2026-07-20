@@ -54,6 +54,18 @@ function referencedSlugs(field: SensitiveFieldSource): string[] {
   return [...new Set(slugs)];
 }
 
+/**
+ * The path segment standing for "this instance is of component type `slug`".
+ *
+ * A dynamic-zone instance is stored as its own fields plus a `_componentType`
+ * marker — there is no per-slug level in the document — so this segment exists
+ * only inside deny paths. The `#` prefix cannot collide with a real field name,
+ * which must be a valid identifier.
+ */
+export function componentTypeSegment(slug: string): string {
+  return `#${slug}`;
+}
+
 /** Memoized resolutions, so one slug is fetched at most once per expansion. */
 type ResolutionCache = Map<string, readonly SensitiveFieldSource[] | null>;
 
@@ -117,16 +129,37 @@ export async function expandComponentFields(
 
     // A dynamic zone contributes several; each is expanded under its own cycle
     // path so one self-referential member cannot suppress its siblings.
+    //
+    // Members are kept in separate, type-tagged containers rather than merged
+    // into one list. Two members can declare the same field name with only one
+    // marking it sensitive, and a merged list collapses both onto a single path
+    // — which would strip the visible field from instances of the other member.
+    // A stored instance records which member it is, so the tag is what lets the
+    // deny path stay specific to it.
+    const slugs = referencedSlugs(field);
+    const multi = slugs.length > 1;
     const grafted: SensitiveFieldSource[] = [];
-    for (const slug of referencedSlugs(field)) {
+    for (const slug of slugs) {
       if (seen.has(slug)) continue;
       const resolved = await resolveOnce(slug, resolve, cache);
       if (!resolved) continue;
       const nested = new Set(seen);
       nested.add(slug);
-      grafted.push(
-        ...(await expandComponentFields(resolved, resolve, nested, cache))
+      const expandedComponent = await expandComponentFields(
+        resolved,
+        resolve,
+        nested,
+        cache
       );
+      if (multi) {
+        grafted.push({
+          name: componentTypeSegment(slug),
+          type: "group",
+          fields: expandedComponent,
+        });
+      } else {
+        grafted.push(...expandedComponent);
+      }
     }
 
     if (grafted.length > 0) {

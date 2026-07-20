@@ -10,6 +10,7 @@
  * @module domains/webhooks/envelope
  */
 
+import { componentTypeSegment } from "./expand-component-fields";
 import type {
   WebhookActor,
   WebhookEvent,
@@ -69,17 +70,35 @@ function deepEqual(a: unknown, b: unknown): boolean {
 function stripValue(
   value: unknown,
   denied: Set<string>,
-  path: string
+  paths: readonly string[]
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map(v => stripValue(v, denied, path));
+    return value.map(v => stripValue(v, denied, paths));
   }
   if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+    // A dynamic-zone instance names the component type it is an instance of.
+    // Two member types can share a field name with only one marking it
+    // sensitive, so those denials are recorded under a type-tagged path and
+    // only apply to instances of that type.
+    const componentType = (value as { _componentType?: unknown })
+      ._componentType;
+    const prefixes =
+      typeof componentType === "string"
+        ? [
+            ...paths,
+            ...paths.map(p =>
+              p
+                ? `${p}.${componentTypeSegment(componentType)}`
+                : componentTypeSegment(componentType)
+            ),
+          ]
+        : paths;
+
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      const childPath = path ? `${path}.${k}` : k;
-      if (denied.has(childPath)) continue;
-      out[k] = stripValue(v, denied, childPath);
+      const childPaths = prefixes.map(p => (p ? `${p}.${k}` : k));
+      if (childPaths.some(candidate => denied.has(candidate))) continue;
+      out[k] = stripValue(v, denied, childPaths);
     }
     return out;
   }
@@ -96,7 +115,7 @@ function stripSensitive(
   sensitiveFields: readonly string[]
 ): Record<string, unknown> {
   if (sensitiveFields.length === 0) return { ...doc };
-  return stripValue(doc, new Set(sensitiveFields), "") as Record<
+  return stripValue(doc, new Set(sensitiveFields), [""]) as Record<
     string,
     unknown
   >;

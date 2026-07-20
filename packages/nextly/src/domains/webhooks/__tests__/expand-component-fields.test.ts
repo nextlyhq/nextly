@@ -137,9 +137,9 @@ describe("expandComponentFields", () => {
     );
 
     const names = sensitiveFieldPaths(expanded);
-    expect(names).toContain("zone.heroToken");
-    expect(names).toContain("zone.ctaSecret");
-    expect(names).not.toContain("zone.headline");
+    expect(names).toContain("zone.#hero.heroToken");
+    expect(names).toContain("zone.#cta.ctaSecret");
+    expect(names).not.toContain("zone.#hero.headline");
   });
 
   it("keeps expanding a dynamic zone's other members when one is self-referential", async () => {
@@ -157,8 +157,26 @@ describe("expandComponentFields", () => {
     );
 
     const names = sensitiveFieldPaths(expanded);
-    expect(names).toContain("zone.loopSecret");
-    expect(names).toContain("zone.safeSecret");
+    expect(names).toContain("zone.#loop.loopSecret");
+    expect(names).toContain("zone.#safe.safeSecret");
+  });
+
+  it("keeps a dynamic zone's members apart when they share a field name", async () => {
+    // `hero.title` is visible, `cta.title` is hidden. Merging both members into
+    // one list collapses them onto a single `zone.title` path, which would strip
+    // the visible title from every hero instance too.
+    const expanded = await expandComponentFields(
+      [{ name: "zone", type: "component", components: ["hero", "cta"] }],
+      resolver({
+        hero: [{ name: "title", type: "text" }],
+        cta: [{ name: "title", type: "text", admin: { hidden: true } }],
+      })
+    );
+
+    const paths = sensitiveFieldPaths(expanded);
+    expect(paths).toEqual(["zone.#cta.title"]);
+    // The unqualified path would apply to every member.
+    expect(paths).not.toContain("zone.title");
   });
 
   it("descends into nested containers to reach a component reference", async () => {

@@ -133,6 +133,28 @@ describe("buildEnvelope", () => {
     expect(env.changedFields).toEqual(["title"]);
   });
 
+  // A dynamic zone stores each instance with a `_componentType` marker and no
+  // per-slug level, so a denial that belongs to one member type must apply only
+  // to instances of that type.
+  it("strips a type-tagged path only from instances of that component type", () => {
+    const env = buildEnvelope({
+      ...base,
+      previous: null,
+      data: {
+        id: "p1",
+        zone: [
+          { _componentType: "hero", title: "Visible" },
+          { _componentType: "cta", title: "Hidden" },
+        ],
+      },
+      sensitiveFields: ["zone.#cta.title"],
+    });
+    expect(env.data.zone).toEqual([
+      { _componentType: "hero", title: "Visible" },
+      { _componentType: "cta" },
+    ]);
+  });
+
   // Date instances have no enumerable keys, so the diff must compare them by
   // value; otherwise a date-only change would be missed.
   it("detects a Date-only change and treats equal Dates as unchanged", () => {
