@@ -190,6 +190,9 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@nextlyhq/adapter-mysql": "workspace:*",
+    "@nextlyhq/adapter-postgres": "workspace:*",
+    "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",

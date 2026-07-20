@@ -98,6 +98,9 @@
 - name: "ci-nightly-failure"
   color: "b60205"
   description: "Filed automatically when the nightly package smoke fails"
+- name: "ci-dep-audit-failure"
+  color: "b60205"
+  description: "Filed automatically when the weekly dependency audit fails"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"

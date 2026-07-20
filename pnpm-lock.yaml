@@ -847,15 +847,6 @@ importers:
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../adapter-drizzle
-      '@nextlyhq/adapter-mysql':
-        specifier: workspace:*
-        version: link:../adapter-mysql
-      '@nextlyhq/adapter-postgres':
-        specifier: workspace:*
-        version: link:../adapter-postgres
-      '@nextlyhq/adapter-sqlite':
-        specifier: workspace:*
-        version: link:../adapter-sqlite
       bcryptjs:
         specifier: ^3.0.2
         version: 3.0.2
@@ -933,6 +924,15 @@ importers:
         specifier: ^1.0.2
         version: 1.0.2
     devDependencies:
+      '@nextlyhq/adapter-mysql':
+        specifier: workspace:*
+        version: link:../adapter-mysql
+      '@nextlyhq/adapter-postgres':
+        specifier: workspace:*
+        version: link:../adapter-postgres
+      '@nextlyhq/adapter-sqlite':
+        specifier: workspace:*
+        version: link:../adapter-sqlite
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config

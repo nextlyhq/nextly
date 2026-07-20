@@ -79,7 +79,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --label ci-nightly-failure --state open --json number --jq '.[0].number')
+            --label ci-dep-audit-failure --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
               --body "Weekly dependency audit failed again: $RUN_URL"
@@ -89,6 +89,6 @@ jobs:
             body=$(printf 'The weekly dependency audit found a high or critical advisory in the lockfile. Run: %s\n\nIf the package is transitive, patch it with a version-range-keyed entry in the root `pnpm.overrides` (for example `"pkg@>=3": "^5.0.7"`) rather than waiting for Dependabot, which does not open PRs against overrides.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Weekly dependency audit is failing" \
-              --label ci-nightly-failure \
+              --label ci-dep-audit-failure \
               --body "$body"
           fi
