@@ -43,13 +43,17 @@ export class VersionCaptureService {
   /**
    * Allocate the next durable version_no for the document and insert one row,
    * using `db` (the transaction context) so the insert commits atomically with
-   * the caller's content write. The next number is `max + 1`; this allocation
-   * read does not itself run inside the transaction (the tx context's `select`
-   * delegates to the adapter's main connection pool, not the transaction's own
-   * connection, on Postgres/MySQL), so a duplicate version_no is possible under
-   * concurrent capture. The PG partial unique index guards against it there; a
-   * MySQL/SQLite serialization or unique guard is required in a later stage
-   * before capture is wired into concurrent writes.
+   * the caller's content write. The next number is `max + 1`.
+   *
+   * Reads through the transaction context DO run on the transaction's own
+   * connection on every dialect: each adapter's tx `select` forwards the
+   * transaction handle as the executor, so the allocation read and the
+   * retention scan below both observe this transaction's uncommitted writes.
+   *
+   * A duplicate version_no is still possible when two transactions allocate
+   * concurrently, because each reads a max the other has not yet committed.
+   * That race is caught by the durable-sequence unique index and surfaced as a
+   * VersionConflictError for the write path to retry.
    */
   async capture(
     db: VersionsDbApi,

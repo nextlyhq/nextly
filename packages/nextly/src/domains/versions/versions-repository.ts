@@ -22,6 +22,11 @@ import type { PrunableVersion } from "./retention";
 
 const TABLE = "nextly_versions";
 
+// Ids deleted per statement. Each id binds one parameter and SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER is 999 (the lowest across supported dialects), so
+// this stays well under it rather than tracking per-dialect capabilities.
+const DELETE_CHUNK_SIZE = 500;
+
 // Every column except `snapshot`, so metadata reads (history lists) can project
 // away the potentially large JSON payload instead of transferring then dropping
 // it. Keep in sync with VersionRow when adding a metadata column.
@@ -236,7 +241,25 @@ export class VersionsRepository {
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent
     // inserts in a way offset pagination is not.
+    //
+    // Autosave rows carry a NULL versionNo, so they can never satisfy a
+    // `versionNo < cursor` comparison and would silently vanish from a paged
+    // listing that asked for them. Reject the combination instead of returning
+    // a quietly incomplete page.
     if (typeof opts.cursor === "number") {
+      if (opts.includeAutosave) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "cursor",
+              code: "INVALID_COMBINATION",
+              message:
+                "Autosave versions cannot be paged by cursor; they have no version number.",
+            },
+          ],
+          logContext: { reason: "versions-cursor-with-autosave" },
+        });
+      }
       and.push({ column: "versionNo", op: "<", value: opts.cursor });
     }
     const rows = await this.db.select<VersionMeta>(TABLE, {
@@ -276,11 +299,24 @@ export class VersionsRepository {
     });
   }
 
-  /** Delete the given version rows in one statement. No-op for an empty list. */
+  /**
+   * Delete the given version rows. No-op for an empty list.
+   *
+   * Deletes in chunks because each id binds one query parameter and SQLite caps
+   * a statement at 999 (the lowest limit across supported dialects). A document
+   * can legitimately present far more stale rows than that on the first save
+   * after the retention cap starts being enforced, and an over-large statement
+   * would fail the whole write transaction rather than trimming.
+   */
   async deleteByIds(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
-    return this.db.delete(TABLE, {
-      and: [{ column: "id", op: "IN", value: ids }],
-    });
+    let deleted = 0;
+    for (let i = 0; i < ids.length; i += DELETE_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + DELETE_CHUNK_SIZE);
+      deleted += await this.db.delete(TABLE, {
+        and: [{ column: "id", op: "IN", value: chunk }],
+      });
+    }
+    return deleted;
   }
 }

@@ -11,6 +11,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
 
@@ -92,6 +93,60 @@ describe("version retention (integration)", () => {
     }
 
     expect(await versionsFor(current, "posts")).toHaveLength(4);
+  });
+
+  it("trims a large pre-existing backlog in one save", async () => {
+    // A site that ran before the cap was enforced presents a big backlog on its
+    // first save afterwards, spanning several delete statements. This covers
+    // that end to end; the chunk boundary itself is pinned in
+    // versions-repository-delete.test.ts.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          versions: { maxPerDoc: 2 },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "v1" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Seed a backlog directly, bypassing capture, so the next save has to trim
+    // more ids in one go than a single statement may bind.
+    const repo = new VersionsRepository(
+      current.adapter as unknown as ConstructorParameters<
+        typeof VersionsRepository
+      >[0]
+    );
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: "posts",
+      entryId: id,
+    };
+    for (let n = 2; n <= 620; n++) {
+      await repo.insertVersion({
+        ref,
+        versionNo: n,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: `seed-${n}` },
+      });
+    }
+
+    // One ordinary save triggers the trim across the whole backlog.
+    await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { title: "final" }
+    );
+
+    expect(await versionsFor(current, "posts")).toHaveLength(2);
   });
 
   it("prunes per document, not across the collection", async () => {

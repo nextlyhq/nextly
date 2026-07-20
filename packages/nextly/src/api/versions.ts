@@ -19,12 +19,17 @@
 
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondList } from "./response-shapes";
-import { requireRouteCollectionAccess } from "./route-auth";
+import { requireVersionReadAccess } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
+
+/** Page size when the caller does not ask for one. */
+const DEFAULT_LIMIT = 25;
+
+/** Hard ceiling, so one request cannot serialize an unbounded history. */
+const MAX_LIMIT = 100;
 
 /**
  * Context object for dynamic route handlers.
@@ -76,9 +81,10 @@ function parsePositiveInt(
 /**
  * GET handler listing version metadata, newest-first.
  *
- * Reading history requires only read access on the document: the list exposes
- * no content, just metadata. Path and query parameters are validated before the
- * access check so malformed input fails fast without an auth round-trip.
+ * Path and query parameters are validated before the access gate so malformed
+ * input fails fast. The gate then confirms the caller may read the live
+ * document: history metadata (authors, timestamps, how often a document
+ * changed) is itself disclosure, so it is restricted exactly as the document is.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -86,32 +92,33 @@ export const GET = withErrorHandler(
     const scopeKind = parseScopeKind(kind);
 
     const url = new URL(request.url);
-    const limit = parsePositiveInt(url.searchParams.get("limit"), "limit");
+    const requestedLimit = parsePositiveInt(
+      url.searchParams.get("limit"),
+      "limit"
+    );
     const cursor = parsePositiveInt(url.searchParams.get("cursor"), "cursor");
 
-    await requireRouteCollectionAccess(request, "read", slug);
+    // Always bounded: an unset limit still pages, and an oversized one is
+    // clamped, so no single request can serialize an entire long history.
+    const limit = Math.min(requestedLimit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-    await getCachedNextly();
+    await requireVersionReadAccess(request, scopeKind, slug, id);
+
     const versions = getService("versionsService");
-
     const rows = await versions.list(
       { scopeKind, scopeSlug: slug, entryId: id },
-      {
-        ...(limit !== undefined ? { limit } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-      }
+      { limit, ...(cursor !== undefined ? { cursor } : {}) }
     );
 
     // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
-    // so the meta reports the returned window and whether another page may
-    // follow (a full page implies there may be more).
-    const pageSize = limit ?? rows.length;
+    // so the meta describes the returned window. A full page implies another
+    // page may follow; a short page proves it does not.
     return respondList(rows, {
       total: rows.length,
       page: 1,
-      limit: pageSize,
+      limit,
       totalPages: 1,
-      hasNext: pageSize > 0 && rows.length === pageSize,
+      hasNext: rows.length === limit,
       hasPrev: cursor !== undefined,
     });
   }

@@ -89,6 +89,21 @@ describe("VersionsService (integration)", () => {
     expect((version.snapshot as { title?: string }).title).toBe("v1");
   });
 
+  it("rejects cursor paging combined with autosave rows", async () => {
+    // Autosave rows carry a NULL versionNo, so they can never satisfy
+    // `versionNo < cursor`. Returning a quietly short page would be worse than
+    // refusing the combination.
+    const { id, handle } = await seed();
+    const versions = handle.getService<VersionsService>("versionsService");
+
+    await expect(
+      versions.list(
+        { scopeKind: "collection", scopeSlug: "posts", entryId: id },
+        { cursor: 3, includeAutosave: true }
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("throws a not-found error for a missing version", async () => {
     const { id, handle } = await seed();
     const versions = handle.getService<VersionsService>("versionsService");

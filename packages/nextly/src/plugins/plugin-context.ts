@@ -752,7 +752,6 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  const versionsService = getServiceFn("versionsService");
   const db = getServiceFn("db");
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
@@ -801,7 +800,13 @@ export function createPluginContext(
       users: userService,
       media: mediaService,
       email: emailService,
-      versions: versionsService,
+      // Resolved on access, not at construction: `createPluginContext` is
+      // exported, and a resolver written before this service existed would
+      // otherwise throw while building the context for callers that never
+      // touch version history.
+      get versions() {
+        return getServiceFn("versionsService");
+      },
       plugins: buildPluginServicesNamespace(),
     },
     db,

@@ -18,11 +18,13 @@
 
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondDoc } from "./response-shapes";
-import { requireRouteCollectionAccess } from "./route-auth";
+import {
+  redactSnapshotForUser,
+  requireVersionReadAccess,
+} from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -59,8 +61,11 @@ function parseScopeKind(kind: string): VersionScopeKind {
 /**
  * GET handler returning one version with its snapshot.
  *
- * Both path parameters are validated before the access check so malformed
- * input fails fast without an auth round-trip.
+ * Both path parameters are validated before the access gate so malformed input
+ * fails fast. The gate confirms the caller may read the live document (which is
+ * what applies owner-only rules and status filtering), and the snapshot is then
+ * passed through field-level read redaction — a stored snapshot must never
+ * reveal a field a normal read would hide.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -80,14 +85,15 @@ export const GET = withErrorHandler(
       });
     }
 
-    await requireRouteCollectionAccess(request, "read", slug);
+    const user = await requireVersionReadAccess(request, scopeKind, slug, id);
 
-    await getCachedNextly();
     const versions = getService("versionsService");
     const row = await versions.get(
       { scopeKind, scopeSlug: slug, entryId: id },
       parsed
     );
+
+    await redactSnapshotForUser(row.snapshot, scopeKind, slug, user);
 
     return respondDoc(row);
   }

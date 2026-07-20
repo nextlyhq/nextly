@@ -98,6 +98,7 @@ import type {
 } from "../services/collections/collection-registry-service";
 import type { CollectionRelationshipService } from "../services/collections/collection-relationship-service";
 import type { CollectionService } from "../services/collections/collection-service";
+import type { CollectionsHandler } from "../services/collections-handler";
 import type {
   ComponentRegistryService,
   CodeFirstComponentConfig,
@@ -288,6 +289,9 @@ export interface ServiceMap {
   dashboardService: DashboardService;
   metaService: MetaService;
   versionsService: VersionsService;
+  // Registered by registerCollectionServices but previously untyped here, so
+  // consumers had to reach past getService() to use it.
+  collectionsHandler: CollectionsHandler;
 }
 
 // ============================================================
