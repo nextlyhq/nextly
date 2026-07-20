@@ -401,6 +401,75 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByText("null")).toBeInTheDocument();
   });
 
+  it("prefers the filename the user chose over the storage path", () => {
+    // Media records keep the internal storage path in `filename`; the name the
+    // user picked is `originalFilename`, which is what other admin surfaces show.
+    render(
+      <FieldValueDisplay
+        field={field("upload")}
+        value={{
+          id: "m1",
+          filename: "uploads/2026/ab12cd34.pdf",
+          originalFilename: "Quarterly report.pdf",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Quarterly report.pdf")).toBeInTheDocument();
+    expect(
+      screen.queryByText("uploads/2026/ab12cd34.pdf")
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not point an image at a non-image file", () => {
+    // Pointing an <img> at a PDF requests the whole file and then fails to
+    // draw it; the placeholder plus the filename is the useful rendering.
+    const { container } = render(
+      <FieldValueDisplay
+        field={field("upload")}
+        value={{
+          id: "m1",
+          originalFilename: "report.pdf",
+          url: "/uploads/report.pdf",
+          mimeType: "application/pdf",
+        }}
+      />
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
+  });
+
+  it("still renders an image upload from its own url", () => {
+    const { container } = render(
+      <FieldValueDisplay
+        field={field("upload")}
+        value={{
+          id: "m2",
+          originalFilename: "hero.jpg",
+          url: "/uploads/hero.jpg",
+          mimeType: "image/jpeg",
+        }}
+      />
+    );
+
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("shows a parsed JSON null rather than reporting it unset", () => {
+    // An absent key arrives as undefined; a stored JSON null arrives as null.
+    render(<FieldValueDisplay field={field("json")} value={null} />);
+
+    expect(screen.queryByText("Not set")).not.toBeInTheDocument();
+    expect(screen.getByText("null")).toBeInTheDocument();
+  });
+
+  it("still reports an absent json field as unset", () => {
+    render(<FieldValueDisplay field={field("json")} value={undefined} />);
+
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
   it("falls back to text for a field type with no renderer", () => {
     // A plugin field type must still show its value rather than nothing.
     render(

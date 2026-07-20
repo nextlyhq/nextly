@@ -315,11 +315,28 @@ function UploadValue({ entry }: { entry: unknown }) {
   const file = entry as {
     id?: string;
     filename?: string | null;
+    originalFilename?: string | null;
+    original_filename?: string | null;
     thumbnailUrl?: string | null;
     url?: string | null;
+    mimeType?: string | null;
   };
-  const src = file.thumbnailUrl ?? file.url;
-  const name = file.filename ?? file.id ?? "Unknown file";
+
+  // `filename` holds the internal storage path; the name the user chose lives
+  // in `originalFilename`, which is what every other admin surface shows.
+  const name =
+    file.originalFilename ??
+    file.original_filename ??
+    file.filename ??
+    file.id ??
+    "Unknown file";
+
+  // A thumbnail is always safe to render. Falling back to the file's own URL is
+  // only safe for an image: pointing an <img> at a PDF or an archive requests
+  // the whole file and then fails to draw it, so those show the placeholder and
+  // rely on the filename beside it.
+  const isImage = file.mimeType?.startsWith("image/") ?? false;
+  const src = file.thumbnailUrl ?? (isImage ? file.url : null);
 
   return (
     <span className="inline-flex items-center gap-2 border border-border p-1 pr-2">
@@ -529,15 +546,13 @@ export function FieldValueDisplay({
     (field as { label?: string }).label ?? field.name ?? "Untitled field";
 
   // A `json` field may legitimately store the JSON primitive `null`, which
-  // normalizes to the same value as an absent field. Where the storage keeps
-  // them apart — a serialized column holds the characters "null" — the stored
-  // primitive is shown rather than reported as unset. A dialect that returns
-  // JSON `null` already parsed is indistinguishable from an absent value here,
-  // and needs the read path to settle the shape.
+  // normalizes to the same value as an absent field. The two are separable at
+  // this boundary: an absent key arrives as `undefined`, while a stored null
+  // arrives as `null` (or as the characters "null" from a serialized column).
+  // Only the first is treated as unset.
   const isStoredJsonNull =
     field.type === "json" &&
-    typeof value === "string" &&
-    value.trim() === "null";
+    (value === null || (typeof value === "string" && value.trim() === "null"));
 
   const render = registry.get(field.type);
   const body =
