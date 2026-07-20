@@ -1,0 +1,94 @@
+name: Dependency audit
+
+# Weekly check that no known-vulnerable package is resolved in the lockfile.
+#
+# Dependabot alone does not cover this repository. Most advisories here land on
+# TRANSITIVE packages pinned through `pnpm.overrides`, and Dependabot cannot
+# open a PR against an override — it only bumps direct dependencies. So those
+# alerts sit in the security tab with nothing proposing a fix, and the caret
+# ranges in `overrides` do not rescue them either: the lockfile freezes the
+# resolution, so `^1.1.13` keeps installing 1.1.14 long after 1.1.16 ships the
+# patch. Three high-severity advisories accumulated exactly that way.
+#
+# Scheduled rather than per-PR, matching package-smoke: a new advisory can be
+# published against an unchanged tree at any time, so gating PRs on it would
+# block unrelated work for a reason the author did not cause and often cannot
+# fix in that PR. A red week shows up as an issue instead.
+
+on:
+  schedule:
+    # Mondays, after Dependabot's 04:00 run, so direct-dependency PRs already
+    # exist and the audit reports only what they will not cover.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit the lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # `--frozen-lockfile` so the audit reflects what CI and contributors
+      # actually resolve, not what a fresh resolution might pick.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Audits the whole tree, dev included. Build tooling is not exempt: it
+      # runs on maintainer machines and in CI with repository credentials in
+      # the environment.
+      #
+      # `high` rather than `moderate` because this job exists to cover what
+      # Dependabot cannot. Direct dependencies already get their own PR at any
+      # severity; a transitive package behind an override gets nothing, so the
+      # bar here is set where silence is actually dangerous. Lower-severity
+      # transitive findings stay visible in the security tab.
+      - name: Audit
+        run: pnpm audit --audit-level=high
+
+  report-failure:
+    name: File an issue on failure
+    needs: [audit]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-nightly-failure --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "Weekly dependency audit failed again: $RUN_URL"
+          else
+            # printf keeps the multi-line body inside this YAML block scalar;
+            # a raw multi-line string here would dedent and break the file.
+            body=$(printf 'The weekly dependency audit found a high or critical advisory in the lockfile. Run: %s\n\nIf the package is transitive, patch it with a version-range-keyed entry in the root `pnpm.overrides` (for example `"pkg@>=3": "^5.0.7"`) rather than waiting for Dependabot, which does not open PRs against overrides.' "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Weekly dependency audit is failing" \
+              --label ci-nightly-failure \
+              --body "$body"
+          fi
