@@ -57,10 +57,18 @@ describe("restoreVersion", () => {
       locale: null,
       snapshot: { title: "Old title" },
     });
-    collectionSpy.mockResolvedValue({ fields, localized: false });
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: false,
+      versions: { enabled: true },
+    });
     updateEntrySpy.mockResolvedValue({ success: true });
     updateSingleSpy.mockResolvedValue({ success: true });
-    singleRegistrySpy.mockResolvedValue({ fields, localized: false });
+    singleRegistrySpy.mockResolvedValue({
+      fields,
+      localized: false,
+      versions: { enabled: true },
+    });
   });
 
   it("writes the snapshot through the normal update path", async () => {
@@ -93,7 +101,11 @@ describe("restoreVersion", () => {
       locale: "de",
       snapshot: { title: "Hallo" },
     });
-    collectionSpy.mockResolvedValue({ fields, localized: true });
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: true,
+      versions: { enabled: true },
+    });
 
     await restoreVersion(base);
 
@@ -148,16 +160,6 @@ describe("restoreVersion", () => {
     expect(updateEntrySpy).not.toHaveBeenCalled();
   });
 
-  it("does not report success when the write reported failure", async () => {
-    // The update services signal failure in their result rather than throwing,
-    // so a restore that ignored it would claim to have restored nothing.
-    updateEntrySpy.mockResolvedValue({ success: false, statusCode: 500 });
-
-    await expect(restoreVersion(base)).rejects.toMatchObject({
-      code: "INTERNAL_ERROR",
-    });
-  });
-
   it("surfaces a denied write as not found", async () => {
     // Matching the read gate: confirming the document exists to a caller who
     // may not write it is itself disclosure.
@@ -176,6 +178,46 @@ describe("restoreVersion", () => {
       { title: "Old title" },
       expect.objectContaining({ sourceVersionNo: 3 })
     );
+  });
+
+  it("refuses to restore when versioning has been turned off", async () => {
+    // The write goes through the ordinary update, which captures a version only
+    // while versioning is on. Restoring anyway would overwrite live content
+    // without preserving what it replaced — a destructive act sold as a
+    // recoverable one.
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: false,
+      versions: { enabled: false },
+    });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(updateEntrySpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rejected write's own reason instead of reporting a fault", async () => {
+    // A snapshot can fail today's rules for ordinary reasons — an option since
+    // removed, a slug that now collides. Those are answers an editor can act
+    // on, not server faults.
+    updateEntrySpy.mockResolvedValue({
+      success: false,
+      statusCode: 409,
+      message: "That slug is already taken.",
+    });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("still reports a genuine server fault as one", async () => {
+    updateEntrySpy.mockResolvedValue({ success: false, statusCode: 500 });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+    });
   });
 
   it("rejects a version number that is not positive", async () => {

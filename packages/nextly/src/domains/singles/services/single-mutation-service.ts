@@ -611,11 +611,18 @@ export class SingleMutationService extends BaseService {
                   (parentRow as { status?: unknown }).status,
                 parts: { parentRow, components },
                 createdBy: options.user?.id ?? null,
-                // Set only when a companion write actually routed values for
-                // this locale. A requested locale that routed nowhere would
-                // label the snapshot as a language whose values it does not
-                // hold, and a restore trusts this label to decide where to write.
-                locale: writeLocale ?? null,
+                // Labelled with a locale only when locale-specific state was
+                // actually captured. A localized Single routes every write
+                // through `writeLocale`, including one touching only shared
+                // fields on a locale with no companion row — that snapshot
+                // holds no translations and keeps the MAIN row's status, so
+                // calling it that locale's would let a restore publish a
+                // language from state that was never its own.
+                locale:
+                  Object.keys(companionData).length > 0 ||
+                  companionStatus !== undefined
+                    ? (writeLocale ?? null)
+                    : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,
               });

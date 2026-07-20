@@ -27,6 +27,8 @@ import {
   type VersionScope,
 } from "@admin/services/versionApi";
 
+import { singleDocumentKeys, singleKeys } from "./useSingles";
+
 /** Page size for the history list. */
 const PAGE_SIZE = 25;
 
@@ -184,7 +186,13 @@ export function useRestoreVersion({
       void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
       void queryClient.invalidateQueries({ queryKey: entryKeys.all });
       if (scope.kind === "single") {
-        void queryClient.invalidateQueries({ queryKey: ["singles"] });
+        // The editor reads the document through `singleDocumentKeys`, which is
+        // a different root from the metadata list — invalidating only the list
+        // would leave the form showing pre-restore content.
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.all(),
+        });
+        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
       }
       onSuccess?.(result);
     },

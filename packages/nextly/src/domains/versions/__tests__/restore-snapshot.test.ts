@@ -160,6 +160,125 @@ describe("buildRestorePayload", () => {
   });
 });
 
+describe("buildRestorePayload — layered schemas", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("keeps the children of a presentational group", () => {
+    // A nameless group lays fields out; its children are stored at the top
+    // level, so treating the group as one key drops every field inside it.
+    const grouped = [
+      {
+        name: "",
+        type: "group",
+        fields: [{ name: "city", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { city: "Lisbon" },
+      grouped,
+      ctx
+    );
+
+    expect(payload).toEqual({ city: "Lisbon" });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("drops a system column the entity does not have", () => {
+    // A plugin collection has `slug` only when it declares it; naming a column
+    // the table lacks fails the whole restore.
+    const { payload, droppedFields } = buildRestorePayload(
+      { title: "Hello", slug: "hello" },
+      [{ name: "title", type: "text" }] as FieldConfig[],
+      { hasStatus: true, hasSlug: false, hasTitle: true }
+    );
+
+    expect(payload).toEqual({ title: "Hello" });
+    expect(droppedFields).toEqual(["slug"]);
+  });
+
+  it("prunes a key removed from inside a container", () => {
+    // Validation walks the schema's fields, not the value's keys, so a removed
+    // nested key would be written back into the JSON column untouched.
+    const nested = [
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "kept", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { settings: { kept: "yes", removedSince: "stale" } },
+      nested,
+      ctx
+    );
+
+    expect(payload).toEqual({ settings: { kept: "yes" } });
+    expect(droppedFields).toEqual(["settings.removedSince"]);
+  });
+
+  it("prunes removed keys inside each row of a repeater", () => {
+    const rows = [
+      {
+        name: "items",
+        type: "repeater",
+        fields: [{ name: "label", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { items: [{ label: "a", gone: 1 }, { label: "b" }] },
+      rows,
+      ctx
+    );
+
+    expect(payload).toEqual({ items: [{ label: "a" }, { label: "b" }] });
+    expect(droppedFields).toEqual(["items[0].gone"]);
+  });
+
+  it("skips a component whose schema holds a password", () => {
+    // A component names its schema by slug rather than carrying it, so without
+    // the resolved fields the walk cannot see the password inside.
+    const withComponent = [
+      { name: "auth", type: "component", component: "credentials" },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["credentials", [{ name: "secret", type: "password" }] as FieldConfig[]],
+    ]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { auth: { _componentType: "credentials" } },
+      withComponent,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["auth"]);
+  });
+
+  it("keeps a component's type discriminator when pruning it", () => {
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
+    ]);
+
+    const { payload } = buildRestorePayload(
+      { hero: { _componentType: "banner", heading: "Hi", gone: 1 } },
+      withComponent,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({
+      hero: { _componentType: "banner", heading: "Hi" },
+    });
+  });
+});
+
 describe("canRestoreLocale", () => {
   it("allows an unlocalized document regardless of the version's locale", () => {
     expect(canRestoreLocale(false, null)).toBe(true);

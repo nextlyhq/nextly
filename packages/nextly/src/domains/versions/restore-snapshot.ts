@@ -6,6 +6,13 @@
  * all run identically. That leaves one job here: decide what of a snapshot may
  * be resubmitted.
  *
+ * The decision is entirely schema-driven, and the schema is more layered than a
+ * flat field list suggests — a presentational group's children sit at the
+ * document's top level, a container's children live inside its stored value,
+ * and a component names its child schema by slug rather than carrying it. Each
+ * has to be resolved, or the filter passes through keys the table no longer has
+ * or strips keys it still does.
+ *
  * @module domains/versions/restore-snapshot
  */
 
@@ -30,44 +37,6 @@ const IMMUTABLE_FIELDS = new Set([
   "created_by",
 ]);
 
-/**
- * Columns every document carries whether or not the schema declares a field of
- * that name — the schema pipeline synthesizes them when it does not.
- */
-const ALWAYS_WRITABLE_COLUMNS = new Set(["title", "slug"]);
-
-/**
- * Whether any field in this subtree stores a password.
- *
- * Capture strips password values wherever they appear, including inside a
- * group or repeater. The update path replaces a container wholesale, so
- * resubmitting one that held a password would overwrite the stored credential
- * with the stripped snapshot's blank.
- */
-function containsPasswordField(fields: FieldConfig[]): boolean {
-  return fields.some(field => {
-    if (field.type === "password") return true;
-    const nested = (field as { fields?: unknown }).fields;
-    return Array.isArray(nested)
-      ? containsPasswordField(nested as FieldConfig[])
-      : false;
-  });
-}
-
-/**
- * Every name the current schema accepts, including nested container names,
- * which are written as whole values by the update path.
- */
-function currentFieldNames(fields: FieldConfig[]): Set<string> {
-  const names = new Set<string>();
-  for (const field of fields) {
-    if (typeof field.name === "string" && field.name.length > 0) {
-      names.add(field.name);
-    }
-  }
-  return names;
-}
-
 /** What the current schema accepts, beyond its declared fields. */
 export interface RestoreSchemaContext {
   /**
@@ -75,17 +44,186 @@ export interface RestoreSchemaContext {
    * column, so a snapshot taken while it was on still carries `status`.
    */
   hasStatus: boolean;
+  /**
+   * Whether the entity has a `slug` column. It is synthesized for ordinary
+   * collections, but a plugin collection has one only when it declares the
+   * field, so it cannot be assumed.
+   */
+  hasSlug: boolean;
+  /** Whether the entity has a `title` column, on the same terms as `slug`. */
+  hasTitle: boolean;
+  /**
+   * Child fields for each component slug the schema references. A component
+   * field names its schema rather than carrying it, so without these the walk
+   * cannot see inside one.
+   */
+  componentFields?: Map<string, FieldConfig[]>;
 }
 
 export interface RestorePayloadResult {
   /** What to submit through the normal update path. */
   payload: Record<string, unknown>;
   /**
-   * Snapshot keys that no longer exist in the schema. Reported rather than
-   * silently dropped, so a restore can tell the editor what it could not bring
+   * Snapshot keys that cannot be applied to the current schema, whether because
+   * the field is gone or because resubmitting it would destroy something. Named
+   * rather than silently dropped, so a restore reports what it could not bring
    * back instead of appearing to restore the document exactly.
    */
   droppedFields: string[];
+}
+
+/** A field's declared children, when it carries them inline. */
+function inlineChildren(field: FieldConfig): FieldConfig[] | undefined {
+  const nested = (field as { fields?: unknown }).fields;
+  return Array.isArray(nested) ? (nested as FieldConfig[]) : undefined;
+}
+
+/** The component slugs a field references, which name its child schema. */
+function componentSlugs(field: FieldConfig): string[] {
+  const one = (field as { component?: unknown }).component;
+  const many = (field as { components?: unknown }).components;
+  const slugs: string[] = [];
+  if (typeof one === "string") slugs.push(one);
+  if (Array.isArray(many)) {
+    for (const slug of many) if (typeof slug === "string") slugs.push(slug);
+  }
+  return slugs;
+}
+
+/** A field's children, wherever the schema keeps them. */
+function childrenOf(
+  field: FieldConfig,
+  componentFields?: Map<string, FieldConfig[]>
+): FieldConfig[] {
+  const inline = inlineChildren(field);
+  if (inline) return inline;
+
+  const resolved: FieldConfig[] = [];
+  for (const slug of componentSlugs(field)) {
+    const fields = componentFields?.get(slug);
+    if (fields) resolved.push(...fields);
+  }
+  return resolved;
+}
+
+/**
+ * Whether anything in this subtree stores a password.
+ *
+ * Capture strips password values wherever they appear, so any value holding one
+ * comes back incomplete. A field that is a password *now* counts too: it may
+ * not have been when the snapshot was taken, and a text field converted later
+ * leaves a readable value that restoring would hash over the live credential.
+ */
+function containsPasswordField(
+  fields: FieldConfig[],
+  componentFields?: Map<string, FieldConfig[]>,
+  seen: Set<string> = new Set()
+): boolean {
+  return fields.some(field => {
+    if (field.type === "password") return true;
+
+    // A component can reference itself through a descendant, so a slug already
+    // walked is not followed again.
+    const slugs = componentSlugs(field);
+    if (slugs.length > 0 && slugs.every(slug => seen.has(slug))) return false;
+    for (const slug of slugs) seen.add(slug);
+
+    const children = childrenOf(field, componentFields);
+    return children.length > 0
+      ? containsPasswordField(children, componentFields, seen)
+      : false;
+  });
+}
+
+/**
+ * Fields addressable at the document's top level.
+ *
+ * A group with no name is presentational: it exists to lay fields out, and its
+ * children are stored at this level rather than under the group. Treating it as
+ * one key would drop every field inside it as unknown.
+ */
+function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
+  const byName = new Map<string, FieldConfig>();
+
+  for (const field of fields) {
+    if (typeof field.name === "string" && field.name.length > 0) {
+      byName.set(field.name, field);
+      continue;
+    }
+
+    if (field.type === "group") {
+      for (const child of inlineChildren(field) ?? []) {
+        if (typeof child.name === "string" && child.name.length > 0) {
+          byName.set(child.name, child);
+        }
+      }
+    }
+  }
+
+  return byName;
+}
+
+/**
+ * Remove keys the current schema no longer declares from a container's stored
+ * value, recursively.
+ *
+ * The update writes a container as one JSON value, and validation walks the
+ * schema's fields rather than the value's keys — so a key removed from the
+ * schema is neither rejected nor stripped. It would be written back into the
+ * column and served again as though it were still part of the document.
+ */
+function pruneContainerValue(
+  value: unknown,
+  fields: FieldConfig[],
+  componentFields: Map<string, FieldConfig[]> | undefined,
+  removed: string[],
+  path: string
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((row, i) =>
+      pruneContainerValue(
+        row,
+        fields,
+        componentFields,
+        removed,
+        `${path}[${i}]`
+      )
+    );
+  }
+
+  if (typeof value !== "object" || value === null) return value;
+
+  const known = topLevelFields(fields);
+  const out: Record<string, unknown> = {};
+
+  for (const [key, child] of Object.entries(value)) {
+    // Components carry a type discriminator that is not a schema field but is
+    // needed to write the value back.
+    if (key === "_componentType") {
+      out[key] = child;
+      continue;
+    }
+
+    const field = known.get(key);
+    if (!field) {
+      removed.push(`${path}.${key}`);
+      continue;
+    }
+
+    const grandchildren = childrenOf(field, componentFields);
+    out[key] =
+      grandchildren.length > 0
+        ? pruneContainerValue(
+            child,
+            grandchildren,
+            componentFields,
+            removed,
+            `${path}.${key}`
+          )
+        : child;
+  }
+
+  return out;
 }
 
 /**
@@ -100,20 +238,25 @@ export interface RestorePayloadResult {
 export function buildRestorePayload(
   snapshot: unknown,
   fields: FieldConfig[],
-  context: RestoreSchemaContext = { hasStatus: true }
+  context: RestoreSchemaContext = {
+    hasStatus: true,
+    hasSlug: true,
+    hasTitle: true,
+  }
 ): RestorePayloadResult {
   if (typeof snapshot !== "object" || snapshot === null) {
     return { payload: {}, droppedFields: [] };
   }
 
-  const known = currentFieldNames(fields);
-  const byName = new Map(
-    fields
-      .filter(
-        (f): f is FieldConfig & { name: string } => typeof f.name === "string"
-      )
-      .map(f => [f.name, f])
-  );
+  const known = topLevelFields(fields);
+  const { componentFields } = context;
+
+  /** System columns that exist only when the entity actually has them. */
+  const systemColumns = new Map<string, boolean>([
+    ["status", context.hasStatus],
+    ["slug", context.hasSlug],
+    ["title", context.hasTitle],
+  ]);
 
   const payload: Record<string, unknown> = {};
   const droppedFields: string[] = [];
@@ -121,31 +264,39 @@ export function buildRestorePayload(
   for (const [key, value] of Object.entries(snapshot)) {
     if (IMMUTABLE_FIELDS.has(key)) continue;
 
-    // Turning draft/published off drops the column, so a snapshot from before
-    // that still names it. Sending it would fail the whole restore.
-    if (key === "status" && !context.hasStatus) {
+    const field = known.get(key);
+
+    if (!field) {
+      // A system column exists only when the entity has it; naming one it does
+      // not have would fail the whole restore in the raw SET clause.
+      const systemColumnExists = systemColumns.get(key);
+      if (systemColumnExists === true) {
+        payload[key] = value;
+      } else {
+        droppedFields.push(key);
+      }
+      continue;
+    }
+
+    // Nothing that stores a password is resubmitted, at any depth: the
+    // snapshot's copy has it stripped, and the update replaces a container
+    // whole, which would wipe the stored credential.
+    if (containsPasswordField([field], componentFields)) {
       droppedFields.push(key);
       continue;
     }
 
-    if (
-      !known.has(key) &&
-      !ALWAYS_WRITABLE_COLUMNS.has(key) &&
-      key !== "status"
-    ) {
-      droppedFields.push(key);
-      continue;
-    }
-
-    // Nothing that stores a password is resubmitted, at any depth. A container
-    // is skipped because the update replaces it whole and the snapshot's copy
-    // has the password stripped out. A field that is a password *now* is
-    // skipped because it may not have been one when the snapshot was taken —
-    // a text field later converted to a password leaves a readable value in
-    // old snapshots, and restoring it would overwrite the live credential.
-    const field = byName.get(key);
-    if (field && containsPasswordField([field])) {
-      droppedFields.push(key);
+    const children = childrenOf(field, componentFields);
+    if (children.length > 0) {
+      const removed: string[] = [];
+      payload[key] = pruneContainerValue(
+        value,
+        children,
+        componentFields,
+        removed,
+        key
+      );
+      droppedFields.push(...removed);
       continue;
     }
 
