@@ -12,6 +12,7 @@ import {
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
+  decimal as mysqlDecimal,
   index as mysqlIndex,
 } from "drizzle-orm/mysql-core";
 import {
@@ -23,6 +24,7 @@ import {
   jsonb as pgJsonb,
   varchar as pgVarchar,
   doublePrecision as pgDoublePrecision,
+  numeric as pgNumeric,
   index as pgIndex,
 } from "drizzle-orm/pg-core";
 import {
@@ -30,6 +32,7 @@ import {
   text as sqliteText,
   integer as sqliteInteger,
   real as sqliteReal,
+  numeric as sqliteNumeric,
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
@@ -56,9 +59,14 @@ import {
 import type {
   FieldConfig,
   DataFieldConfig,
+  NumberFieldConfig,
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import {
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
+} from "../../schema/services/field-column-descriptor";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -71,6 +79,7 @@ const SQL_COLUMN_TYPES: Record<
     boolean: string;
     integer: string;
     real: string;
+    decimal: (precision: number, scale: number) => string;
     timestamp: string;
     json: string;
   }
@@ -82,6 +91,8 @@ const SQL_COLUMN_TYPES: Record<
     boolean: "BOOLEAN",
     integer: "INTEGER",
     real: "REAL",
+    decimal: (precision: number, scale: number) =>
+      `NUMERIC(${precision}, ${scale})`,
     timestamp: "TIMESTAMP",
     json: "JSONB",
   },
@@ -92,6 +103,8 @@ const SQL_COLUMN_TYPES: Record<
     boolean: "BOOLEAN",
     integer: "INT",
     real: "DOUBLE",
+    decimal: (precision: number, scale: number) =>
+      `DECIMAL(${precision}, ${scale})`,
     timestamp: "DATETIME",
     json: "JSON",
   },
@@ -102,6 +115,9 @@ const SQL_COLUMN_TYPES: Record<
     boolean: "INTEGER",
     integer: "INTEGER",
     real: "REAL",
+    // SQLite has no fixed-precision decimal type; a NUMERIC column carries
+    // NUMERIC affinity and stores the value best-effort.
+    decimal: () => "NUMERIC",
     timestamp: "INTEGER",
     json: "TEXT",
   },
@@ -701,6 +717,29 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     return parts.join(" ");
   }
 
+  // Classifies a number field's storage the same way collections and
+  // migrate:create do (via the shared column descriptor): exact decimal for
+  // `dbType: "decimal"`, floating point for a UI field's `options.format ===
+  // "float"`, integer otherwise. Keeps a component's number column matching the
+  // type the rest of the schema pipeline emits for the identical field.
+  private numberColumnKind(
+    field: NumberFieldConfig
+  ): "integer" | "decimal" | "double" {
+    if (field.dbType === "decimal") return "decimal";
+    const format = (field as { options?: { format?: string } }).options?.format;
+    return format === "float" ? "double" : "integer";
+  }
+
+  private decimalDimensions(field: NumberFieldConfig): {
+    precision: number;
+    scale: number;
+  } {
+    return {
+      precision: field.precision ?? DEFAULT_DECIMAL_PRECISION,
+      scale: field.scale ?? DEFAULT_DECIMAL_SCALE,
+    };
+  }
+
   private getColumnType(field: DataFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
@@ -721,6 +760,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return types.varchar(255);
     }
     if (isNumberField(field)) {
+      const kind = this.numberColumnKind(field);
+      if (kind === "integer") return types.integer;
+      if (kind === "decimal") {
+        const { precision, scale } = this.decimalDimensions(field);
+        return types.decimal(precision, scale);
+      }
       return types.real;
     }
     if (isCheckboxField(field)) {
@@ -769,9 +814,14 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (isNumberField(field)) {
-      return isRequired
-        ? pgDoublePrecision(colName).notNull()
-        : pgDoublePrecision(colName);
+      const kind = this.numberColumnKind(field);
+      const column =
+        kind === "integer"
+          ? pgInteger(colName)
+          : kind === "decimal"
+            ? pgNumeric(colName, this.decimalDimensions(field))
+            : pgDoublePrecision(colName);
+      return isRequired ? column.notNull() : column;
     }
     if (isCheckboxField(field)) {
       return isRequired ? pgBoolean(colName).notNull() : pgBoolean(colName);
@@ -810,7 +860,14 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return isRequired ? mysqlText(colName).notNull() : mysqlText(colName);
     }
     if (isNumberField(field)) {
-      return isRequired ? mysqlDouble(colName).notNull() : mysqlDouble(colName);
+      const kind = this.numberColumnKind(field);
+      const column =
+        kind === "integer"
+          ? mysqlInt(colName)
+          : kind === "decimal"
+            ? mysqlDecimal(colName, this.decimalDimensions(field))
+            : mysqlDouble(colName);
+      return isRequired ? column.notNull() : column;
     }
     if (isCheckboxField(field)) {
       return isRequired
@@ -855,7 +912,14 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
     if (isNumberField(field)) {
-      return isRequired ? sqliteReal(colName).notNull() : sqliteReal(colName);
+      const kind = this.numberColumnKind(field);
+      const column =
+        kind === "integer"
+          ? sqliteInteger(colName)
+          : kind === "decimal"
+            ? sqliteNumeric(colName)
+            : sqliteReal(colName);
+      return isRequired ? column.notNull() : column;
     }
     if (isCheckboxField(field)) {
       return isRequired
@@ -910,6 +974,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return `varchar('${colName}', { length: 255 })`;
     }
     if (isNumberField(field)) {
+      const kind = this.numberColumnKind(field);
+      if (kind === "integer") return `integer('${colName}')`;
+      if (kind === "decimal") {
+        const { precision, scale } = this.decimalDimensions(field);
+        return `numeric('${colName}', { precision: ${precision}, scale: ${scale} })`;
+      }
       return `doublePrecision('${colName}')`;
     }
     if (isCheckboxField(field)) {
@@ -948,6 +1018,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       return `text('${colName}')`;
     }
     if (isNumberField(field)) {
+      const kind = this.numberColumnKind(field);
+      if (kind === "integer") return `integer('${colName}')`;
+      if (kind === "decimal") {
+        const { precision, scale } = this.decimalDimensions(field);
+        return `decimal('${colName}', { precision: ${precision}, scale: ${scale} })`;
+      }
       return `double('${colName}')`;
     }
     if (isCheckboxField(field)) {
@@ -970,6 +1046,9 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     colName: string
   ): string {
     if (isNumberField(field)) {
+      const kind = this.numberColumnKind(field);
+      if (kind === "integer") return `integer('${colName}')`;
+      if (kind === "decimal") return `numeric('${colName}')`;
       return `real('${colName}')`;
     }
     if (isCheckboxField(field)) {
@@ -1018,7 +1097,16 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       if (!isDataField(field) || isComponentField(field)) continue;
 
       if (this.dialect === "sqlite") {
-        if (isNumberField(field)) imports.add("real");
+        if (isNumberField(field)) {
+          const kind = this.numberColumnKind(field);
+          imports.add(
+            kind === "decimal"
+              ? "numeric"
+              : kind === "double"
+                ? "real"
+                : "integer"
+          );
+        }
         if (isCheckboxField(field)) imports.add("integer");
         if (isDateField(field)) imports.add("integer");
       } else if (this.dialect === "mysql") {
@@ -1033,7 +1121,16 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         ) {
           imports.add("varchar");
         }
-        if (isNumberField(field)) imports.add("double");
+        if (isNumberField(field)) {
+          const kind = this.numberColumnKind(field);
+          imports.add(
+            kind === "decimal"
+              ? "decimal"
+              : kind === "double"
+                ? "double"
+                : "integer"
+          );
+        }
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
         if (
@@ -1053,7 +1150,16 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
             imports.add("varchar");
           }
         }
-        if (isNumberField(field)) imports.add("doublePrecision");
+        if (isNumberField(field)) {
+          const kind = this.numberColumnKind(field);
+          imports.add(
+            kind === "decimal"
+              ? "numeric"
+              : kind === "double"
+                ? "doublePrecision"
+                : "integer"
+          );
+        }
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
         if (
