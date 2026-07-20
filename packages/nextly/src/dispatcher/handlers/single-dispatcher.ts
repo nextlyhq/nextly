@@ -93,6 +93,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   getVersionForDocument,
+  restoreVersionForDocument,
   listVersionsForDocument,
   userFromParams,
 } from "./versions-methods";
@@ -324,6 +325,22 @@ export const SINGLE_VERSION_METHODS: Record<
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
       });
       return respondList(result.items, result.meta);
+    },
+  },
+  restoreSingleVersion: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The document id comes from the live row, never from the URL: a Single
+      // has exactly one document and the client must not name which.
+      const entryId = await requireLiveSingleId(slug);
+      const result = await restoreVersionForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondAction("Version restored.", result);
     },
   },
   getSingleVersion: {

@@ -35,17 +35,22 @@ describe("version methods are registered", () => {
     getSpy.mockResolvedValue({ versionNo: 1 });
   });
 
-  it("exposes both collection version methods", () => {
+  it("exposes every collection version method", () => {
+    // Pinned as a set so a method cannot be added to the map without also
+    // being registered for authorization, which decides whether it is
+    // permitted as a read or as a write.
     expect(Object.keys(COLLECTION_VERSION_METHODS).sort()).toEqual([
       "getEntryVersion",
       "listEntryVersions",
+      "restoreEntryVersion",
     ]);
   });
 
-  it("exposes both single version methods", () => {
+  it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
       "getSingleVersion",
       "listSingleVersions",
+      "restoreSingleVersion",
     ]);
   });
 

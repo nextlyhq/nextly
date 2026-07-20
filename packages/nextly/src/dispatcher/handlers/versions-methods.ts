@@ -20,6 +20,7 @@ import {
   attachVersionAuthors,
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
+import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
@@ -196,4 +197,31 @@ export async function getVersionForDocument(
   );
 
   return row;
+}
+
+/**
+ * Put a document back to an earlier version.
+ *
+ * The document gate runs first for the same reason every other version method
+ * runs it: a caller who may not see this document must not learn that a given
+ * version of it exists. The write that follows enforces access again on its own
+ * terms, so an update the caller may not make still fails.
+ */
+export async function restoreVersionForDocument(
+  args: VersionMethodArgs & { versionNo: number }
+): Promise<{ restoredFrom: number; droppedFields: string[] }> {
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user
+  );
+
+  return restoreVersion({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    versionNo: args.versionNo,
+    user: args.user,
+  });
 }
