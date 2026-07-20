@@ -57,6 +57,7 @@ import type {
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import type { VersionsService } from "../domains/versions/versions-service";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -97,6 +98,7 @@ import type {
 } from "../services/collections/collection-registry-service";
 import type { CollectionRelationshipService } from "../services/collections/collection-relationship-service";
 import type { CollectionService } from "../services/collections/collection-service";
+import type { CollectionsHandler } from "../services/collections-handler";
 import type {
   ComponentRegistryService,
   CodeFirstComponentConfig,
@@ -141,6 +143,7 @@ import {
   registerMetaServices,
   registerSingleServices,
   registerUserServices,
+  registerVersionServices,
   type RegistrationContext,
 } from "./registrations";
 
@@ -285,6 +288,10 @@ export interface ServiceMap {
   activityLogService: ActivityLogService;
   dashboardService: DashboardService;
   metaService: MetaService;
+  versionsService: VersionsService;
+  // Registered by registerCollectionServices but previously untyped here, so
+  // consumers had to reach past getService() to use it.
+  collectionsHandler: CollectionsHandler;
 }
 
 // ============================================================
@@ -723,6 +730,7 @@ export async function registerServices(
   registerMediaServices(ctx);
   registerMetaServices(ctx);
   registerSingleServices(ctx);
+  registerVersionServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
@@ -2037,6 +2045,7 @@ async function initializePlugins(
       | "userService"
       | "mediaService"
       | "emailService"
+      | "versionsService"
       | "db"
       | "logger"
       | "config",
@@ -2047,6 +2056,7 @@ async function initializePlugins(
     | UserService
     | UnifiedMediaService
     | EmailService
+    | VersionsService
     | DatabaseInstance
     | Logger
     | NextlyServiceConfig => {
@@ -2059,6 +2069,8 @@ async function initializePlugins(
         return container.get<UnifiedMediaService>("mediaService");
       case "emailService":
         return container.get<EmailService>("emailService");
+      case "versionsService":
+        return container.get<VersionsService>("versionsService");
       case "db":
         return adapterDrizzleDb;
       case "logger":

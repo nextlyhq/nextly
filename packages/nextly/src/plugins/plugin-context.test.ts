@@ -75,7 +75,9 @@ describe("createPluginContext (P1 reshape)", () => {
       "collections",
       "email",
       "media",
+      "plugins",
       "users",
+      "versions",
     ]);
   });
 });
