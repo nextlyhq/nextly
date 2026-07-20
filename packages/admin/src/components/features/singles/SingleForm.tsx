@@ -553,6 +553,7 @@ export function SingleForm({
               <EntrySystemHeader
                 mode="edit"
                 titleField={titleField}
+                historyFields={schema.fields}
                 hasStatus={hasStatus}
                 isSubmitting={isSubmitting}
                 isDirty={isDirty}

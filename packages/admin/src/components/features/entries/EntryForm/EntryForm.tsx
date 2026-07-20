@@ -385,6 +385,7 @@ export function EntryForm({
                   isDirty={isDirty}
                   entry={entry}
                   collectionSlug={collection.name}
+                  historyFields={getCollectionFields(collection)}
                   locale={locale}
                   onLocaleChange={onLocaleChange}
                   toolbarSlot={

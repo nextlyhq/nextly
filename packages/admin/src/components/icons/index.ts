@@ -100,6 +100,7 @@ export {
   Heart, // Collection Settings: icon picker
   Highlighter, // Rich text editor: text highlight
   HelpCircle,
+  History, // Entry header: version history
   Home,
   Image,
   Inbox, // Collection Settings: icon picker

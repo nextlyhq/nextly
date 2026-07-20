@@ -12,11 +12,13 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
+import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   Code,
   Copy,
   EyeOff,
   Globe,
+  History,
   Loader2,
   MoreHorizontal,
   PanelRight,
@@ -128,6 +130,12 @@ export interface EntrySystemHeaderProps {
    * plugin-agnostic — the caller builds it from `entryFormToolbarSlot`.
    */
   toolbarSlot?: React.ReactNode;
+
+  /**
+   * Current schema fields, used to render a stored version in the history
+   * panel. Absent means the caller cannot show history, so the control hides.
+   */
+  historyFields?: FieldConfig[];
 }
 
 export function EntrySystemHeader({
@@ -152,6 +160,7 @@ export function EntrySystemHeader({
   onViewApi,
   showJson = true,
   scope = "collection",
+  historyFields,
   lockIdentity = false,
   isRailCollapsed = false,
   onToggleRail,
@@ -161,6 +170,7 @@ export function EntrySystemHeader({
   const entryLocale = useEntryLocale();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Why: autofocus the title input on create so the cursor blinks ready for
   // typing. Skip in edit mode — focusing a populated title interrupts the
@@ -263,6 +273,21 @@ export function EntrySystemHeader({
       {/* Action cluster — right-aligned */}
       <div className="flex items-center gap-1.5 shrink-0">
         {toolbarSlot}
+        {/* A document only has history once it has been saved, and rendering a
+            snapshot needs the schema, so both are required to offer this. */}
+        {showEditMenuItems && historyFields ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="px-2"
+            aria-label="Version history"
+            title="Version history"
+            onClick={() => setHistoryOpen(true)}
+          >
+            <History className="h-4 w-4" />
+          </Button>
+        ) : null}
         {/* i18n M7: content-language switcher. Renders only when a change handler is wired AND
             localization is configured (the component self-hides otherwise). */}
         {onLocaleChange && (
@@ -458,6 +483,21 @@ export function EntrySystemHeader({
         }}
         isLoading={isSubmitting}
       />
+
+      {/* Mounted at the component root for the same reason as the dialog above:
+          the panel must survive whichever button matrix branch rendered. */}
+      {historyFields && entry?.id ? (
+        <VersionHistorySheet
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          scope={
+            scope === "single"
+              ? { kind: "single", slug: collectionSlug }
+              : { kind: "collection", slug: collectionSlug, entryId: entry.id }
+          }
+          fields={historyFields}
+        />
+      ) : null}
     </div>
   );
 }
