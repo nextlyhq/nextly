@@ -56,32 +56,74 @@ describe("version routes", () => {
     });
   });
 
-  it("rejects a path with segments beyond the version number", () => {
-    // A deeper path is not a route this owns; truncating it to a version read
-    // would answer a request that was never made.
+  it("matches no route at all for segments beyond the version number", () => {
+    // Asserting the absence of a route, not merely of the version route: the
+    // entry branches sit below this one, so a path that is merely "not a
+    // version read" could still be answered as a read of the entry itself.
     const parsed = parseRestRoute(
       ["collections", "posts", "entries", "e1", "versions", "3", "extra"],
       "GET"
     );
 
-    expect(parsed.method).not.toBe("getEntryVersion");
+    expect(parsed.method).toBeUndefined();
   });
 
-  it("rejects a single version path with trailing segments", () => {
+  it("matches no route for a single version path with trailing segments", () => {
     const parsed = parseRestRoute(
       ["singles", "settings", "versions", "2", "extra"],
       "GET"
     );
 
-    expect(parsed.method).not.toBe("getSingleVersion");
+    expect(parsed.method).toBeUndefined();
   });
 
-  it("does not claim version routes for non-GET methods", () => {
-    const parsed = parseRestRoute(
-      ["collections", "posts", "entries", "e1", "versions"],
-      "POST"
-    );
+  it.each([
+    ["POST", "listEntryVersions"],
+    ["PATCH", "updateEntry"],
+    ["DELETE", "deleteEntry"],
+  ])(
+    "does not answer %s on a version path as an entry write",
+    (httpMethod, forbiddenMethod) => {
+      // A version path with a mutating verb owns no route. It must not fall
+      // through to the entry branches, where DELETE would destroy the very
+      // document whose history was addressed.
+      const parsed = parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions"],
+        httpMethod
+      );
 
-    expect(parsed.method).not.toBe("listEntryVersions");
+      expect(parsed.method).not.toBe(forbiddenMethod);
+      expect(parsed.method).toBeUndefined();
+    }
+  );
+
+  it("still matches the entry itself when no segments trail", () => {
+    // The guard must not cost the entry routes their own paths.
+    expect(
+      parseRestRoute(["collections", "posts", "entries", "e1"], "DELETE").method
+    ).toBe("deleteEntry");
+    expect(
+      parseRestRoute(["collections", "posts", "entries", "e1"], "GET").method
+    ).toBe("getEntry");
+    expect(
+      parseRestRoute(["collections", "posts", "entries", "e1"], "PATCH").method
+    ).toBe("updateEntry");
+  });
+
+  it("leaves the real entry sub-routes matching", () => {
+    // These are claimed by earlier, POST-only parsers; the guard sits below
+    // them and must not shadow them.
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "duplicate"],
+        "POST"
+      ).method
+    ).toBe("duplicateEntry");
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "publish-all"],
+        "POST"
+      ).method
+    ).toBe("publishAllLocales");
   });
 });

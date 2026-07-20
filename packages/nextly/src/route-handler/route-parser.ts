@@ -641,7 +641,20 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "GET") {
+  // The three branches below match the entry itself, so they must not claim a
+  // path that carries further segments. Every real sub-route (duplicate,
+  // publish-all, count, bulk, versions) is matched earlier, so anything still
+  // trailing here belongs to no route: without this guard
+  // `DELETE /entries/{id}/versions` would silently delete the entry.
+  const targetsEntryItself = additionalParams.length === 0;
+
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "GET"
+  ) {
     // GET /api/collections/products/entries/123 → get entry by id
     routeParams.collectionName = id;
     routeParams.entryId = subId;
@@ -653,7 +666,13 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "PATCH") {
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "PATCH"
+  ) {
     // PATCH /api/collections/products/entries/123 → update entry
     routeParams.collectionName = id;
     routeParams.entryId = subId;
@@ -665,7 +684,13 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "DELETE") {
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "DELETE"
+  ) {
     // DELETE /api/collections/products/entries/123 → delete entry
     routeParams.collectionName = id;
     routeParams.entryId = subId;
