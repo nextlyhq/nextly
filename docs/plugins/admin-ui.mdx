@@ -59,6 +59,11 @@ import {
 } from "@nextlyhq/ui";
 ```
 
+Which of these primitives are covered by a stability guarantee is recorded in
+[`packages/ui/STABILITY.md`](https://github.com/nextlyhq/nextly/blob/main/packages/ui/STABILITY.md):
+a component becomes `@public` once a first-party plugin depends on it, and everything
+else is `@experimental` and may change in any release.
+
 Register components and reference admin contribution types through
 `@nextlyhq/plugin-sdk/admin`; import UI primitives from `@nextlyhq/ui`.
 

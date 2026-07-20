@@ -9,6 +9,11 @@ policy.
 > `@deprecated`) that mirrors the table below. When the JSDoc and this table disagree,
 > **this table wins** — please open an issue.
 
+> This ledger covers **admin integration**: registration, contributions, the data table
+> and the field-UI kit. The presentational primitives plugins render — buttons, inputs,
+> dialogs and the design tokens — ship from `@nextlyhq/ui` and have their own ledger at
+> [`packages/ui/STABILITY.md`](../ui/STABILITY.md).
+
 ## How a surface becomes stable
 
 Nextly follows a **stability ladder** (D55): nothing is declared stable on paper. A

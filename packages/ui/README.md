@@ -77,6 +77,12 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 **Feedback:** `Spinner`, `Toaster` (with `toast()` helper)
 **Tables:** `Table` primitives, `ResponsiveTable`, `TableSearch`, `TablePagination`, `TableSkeleton`, `TableEmpty`, `TableError`, `TableLoading`
 **Providers:** `PortalProvider`, `usePortalContainer`
+
+> Which of these carry a stability guarantee is recorded in
+> [STABILITY.md](./STABILITY.md). A component becomes `@public` once a first-party
+> plugin depends on it; everything else is `@experimental` and may change in any
+> release.
+
 **Utilities:** `cn` (from `@nextlyhq/ui/utils`), `uiPreset` (from `@nextlyhq/ui/tailwind-preset`)
 
 > Both ship from their own subpaths rather than the root: the root bundle is

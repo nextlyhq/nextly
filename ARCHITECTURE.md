@@ -86,15 +86,22 @@ The load-bearing rules:
   the `nextly/runtime` subpath. `nextly/config` exposes only types, field
   factories, and guards, which is why admin can import from it without
   dragging runtime code into the browser bundle.
-- **`@nextlyhq/plugin-sdk` is the stability boundary.** Plugin authors import
-  from it and nothing else; every export carries a `@public`/`@experimental`
-  marker (ledger in `packages/plugin-sdk/STABILITY.md`). It re-exports from
-  both core (plugin definition, events) and admin (the field-UI kit,
-  DataTable) so plugins never take direct dependencies on internals.
+- **The plugin surface is two packages, both versioned contracts.**
+  `@nextlyhq/plugin-sdk` covers admin integration: it re-exports from core
+  (plugin definition, events) and admin (the field-UI kit, DataTable) so
+  plugins never take direct dependencies on internals. `@nextlyhq/ui` covers
+  presentation: the React primitives the admin itself is built from, plus the
+  design tokens. Each has a `@public`/`@experimental` ledger
+  (`packages/plugin-sdk/STABILITY.md`, `packages/ui/STABILITY.md`) and a
+  snapshot guard over its exported names. `@nextlyhq/admin` is an application,
+  not an API, and remains off-limits.
 - **Adapters contain no field-type knowledge.** They execute Drizzle schema
   and queries; the mapping from field types to columns lives in core (see the
   field-type system below).
 - **`@nextlyhq/ui` has no workspace dependencies** and owns the design tokens.
+  It is a peer dependency of admin, not a bundled one: it ships React context,
+  so a second copy in an install tree gives portals a second context and they
+  render into the wrong container.
 
 ## The field-type system
 
@@ -264,8 +271,10 @@ sanitization) whose failure modes are first-class error codes.
    `field-column-descriptor.ts`.
 4. Every API response uses the canonical envelopes; errors always carry a
    code from `error-codes.ts` and a request id.
-5. `@nextlyhq/plugin-sdk` is the only import surface plugins may use; its
-   stability markers are contracts.
+5. Plugins import only from `@nextlyhq/plugin-sdk` (admin integration) and
+   `@nextlyhq/ui` (presentational primitives), never from `@nextlyhq/admin`.
+   Both carry `@public`/`@experimental` markers, and those markers are
+   contracts.
 6. Field-type lists render from the serializable catalog; no UI surface
    hand-maintains its own list.
 7. Admin styles stay inside `.nextly-admin` and use `--nx-*` tokens with
