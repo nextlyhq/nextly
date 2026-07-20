@@ -10,11 +10,11 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@nextlyhq/ui";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Home, Settings, Shield, Users } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
+import { navigateTo } from "@admin/lib/navigation";
 
 import { ActionCommands } from "./ActionCommands";
 import { UserSearchResults } from "./UserSearchResults";
@@ -34,7 +34,7 @@ import { UserSearchResults } from "./UserSearchResults";
  * @features
  * - Keyboard shortcut: Cmd+K / Ctrl+K
  * - Fuzzy search across navigation commands
- * - Next.js router integration for navigation
+ * - Admin SPA router integration for navigation
  * - Dark mode compatible
  * - WCAG 2.2 AA compliant
  *
@@ -113,7 +113,6 @@ const navigationCommands: NavigationCommand[] = [
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const router = useRouter();
 
   /**
    * Handle command selection
@@ -166,26 +165,28 @@ export function CommandPalette() {
         const timeSinceLastKey = currentTime - lastKeyTime;
 
         // If 'g' was pressed recently (within timeout window)
+        // The "g <key>" shortcuts jump between admin sections, so they route
+        // through the admin's own SPA navigation rather than a full page load.
         if (lastKey === "g" && timeSinceLastKey < SEQUENTIAL_KEY_TIMEOUT) {
           switch (e.key.toLowerCase()) {
             case "d":
               e.preventDefault();
-              handleSelect(() => router.push(ROUTES.DASHBOARD));
+              handleSelect(() => navigateTo(ROUTES.DASHBOARD));
               lastKey = "";
               break;
             case "u":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/users"));
+              handleSelect(() => navigateTo("/admin/users"));
               lastKey = "";
               break;
             case "r":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/roles"));
+              handleSelect(() => navigateTo("/admin/roles"));
               lastKey = "";
               break;
             case "s":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/settings"));
+              handleSelect(() => navigateTo("/admin/settings"));
               lastKey = "";
               break;
             default:
@@ -204,7 +205,7 @@ export function CommandPalette() {
 
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
-  }, [open, handleSelect, router]);
+  }, [open, handleSelect]);
 
   /**
    * Handle dialog open/close state changes
@@ -237,7 +238,9 @@ export function CommandPalette() {
                 key={command.id}
                 value={command.label}
                 keywords={command.keywords}
-                onSelect={() => handleSelect(() => router.push(command.href))}
+                // Navigation commands move within the admin SPA, so they go
+                // through its router and keep the loaded app state.
+                onSelect={() => handleSelect(() => navigateTo(command.href))}
               >
                 <Icon className="h-4 w-4" />
                 <span>{command.label}</span>
