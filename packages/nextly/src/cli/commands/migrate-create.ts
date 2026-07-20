@@ -69,6 +69,7 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../../domains/schema/ui-schema/metadata-sql";
+import { resolvePrefixedTableName } from "../../domains/schema/utils/resolve-table-name";
 import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
@@ -464,7 +465,11 @@ function toMinimalEntities(
     }));
     return {
       slug,
-      tableName: e.dbName ?? `${tableNamePrefix}${slug.replace(/-/g, "_")}`,
+      // Route through the shared resolver so a dbName that omits the target
+      // prefix (e.g. a plugin collection with dbName:"forms") still resolves to
+      // the same physical table the runtime creates (dc_forms), instead of an
+      // un-prefixed table that the runtime never made.
+      tableName: resolvePrefixedTableName(slug, e.dbName, tableNamePrefix),
       fields,
       // Why: forward the Draft/Published flag so migrate:create emits
       // the system status column on first sync. Mirrors the same

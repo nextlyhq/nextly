@@ -69,6 +69,7 @@ import {
   applyDeferredExtendsToManifest,
   mergeUiEntities,
 } from "../../domains/schema/ui-schema/merge";
+import { resolvePrefixedTableName } from "../../domains/schema/utils/resolve-table-name";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -404,7 +405,11 @@ function toMinimalEntities(
     };
     return {
       slug: e.slug,
-      tableName: e.dbName ?? `${tableNamePrefix}${e.slug.replace(/-/g, "_")}`,
+      // Route through the shared resolver so a dbName that omits the target
+      // prefix (e.g. a plugin collection with dbName:"forms") still resolves to
+      // the same physical table the runtime creates (dc_forms), instead of an
+      // un-prefixed table that the runtime never made.
+      tableName: resolvePrefixedTableName(e.slug, e.dbName, tableNamePrefix),
       fields: (e.fields ?? []).map(f => ({
         name: f.name,
         type: f.type,

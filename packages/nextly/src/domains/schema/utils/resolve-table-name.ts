@@ -14,7 +14,22 @@ export function resolveCollectionTableName(
   slug: string,
   dbName?: string
 ): string {
-  if (dbName && dbName.startsWith("dc_")) return dbName;
+  return resolvePrefixedTableName(slug, dbName, "dc_");
+}
+
+// Generalizes the rule above to the `single_` and `comp_` prefixes as well,
+// for the migration CLI which resolves all three entity kinds through a
+// shared prefix. A `dbName` that already carries the target prefix is used
+// verbatim; otherwise the `dbName ?? slug` base has its dashes normalized to
+// underscores and is prefixed. This keeps a plugin entity whose `dbName`
+// omits the prefix (e.g. a collection with `dbName: "forms"`) from producing
+// an un-prefixed table that diverges from the runtime's `dc_forms`.
+export function resolvePrefixedTableName(
+  slug: string,
+  dbName: string | undefined,
+  prefix: "dc_" | "single_" | "comp_"
+): string {
+  if (dbName && dbName.startsWith(prefix)) return dbName;
   const base = dbName ?? slug;
-  return `dc_${base.replace(/-/g, "_")}`;
+  return `${prefix}${base.replace(/-/g, "_")}`;
 }
