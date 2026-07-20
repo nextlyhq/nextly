@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
   `slug` varchar(255) NOT NULL,
   `icon` text,
   `description` text,
+  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `name` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `description` text,
+  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS `single_site_settings` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Site Settings',
   `slug` varchar(255) NOT NULL DEFAULT 'site-settings',
+  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `site_name` varchar(255) NOT NULL DEFAULT 'My Blog',
   `tagline` varchar(500) DEFAULT 'Thoughts on web development',
   `site_description` text,
@@ -125,6 +128,7 @@ CREATE TABLE IF NOT EXISTS `single_navigation` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Navigation',
   `slug` varchar(255) NOT NULL DEFAULT 'navigation',
+  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `header_links` json,
   `footer_read_links` json,
   `show_theme_toggle` tinyint(1) DEFAULT 1,
@@ -139,6 +143,7 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Homepage',
   `slug` varchar(255) NOT NULL DEFAULT 'homepage',
+  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `hero_title` varchar(500) NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
   `hero_subtitle` varchar(500) DEFAULT 'Essays and notes from our engineering team.',
   `show_featured_post` tinyint(1) DEFAULT 1,
@@ -198,14 +203,14 @@ FOREIGN KEY (`logo`) REFERENCES `media`(`id`) ON DELETE SET NULL;
 -- ============ SINGLES DATA DEFAULTS ============
 -- Insert default documents for each single so they're accessible immediately
 -- MySQL uses INSERT IGNORE instead of ON CONFLICT DO NOTHING
-INSERT IGNORE INTO `single_site_settings` (`id`, `title`, `slug`, `site_name`, `tagline`, `created_at`, `updated_at`)
-VALUES (UUID(), 'Site Settings', 'site-settings', 'My Blog', 'Thoughts on web development', NOW(), NOW());
+INSERT IGNORE INTO `single_site_settings` (`id`, `title`, `slug`, `status`, `site_name`, `tagline`, `created_at`, `updated_at`)
+VALUES (UUID(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', NOW(), NOW());
 
-INSERT IGNORE INTO `single_navigation` (`id`, `title`, `slug`, `show_theme_toggle`, `show_search_icon`, `created_at`, `updated_at`)
-VALUES (UUID(), 'Navigation', 'navigation', 1, 1, NOW(), NOW());
+INSERT IGNORE INTO `single_navigation` (`id`, `title`, `slug`, `status`, `show_theme_toggle`, `show_search_icon`, `created_at`, `updated_at`)
+VALUES (UUID(), 'Navigation', 'navigation', 'published', 1, 1, NOW(), NOW());
 
-INSERT IGNORE INTO `single_homepage` (`id`, `title`, `slug`, `hero_title`, `hero_subtitle`, `show_featured_post`, `featured_section_title`, `show_latest_posts`, `latest_section_title`, `latest_posts_count`, `show_category_strip`, `show_newsletter_cta`, `newsletter_heading`, `newsletter_subheading`, `created_at`, `updated_at`)
-VALUES (UUID(), 'Homepage', 'homepage', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 1, 'Featured', 1, 'Latest', 3, 1, 1, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', NOW(), NOW());
+INSERT IGNORE INTO `single_homepage` (`id`, `title`, `slug`, `status`, `hero_title`, `hero_subtitle`, `show_featured_post`, `featured_section_title`, `show_latest_posts`, `latest_section_title`, `latest_posts_count`, `show_category_strip`, `show_newsletter_cta`, `newsletter_heading`, `newsletter_subheading`, `created_at`, `updated_at`)
+VALUES (UUID(), 'Homepage', 'homepage', 'published', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 1, 'Featured', 1, 'Latest', 3, 1, 1, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', NOW(), NOW());
 
 -- ============================================
 -- DOWN: Rollback all changes

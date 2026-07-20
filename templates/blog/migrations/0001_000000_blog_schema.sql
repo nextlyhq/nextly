@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
   "slug" text NOT NULL UNIQUE,
   "icon" text,
   "description" text,
+  "status" text DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "created_at" timestamp with time zone DEFAULT now(),
   "updated_at" timestamp with time zone DEFAULT now(),
   "created_by" text
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
   "description" text,
+  "status" text DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "created_at" timestamp with time zone DEFAULT now(),
   "updated_at" timestamp with time zone DEFAULT now(),
   "created_by" text
@@ -121,6 +123,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Site Settings',
   "slug" text NOT NULL DEFAULT 'site-settings',
+  "status" text DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "site_name" text NOT NULL DEFAULT 'My Blog',
   "tagline" text DEFAULT 'Thoughts on web development',
   "site_description" text,
@@ -136,6 +139,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Navigation',
   "slug" text NOT NULL DEFAULT 'navigation',
+  "status" text DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "header_links" jsonb,
   "footer_read_links" jsonb,
   "show_theme_toggle" boolean DEFAULT true,
@@ -150,6 +154,7 @@ CREATE TABLE IF NOT EXISTS "single_homepage" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Homepage',
   "slug" text NOT NULL DEFAULT 'homepage',
+  "status" text DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "hero_title" text NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
   "hero_subtitle" text DEFAULT 'Essays and notes from our engineering team.',
   "show_featured_post" boolean DEFAULT true,
@@ -209,16 +214,16 @@ FOREIGN KEY ("logo") REFERENCES "media"("id") ON DELETE SET NULL;
 
 -- ============ SINGLES DATA DEFAULTS ============
 -- Insert default documents for each single so they're accessible immediately
-INSERT INTO "single_site_settings" ("id", "title", "slug", "site_name", "tagline", "created_at", "updated_at")
-VALUES (gen_random_uuid(), 'Site Settings', 'site-settings', 'My Blog', 'Thoughts on web development', now(), now())
+INSERT INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
+VALUES (gen_random_uuid(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', now(), now())
 ON CONFLICT ("id") DO NOTHING;
 
-INSERT INTO "single_navigation" ("id", "title", "slug", "show_theme_toggle", "show_search_icon", "created_at", "updated_at")
-VALUES (gen_random_uuid(), 'Navigation', 'navigation', true, true, now(), now())
+INSERT INTO "single_navigation" ("id", "title", "slug", "status", "show_theme_toggle", "show_search_icon", "created_at", "updated_at")
+VALUES (gen_random_uuid(), 'Navigation', 'navigation', 'published', true, true, now(), now())
 ON CONFLICT ("id") DO NOTHING;
 
-INSERT INTO "single_homepage" ("id", "title", "slug", "hero_title", "hero_subtitle", "show_featured_post", "featured_section_title", "show_latest_posts", "latest_section_title", "latest_posts_count", "show_category_strip", "show_newsletter_cta", "newsletter_heading", "newsletter_subheading", "created_at", "updated_at")
-VALUES (gen_random_uuid(), 'Homepage', 'homepage', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', true, 'Featured', true, 'Latest', 3, true, true, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', now(), now())
+INSERT INTO "single_homepage" ("id", "title", "slug", "status", "hero_title", "hero_subtitle", "show_featured_post", "featured_section_title", "show_latest_posts", "latest_section_title", "latest_posts_count", "show_category_strip", "show_newsletter_cta", "newsletter_heading", "newsletter_subheading", "created_at", "updated_at")
+VALUES (gen_random_uuid(), 'Homepage', 'homepage', 'published', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', true, 'Featured', true, 'Latest', 3, true, true, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', now(), now())
 ON CONFLICT ("id") DO NOTHING;
 
 -- ============================================

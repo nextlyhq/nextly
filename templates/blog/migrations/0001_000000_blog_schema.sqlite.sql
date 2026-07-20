@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
   "slug" TEXT NOT NULL UNIQUE,
   "icon" TEXT,
   "description" TEXT,
+  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "created_by" TEXT
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "name" TEXT NOT NULL,
   "slug" TEXT NOT NULL UNIQUE,
   "description" TEXT,
+  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "created_by" TEXT
@@ -114,6 +116,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Site Settings',
   "slug" TEXT NOT NULL DEFAULT 'site-settings',
+  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "site_name" TEXT NOT NULL DEFAULT 'My Blog',
   "tagline" TEXT DEFAULT 'Thoughts on web development',
   "site_description" TEXT,
@@ -129,6 +132,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Navigation',
   "slug" TEXT NOT NULL DEFAULT 'navigation',
+  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "header_links" TEXT,
   "footer_read_links" TEXT,
   "show_theme_toggle" INTEGER DEFAULT 1,
@@ -143,6 +147,7 @@ CREATE TABLE IF NOT EXISTS "single_homepage" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Homepage',
   "slug" TEXT NOT NULL DEFAULT 'homepage',
+  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "hero_title" TEXT NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
   "hero_subtitle" TEXT DEFAULT 'Essays and notes from our engineering team.',
   "show_featured_post" INTEGER DEFAULT 1,
@@ -202,14 +207,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_homepage_slug" ON "single_homepage"
 -- ============ SINGLES DATA DEFAULTS ============
 -- Insert default documents for each single so they're accessible immediately
 -- SQLite uses INSERT OR IGNORE instead of ON CONFLICT DO NOTHING
-INSERT OR IGNORE INTO "single_site_settings" ("id", "title", "slug", "site_name", "tagline", "created_at", "updated_at")
-VALUES (lower(hex(randomblob(16))), 'Site Settings', 'site-settings', 'My Blog', 'Thoughts on web development', strftime('%s', 'now'), strftime('%s', 'now'));
+INSERT OR IGNORE INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
+VALUES (lower(hex(randomblob(16))), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', strftime('%s', 'now'), strftime('%s', 'now'));
 
-INSERT OR IGNORE INTO "single_navigation" ("id", "title", "slug", "show_theme_toggle", "show_search_icon", "created_at", "updated_at")
-VALUES (lower(hex(randomblob(16))), 'Navigation', 'navigation', 1, 1, strftime('%s', 'now'), strftime('%s', 'now'));
+INSERT OR IGNORE INTO "single_navigation" ("id", "title", "slug", "status", "show_theme_toggle", "show_search_icon", "created_at", "updated_at")
+VALUES (lower(hex(randomblob(16))), 'Navigation', 'navigation', 'published', 1, 1, strftime('%s', 'now'), strftime('%s', 'now'));
 
-INSERT OR IGNORE INTO "single_homepage" ("id", "title", "slug", "hero_title", "hero_subtitle", "show_featured_post", "featured_section_title", "show_latest_posts", "latest_section_title", "latest_posts_count", "show_category_strip", "show_newsletter_cta", "newsletter_heading", "newsletter_subheading", "created_at", "updated_at")
-VALUES (lower(hex(randomblob(16))), 'Homepage', 'homepage', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 1, 'Featured', 1, 'Latest', 3, 1, 1, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', strftime('%s', 'now'), strftime('%s', 'now'));
+INSERT OR IGNORE INTO "single_homepage" ("id", "title", "slug", "status", "hero_title", "hero_subtitle", "show_featured_post", "featured_section_title", "show_latest_posts", "latest_section_title", "latest_posts_count", "show_category_strip", "show_newsletter_cta", "newsletter_heading", "newsletter_subheading", "created_at", "updated_at")
+VALUES (lower(hex(randomblob(16))), 'Homepage', 'homepage', 'published', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 1, 'Featured', 1, 'Latest', 3, 1, 1, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', strftime('%s', 'now'), strftime('%s', 'now'));
 
 -- ============================================
 -- DOWN: Rollback all changes
