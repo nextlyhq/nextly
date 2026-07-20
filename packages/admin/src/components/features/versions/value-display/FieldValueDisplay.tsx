@@ -35,7 +35,12 @@ const registry = new Map<string, ValueDisplayRenderer>();
 
 /**
  * Register a renderer for one or more field types. A later registration for the
- * same type wins, so a plugin can replace a core renderer.
+ * same type wins, so a renderer can be replaced rather than patched.
+ *
+ * Internal for now: reaching this from a plugin needs a re-export through the
+ * plugin author surface, which belongs with the change that makes this display
+ * reachable at all. Until then an unregistered field type falls back to text,
+ * so a plugin field still shows its value.
  */
 export function defineValueDisplay(
   types: string[],

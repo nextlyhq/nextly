@@ -93,6 +93,35 @@ describe("richTextToText", () => {
     expect(richTextToText(doc([image]))).toContain("Revenue by quarter");
   });
 
+  it("keeps a soft break as a boundary", () => {
+    // Shift+Enter serializes as a linebreak node. Without treating it as a
+    // boundary the surrounding runs concatenate into "HelloWorld".
+    const withBreak = {
+      type: "paragraph",
+      children: [
+        { type: "text", text: "Hello" },
+        { type: "linebreak" },
+        { type: "text", text: "World" },
+      ],
+    };
+
+    expect(richTextToText(doc([withBreak]))).toBe("Hello\nWorld");
+  });
+
+  it("keeps the labels of a button group", () => {
+    // A button group holds its visible text in buttons[].text and has no
+    // children, so a CTA-only document would otherwise extract as empty.
+    const group = {
+      type: "button-group",
+      buttons: [{ text: "Get started" }, { text: "Read the docs" }],
+    };
+
+    const result = richTextToText(doc([group]));
+
+    expect(result).toContain("Get started");
+    expect(result).toContain("Read the docs");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(richTextToText(doc([]))).toBe("");
   });

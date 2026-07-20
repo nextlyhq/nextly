@@ -39,6 +39,13 @@ interface LexicalNode {
  */
 const TEXT_BEARING_PROPS = ["caption", "altText", "title", "label"] as const;
 
+/**
+ * Properties holding a list of objects whose own text is visible — a button
+ * group keeps its labels in `buttons[].text`. Those nodes carry no `children`,
+ * so without reading these a call-to-action group extracts as empty.
+ */
+const TEXT_BEARING_LISTS = ["buttons", "items", "links"] as const;
+
 function asNode(value: unknown): LexicalNode | null {
   if (typeof value !== "object" || value === null) return null;
   return value as LexicalNode;
@@ -54,10 +61,27 @@ export function isLexicalDocument(value: unknown): boolean {
 function collect(node: LexicalNode | null, lines: string[]): void {
   if (!node) return;
 
+  // A soft break (Shift+Enter) is a visible boundary, so the text on either
+  // side of it must not be concatenated into one run.
+  if (node.type === "linebreak") {
+    lines.push("");
+  }
+
   for (const prop of TEXT_BEARING_PROPS) {
     const text = node[prop];
     if (typeof text === "string" && text.trim().length > 0) {
       lines.push(text.trim());
+    }
+  }
+
+  for (const prop of TEXT_BEARING_LISTS) {
+    const list = node[prop];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const text = asNode(item)?.text;
+      if (typeof text === "string" && text.trim().length > 0) {
+        lines.push(text.trim());
+      }
     }
   }
 
