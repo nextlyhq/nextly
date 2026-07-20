@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
@@ -189,6 +190,8 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }): Promise<CollectionServiceResult> {
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
@@ -260,6 +263,10 @@ export class CollectionBulkService extends BaseService {
         {
           collectionName: params.collectionName,
           user: params.user,
+          // Duplicating reaches the instrumented create, so the event it records
+          // must name the acting identity rather than falling back to the API
+          // key's owner.
+          actor: params.actor,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
         },
@@ -379,6 +386,8 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
@@ -393,6 +402,10 @@ export class CollectionBulkService extends BaseService {
                 collectionName: params.collectionName,
                 entryId,
                 user: params.user,
+                // These updates reach the instrumented path, so the event they
+                // record must name the acting identity rather than falling back
+                // to the API key's owner.
+                actor: params.actor,
                 overrideAccess: params.overrideAccess,
                 routeAuthorized: params.routeAuthorized,
                 context: params.context,
@@ -474,6 +487,8 @@ export class CollectionBulkService extends BaseService {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: BulkOperationOptions & {
       /**
@@ -613,6 +628,7 @@ export class CollectionBulkService extends BaseService {
       ids,
       data: params.data,
       user: params.user,
+      actor: params.actor,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,

@@ -274,6 +274,49 @@ describe("webhook outbox capture (integration)", () => {
     });
   });
 
+  it("keeps the acting identity through the duplicate and bulk-update wrappers", async () => {
+    // These routes reach the instrumented create/update, so they DO record
+    // events — which makes a dropped actor worse than a missing one: the row
+    // says a person performed a write that a token performed. `actorForWrite`
+    // cannot recover it, since it only sees what the wrapper forwarded.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const actor = { type: "apiKey" as const, id: "key_wrapper" };
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true, actor },
+      { title: "original" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.duplicateEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+      actor,
+    });
+    await handler.bulkUpdateEntries({
+      collectionName: "posts",
+      ids: [id],
+      data: { title: "bulk-updated" },
+      overrideAccess: true,
+      actor,
+    });
+
+    const rows = await events(current);
+    // The original create, the duplicate's create, and the bulk update.
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.actorType).toBe("apiKey");
+      expect(row.actorId).toBe("key_wrapper");
+    }
+  });
+
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {
     // The outbox guarantee: an event must never outlive the change it describes,
     // or a webhook fires for something that never happened. Recording through the

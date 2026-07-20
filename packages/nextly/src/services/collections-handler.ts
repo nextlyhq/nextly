@@ -690,6 +690,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
   }
@@ -719,6 +721,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: { limit?: number }
   ) {
@@ -791,6 +795,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.duplicateEntry(this.resolveUserParam(params));
   }

@@ -1209,6 +1209,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,
@@ -1271,6 +1272,7 @@ const COLLECTIONS_METHODS: Record<
           // collection's access rules.
           where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
+          actor: readAuthenticatedActor(p),
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)
             : undefined,
@@ -1311,6 +1313,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,

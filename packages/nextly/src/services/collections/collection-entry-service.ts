@@ -278,6 +278,8 @@ export class CollectionEntryService extends BaseService {
     overrides?: Record<string, unknown>;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.bulkService.duplicateEntry(params);
   }
@@ -301,6 +303,8 @@ export class CollectionEntryService extends BaseService {
     user?: UserContext;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     return this.bulkService.bulkUpdateEntries(params);
   }
@@ -315,6 +319,8 @@ export class CollectionEntryService extends BaseService {
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
