@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
@@ -27,13 +27,19 @@ function toSlug(name: string): string {
 export function usePluginPageRegistration(
   plugins: PluginMetadata[] | undefined
 ): void {
+  // Signature of the plugin routes registered by the last run, so the effect
+  // can tell an actual route change from an unrelated admin-meta change.
+  const registeredRoutesRef = useRef("");
+
   useEffect(() => {
     clearPluginPages();
-    if (!plugins || plugins.length === 0) return;
 
     const componentPaths: string[] = [];
-    let registeredAnyPage = false;
-    for (const plugin of plugins) {
+    const registeredRoutes: string[] = [];
+    // `plugins` is undefined until admin-meta loads, and can come back without
+    // pages if a plugin is disabled; both must still reach the change check
+    // below so a removed route stops resolving.
+    for (const plugin of plugins ?? []) {
       const slug = toSlug(plugin.name);
       if (plugin.pages && plugin.pages.length > 0) {
         registerPluginPages(
@@ -44,8 +50,12 @@ export function usePluginPageRegistration(
             requiredPermission: page.requiredPermission,
           }))
         );
-        registeredAnyPage = true;
-        for (const page of plugin.pages) componentPaths.push(page.component);
+        for (const page of plugin.pages) {
+          componentPaths.push(page.component);
+          registeredRoutes.push(
+            `${slug}:${page.path}:${page.component}:${page.requiredPermission ?? ""}`
+          );
+        }
       }
       if (plugin.settings?.component) {
         componentPaths.push(plugin.settings.component);
@@ -69,14 +79,21 @@ export function usePluginPageRegistration(
       void autoRegisterPluginComponents(componentPaths);
     }
 
-    // The plugin page routes are registered here, in an effect that runs after
-    // admin-meta (branding) loads — later than `useRouter`'s one-time initial
-    // route resolution. On a deep link or hard refresh to a plugin page, that
-    // first `resolveRoute` ran before the registry was populated and returned a
-    // 404, and `useRouter` only re-resolves on navigation or a `locationchange`
-    // event. Emit that event now so the router re-resolves the current path
-    // against the just-registered routes and the page renders instead of 404ing.
-    if (registeredAnyPage && typeof window !== "undefined") {
+    // Plugin routes register here, in an effect that runs after admin-meta
+    // loads — later than `useRouter`'s one-time initial route resolution. On a
+    // deep link or hard refresh to a plugin page, that first `resolveRoute` ran
+    // before the registry was populated and returned a 404, and `useRouter`
+    // only re-resolves on navigation or a `locationchange`. Emit that event
+    // when the registered route set changes so the router re-resolves the
+    // current path: a newly registered page renders instead of 404ing, and a
+    // page that went away stops resolving instead of lingering until the next
+    // navigation. Admin-meta refetches periodically, so comparing the route set
+    // (rather than just "did anything register") keeps unrelated branding
+    // changes from forcing a redundant re-resolution.
+    const signature = registeredRoutes.sort().join("|");
+    const previousSignature = registeredRoutesRef.current;
+    registeredRoutesRef.current = signature;
+    if (signature !== previousSignature && typeof window !== "undefined") {
       window.dispatchEvent(new Event("locationchange"));
     }
   }, [plugins]);
