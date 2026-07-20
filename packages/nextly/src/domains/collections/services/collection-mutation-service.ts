@@ -22,6 +22,7 @@ import { eq, ne, and, like, ilike } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
@@ -66,9 +67,11 @@ import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -952,6 +955,11 @@ export class CollectionMutationService extends BaseService {
     params: {
       collectionName: string;
       user?: UserContext;
+      /**
+       * Who performed the write, recorded on the outbox event. Set by the
+       * transport; absent for internal writes, which record as `system`.
+       */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       /** Write locale (i18n M5): translatable values are stored for this language. */
       locale?: string;
@@ -1429,40 +1437,52 @@ export class CollectionMutationService extends BaseService {
           }
         }
 
-        // Record a durable version snapshot atomically with the write when the
-        // collection opts into versioning. Runs after components + m2m so the
-        // read from the transaction below sees them (read-your-writes).
-        if (versionsConfig?.enabled) {
-          // Snapshot the parent from the RAW insert row (field-name keys) — not
-          // the camelCased `entry` used for the response — so user fields whose
-          // names contain underscores keep their configured keys; convert only
-          // the timestamp columns to match a normal read. Merge this locale's
-          // translatable values (split out of the main insert), parse JSON-backed
-          // fields, and strip password hashes + the owner column (created_by) so
-          // neither ever enters durable history.
-          const snapshotParent = convertTimestampsToCamelCase(
-            this.deserializeJsonFieldsForSnapshot(
-              {
-                ...(rawEntry as Record<string, unknown>),
-                ...(localizedWrite?.localizedFieldValues ?? {}),
-              },
-              fields
-            )
+        // Assemble the read-shape document once, unconditionally: the webhook
+        // outbox records every write, and a version snapshot reuses the same
+        // assembly when the collection opts into versioning. Runs after
+        // components + m2m so the reads below see them (read-your-writes).
+        //
+        // Snapshot the parent from the RAW insert row (field-name keys) — not
+        // the camelCased `entry` used for the response — so user fields whose
+        // names contain underscores keep their configured keys; convert only
+        // the timestamp columns to match a normal read. Merge this locale's
+        // translatable values (split out of the main insert), parse JSON-backed
+        // fields, and strip password hashes + the owner column (created_by) so
+        // neither ever enters durable history or an outbound payload.
+        const snapshotParent = convertTimestampsToCamelCase(
+          this.deserializeJsonFieldsForSnapshot(
+            {
+              ...(rawEntry as Record<string, unknown>),
+              ...(localizedWrite?.localizedFieldValues ?? {}),
+            },
+            fields
+          )
+        );
+        stripPasswordFieldValues(snapshotParent, fields);
+        stripSystemOwnerField(snapshotParent);
+        // Components + m2m are read from the transaction: the write above just
+        // persisted them, and an empty relationship reads as [] — so the
+        // document is complete and read-shaped with no in-memory overlay. These
+        // reads are the costly part, so they happen exactly once and both
+        // consumers below compose their document from the same parts.
+        const { components: snapshotComponents, manyToMany: snapshotM2M } =
+          await this.buildFullSnapshotRelations(
+            tx,
+            entry.id as string,
+            params.collectionName,
+            tableName,
+            fields,
+            manyToManyFields
           );
-          stripPasswordFieldValues(snapshotParent, fields);
-          stripSystemOwnerField(snapshotParent);
-          // Components + m2m are read from the transaction: the write above just
-          // persisted them, and an empty relationship reads as [] — so the
-          // snapshot is complete and read-shaped with no in-memory overlay.
-          const { components: snapshotComponents, manyToMany: snapshotM2M } =
-            await this.buildFullSnapshotRelations(
-              tx,
-              entry.id as string,
-              params.collectionName,
-              tableName,
-              fields,
-              manyToManyFields
-            );
+        const documentParts = {
+          parentRow: snapshotParent,
+          components: snapshotComponents,
+          manyToMany: snapshotM2M,
+        };
+
+        // Record a durable version snapshot atomically with the write when the
+        // collection opts into versioning.
+        if (versionsConfig?.enabled) {
           await captureInTx(tx, this.versionCapture, {
             ref: {
               scopeKind: "collection",
@@ -1470,15 +1490,26 @@ export class CollectionMutationService extends BaseService {
               entryId: entry.id as string,
             },
             contentStatus: (entry as { status?: unknown }).status,
-            parts: {
-              parentRow: snapshotParent,
-              components: snapshotComponents,
-              manyToMany: snapshotM2M,
-            },
+            parts: documentParts,
             createdBy: params.user?.id ?? null,
             maxPerDoc: versionsConfig.maxPerDoc,
           });
         }
+
+        // Append the outbox event in the same transaction, so it commits with
+        // the entry and is never recorded for a write that later rolls back.
+        await recordMutationEvent(tx, {
+          type: "entry.created",
+          resource: {
+            kind: "entry",
+            collection: params.collectionName,
+            id: entry.id as string,
+          },
+          data: assembleDocument(documentParts),
+          previous: null,
+          fields,
+          actor: params.actor ?? null,
+        });
       });
 
       // Execute afterCreate hooks (code-registered)

@@ -23,8 +23,12 @@ export interface SensitiveFieldSource {
   type?: string;
   /** Top-level hidden flag. */
   hidden?: boolean;
-  /** Admin-scoped options; real collection fields put `hidden` here. */
-  admin?: { hidden?: boolean };
+  /**
+   * Admin-scoped options; real collection fields put `hidden` here. Other admin
+   * keys (placeholder, description, ...) are tolerated so any field config can
+   * satisfy this shape without a cast at the call site.
+   */
+  admin?: { hidden?: boolean; [key: string]: unknown };
   /** Inline sub-fields of a group/repeater field, if any. */
   fields?: SensitiveFieldSource[];
   /** Block definitions of a blocks field; each carries its own `fields`. */
