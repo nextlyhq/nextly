@@ -33,6 +33,12 @@ looks finished.
 The public surface is kept **deliberately small** (D40). Everything not listed as
 `@public` is `@experimental` and may change in any release.
 
+One export graduates on a second route: **what a `@public` artifact requires in order to
+work.** `styles.scoped.css` is public, and overlays portal to `document.body` — outside
+the wrapper the scoped rules are confined to — so `PortalProvider` is mandatory for the
+documented setup. Promising the stylesheet is stable while the only correct way to use it
+may change in any release would not be a real guarantee, so the two move together.
+
 ## The semver guarantee
 
 The `@public` surface is the semver-protected contract. After `1.0`, breaking a
@@ -61,7 +67,8 @@ that swap fails the snapshot too.
 | Dropdown menu | `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuSeparator` | page-builder               |
 | Tooltip       | `Tooltip`, `TooltipTrigger`, `TooltipContent`                                                                                         | form-builder, page-builder |
 | Notifications | `toast`                                                                                                                               | admin, page-builder        |
-| Design tokens | `theme.css`, `styles.css`, and the `--nx-*` custom properties they define                                                             | admin, all plugins         |
+| Design tokens | `theme.css`, `styles.css`, `styles.scoped.css`, and the `--nx-*` custom properties they define                                        | admin, all plugins         |
+| Portals       | `PortalProvider`, `usePortalContainer`                                                                                                | admin, `styles.scoped.css` |
 
 | Prop types | `ButtonProps`, `InputProps`, `FormLabelWithTooltipProps` | form-builder, page-builder |
 
@@ -72,8 +79,7 @@ Prop types carry the same guarantee as the component they belong to.
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
 `Avatar`, `Card`, `Collapsible`, `Command`, `Popover`, `Progress`, `Separator`,
 `Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, the table
-state components, the layout primitives (`Stack`, `Grid`, `Stat`), `Toaster`,
-`PortalProvider` and `usePortalContainer`.
+state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
 
 These are shipped and used by the admin, but no first-party plugin depends on them yet,
 so they have not met the graduation bar. Use them — that is what promotes them — but

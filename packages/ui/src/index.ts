@@ -412,7 +412,7 @@ export type {
   DataFetcher,
 } from "./types/table";
 
-/** @experimental Portal provider; the admin mounts it, no plugin does. */
+/** @public Required to use styles.scoped.css correctly; see STABILITY.md. */
 // Providers
 export {
   PortalProvider,

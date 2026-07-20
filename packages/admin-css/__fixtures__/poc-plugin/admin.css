@@ -8,5 +8,12 @@
  * `admin.styles`.
  */
 @import "tailwindcss";
-@import "@nextlyhq/ui/theme.css";
+/*
+ * A published plugin writes `@import "@nextlyhq/ui/theme.css"`. This fixture
+ * reaches the same file by path because `@nextlyhq/ui` cannot be a dependency
+ * of this package: `ui` already depends on `admin-css` for the scoper, and
+ * declaring the reverse edge makes the two builds a cycle. The tokens the
+ * compile needs are identical either way.
+ */
+@import "../../../ui/src/styles/theme.css";
 @source inline("grid-cols-12 bg-accent text-accent-foreground");
