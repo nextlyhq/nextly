@@ -13,7 +13,10 @@ import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 /** A single AND-ed filter condition (subset of the adapter WhereClause). */
 export interface VersionsWhereCondition {
   column: string;
-  op: "=" | "!=";
+  // `<` powers keyset pagination (versionNo < cursor); `IN` powers the
+  // retention delete, which removes several rows in one statement. The
+  // adapter's WhereOperator spells the set operator uppercase.
+  op: "=" | "!=" | "<" | "IN";
   // Matches the adapter's WhereCondition.value so the adapter and the
   // transaction context both structurally satisfy VersionsDbApi (a looser
   // `unknown` here breaks that assignability under method-parameter variance).
@@ -44,4 +47,11 @@ export interface VersionsDbApi {
     table: string,
     options?: VersionsSelectOptions
   ): Promise<T[]>;
+  /**
+   * Delete rows matching `where`, returning the number removed. No options
+   * parameter: retention needs none, and omitting it keeps the port satisfied
+   * by both the adapter and the transaction context, whose wider `where` and
+   * extra optional arguments remain assignable to this narrower shape.
+   */
+  delete(table: string, where: VersionsWhere): Promise<number>;
 }
