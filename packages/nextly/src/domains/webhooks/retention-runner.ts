@@ -43,7 +43,12 @@ export class WebhookRetentionRunner {
 
   constructor(private readonly deps: RetentionRunnerDeps) {}
 
-  async maybeRun(): Promise<void> {
+  /**
+   * @param maxBatches Caps this pass, overriding the policy. The write path
+   *   passes a small number so a save that happens to win the gate is not held
+   *   up by a full backlog sweep; the drain leaves it unset and takes the lot.
+   */
+  async maybeRun(maxBatches?: number): Promise<void> {
     try {
       const now = (this.deps.now ?? (() => new Date()))().getTime();
       if (now < this.nextEligibleAt) return;
@@ -61,7 +66,11 @@ export class WebhookRetentionRunner {
       );
       if (!claimed) return;
 
-      await pruneWebhookDataSafely(this.deps.prune, this.deps.policy);
+      const policy =
+        maxBatches === undefined
+          ? this.deps.policy
+          : { ...this.deps.policy, maxBatchesPerRun: maxBatches };
+      await pruneWebhookDataSafely(this.deps.prune, policy);
     } catch (error) {
       // pruneWebhookDataSafely and claimRetentionPass both absorb their own
       // failures, so reaching here means something unforeseen. Swallow it for

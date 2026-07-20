@@ -39,9 +39,9 @@ const LEGS: Leg[] = [
 const KEYS = ["delcount.a", "delcount.b", "delcount.c"];
 
 for (const leg of LEGS) {
-  // eslint-disable-next-line vitest/no-conditional-tests -- dialect gate: skipped
-  // wholesale when the dialect's URL is unset, matching the other gates here.
-  const describeLeg = leg.url ? describe : describe.skip;
+  // Dialect gate: the whole suite is skipped when this dialect's URL is
+  // unset, matching how the other dialect gates in this package self-skip.
+  const describeLeg = describe.skipIf(!leg.url);
 
   describeLeg(`adapter.delete affected rows (${leg.name})`, () => {
     let handle: TestNextly | undefined;

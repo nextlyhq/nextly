@@ -198,14 +198,29 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * Offer a retention pass after a successful write.
-   *
-   * Deliberately not awaited: a pass can delete thousands of rows and no user's
-   * save should wait on housekeeping. `maybeRun` absorbs its own failures, so
-   * nothing can reject here.
+   * Batches a write-triggered pass may run. Small on purpose: the write path is
+   * the only retention trigger an install without a drain has, so the pass must
+   * be awaited to survive a serverless invocation being frozen after the
+   * response — which means one save per interval pays for it, and that save
+   * should not be waiting on a full backlog sweep. Ten thousand rows an hour
+   * from this path alone keeps ahead of most sites; anything with a drain gets
+   * the full budget there.
    */
-  private offerRetentionPass(): void {
-    void this.retentionRunner?.maybeRun();
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  /**
+   * Run a retention pass after a successful write, if one is due.
+   *
+   * Awaited rather than fired and forgotten: on a serverless runtime the
+   * invocation can be frozen or torn down as soon as the response is returned,
+   * so a detached promise may never get past the gate — and for an install with
+   * no drain this is the only trigger there is. `maybeRun` absorbs its own
+   * failures, so this cannot turn a successful save into an error.
+   */
+  private async offerRetentionPass(): Promise<void> {
+    await this.retentionRunner?.maybeRun(
+      CollectionEntryService.WRITE_PATH_PRUNE_BATCHES
+    );
   }
 
   async createEntry(
@@ -223,7 +238,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.createEntry(params, body, depth);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -243,7 +258,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.updateEntry(params, body, depth);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -255,7 +270,7 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -267,7 +282,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }) {
     const result = await this.mutationService.deleteEntry(params);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -309,7 +324,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -323,7 +338,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -338,7 +353,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -358,7 +373,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -373,7 +388,7 @@ export class CollectionEntryService extends BaseService {
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -391,7 +406,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -419,7 +434,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 
@@ -443,7 +458,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
     const result = await this.bulkService.deleteEntries(params, ids, options);
-    this.offerRetentionPass();
+    await this.offerRetentionPass();
     return result;
   }
 

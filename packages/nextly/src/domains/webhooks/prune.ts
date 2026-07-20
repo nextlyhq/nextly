@@ -358,6 +358,17 @@ export async function pruneWebhookData(
   for (const eventClass of EVENT_RETENTION_CLASSES) {
     const cutoff = cutoffFor(now, windowForClass(policy, eventClass));
     if (!cutoff) continue;
+    // A delivery can only hold its event back within the event's own window.
+    // Otherwise a long delivery window would silently override a short event
+    // one — with events kept an hour and deliveries a week, any event that was
+    // ever delivered would live the full week. The later of the two cutoffs is
+    // the shorter effective window, and a null delivery cutoff means keep
+    // forever, which the config already documents as winning over the cascade.
+    const pinCutoff =
+      deliveryCutoff === null
+        ? null
+        : new Date(Math.max(deliveryCutoff.getTime(), cutoff.getTime()));
+
     const outcome = await pruneEventClass(
       deps,
       policy,
@@ -366,7 +377,7 @@ export async function pruneWebhookData(
       budget,
       options,
       requireFanOut,
-      deliveryCutoff
+      pinCutoff
     );
     result.events[eventClass] = outcome.deleted;
     if (!outcome.exhausted) result.truncated = true;

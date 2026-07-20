@@ -65,10 +65,9 @@ function envelopeOf(row: { payload: unknown }): WebhookEvent {
 }
 
 for (const leg of LEGS) {
-  // eslint-disable-next-line vitest/no-conditional-tests -- dialect gate: the
-  // suite is skipped wholesale when the dialect's URL is unset, matching the
-  // other dialect gates in this package.
-  const describeLeg = leg.url ? describe : describe.skip;
+  // Dialect gate: the whole suite is skipped when this dialect's URL is
+  // unset, matching how the other dialect gates in this package self-skip.
+  const describeLeg = describe.skipIf(!leg.url);
 
   describeLeg(`outbox pre-image row lock (${leg.name} dialect gate)`, () => {
     let cleanup: TestAdapter | undefined;

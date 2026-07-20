@@ -168,6 +168,39 @@ describe("pruneWebhookData", () => {
     expect(scan?.where?.and.some(c => c.column === "createdAt")).toBe(false);
   });
 
+  it("does not let a delivery hold an event past the event's own window", async () => {
+    // Events kept an hour, deliveries a week. Without clamping per class, any
+    // event that was ever delivered would live the full week and the configured
+    // event window would mean nothing.
+    const f = fakeAdapter({
+      events: [["e1"]],
+      youngDeliveryEventIds: ["e1"],
+      hasEndpoint: true,
+    });
+    const shortEvents = resolveWebhookRetentionConfig({
+      eventsMaxAgeMs: 60 * 60 * 1000,
+      auditEventsMaxAgeMs: 365 * 24 * 60 * 60 * 1000,
+      deliveriesMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+      batchSize: 2,
+    })!;
+    const now = new Date("2026-07-21T12:00:00.000Z");
+
+    await pruneWebhookData({ adapter: f.adapter, now: () => now }, shortEvents);
+
+    // The pin is taken at the event's cutoff, not the older delivery cutoff.
+    // The pin lookup is the one keyed by event id; the delivery prune scan also
+    // filters on updatedAt and runs first.
+    const pinLookup = f.selects.find(
+      s =>
+        s.table === "nextly_webhook_deliveries" &&
+        s.where?.and.some(c => c.column === "eventId") &&
+        s.where?.and.some(c => c.column === "updatedAt")
+    );
+    const pinAt = pinLookup?.where?.and.find(c => c.column === "updatedAt")
+      ?.value as Date;
+    expect(pinAt).toEqual(new Date(now.getTime() - 60 * 60 * 1000));
+  });
+
   it("prunes only terminal deliveries, so it cannot race the drain", async () => {
     const f = fakeAdapter({ deliveries: [["d1"]] });
     await pruneWebhookData({ adapter: f.adapter }, policy());
