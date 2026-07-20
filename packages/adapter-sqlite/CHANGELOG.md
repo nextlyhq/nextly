@@ -1,5 +1,28 @@
 # @nextlyhq/adapter-sqlite
 
+## 0.0.2-alpha.37
+
+### Patch Changes
+
+- [#241](https://github.com/nextlyhq/nextly/pull/241) [`14c88c8`](https://github.com/nextlyhq/nextly/commit/14c88c8982a9bc7c6526289103888193263cb20c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Content version snapshots are now captured more faithfully: component subtrees and
+  relations are read within the write transaction so just-written data is included
+  correctly on every database (no leaked password hashes, no lost ids), a partial
+  translation edit keeps the language's other translated fields in the snapshot, and
+  publishing all languages records a version and fires the status-change events like
+  an ordinary publish. Publishing or changing the status of a single translation now
+  also fires the document status-change events, tagged with the language. A versioned
+  Single that is auto-created on its first read now starts its version history at that
+  moment instead of leaving the live document without any version.
+
+- [#172](https://github.com/nextlyhq/nextly/pull/172) [`dbb4675`](https://github.com/nextlyhq/nextly/commit/dbb46757081a5d68b33ffaead8e621bbbff6e262) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Extend content localization to singles and embedded components, and make disabling localization recoverable.
+
+  Singles and components now localize the same way collections do: mark a single or a component `localized` (in code or the Schema Builder) and its translatable fields move to a companion `_locales` table, with per-language reads and writes (`?locale=`, `?fallback-locale=`), a per-language switcher, and RTL-aware editing. The push pipeline provisions each companion table out of band and keeps the translatable columns off the main table, so a boot-time code-first sync no longer re-adds them.
+
+  Turning localization off is now guarded. `nextly migrate:create` emits a migration that archives every non-default translation into `nextly_i18n_archive` before dropping the companion, and `nextly i18n:restore` replays an archive back onto the companion, so a mistaken disable is reversible rather than a silent data loss.
+
+- Updated dependencies [[`14c88c8`](https://github.com/nextlyhq/nextly/commit/14c88c8982a9bc7c6526289103888193263cb20c), [`dbb4675`](https://github.com/nextlyhq/nextly/commit/dbb46757081a5d68b33ffaead8e621bbbff6e262)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.37
+
 ## 0.0.2-alpha.36
 
 ### Patch Changes
