@@ -4,6 +4,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
@@ -425,6 +426,8 @@ export class CollectionsHandler {
       depth?: number;
       /** User context for access control */
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values stored for this language. */
@@ -441,7 +444,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.createEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );

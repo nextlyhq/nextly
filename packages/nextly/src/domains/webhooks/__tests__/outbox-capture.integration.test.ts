@@ -144,6 +144,37 @@ describe("webhook outbox capture (integration)", () => {
     expect(JSON.stringify(envelope)).not.toContain("SuperSecret123!");
   });
 
+  it("attributes the event to the acting identity, including an API key", async () => {
+    // An API-key write must attribute to the key itself, not to the user that
+    // owns it: durable history that says "a person did this" when a token did
+    // is worse than no attribution.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    await handler.createEntry(
+      {
+        collectionName: "posts",
+        overrideAccess: true,
+        actor: { type: "apiKey", id: "key_abc" },
+      },
+      { title: "by key" }
+    );
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actorType).toBe("apiKey");
+    expect(rows[0].actorId).toBe("key_abc");
+    expect(envelopeOf(rows[0]).actor).toEqual({
+      type: "apiKey",
+      id: "key_abc",
+    });
+  });
+
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {
     // The outbox guarantee: an event must never outlive the change it describes,
     // or a webhook fires for something that never happened. Recording through the
