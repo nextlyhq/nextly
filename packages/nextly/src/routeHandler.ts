@@ -430,12 +430,34 @@ const COLLECTION_ENTRY_METHODS = new Set([
   "countEntries",
   "duplicateEntry",
   "publishAllLocales",
+  // Version history is guarded by the same per-collection read permission as
+  // the entry itself; the document-level rules run inside the methods.
+  "listEntryVersions",
+  "getEntryVersion",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
 const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleDocument",
   "updateSingleDocument",
+  // Read-only history for the document, guarded by the same read permission.
+  "listSingleVersions",
+  "getSingleVersion",
+]);
+
+/**
+ * Read methods that still need resolved role slugs.
+ *
+ * Their responses run field-level `access.read`, which evaluates role-based
+ * rules against the caller's roles. Reads normally skip the roles lookup, but
+ * skipping it here would treat a permitted caller as having no roles and
+ * silently strip fields they are allowed to see.
+ */
+const ROLE_AWARE_READ_METHODS = new Set([
+  "listEntryVersions",
+  "getEntryVersion",
+  "listSingleVersions",
+  "getSingleVersion",
 ]);
 
 /**
@@ -473,8 +495,14 @@ async function resolveAuthorization(
   // --- Singles endpoints ---
   if (service === "singles") {
     if (SINGLE_DOCUMENT_METHODS.has(method)) {
-      // Document operations → {action}-{singleSlug}
-      const action = method === "getSingleDocument" ? "read" : "update";
+      // Document operations → {action}-{singleSlug}. The read-only methods
+      // must not demand update permission just by sharing this set.
+      const action =
+        method === "getSingleDocument" ||
+        method === "listSingleVersions" ||
+        method === "getSingleVersion"
+          ? "read"
+          : "update";
       const slug = routeParams?.slug || "";
       return requireCollectionAccess(req, action, slug);
     }
@@ -813,10 +841,13 @@ async function handleServiceRequest(
   // the lookup for reads and every other service so they don't incur a
   // permissions query.
   const needsRoles =
-    (service === "collections" || service === "singles") &&
-    httpMethod !== "GET" &&
-    httpMethod !== "HEAD" &&
-    httpMethod !== "OPTIONS";
+    ((service === "collections" || service === "singles") &&
+      httpMethod !== "GET" &&
+      httpMethod !== "HEAD" &&
+      httpMethod !== "OPTIONS") ||
+    // Version reads are GETs but still redact per field-level `access.read`,
+    // which needs the caller's roles to evaluate role-based rules.
+    ROLE_AWARE_READ_METHODS.has(method);
   await setAuthenticatedRouteParams(routeParams, authorizedUser, needsRoles);
 
   const dispatchRequest: DispatchRequest = {

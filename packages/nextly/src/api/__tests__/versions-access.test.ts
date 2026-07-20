@@ -50,11 +50,11 @@ vi.mock("../../services/lib/permissions", () => ({
 
 import {
   assertVersionDocumentReadable,
-  requireVersionReadAccess,
+  requireRouteVersionReadAccess,
 } from "../versions-access";
 import { GET as listVersions } from "../versions";
 
-describe("requireVersionReadAccess", () => {
+describe("requireRouteVersionReadAccess", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireRouteCollectionAccessSpy.mockResolvedValue({
@@ -70,7 +70,7 @@ describe("requireVersionReadAccess", () => {
   it("reads a collection entry with status:all so drafts still have history", async () => {
     getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
 
-    await requireVersionReadAccess(
+    await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
       "collection",
       "posts",
@@ -98,7 +98,7 @@ describe("requireVersionReadAccess", () => {
     getEntrySpy.mockResolvedValue({ success: false, statusCode: 500 });
 
     await expect(
-      requireVersionReadAccess(
+      requireRouteVersionReadAccess(
         new Request("http://localhost/x"),
         "collection",
         "posts",
@@ -111,7 +111,7 @@ describe("requireVersionReadAccess", () => {
     getEntrySpy.mockResolvedValue({ success: false, statusCode: 403 });
 
     await expect(
-      requireVersionReadAccess(
+      requireRouteVersionReadAccess(
         new Request("http://localhost/x"),
         "collection",
         "posts",
@@ -128,7 +128,7 @@ describe("requireVersionReadAccess", () => {
     selectOneSpy.mockResolvedValue(null);
 
     await expect(
-      requireVersionReadAccess(
+      requireRouteVersionReadAccess(
         new Request("http://localhost/x"),
         "single",
         "settings",
@@ -146,7 +146,7 @@ describe("requireVersionReadAccess", () => {
     selectOneSpy.mockResolvedValue({ id: "current-id" });
 
     await expect(
-      requireVersionReadAccess(
+      requireRouteVersionReadAccess(
         new Request("http://localhost/x"),
         "single",
         "settings",
@@ -162,7 +162,7 @@ describe("requireVersionReadAccess", () => {
     selectOneSpy.mockResolvedValue({ id: "single-1" });
     singleGetSpy.mockResolvedValue({ success: true, statusCode: 200 });
 
-    const user = await requireVersionReadAccess(
+    const user = await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
       "single",
       "settings",

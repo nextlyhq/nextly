@@ -38,7 +38,7 @@ import { requireRouteCollectionAccess } from "./route-auth";
  *
  * @returns The resolved caller, for redacting whatever is returned next.
  */
-export async function requireVersionReadAccess(
+export async function requireRouteVersionReadAccess(
   request: Request,
   scopeKind: VersionScopeKind,
   slug: string,
@@ -73,7 +73,7 @@ export async function requireVersionReadAccess(
  * The dispatcher authorizes centrally before dispatching, so it needs the
  * document-level half of the gate on its own — owner-only rules,
  * draft/published visibility, and (for Singles) the live-id match. Keeping this
- * separate from {@link requireVersionReadAccess} means those rules are defined
+ * separate from {@link requireRouteVersionReadAccess} means those rules are defined
  * once instead of drifting between the two entry points.
  *
  * @throws NextlyError.notFound when the caller may not see the document.

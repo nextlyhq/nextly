@@ -23,7 +23,7 @@ import type { VersionScopeKind } from "../schemas/versions/types";
 import { respondDoc } from "./response-shapes";
 import {
   redactSnapshotForUser,
-  requireVersionReadAccess,
+  requireRouteVersionReadAccess,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -85,7 +85,12 @@ export const GET = withErrorHandler(
       });
     }
 
-    const user = await requireVersionReadAccess(request, scopeKind, slug, id);
+    const user = await requireRouteVersionReadAccess(
+      request,
+      scopeKind,
+      slug,
+      id
+    );
 
     const versions = getService("versionsService");
     const row = await versions.get(
