@@ -1476,6 +1476,7 @@ export class CollectionMutationService extends BaseService {
               manyToMany: snapshotM2M,
             },
             createdBy: params.user?.id ?? null,
+            maxPerDoc: versionsConfig.maxPerDoc,
           });
         }
       });
@@ -1797,6 +1798,7 @@ export class CollectionMutationService extends BaseService {
                   manyToMany: snapshotM2M,
                 },
                 createdBy: params.user?.id ?? null,
+                maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
           }
@@ -2564,6 +2566,7 @@ export class CollectionMutationService extends BaseService {
                   manyToMany: snapshotM2M,
                 },
                 createdBy: params.user?.id ?? null,
+                maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
           }

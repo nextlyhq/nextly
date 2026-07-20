@@ -13,6 +13,7 @@
 import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
+import { selectVersionsToPrune } from "./retention";
 import { VersionConflictError, isUniqueViolation } from "./version-conflict";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
@@ -25,6 +26,12 @@ export interface CaptureInput {
   label?: string | null;
   locale?: string | null;
   sourceVersionNo?: number | null;
+  /**
+   * Durable versions retained for this document; `false` or omitted leaves
+   * history unbounded. Applied in the caller's transaction right after the
+   * insert, so the cap holds without a background worker.
+   */
+  maxPerDoc?: number | false;
 }
 
 /** The allocated number of a captured version. */
@@ -74,6 +81,16 @@ export class VersionCaptureService {
         throw new VersionConflictError(err);
       }
       throw err;
+    }
+    // Trim history to the configured cap inside the caller's transaction. The
+    // newest version and the most recent published one are always protected, so
+    // the head of history and the snapshot matching live content survive.
+    if (typeof input.maxPerDoc === "number") {
+      const durable = await repo.listDurableForPrune(input.ref);
+      const staleIds = selectVersionsToPrune(durable, input.maxPerDoc);
+      if (staleIds.length > 0) {
+        await repo.deleteByIds(staleIds);
+      }
     }
     return { versionNo };
   }

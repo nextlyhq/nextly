@@ -42,6 +42,8 @@ export interface CaptureInTxArgs {
   parts: AssembleDocumentParts;
   /** The acting user's id, or null for system/seed writes. */
   createdBy?: string | null;
+  /** Retention cap for this document, from the resolved versions config. */
+  maxPerDoc?: number | false;
 }
 
 /**
@@ -62,5 +64,6 @@ export async function captureInTx(
     status,
     snapshot,
     createdBy: args.createdBy ?? null,
+    maxPerDoc: args.maxPerDoc,
   });
 }

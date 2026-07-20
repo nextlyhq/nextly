@@ -778,6 +778,7 @@ export class SingleQueryService extends BaseService {
           // System-materialized default: no authoring user.
           parts: { parentRow, components: {} },
           createdBy: null,
+          maxPerDoc: versionsConfig.maxPerDoc,
         });
         return row;
       })
