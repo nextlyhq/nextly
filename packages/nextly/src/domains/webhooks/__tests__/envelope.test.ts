@@ -109,13 +109,28 @@ describe("buildEnvelope", () => {
         profile: { name: "A", apiSecret: "s1" },
         items: [{ label: "x", token: "t1" }],
       },
-      sensitiveFields: ["apiSecret", "token"],
+      sensitiveFields: ["profile.apiSecret", "items.token"],
     });
     expect(env.data).toEqual({
       id: "p1",
       profile: { name: "A" },
       items: [{ label: "x" }],
     });
+  });
+
+  // A nested sensitive field must not take an unrelated field of the same name
+  // with it: bare-name stripping would silently delete the document's own
+  // `title` because some component declares a hidden one.
+  it("strips only the denied path, leaving a same-named sibling intact", () => {
+    const env = buildEnvelope({
+      ...base,
+      previous: { id: "p1", title: "Before", profile: { title: "secret" } },
+      data: { id: "p1", title: "After", profile: { title: "secret" } },
+      sensitiveFields: ["profile.title"],
+    });
+    expect(env.data).toEqual({ id: "p1", title: "After", profile: {} });
+    // The legitimate change is still reported.
+    expect(env.changedFields).toEqual(["title"]);
   });
 
   // Date instances have no enumerable keys, so the diff must compare them by

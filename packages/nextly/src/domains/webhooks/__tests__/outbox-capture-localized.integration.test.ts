@@ -157,6 +157,36 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(envelope.changedFields).toContain("heading");
   });
 
+  it("identifies which translation the event describes", async () => {
+    // Without the locale, an English and a German write to the same entry
+    // produce indistinguishable events carrying different values, so a receiver
+    // cannot tell which translation changed.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "T", heading: "Deutsch" }
+    );
+    const id = (created.data as { id: string }).id;
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      },
+      { heading: "English" }
+    );
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const createdEvent = rows.find(r => r.type === "entry.created");
+    const updatedEvent = rows.find(r => r.type === "entry.updated");
+    expect(envelopeOf(createdEvent!).resource).toMatchObject({ locale: "de" });
+    expect(envelopeOf(updatedEvent!).resource).toMatchObject({ locale: "en" });
+  });
+
   it("records the per-locale status a create committed, not the main-row default", async () => {
     const t = await boot();
     await migrate(t);

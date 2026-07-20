@@ -19,7 +19,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { buildEnvelope } from "./envelope";
 import { recordEvent } from "./record-event";
 import {
-  sensitiveFieldNames,
+  sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 import type { WebhookEventType, WebhookResource } from "./types";
@@ -66,7 +66,7 @@ export async function recordMutationEvent(
     data: args.data,
     previous: args.previous ?? null,
     actor: args.actor ?? null,
-    sensitiveFields: sensitiveFieldNames(args.fields),
+    sensitiveFields: sensitiveFieldPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
   });
 

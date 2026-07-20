@@ -10,7 +10,7 @@ import {
   expandComponentFields,
   type ComponentFieldResolver,
 } from "../expand-component-fields";
-import { sensitiveFieldNames } from "../sensitive-fields";
+import { sensitiveFieldPaths } from "../sensitive-fields";
 
 const resolver =
   (map: Record<string, unknown[]>): ComponentFieldResolver =>
@@ -33,8 +33,8 @@ describe("expandComponentFields", () => {
     );
 
     // The hidden field is only discoverable after expansion.
-    expect(sensitiveFieldNames(expanded)).toContain("note");
-    expect(sensitiveFieldNames(expanded)).not.toContain("heading");
+    expect(sensitiveFieldPaths(expanded)).toContain("profile.note");
+    expect(sensitiveFieldPaths(expanded)).not.toContain("profile.heading");
   });
 
   it("reads the stored `componentSlug` key as well as config's `component`", async () => {
@@ -43,7 +43,7 @@ describe("expandComponentFields", () => {
       resolver({ bio: [{ name: "secretNote", type: "password" }] })
     );
 
-    expect(sensitiveFieldNames(expanded)).toContain("secretNote");
+    expect(sensitiveFieldPaths(expanded)).toContain("bio.secretNote");
   });
 
   it("terminates on a component cycle instead of recursing forever", async () => {
@@ -62,9 +62,9 @@ describe("expandComponentFields", () => {
       })
     );
 
-    const names = sensitiveFieldNames(expanded);
-    expect(names).toContain("aSecret");
-    expect(names).toContain("bSecret");
+    const names = sensitiveFieldPaths(expanded);
+    expect(names).toContain("a.aSecret");
+    expect(names).toContain("a.toB.bSecret");
   });
 
   it("resolves each component once even when several branches reference it", async () => {
@@ -136,10 +136,10 @@ describe("expandComponentFields", () => {
       })
     );
 
-    const names = sensitiveFieldNames(expanded);
-    expect(names).toContain("heroToken");
-    expect(names).toContain("ctaSecret");
-    expect(names).not.toContain("headline");
+    const names = sensitiveFieldPaths(expanded);
+    expect(names).toContain("zone.heroToken");
+    expect(names).toContain("zone.ctaSecret");
+    expect(names).not.toContain("zone.headline");
   });
 
   it("keeps expanding a dynamic zone's other members when one is self-referential", async () => {
@@ -156,9 +156,9 @@ describe("expandComponentFields", () => {
       })
     );
 
-    const names = sensitiveFieldNames(expanded);
-    expect(names).toContain("loopSecret");
-    expect(names).toContain("safeSecret");
+    const names = sensitiveFieldPaths(expanded);
+    expect(names).toContain("zone.loopSecret");
+    expect(names).toContain("zone.safeSecret");
   });
 
   it("descends into nested containers to reach a component reference", async () => {
@@ -173,6 +173,6 @@ describe("expandComponentFields", () => {
       resolver({ inner: [{ name: "innerSecret", type: "password" }] })
     );
 
-    expect(sensitiveFieldNames(expanded)).toContain("innerSecret");
+    expect(sensitiveFieldPaths(expanded)).toContain("group.inner.innerSecret");
   });
 });

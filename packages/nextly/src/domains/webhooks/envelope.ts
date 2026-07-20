@@ -56,20 +56,30 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Recursively drop every key named in `denied` from a value, descending into
+ * Recursively drop every key whose dotted PATH is in `denied`, descending into
  * nested objects and arrays (Nextly allows secret fields at any depth, e.g. a
  * password inside a group or repeater). Dates are treated as leaves. Returns a
  * fresh structure so the caller's objects are never mutated.
+ *
+ * Matching is by path rather than bare key so a sensitive name nested somewhere
+ * cannot strip an unrelated field that happens to share it — a component with a
+ * hidden `title` must not remove the document's own `title`. Array elements do
+ * not add a segment, so one path covers every element of a repeater.
  */
-function stripValue(value: unknown, denied: Set<string>): unknown {
+function stripValue(
+  value: unknown,
+  denied: Set<string>,
+  path: string
+): unknown {
   if (Array.isArray(value)) {
-    return value.map(v => stripValue(v, denied));
+    return value.map(v => stripValue(v, denied, path));
   }
   if (value !== null && typeof value === "object" && !(value instanceof Date)) {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      if (denied.has(k)) continue;
-      out[k] = stripValue(v, denied);
+      const childPath = path ? `${path}.${k}` : k;
+      if (denied.has(childPath)) continue;
+      out[k] = stripValue(v, denied, childPath);
     }
     return out;
   }
@@ -77,16 +87,19 @@ function stripValue(value: unknown, denied: Set<string>): unknown {
 }
 
 /**
- * Return a deep copy of `doc` without the sensitive field names, at any depth.
- * A missing field name is a no-op, so callers can pass a superset (e.g. every
- * secret field of the collection) safely.
+ * Return a deep copy of `doc` without the sensitive field paths. A path that
+ * matches nothing is a no-op, so callers can pass a superset (e.g. every secret
+ * field of the collection) safely.
  */
 function stripSensitive(
   doc: Record<string, unknown>,
   sensitiveFields: readonly string[]
 ): Record<string, unknown> {
   if (sensitiveFields.length === 0) return { ...doc };
-  return stripValue(doc, new Set(sensitiveFields)) as Record<string, unknown>;
+  return stripValue(doc, new Set(sensitiveFields), "") as Record<
+    string,
+    unknown
+  >;
 }
 
 /**
@@ -130,7 +143,11 @@ export interface BuildEnvelopeInput {
   /** Prior state on update/delete/status-change; null/undefined on create. Same deserialized-document requirement as `data`. */
   previous?: Record<string, unknown> | null;
   actor?: WebhookActor | null;
-  /** Field names to strip from both `data` and `previous` before shipping. */
+  /**
+   * Dotted field PATHS to strip from both `data` and `previous` before
+   * shipping (`secret`, `profile.apiKey`). Bare names would strip every
+   * occurrence of that key at any depth, including unrelated siblings.
+   */
   sensitiveFields?: readonly string[];
 }
 
