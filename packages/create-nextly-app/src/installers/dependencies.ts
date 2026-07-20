@@ -135,6 +135,19 @@ export async function installDependencies(
         ]),
       ];
 
+      // Everything else in the install set comes from npm, not the yalc store:
+      // @tanstack/react-query and lucide-react are externalised from the admin
+      // bundle and peer-required by @nextlyhq/ui, so `yalc add` would never
+      // provide them and the peers would stay unresolved.
+      const registryPackages = allPackages.filter(
+        pkg => !yalcPackages.includes(pkg)
+      );
+
+      if (registryPackages.length > 0) {
+        const [cmd, ...args] = INSTALL_COMMANDS[pm];
+        await execa(cmd, [...args, ...registryPackages], { cwd });
+      }
+
       for (const pkg of yalcPackages) {
         await execa("yalc", ["add", pkg], { cwd });
       }
