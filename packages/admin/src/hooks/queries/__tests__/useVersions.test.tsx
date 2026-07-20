@@ -15,6 +15,8 @@ const { listSpy, getSpy, restoreSpy } = vi.hoisted(() => ({
   restoreSpy: vi.fn(),
 }));
 
+// The API client is replaced so these tests drive query and mutation outcomes
+// directly — including a failing restore — without a network round trip.
 vi.mock("@admin/services/versionApi", () => ({
   versionApi: { list: listSpy, get: getSpy, restore: restoreSpy },
 }));

@@ -109,6 +109,24 @@ describe("buildRestorePayload", () => {
     expect(droppedFields).toEqual(["account"]);
   });
 
+  it("does not resubmit a field that is a password now", () => {
+    // The snapshot may predate the field becoming a password — a text field
+    // converted later leaves a readable value in old snapshots, and restoring
+    // it would overwrite the live credential.
+    const withSecret = [
+      { name: "title", type: "text" },
+      { name: "secret", type: "password" },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { title: "Hello", secret: "was-plain-text-back-then" },
+      withSecret
+    );
+
+    expect(payload).toEqual({ title: "Hello" });
+    expect(droppedFields).toEqual(["secret"]);
+  });
+
   it("still restores a container with no password in it", () => {
     const plain = [
       {

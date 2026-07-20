@@ -2865,6 +2865,15 @@ export class CollectionMutationService extends BaseService {
                 manyToMany: snapshotM2M,
               };
 
+              // Whether anything in this snapshot is specific to the write
+              // locale: values read back from its companion row, values this
+              // write put there, or its own status.
+              const capturedLocaleState =
+                Object.keys(priorLocalizedValues).length > 0 ||
+                Object.keys(localizedUpdate?.localizedFieldValues ?? {})
+                  .length > 0 ||
+                typeof effectiveLocaleStatus === "string";
+
               if (versionsConfig?.enabled) {
                 await captureInTx(tx, this.versionCapture, {
                   ref: {
@@ -2883,12 +2892,16 @@ export class CollectionMutationService extends BaseService {
                     (currentParent as { status?: unknown }).status,
                   parts: documentParts,
                   createdBy: params.user?.id ?? null,
-                  // The locale the snapshot above was assembled from — set only
-                  // when localized values were actually overlaid onto it. A
-                  // requested locale that routed nowhere would label a snapshot
-                  // as a language whose values it does not hold, and a restore
-                  // trusts this label to decide where to write.
-                  locale: localizedUpdate?.writeLocale ?? null,
+                  // Labelled with a locale only when locale-specific state was
+                  // actually captured. A migrated localized collection routes
+                  // every write through `localizedUpdate`, including one that
+                  // touches only shared fields on a locale with no companion
+                  // row — that snapshot holds no translations and falls back to
+                  // the MAIN row's status, so calling it that locale's would let
+                  // a restore publish a language from entry-level state.
+                  locale: capturedLocaleState
+                    ? (localizedUpdate?.writeLocale ?? null)
+                    : null,
                   sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,
                 });

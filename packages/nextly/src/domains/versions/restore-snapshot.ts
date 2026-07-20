@@ -137,14 +137,14 @@ export function buildRestorePayload(
       continue;
     }
 
-    // A container whose subtree holds a password cannot be resubmitted: the
-    // snapshot's copy has the password stripped, and the update replaces the
-    // container whole, which would wipe the stored credential.
+    // Nothing that stores a password is resubmitted, at any depth. A container
+    // is skipped because the update replaces it whole and the snapshot's copy
+    // has the password stripped out. A field that is a password *now* is
+    // skipped because it may not have been one when the snapshot was taken —
+    // a text field later converted to a password leaves a readable value in
+    // old snapshots, and restoring it would overwrite the live credential.
     const field = byName.get(key);
-    const nested = field
-      ? ((field as { fields?: unknown }).fields as FieldConfig[] | undefined)
-      : undefined;
-    if (Array.isArray(nested) && containsPasswordField(nested)) {
+    if (field && containsPasswordField([field])) {
       droppedFields.push(key);
       continue;
     }

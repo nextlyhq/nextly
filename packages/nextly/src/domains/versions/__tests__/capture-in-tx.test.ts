@@ -56,6 +56,21 @@ describe("captureInTx", () => {
     );
   });
 
+  it("passes through whatever locale the caller established", async () => {
+    // The seam does not decide whether a snapshot is locale-specific; the write
+    // path does, and passes null when it captured no locale-specific state.
+    await captureInTx(tx, service(), {
+      ref,
+      parts: { parentRow: { id: "e1" } },
+      locale: null,
+    });
+
+    expect(capture).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ locale: null })
+    );
+  });
+
   it("records the version a restore came from", async () => {
     await captureInTx(tx, service(), {
       ref,
