@@ -17,8 +17,8 @@ Plugin authors use both:
 | The Tailwind v3 preset                                              | `@nextlyhq/ui/tailwind-preset`        |
 
 > **Never import from `@nextlyhq/admin`.** It is an application, not a published API.
-
-> Export groups are annotated with a TSDoc release tag (`@public` / `@experimental`)
+>
+> Export clauses are annotated with a TSDoc release tag (`@public` / `@experimental`)
 > that mirrors the tables below. When the JSDoc and this table disagree, **this table
 > wins** — please open an issue.
 
@@ -63,8 +63,9 @@ that swap fails the snapshot too.
 | Notifications | `toast`                                                                                                                               | admin, page-builder        |
 | Design tokens | `theme.css`, `styles.css`, and the `--nx-*` custom properties they define                                                             | admin, all plugins         |
 
-Prop types exported alongside a `@public` component (for example `ButtonProps`) carry the
-same guarantee as the component.
+| Prop types | `ButtonProps`, `InputProps`, `FormLabelWithTooltipProps` | form-builder, page-builder |
+
+Prop types carry the same guarantee as the component they belong to.
 
 ## Experimental surface (`@experimental`)
 

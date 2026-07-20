@@ -79,7 +79,7 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 **Providers:** `PortalProvider`, `usePortalContainer`
 
 > Which of these carry a stability guarantee is recorded in
-> [STABILITY.md](./STABILITY.md). A component becomes `@public` once a first-party
+> [STABILITY.md](https://github.com/nextlyhq/nextly/blob/main/packages/ui/STABILITY.md). A component becomes `@public` once a first-party
 > plugin depends on it; everything else is `@experimental` and may change in any
 > release.
 

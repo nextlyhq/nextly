@@ -5,7 +5,8 @@
  * plugin's admin components compile against these exports, so removing or
  * renaming one breaks installed plugins on a host upgrade. This snapshots the
  * exported names of each published entry point so a change fails CI and forces
- * an intentional review against `STABILITY.md`.
+ * an intentional review, and cross-checks the source against `STABILITY.md` in
+ * both directions so the ledger and the code cannot drift apart.
  *
  * It reads the source rather than importing it: the root barrel is published
  * with `"use client"` and pulls in the whole component tree, which does not
@@ -18,9 +19,26 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
+const PKG_ROOT = path.join(SRC, "..");
 
 /** The entry points named in the package's `exports` map. */
 const ENTRY_POINTS = ["index.ts", "lib/utils.ts", "tailwind-preset.ts"];
+
+/**
+ * Strip comments before any structural check. Doc comments here legitimately
+ * contain `export default …` and `export *` in usage examples, so matching the
+ * raw text would both fire on prose and keep passing after the real export it
+ * describes was deleted.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+function sourceOf(file: string): string {
+  return stripComments(readFileSync(path.join(SRC, file), "utf8"));
+}
 
 /**
  * Extract each export as `"<name> (value|type)"` from a module's source. Covers
@@ -33,11 +51,9 @@ const ENTRY_POINTS = ["index.ts", "lib/utils.ts", "tailwind-preset.ts"];
  * name but can break a consumer at runtime, so it must not pass silently.
  */
 function exportedNames(file: string): string[] {
-  const source = readFileSync(path.join(SRC, file), "utf8");
+  const source = sourceOf(file);
   const kinds = new Map<string, "value" | "type">();
 
-  // Named export/re-export blocks (possibly multi-line). `export type { … }`
-  // makes the whole block type-only; an inline `type ` prefix marks one entry.
   for (const m of source.matchAll(/export\s+(type\s+)?\{([\s\S]*?)\}/g)) {
     const blockIsType = Boolean(m[1]);
     for (const raw of m[2].split(",")) {
@@ -48,22 +64,76 @@ function exportedNames(file: string): string[] {
         kind = "type";
         entry = entry.replace(/^type\s+/, "");
       }
-      // `X as Y` exports the name after `as`.
       const asMatch = entry.match(/\bas\s+([A-Za-z0-9_$]+)$/);
       kinds.set(asMatch ? asMatch[1] : entry, kind);
     }
   }
-  // Direct declaration exports. `interface`/`type` are type-only; the rest
-  // (`function`/`class`/`const`/`let`/`var`/`enum`) are runtime values.
   for (const m of source.matchAll(
     /export\s+(?:async\s+)?(function|class|const|let|var|interface|enum|type)\s+([A-Za-z0-9_$]+)/g
   )) {
     kinds.set(m[2], m[1] === "interface" || m[1] === "type" ? "type" : "value");
   }
-  // A default export is part of the surface too, and is not named above.
   if (/export\s+default\s/.test(source)) kinds.set("default", "value");
 
   return [...kinds.entries()].map(([name, kind]) => `${name} (${kind})`).sort();
+}
+
+/** Names the barrel exports, without the kind suffix. */
+function barrelNames(): Set<string> {
+  return new Set(
+    exportedNames("index.ts").map(entry => entry.replace(/ \(.*\)$/, ""))
+  );
+}
+
+/**
+ * Names carried by `@public`-tagged export clauses in the barrel. Each clause
+ * is tagged with exactly one release tag, so the tag preceding a clause applies
+ * to every name in it. A group heading may sit between the tag and the clause.
+ */
+function publicPerSource(): Set<string> {
+  const source = readFileSync(path.join(SRC, "index.ts"), "utf8");
+  const names = new Set<string>();
+  for (const m of source.matchAll(
+    /\/\*\*[\s\S]*?@public[\s\S]*?\*\/\s*(?:\/\/[^\n]*\n\s*)*export(?:\s+type)?\s*\{([^}]*)\}/g
+  )) {
+    for (const raw of m[1].split(",")) {
+      const entry = raw.trim().replace(/^type\s+/, "");
+      if (!entry) continue;
+      const asMatch = entry.match(/\bas\s+([A-Za-z0-9_$]+)$/);
+      names.add(asMatch ? asMatch[1] : entry);
+    }
+  }
+  return names;
+}
+
+const ledger = readFileSync(path.join(PKG_ROOT, "STABILITY.md"), "utf8");
+const packageJson = JSON.parse(
+  readFileSync(path.join(PKG_ROOT, "package.json"), "utf8")
+) as { exports: Record<string, unknown> };
+
+/** Everything backticked in the ledger's stable table, identifiers and files. */
+function documentedPublic(): { names: string[]; files: string[] } {
+  const start = ledger.indexOf("## Stable surface");
+  const end = ledger.indexOf("## Experimental surface");
+  // Fail closed: a renamed heading must break the check, not silently skip it.
+  expect(
+    start,
+    "STABILITY.md is missing the '## Stable surface' heading"
+  ).toBeGreaterThan(-1);
+  expect(
+    end,
+    "STABILITY.md is missing the '## Experimental surface' heading"
+  ).toBeGreaterThan(start);
+
+  const section = ledger.slice(start, end);
+  const ticked = [
+    ...new Set([...section.matchAll(/`([A-Za-z][\w./-]*)`/g)].map(m => m[1])),
+  ];
+  return {
+    // Lowercase identifiers count too — `toast` is a public runtime export.
+    names: ticked.filter(t => /^[A-Za-z][A-Za-z0-9]*$/.test(t)),
+    files: ticked.filter(t => t.endsWith(".css")),
+  };
 }
 
 describe("ui public export surface", () => {
@@ -74,37 +144,56 @@ describe("ui public export surface", () => {
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(ENTRY_POINTS)(
-    "%s uses only named exports (no `export *`, which the guard cannot track)",
-    file => {
-      const source = readFileSync(path.join(SRC, file), "utf8");
-      expect(source).not.toMatch(/export\s+\*/);
-    }
-  );
+  it.each(ENTRY_POINTS)("%s uses only named exports (no `export *`)", file => {
+    expect(sourceOf(file)).not.toMatch(/export\s+\*/);
+  });
+});
 
-  // The ledger is what plugin authors read; a public export that vanished from
-  // it, or one documented but never shipped, is a broken promise either way.
-  it("documents every export named in STABILITY.md as @public", () => {
-    const ledger = readFileSync(path.join(SRC, "..", "STABILITY.md"), "utf8");
-    const stableSection = ledger.slice(
-      ledger.indexOf("## Stable surface"),
-      ledger.indexOf("## Experimental surface")
-    );
-    // Names in the table's `Exports` column, written as `` `Name` ``.
-    const documented = [
-      ...new Set(
-        [...stableSection.matchAll(/`([A-Z][A-Za-z0-9]*)`/g)].map(m => m[1])
-      ),
-    ];
-    const shipped = new Set(
-      exportedNames("index.ts").map(entry => entry.replace(/ \(.*\)$/, ""))
-    );
+describe("ui STABILITY.md ledger", () => {
+  it("promises no export the barrel does not ship", () => {
+    const shipped = barrelNames();
+    const missing = documentedPublic().names.filter(n => !shipped.has(n));
 
-    const missing = documented.filter(name => !shipped.has(name));
     expect(
       missing,
-      `STABILITY.md lists these as @public but the barrel does not export ` +
-        `them: ${missing.join(", ")}`
+      `Listed as @public but not exported: ${missing.join(", ")}`
     ).toEqual([]);
+  });
+
+  it("promises no stylesheet the package does not export", () => {
+    const exported = new Set(Object.keys(packageJson.exports));
+    const missing = documentedPublic().files.filter(
+      file => !exported.has(`./${file}`)
+    );
+
+    expect(
+      missing,
+      `Listed as @public but absent from the exports map: ${missing.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("matches the @public tags in the barrel, in both directions", () => {
+    const documented = new Set(documentedPublic().names);
+    const tagged = publicPerSource();
+
+    const taggedNotDocumented = [...tagged].filter(n => !documented.has(n));
+    const documentedNotTagged = [...documented].filter(n => !tagged.has(n));
+
+    expect(
+      taggedNotDocumented,
+      `Tagged @public in index.ts but absent from STABILITY.md: ` +
+        `${taggedNotDocumented.join(", ")}`
+    ).toEqual([]);
+    expect(
+      documentedNotTagged,
+      `Listed @public in STABILITY.md but not tagged @public in index.ts: ` +
+        `${documentedNotTagged.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("names a real surface, so the checks cannot pass vacuously", () => {
+    expect(documentedPublic().names).toContain("toast");
+    expect(documentedPublic().names.length).toBeGreaterThan(20);
+    expect(publicPerSource().size).toBeGreaterThan(20);
   });
 });
