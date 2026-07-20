@@ -59,12 +59,20 @@ export const nextlyEvents = pgTable(
     // NULL means the event still needs fan-out. Lets the drain find un-fanned
     // events cheaply without rescanning the delivery table.
     fannedOutAt: timestamp("fanned_out_at", { withTimezone: false }),
+    // Which retention window governs this row. A single event can serve both
+    // roles at once, so this records the LONGEST retention it needs: rows the
+    // audit log depends on outlive rows that only ever drove a webhook.
+    retentionClass: varchar("retention_class", { length: 20 })
+      .notNull()
+      .default("webhook"),
   },
   t => [
     // Drain/reporting scans by type and recency.
     index("nextly_events_type_created_at_idx").on(t.type, t.createdAt),
     // The fan-out pass scans for events still needing fan-out, oldest first.
     index("nextly_events_fanned_out_at_idx").on(t.fannedOutAt, t.createdAt),
+    // Retention prunes one class at a time, oldest first.
+    index("nextly_events_retention_idx").on(t.retentionClass, t.createdAt),
   ]
 );
 
@@ -157,5 +165,8 @@ export const nextlyWebhookDeliveries = pgTable(
     // Postgres does not auto-index FK columns, so index event_id explicitly for
     // the event -> deliveries cascade delete and event-scoped admin queries.
     index("nextly_webhook_deliveries_event_idx").on(t.eventId),
+    // Retention scans terminal rows oldest-first; without this the prune would
+    // sequentially scan the fastest-growing table in the system.
+    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.createdAt),
   ]
 );

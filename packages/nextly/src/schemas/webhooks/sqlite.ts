@@ -39,11 +39,15 @@ export const nextlyEvents = sqliteTable(
     // Set by the drain's fan-out pass once delivery rows exist for this event;
     // NULL means the event still needs fan-out.
     fannedOutAt: integer("fanned_out_at", { mode: "timestamp" }),
+    // Which retention window governs this row; see the PostgreSQL definition.
+    retentionClass: text("retention_class").notNull().default("webhook"),
   },
   t => [
     index("nextly_events_type_created_at_idx").on(t.type, t.createdAt),
     // The fan-out pass scans for events still needing fan-out, oldest first.
     index("nextly_events_fanned_out_at_idx").on(t.fannedOutAt, t.createdAt),
+    // Retention prunes one class at a time, oldest first.
+    index("nextly_events_retention_idx").on(t.retentionClass, t.createdAt),
   ]
 );
 
@@ -118,5 +122,7 @@ export const nextlyWebhookDeliveries = sqliteTable(
     // Index event_id for the event -> deliveries cascade delete and
     // event-scoped admin queries.
     index("nextly_webhook_deliveries_event_idx").on(t.eventId),
+    // Retention scans terminal rows oldest-first; see the PostgreSQL definition.
+    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.createdAt),
   ]
 );
