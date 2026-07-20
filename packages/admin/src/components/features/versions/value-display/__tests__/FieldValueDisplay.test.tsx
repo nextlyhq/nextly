@@ -259,6 +259,25 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByText("Solo")).toBeInTheDocument();
   });
 
+  it("renders a hasMany number list as separate formatted values", () => {
+    // Without array handling this falls through to String(array) and renders
+    // as unformatted comma-joined text.
+    const f = field("number", { hasMany: true });
+
+    render(<FieldValueDisplay field={f} value="[1000,2000]" />);
+
+    expect(screen.getByText("1,000")).toBeInTheDocument();
+    expect(screen.getByText("2,000")).toBeInTheDocument();
+  });
+
+  it("shows an empty hasMany number list as not set", () => {
+    const f = field("number", { hasMany: true });
+
+    render(<FieldValueDisplay field={f} value="[]" />);
+
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
   it("falls back to text for a field type with no renderer", () => {
     // A plugin field type must still show its value rather than nothing.
     render(

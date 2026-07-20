@@ -112,11 +112,32 @@ defineValueDisplay(["password"], () => (
   <span className="text-muted-foreground">••••••••</span>
 ));
 
-defineValueDisplay(["number"], ({ value }) => (
-  <span className="text-foreground font-mono tabular-nums">
-    {typeof value === "number" ? value.toLocaleString() : String(value)}
-  </span>
-));
+/** Locale-formatted, or the raw text when the value is not a number. */
+function formatNumber(value: unknown): string {
+  return typeof value === "number" ? value.toLocaleString() : String(value);
+}
+
+defineValueDisplay(["number"], ({ value }) => {
+  // A `hasMany` number field stores a list; without this it would fall through
+  // to String(array) and render as unformatted comma-joined text.
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <EmptyValue />;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {value.map((entry, i) => (
+          <Badge key={`${String(entry)}-${i}`} variant="default">
+            {formatNumber(entry)}
+          </Badge>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <span className="text-foreground font-mono tabular-nums">
+      {formatNumber(value)}
+    </span>
+  );
+});
 
 defineValueDisplay(["checkbox", "boolean"], ({ value }) => (
   <span className="text-foreground">{value === true ? "Yes" : "No"}</span>
