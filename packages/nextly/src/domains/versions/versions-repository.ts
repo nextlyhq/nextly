@@ -18,6 +18,7 @@ import type {
 } from "../../schemas/versions/types";
 
 import type { VersionsDbApi, VersionsWhereCondition } from "./db-api";
+import type { PrunableVersion } from "./retention";
 
 const TABLE = "nextly_versions";
 
@@ -226,11 +227,17 @@ export class VersionsRepository {
    */
   async listByDoc(
     ref: VersionRef,
-    opts: { limit?: number; includeAutosave?: boolean } = {}
+    opts: { limit?: number; includeAutosave?: boolean; cursor?: number } = {}
   ): Promise<VersionMeta[]> {
     const and = [...this.docWhere(ref)];
     if (!opts.includeAutosave) {
       and.push({ column: "isAutosave", op: "=", value: false });
+    }
+    // Keyset pagination: return versions strictly older than the cursor, which
+    // is the last versionNo the caller already has. Stable under concurrent
+    // inserts in a way offset pagination is not.
+    if (typeof opts.cursor === "number") {
+      and.push({ column: "versionNo", op: "<", value: opts.cursor });
     }
     const rows = await this.db.select<VersionMeta>(TABLE, {
       // Project metadata columns only, so the snapshot payload is never
@@ -246,5 +253,34 @@ export class VersionsRepository {
       ...(typeof opts.limit === "number" ? { limit: opts.limit } : {}),
     });
     return rows;
+  }
+
+  /**
+   * Durable rows for one document, newest-first, projecting only what the
+   * retention rules need. Autosave rows are excluded because they never count
+   * toward the cap.
+   */
+  async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
+    return this.db.select<PrunableVersion>(TABLE, {
+      columns: ["id", "versionNo", "status"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+        ],
+      },
+      orderBy: [
+        { column: "versionNo", direction: "desc" },
+        { column: "createdAt", direction: "desc" },
+      ],
+    });
+  }
+
+  /** Delete the given version rows in one statement. No-op for an empty list. */
+  async deleteByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    return this.db.delete(TABLE, {
+      and: [{ column: "id", op: "IN", value: ids }],
+    });
   }
 }
