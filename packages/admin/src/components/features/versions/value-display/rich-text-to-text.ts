@@ -1,0 +1,81 @@
+/**
+ * Plain text from a Lexical document.
+ *
+ * A read-only view of rich text has three options: mount a Lexical editor with
+ * editing disabled, render serialized HTML, or extract text. Mounting an editor
+ * carries a full editing runtime to display immutable content and, because
+ * Lexical reads its initial state once, shows stale content when the surrounding
+ * view switches between documents. Rendering HTML would mean injecting markup
+ * produced elsewhere into the admin. Text extraction avoids both, and is the
+ * same shape a textual diff consumes.
+ *
+ * The trade is formatting: headings, bold, and links render as their text.
+ * Block boundaries are preserved so paragraphs and list items stay separate.
+ *
+ * @module components/features/versions/value-display/rich-text-to-text
+ */
+
+/** Node types that end a block, so their text does not run into the next one. */
+const BLOCK_TYPES = new Set([
+  "paragraph",
+  "heading",
+  "listitem",
+  "quote",
+  "code",
+]);
+
+interface LexicalNode {
+  type?: string;
+  text?: string;
+  children?: unknown[];
+}
+
+function asNode(value: unknown): LexicalNode | null {
+  return typeof value === "object" && value !== null ? value : null;
+}
+
+/** Whether a value looks like a Lexical document rather than arbitrary JSON. */
+export function isLexicalDocument(value: unknown): boolean {
+  const root = asNode(value)?.["root" as keyof LexicalNode];
+  const node = asNode(root);
+  return node?.type === "root" && Array.isArray(node.children);
+}
+
+function collect(node: LexicalNode | null, lines: string[]): void {
+  if (!node) return;
+
+  if (typeof node.text === "string" && node.text.length > 0) {
+    // Text nodes append to the block being built rather than starting one.
+    lines[lines.length - 1] = (lines[lines.length - 1] ?? "") + node.text;
+  }
+
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      const childNode = asNode(child);
+      const startsBlock =
+        childNode?.type !== undefined && BLOCK_TYPES.has(childNode.type);
+      if (startsBlock) lines.push("");
+      collect(childNode, lines);
+    }
+  }
+}
+
+/**
+ * Extract readable text from a Lexical document, one line per block.
+ *
+ * Anything that is not a Lexical document yields an empty string rather than a
+ * dump of its JSON: showing serialized editor internals to an editor reads as a
+ * bug, and an empty result lets the caller fall back to its own empty state.
+ */
+export function richTextToText(value: unknown): string {
+  if (!isLexicalDocument(value)) return "";
+
+  const root = asNode(asNode(value)?.["root" as keyof LexicalNode]);
+  const lines: string[] = [];
+  collect(root, lines);
+
+  return lines
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join("\n");
+}
