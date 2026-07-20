@@ -26,7 +26,7 @@ export interface SingleNameInput {
   dbName?: string;
 }
 
-function normalizeIdentifier(input: string): string {
+export function normalizeIdentifier(input: string): string {
   return input
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")

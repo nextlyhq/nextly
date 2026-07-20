@@ -1635,6 +1635,11 @@ async function syncCodeFirstComponents(
     );
     const dialect = adapter.getCapabilities().dialect;
     const compSchemaService = new CompSchemaService(dialect);
+    // Shared resolver so this DDL path and the migration CLI produce identical
+    // component table names.
+    const { resolveComponentTableName } = await import(
+      "../domains/schema/utils/resolve-table-name"
+    );
 
     for (const slug of componentsNeedingTableSync) {
       const compConfig = transformedConfig.components.find(
@@ -1642,12 +1647,7 @@ async function syncCodeFirstComponents(
       );
       if (!compConfig) continue;
 
-      const tableName =
-        compConfig.dbName ??
-        `comp_${slug
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "")}`;
+      const tableName = resolveComponentTableName(slug, compConfig.dbName);
 
       // i18n: a localized component omits its translatable columns from the main comp_
       // table and gets a companion `comp_<slug>_locales` (created below).

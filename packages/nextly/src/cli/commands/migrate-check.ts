@@ -69,7 +69,11 @@ import {
   applyDeferredExtendsToManifest,
   mergeUiEntities,
 } from "../../domains/schema/ui-schema/merge";
-import { resolvePrefixedTableName } from "../../domains/schema/utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -176,14 +180,14 @@ export async function runMigrateCheck(
 
   // Merge code + UI entities (code-first wins) for the drift comparison.
   const merged = mergeUiEntities({
-    codeCollections: toMinimalEntities(configResult.config.collections, "dc_"),
-    codeSingles: toMinimalEntities(
-      configResult.config.singles ?? [],
-      "single_"
+    codeCollections: toMinimalEntities(configResult.config.collections, e =>
+      resolveCollectionTableName(e.slug, e.dbName)
     ),
-    codeComponents: toMinimalEntities(
-      configResult.config.components ?? [],
-      "comp_"
+    codeSingles: toMinimalEntities(configResult.config.singles ?? [], e =>
+      resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
+    ),
+    codeComponents: toMinimalEntities(configResult.config.components ?? [], e =>
+      resolveComponentTableName(e.slug, e.dbName)
     ),
     manifest,
   });
@@ -381,7 +385,7 @@ function describeOp(op: Operation): string {
  */
 function toMinimalEntities(
   entities: unknown[],
-  tableNamePrefix: "dc_" | "single_" | "comp_"
+  resolveTableName: (entity: { slug: string; dbName?: string }) => string
 ): MinimalConfigEntity[] {
   return entities.map(raw => {
     const e = raw as {
@@ -405,11 +409,10 @@ function toMinimalEntities(
     };
     return {
       slug: e.slug,
-      // Route through the shared resolver so a dbName that omits the target
-      // prefix (e.g. a plugin collection with dbName:"forms") still resolves to
-      // the same physical table the runtime creates (dc_forms), instead of an
-      // un-prefixed table that the runtime never made.
-      tableName: resolvePrefixedTableName(e.slug, e.dbName, tableNamePrefix),
+      // Resolve through the same per-kind helper the runtime uses so a dbName
+      // that omits the prefix (e.g. a plugin collection with dbName:"forms")
+      // still resolves to the table the runtime creates (dc_forms).
+      tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
       fields: (e.fields ?? []).map(f => ({
         name: f.name,
         type: f.type,
