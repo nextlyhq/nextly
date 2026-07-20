@@ -1061,6 +1061,8 @@ const COLLECTIONS_METHODS: Record<
           // i18n M5: `?locale=de` updates only the German translatable values.
           locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Who performed the write, recorded on the outbox event.
+          actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.

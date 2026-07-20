@@ -144,6 +144,48 @@ describe("webhook outbox capture (integration)", () => {
     expect(JSON.stringify(envelope)).not.toContain("SuperSecret123!");
   });
 
+  it("records entry.updated with a real prior document and an accurate diff", async () => {
+    // The prior state must be read BEFORE the write: everything the update path
+    // reads afterwards already reflects the new values, so sourcing `previous`
+    // from it would make it equal `data` and leave changedFields empty —
+    // silently breaking every changed-field filter.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "before", body: "unchanged" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { title: "after" }
+    );
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(2);
+    const updated = rows.find(r => r.type === "entry.updated");
+    expect(updated).toBeDefined();
+    const envelope = envelopeOf(updated!);
+
+    expect(envelope.data.title).toBe("after");
+    // Genuinely prior state, not a copy of `data`.
+    expect(envelope.previous).not.toBeNull();
+    expect(envelope.previous?.title).toBe("before");
+    // Only the field that actually moved is reported as changed.
+    expect(envelope.changedFields).toContain("title");
+    expect(envelope.changedFields).not.toContain("body");
+  });
+
   it("attributes the event to the acting identity, including an API key", async () => {
     // An API-key write must attribute to the key itself, not to the user that
     // owns it: durable history that says "a person did this" when a token did

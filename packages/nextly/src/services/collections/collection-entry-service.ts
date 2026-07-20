@@ -211,6 +211,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;

@@ -551,6 +551,8 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       /**
@@ -565,7 +567,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.updateEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );

@@ -1902,6 +1902,11 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /**
+       * Who performed the write, recorded on the outbox event. Set by the
+       * transport; absent for internal writes, which record as `system`.
+       */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       /** Write locale (i18n M5): translatable values are updated for this language only. */
       locale?: string;
@@ -2359,18 +2364,53 @@ export class CollectionMutationService extends BaseService {
             updatedAt: new Date(),
           };
 
-          // Read the committed status before this attempt's UPDATE so the status
-          // event uses the true prior value even after a conflict retry. Only
-          // needed for versioned collections (the only ones that can retry).
+          // Read the committed state before this attempt's UPDATE. Nothing read
+          // after the write can serve as prior state: the UPDATE below, the
+          // companion upsert, and the many-to-many rewrite have all run by then.
+          const [preUpdateRow] = await this.db
+            .select()
+            .from(schema)
+            .where(eq(schema.id, params.entryId))
+            .limit(1);
+
+          // The status event uses the true prior value even after a conflict
+          // retry. Only recorded for versioned collections (the only ones that
+          // can retry), matching the status semantics the rest of this path
+          // expects.
           if (versionsConfig?.enabled) {
-            const [preStatusRow] = await this.db
-              .select()
-              .from(schema)
-              .where(eq(schema.id, params.entryId))
-              .limit(1);
             committedPreviousStatus = (
-              preStatusRow as { status?: unknown } | undefined
+              preUpdateRow as { status?: unknown } | undefined
             )?.status as string | null | undefined;
+          }
+
+          // The prior document the outbox event reports as `previous`, read in
+          // the same shape as the post-write document so the changed-field diff
+          // compares like with like. Relations are read here, before they are
+          // rewritten, so a component or m2m edit is visible in the diff.
+          let previousDocument: Record<string, unknown> | null = null;
+          if (preUpdateRow) {
+            const previousParent = this.deserializeJsonFieldsForSnapshot(
+              convertTimestampsToCamelCase({
+                ...(preUpdateRow as Record<string, unknown>),
+              }),
+              fields
+            );
+            stripPasswordFieldValues(previousParent, fields);
+            stripSystemOwnerField(previousParent);
+            const { components: previousComponents, manyToMany: previousM2M } =
+              await this.buildFullSnapshotRelations(
+                tx,
+                params.entryId,
+                params.collectionName,
+                tableName,
+                fields,
+                manyToManyFields
+              );
+            previousDocument = assembleDocument({
+              parentRow: previousParent,
+              components: previousComponents,
+              manyToMany: previousM2M,
+            });
           }
 
           // Dialect-aware identifier quoting and placeholder syntax.
@@ -2495,7 +2535,7 @@ export class CollectionMutationService extends BaseService {
           // the read shape, and password hashes are stripped. Components and m2m
           // are completed from current state so a scalar-only edit does not drop
           // existing relations. Status prefers the new value, else the prior one.
-          if (versionsConfig?.enabled) {
+          {
             const freshRows = await this.db
               .select()
               .from(schema)
@@ -2513,7 +2553,12 @@ export class CollectionMutationService extends BaseService {
               // contain underscores like `meta_title`) exactly, converting only
               // the timestamp columns — camel-casing every key would rewrite
               // those fields and diverge from a normal read.
-              const preImage = convertTimestampsToCamelCase({ ...currentRow });
+              // The row as it stands AFTER this write (the UPDATE above has
+              // already run); named for what it is, so it is never mistaken for
+              // prior state — `previousDocument` above holds that.
+              const currentParent = convertTimestampsToCamelCase({
+                ...currentRow,
+              });
               // Overlay `updatePayload` (not raw `finalData`): it carries the
               // `updatedAt` the write commits and has immutable system keys
               // (id/createdAt/createdBy) stripped, so the snapshot records the new
@@ -2557,7 +2602,7 @@ export class CollectionMutationService extends BaseService {
               }
               const parentRow = this.deserializeJsonFieldsForSnapshot(
                 {
-                  ...preImage,
+                  ...currentParent,
                   ...updatePayload,
                   ...priorLocalizedValues,
                   ...(localizedUpdate?.localizedFieldValues ?? {}),
@@ -2578,26 +2623,45 @@ export class CollectionMutationService extends BaseService {
                 fields,
                 manyToManyFields
               );
-              await captureInTx(tx, this.versionCapture, {
-                ref: {
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
+              const documentParts = {
+                parentRow,
+                components: snapshotComponents,
+                manyToMany: snapshotM2M,
+              };
+
+              if (versionsConfig?.enabled) {
+                await captureInTx(tx, this.versionCapture, {
+                  ref: {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  // Prefer the written status; for a localized status change it is
+                  // moved to the companion `_status`, so fall back to that before the
+                  // prior main-row status.
+                  contentStatus:
+                    (updatePayload as { status?: unknown }).status ??
+                    companionStatus ??
+                    (currentParent as { status?: unknown }).status,
+                  parts: documentParts,
+                  createdBy: params.user?.id ?? null,
+                  maxPerDoc: versionsConfig.maxPerDoc,
+                });
+              }
+
+              // Append the outbox event in the same transaction, so it commits
+              // with the entry and is never recorded for a write that rolls back.
+              await recordMutationEvent(tx, {
+                type: "entry.updated",
+                resource: {
+                  kind: "entry",
+                  collection: params.collectionName,
+                  id: params.entryId,
                 },
-                // Prefer the written status; for a localized status change it is
-                // moved to the companion `_status`, so fall back to that before the
-                // prior main-row status.
-                contentStatus:
-                  (updatePayload as { status?: unknown }).status ??
-                  companionStatus ??
-                  (preImage as { status?: unknown }).status,
-                parts: {
-                  parentRow,
-                  components: snapshotComponents,
-                  manyToMany: snapshotM2M,
-                },
-                createdBy: params.user?.id ?? null,
-                maxPerDoc: versionsConfig.maxPerDoc,
+                data: assembleDocument(documentParts),
+                previous: previousDocument,
+                fields,
+                actor: params.actor ?? null,
               });
             }
           }
