@@ -181,7 +181,10 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       logger,
       basePath,
       // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
-      ctx.config.localization
+      ctx.config.localization,
+      // Content writes offer a retention pass, so the event ledger stays
+      // bounded in installs that never run the drain.
+      ctx.config.webhookRetention
     );
 
     if (container.has("permissionSeedService")) {

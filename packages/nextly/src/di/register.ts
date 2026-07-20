@@ -58,6 +58,7 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -251,6 +252,13 @@ export interface NextlyServiceConfig {
    * populating localized fields from the companion `_locales` table.
    */
   localization?: SanitizedLocalizationConfig;
+
+  /**
+   * Resolved webhook retention policy, carried through so services can offer a
+   * retention pass without re-deriving it. Null when the user switched
+   * retention off; absent when this container was built without app config.
+   */
+  webhookRetention?: ResolvedWebhookRetentionConfig | null;
 }
 
 // ============================================================

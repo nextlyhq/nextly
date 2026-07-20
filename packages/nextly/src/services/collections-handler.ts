@@ -9,6 +9,9 @@ import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { MetaService } from "../domains/meta/services/meta-service";
+import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -57,16 +60,35 @@ export class CollectionsHandler {
   private readonly fileManager: CollectionFileManager;
   private readonly logger: Logger;
 
+  /** Present only when retention is configured; see the constructor. */
+  private readonly retentionRunner?: WebhookRetentionRunner;
+
   constructor(
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
     logger: Logger = consoleLogger,
     consumerAppRoot?: string,
     /** Normalized localization config (i18n M4) — enables companion-aware reads. */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    /**
+     * Resolved webhook retention policy. Content writes offer to run a pass so
+     * the event ledger stays bounded in installs that never configure a webhook
+     * and therefore never run the drain. Null or absent disables it.
+     */
+    webhookRetention?: ResolvedWebhookRetentionConfig | null
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
+
+    if (webhookRetention) {
+      const meta = new MetaService(adapter, logger);
+      this.retentionRunner = new WebhookRetentionRunner({
+        policy: webhookRetention,
+        prune: { adapter, logger },
+        gate: meta,
+        logger,
+      });
+    }
 
     const hookRegistry = getHookRegistry();
 
@@ -443,7 +465,7 @@ export class CollectionsHandler {
     },
     body: Record<string, unknown>
   ) {
-    return this.entryService.createEntry(
+    const result = await this.entryService.createEntry(
       {
         ...this.resolveUserParam(params),
         locale: params.locale,
@@ -452,6 +474,22 @@ export class CollectionsHandler {
       body,
       params.depth
     );
+    this.offerRetentionPass();
+    return result;
+  }
+
+  /**
+   * Offer a retention pass after a successful write.
+   *
+   * Deliberately not awaited: a pass can delete thousands of rows, and no
+   * user's save should wait on housekeeping. `maybeRun` absorbs its own
+   * failures, so nothing can reject here. On a serverless runtime the process
+   * may be frozen before a pass finishes — that is acceptable, because the
+   * deletes are batched and already committed, and the gate has recorded the
+   * attempt either way.
+   */
+  private offerRetentionPass(): void {
+    void this.retentionRunner?.maybeRun();
   }
 
   /**
@@ -566,7 +604,7 @@ export class CollectionsHandler {
     },
     body: Record<string, unknown>
   ) {
-    return this.entryService.updateEntry(
+    const result = await this.entryService.updateEntry(
       {
         ...this.resolveUserParam(params),
         locale: params.locale,
@@ -575,6 +613,8 @@ export class CollectionsHandler {
       body,
       params.depth
     );
+    this.offerRetentionPass();
+    return result;
   }
 
   /**
