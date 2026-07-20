@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
@@ -192,6 +193,8 @@ export class CollectionEntryService extends BaseService {
     params: {
       collectionName: string;
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
@@ -208,6 +211,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
@@ -273,6 +278,8 @@ export class CollectionEntryService extends BaseService {
     overrides?: Record<string, unknown>;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.bulkService.duplicateEntry(params);
   }
@@ -296,6 +303,8 @@ export class CollectionEntryService extends BaseService {
     user?: UserContext;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     return this.bulkService.bulkUpdateEntries(params);
   }
@@ -310,6 +319,8 @@ export class CollectionEntryService extends BaseService {
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {

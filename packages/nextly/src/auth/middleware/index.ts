@@ -153,6 +153,12 @@ export interface AuthContext {
   permissions: string[];
   roles: string[];
   authMethod: "session" | "api-key";
+  /**
+   * The authenticating API key's own id, present only for `api-key` requests.
+   * Carried so a write can be attributed to the specific key rather than only
+   * to the user that owns it.
+   */
+  apiKeyId?: string;
 }
 
 /**
@@ -190,7 +196,7 @@ export interface AuthContext {
 export async function requireApiKeyAuth(
   req: Request
 ): Promise<
-  | { userId: string; permissions: string[]; roles: string[] }
+  | { userId: string; permissions: string[]; roles: string[]; apiKeyId: string }
   | ErrorResponse
   | null
 > {
@@ -268,7 +274,9 @@ export async function requireApiKeyAuth(
     ),
   ]);
 
-  return { userId: keyAuth.userId, permissions, roles };
+  // The key's own id travels with the result so a write can be attributed to
+  // the specific key, not just to the user that owns it.
+  return { userId: keyAuth.userId, permissions, roles, apiKeyId: keyAuth.id };
 }
 
 /**
@@ -337,6 +345,7 @@ export async function requireAuthentication(
     permissions: apiKeyResult.permissions,
     roles: apiKeyResult.roles,
     authMethod: "api-key",
+    apiKeyId: apiKeyResult.apiKeyId,
   };
 }
 

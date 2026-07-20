@@ -68,6 +68,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -985,6 +986,8 @@ const COLLECTIONS_METHODS: Record<
           // i18n M5: `?locale=de` stores the translatable values for German.
           locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Who performed the write, recorded on the outbox event.
+          actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
@@ -1058,6 +1061,8 @@ const COLLECTIONS_METHODS: Record<
           // i18n M5: `?locale=de` updates only the German translatable values.
           locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Who performed the write, recorded on the outbox event.
+          actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
@@ -1204,6 +1209,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,
@@ -1266,6 +1272,7 @@ const COLLECTIONS_METHODS: Record<
           // collection's access rules.
           where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
+          actor: readAuthenticatedActor(p),
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)
             : undefined,
@@ -1306,6 +1313,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,

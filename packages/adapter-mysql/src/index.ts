@@ -780,6 +780,15 @@ export class MySqlAdapter extends DrizzleAdapter {
         return rows as T[];
       },
 
+      lockRow: async (table: string, id: SqlParam): Promise<void> => {
+        const idColumn = this.escapeIdentifier("id");
+        await connection.query(
+          `SELECT ${idColumn} FROM ${this.escapeIdentifier(table)} ` +
+            `WHERE ${idColumn} = ? FOR UPDATE`,
+          [id] as unknown[]
+        );
+      },
+
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,

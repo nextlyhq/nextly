@@ -26,6 +26,7 @@ import {
   type AuthContext,
   type ErrorResponse,
 } from "@nextly/auth/middleware";
+import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
 
 import {
@@ -1471,10 +1472,18 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedUserName;
   delete routeParams._authenticatedUserEmail;
   delete routeParams._authenticatedUserRoles;
+  delete routeParams._authenticatedActorType;
+  delete routeParams._authenticatedActorId;
 
   if (!authorizedUser) return;
 
   routeParams._authenticatedUserId = authorizedUser.userId;
+  // The acting identity is resolved here, the only place that knows how the
+  // request authenticated: a write attributes to the API key itself when one
+  // was used, rather than silently to the user that owns the key.
+  const actor = actorFromAuthContext(authorizedUser);
+  routeParams._authenticatedActorType = actor.type;
+  if (actor.id) routeParams._authenticatedActorId = actor.id;
   if (authorizedUser.userName)
     routeParams._authenticatedUserName = authorizedUser.userName;
   if (authorizedUser.userEmail)

@@ -4,6 +4,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
@@ -425,6 +426,8 @@ export class CollectionsHandler {
       depth?: number;
       /** User context for access control */
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values stored for this language. */
@@ -441,7 +444,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.createEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );
@@ -544,6 +551,8 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       /**
@@ -558,7 +567,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.updateEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );
@@ -677,6 +690,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
   }
@@ -706,6 +721,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: { limit?: number }
   ) {
@@ -778,6 +795,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.duplicateEntry(this.resolveUserParam(params));
   }

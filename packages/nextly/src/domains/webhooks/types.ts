@@ -59,12 +59,20 @@ export type WebhookActorType = "user" | "apiKey" | "system";
  * collection invariant is enforced by the type system: an `entry` always
  * carries its collection slug, and every other kind forbids one.
  */
+/**
+ * What the event is about. `locale` identifies WHICH translation changed on a
+ * localized resource: the document carries that locale's values, so without it
+ * an English and a German write to the same entry are indistinguishable and a
+ * receiver cannot route or reconcile them. Absent when the resource stores no
+ * per-locale data.
+ */
 export type WebhookResource =
-  | { kind: "entry"; collection: string; id?: string }
+  | { kind: "entry"; collection: string; id?: string; locale?: string }
   | {
       kind: "single" | "media" | "user" | "form";
       collection?: never;
       id?: string;
+      locale?: string;
     };
 
 /** Who triggered the event. */

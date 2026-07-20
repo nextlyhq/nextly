@@ -127,12 +127,17 @@ export class ComponentQueryService extends BaseService {
    * (with fallback). No-op when localization is off, the component isn't localized, no
    * locale was requested, or it has no translatable fields. `dataArray` is mutated in place;
    * each item must carry the instance `id` (deserializeComponentRow sets it).
+   *
+   * `executor` mirrors the one the instance read uses: a snapshot assembled inside
+   * a write transaction has just written these companion rows on that connection,
+   * and a pooled read would not see them.
    */
   private async overlayLocalizedComponent(
     meta: DynamicComponentRecord,
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    executor?: unknown
   ): Promise<void> {
     if (
       !this.localization ||
@@ -156,7 +161,9 @@ export class ComponentQueryService extends BaseService {
     // otherwise they would be missing entirely (the main comp_* table omits those columns).
     if (locale === "all") {
       await populateCompanionFieldsAllLocales({
-        db: this.adapter.getDrizzle(),
+        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+          typeof populateCompanionFieldsAllLocales
+        >[0]["db"],
         companionTable: companion.table,
         localizedFields: companion.localizedFields,
         rows: dataArray,
@@ -181,7 +188,9 @@ export class ComponentQueryService extends BaseService {
       fallbackLocale
     );
     await populateCompanionFields({
-      db: this.adapter.getDrizzle(),
+      db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+        typeof populateCompanionFields
+      >[0]["db"],
       companionTable: companion.table,
       localizedFields: companion.localizedFields,
       rows: dataArray,
@@ -471,7 +480,10 @@ export class ComponentQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown> | null> {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      executor
+    );
     const componentFields = meta.fields;
     const rows = await this.getExistingInstances(
       meta.tableName,
@@ -485,7 +497,13 @@ export class ComponentQueryService extends BaseService {
 
     let data = this.deserializeComponentRow(rows[0], componentFields, false);
     // i18n: overlay translatable fields from the companion for the requested locale.
-    await this.overlayLocalizedComponent(meta, [data], locale, fallbackLocale);
+    await this.overlayLocalizedComponent(
+      meta,
+      [data],
+      locale,
+      fallbackLocale,
+      executor
+    );
     data = await this.expandComponentRelationships(
       data,
       componentSlug,
@@ -508,7 +526,10 @@ export class ComponentQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown>[]> {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      executor
+    );
     const componentFields = meta.fields;
     const rows = await this.getExistingInstances(
       meta.tableName,
@@ -527,7 +548,8 @@ export class ComponentQueryService extends BaseService {
       meta,
       dataArray,
       locale,
-      fallbackLocale
+      fallbackLocale,
+      executor
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -561,7 +583,7 @@ export class ComponentQueryService extends BaseService {
 
     for (const slug of allowedSlugs) {
       try {
-        const meta = await this.registryService.getComponent(slug);
+        const meta = await this.registryService.getComponent(slug, executor);
         const rows = await this.getExistingInstances(
           meta.tableName,
           parentId,
@@ -588,12 +610,13 @@ export class ComponentQueryService extends BaseService {
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
       // may span several component types, each with its own companion.
-      const meta = await this.registryService.getComponent(slug);
+      const meta = await this.registryService.getComponent(slug, executor);
       await this.overlayLocalizedComponent(
         meta,
         [data],
         locale,
-        fallbackLocale
+        fallbackLocale,
+        executor
       );
       data = await this.expandComponentRelationships(
         data,
