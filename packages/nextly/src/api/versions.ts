@@ -18,6 +18,7 @@
  */
 
 import { getService } from "../di";
+import { attachVersionAuthors } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
@@ -85,6 +86,9 @@ function parsePositiveInt(
  * input fails fast. The gate then confirms the caller may read the live
  * document: history metadata (authors, timestamps, how often a document
  * changed) is itself disclosure, so it is restricted exactly as the document is.
+ *
+ * Rows carry only an author id as stored, so each is resolved to a display name
+ * before returning.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -118,7 +122,8 @@ export const GET = withErrorHandler(
 
     // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
     // so the meta describes the returned window.
-    return respondList(rows, {
+    // Rows record only an author id; a history list shows a person.
+    return respondList(await attachVersionAuthors(rows), {
       total: rows.length,
       page: 1,
       limit,

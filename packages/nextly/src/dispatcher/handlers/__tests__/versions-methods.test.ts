@@ -6,19 +6,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const assertReadableSpy = vi.fn();
-const redactSpy = vi.fn();
+const prepareSpy = vi.fn();
 const resolveSingleIdSpy = vi.fn();
 const listSpy = vi.fn();
 const getSpy = vi.fn();
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: (...a: unknown[]) => assertReadableSpy(...a),
-  redactSnapshotForUser: (...a: unknown[]) => redactSpy(...a),
+  prepareSnapshotForUser: (...a: unknown[]) => prepareSpy(...a),
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
 }));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn(() => ({ list: listSpy, get: getSpy })),
+}));
+
+vi.mock("../../../domains/versions/author-hydration", () => ({
+  attachVersionAuthors: (rows: unknown[]) => Promise.resolve(rows),
 }));
 
 import {
@@ -137,7 +141,7 @@ describe("listVersionsForDocument", () => {
 describe("getVersionForDocument", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("redacts the snapshot before returning it", async () => {
+  it("prepares the snapshot before returning it", async () => {
     getSpy.mockResolvedValue({ versionNo: 1, snapshot: { title: "x" } });
 
     await getVersionForDocument({
@@ -148,8 +152,9 @@ describe("getVersionForDocument", () => {
       versionNo: 1,
     });
 
-    // A stored snapshot must never reveal a field the live read would hide.
-    expect(redactSpy).toHaveBeenCalledWith(
+    // A stored snapshot must never reveal a field the live read would hide,
+    // and its references are resolved for display in the same pass.
+    expect(prepareSpy).toHaveBeenCalledWith(
       { title: "x" },
       "collection",
       "posts",

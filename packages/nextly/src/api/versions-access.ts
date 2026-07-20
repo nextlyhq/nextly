@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import type { UserContext } from "../domains/singles/types";
+import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -247,6 +248,32 @@ export async function redactSnapshotForUser(
     user,
     overrideAccess: false,
   });
+}
+
+/**
+ * Prepare a stored snapshot for display: strip what the caller may not read,
+ * then resolve relationship and upload ids to something human-readable.
+ *
+ * Both read surfaces call this one function so they cannot drift apart. The
+ * order is load-bearing — redaction runs first, so references living inside a
+ * field the caller may not read are never resolved. Hydrating first would spend
+ * reads on values about to be discarded, and would let the timing of those
+ * reads say something about a field the response does not contain.
+ */
+export async function prepareSnapshotForUser(
+  snapshot: unknown,
+  scopeKind: VersionScopeKind,
+  slug: string,
+  user: UserContext
+): Promise<void> {
+  await redactSnapshotForUser(snapshot, scopeKind, slug, user);
+
+  if (scopeKind !== "collection" && scopeKind !== "single") return;
+
+  const fields = await resolveFieldsForRedaction(scopeKind, slug);
+  if (fields.length === 0) return;
+
+  await hydrateSnapshotReferences(snapshot, user, fields);
 }
 
 /**
