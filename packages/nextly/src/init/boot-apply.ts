@@ -136,7 +136,7 @@ async function reloadDynamicTables(label: string): Promise<void> {
     await loadDynamicTables(
       adapter as Parameters<typeof loadDynamicTables>[0],
       "dynamic_collections",
-      async (tableName, fields, hasStatus, localized) => {
+      (tableName, fields, hasStatus, localized) => {
         const { table } = generateRuntimeSchema(
           tableName,
           fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -148,6 +148,7 @@ async function reloadDynamicTables(label: string): Promise<void> {
             registerDynamicSchema: (tableName: string, table: unknown) => void;
           }
         ).registerDynamicSchema(tableName, table);
+        return Promise.resolve();
       }
     );
 
@@ -155,7 +156,7 @@ async function reloadDynamicTables(label: string): Promise<void> {
     await loadDynamicTables(
       adapter as Parameters<typeof loadDynamicTables>[0],
       "dynamic_singles",
-      async (tableName, fields, hasStatus, localized) => {
+      (tableName, fields, hasStatus, localized) => {
         const { table } = generateRuntimeSchema(
           tableName,
           fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -167,6 +168,7 @@ async function reloadDynamicTables(label: string): Promise<void> {
             registerDynamicSchema: (tableName: string, table: unknown) => void;
           }
         ).registerDynamicSchema(tableName, table);
+        return Promise.resolve();
       }
     );
 
