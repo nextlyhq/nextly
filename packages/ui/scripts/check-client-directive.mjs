@@ -1,12 +1,13 @@
 /**
- * Verify the published component bundles still carry `"use client"`, and that
- * the build-time preset still does not.
+ * Verify the published component bundles carry `"use client"`, and that the
+ * server-safe entries do not.
  *
  * The directive is a per-module property, so a bundling build drops it from
- * every non-entry module. That failed silently once: the source files kept
- * their directives, the build kept succeeding, and the published package would
- * have thrown for anyone importing a component from a Server Component. Only
- * the built artifact proves it, so it is asserted here rather than trusted.
+ * every non-entry module, and a treeshaking pass strips it even when it is
+ * declared on the entry. Neither shows up as a build error: the sources keep
+ * their directives and the build succeeds, while the published package throws
+ * for anyone importing a component from a Server Component. Only the built
+ * artifact settles it, so it is asserted here rather than assumed.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

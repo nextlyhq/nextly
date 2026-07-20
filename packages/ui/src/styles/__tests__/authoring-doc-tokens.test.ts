@@ -1,15 +1,12 @@
 /**
  * Asserts that the package's own documentation stays true to what it ships:
- * every design token it names exists in `theme.css`, and it never tells anyone
- * to import from an entry point that does not export the thing.
+ * every design token it names exists in `theme.css`, and it never shows an
+ * import from an entry point that does not export that symbol.
  *
  * Docs are the contract external plugin authors build against, and both failure
  * modes are silent. A token that does not exist resolves to nothing, so a stale
- * name produces unstyled UI with no error; an import from the wrong entry point
- * only fails once someone follows the instructions. Both have already happened
- * here — the guide named a scope class rendered nowhere and unprefixed tokens
- * nothing reads, and the README advertised `cn`/`uiPreset` on the root barrel
- * after they moved to their own subpaths.
+ * name renders unstyled UI with no error anywhere; an import from the wrong
+ * entry point only surfaces once someone follows the instructions.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

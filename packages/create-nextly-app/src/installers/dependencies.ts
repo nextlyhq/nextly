@@ -19,6 +19,8 @@ const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
  * Core Nextly packages that are always installed.
  * @nextlyhq/ui is a peer dependency of admin (externalized from admin bundle).
  * @tanstack/react-query is externalized from admin to avoid duplicate instances.
+ * lucide-react is a peer dependency of @nextlyhq/ui, so it must exist in the
+ * consumer project rather than only inside admin's own tree.
  */
 const CORE_PACKAGES = [
   "nextly",
@@ -26,6 +28,7 @@ const CORE_PACKAGES = [
   "@nextlyhq/adapter-drizzle",
   "@nextlyhq/ui",
   "@tanstack/react-query",
+  "lucide-react",
 ];
 
 /**
