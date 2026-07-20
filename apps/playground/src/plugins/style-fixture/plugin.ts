@@ -18,6 +18,10 @@ export const styleFixturePlugin = definePlugin({
     admin: {
       // Render the showcase after the Posts list.
       views: { posts: { afterList: STYLE_FIXTURE_PATH } },
+      // Also expose it as a standalone plugin page at
+      // /admin/plugins/style-fixture/showcase, so plugin-page-routing.spec.ts
+      // can cover deep-link route resolution.
+      pages: [{ path: "/showcase", component: STYLE_FIXTURE_PATH }],
       // Declared for tooling/the plugin doctor; the file is loaded by the
       // side-effect import in ./admin.
       styles: "playground/style-fixture/admin.css",
