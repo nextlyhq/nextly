@@ -11,6 +11,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   findUnscopedRules,
+  isScoped,
+  prefixKeyframes,
   scopeCss,
   scopeSelector,
   splitTopLevel,
@@ -199,5 +201,72 @@ describe("a custom scope", () => {
   it("still reports a leak when a rule escapes the given scope", () => {
     expect(findUnscopedRules(".nextly-ui .a, .leak{color:red}", ".nextly-ui"))
       .toHaveLength(1);
+  });
+
+  // A class that merely starts with the scope text is a different class, and an
+  // attribute selector matching the scope as a substring is not constrained by
+  // the wrapper at all. Both must be treated as unscoped, or they pass straight
+  // through scoping and the leak check into the shipped sheet.
+  it("does not mistake a longer class name for the scope", () => {
+    expect(scopeSelector(".nextly-ui-card", ".nextly-ui")).toBe(
+      ".nextly-ui .nextly-ui-card"
+    );
+    expect(
+      findUnscopedRules(".nextly-ui-card{color:red}", ".nextly-ui")
+    ).toEqual([".nextly-ui-card"]);
+  });
+
+  it("does not accept the scope appearing inside an attribute selector", () => {
+    expect(
+      findUnscopedRules('[class*=".nextly-ui"]{color:red}', ".nextly-ui")
+    ).toEqual(['[class*=".nextly-ui"]']);
+  });
+
+  it("accepts the scope when the class ends at a boundary", () => {
+    expect(isScoped(".nextly-ui.dark .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui > .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-uix", ".nextly-ui")).toBe(false);
+  });
+
+  it("namespaces keyframe names and the references to them", () => {
+    const css = [
+      "@keyframes spin{to{transform:rotate(360deg)}}",
+      ".nextly-ui .a{animation:spin 1s linear infinite}",
+      ".nextly-ui{--animate-spin:spin 1s linear infinite}",
+      ".nextly-ui .b{animation-name:spin}",
+    ].join("\n");
+    const out = prefixKeyframes(css, "nx-");
+
+    expect(out).toContain("@keyframes nx-spin");
+    expect(out).toContain("animation:nx-spin 1s linear infinite");
+    expect(out).toContain("--animate-spin:nx-spin 1s linear infinite");
+    expect(out).toContain("animation-name:nx-spin");
+    // No bare reference survives to collide with a host animation.
+    expect(out).not.toMatch(/(^|[\s,:]) spin(?=$|[\s,;}])/);
+  });
+
+  it("leaves identifiers that merely share a keyframe name alone", () => {
+    const css = [
+      "@keyframes spin{to{opacity:1}}",
+      ".nextly-ui .a{content:'spin';transition:spin 1s}",
+    ].join("\n");
+    const out = prefixKeyframes(css, "nx-");
+
+    expect(out).toContain("content:'spin'");
+    expect(out).toContain("transition:spin 1s");
+  });
+
+  it("keeps a var() reference intact while namespacing the token value", () => {
+    const out = prefixKeyframes(
+      "@keyframes pulse{to{opacity:1}}\n.nextly-ui .a{animation:var(--animate-pulse)}",
+      "nx-"
+    );
+    expect(out).toContain("animation:var(--animate-pulse)");
+  });
+
+  it("scopes the unscoped half of a partially scoped selector list", () => {
+    expect(scopeCss(".nextly-ui .a, .b{color:red}", ".nextly-ui")).toContain(
+      ".nextly-ui .a, .nextly-ui .b{"
+    );
   });
 });

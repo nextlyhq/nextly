@@ -3,7 +3,7 @@
 /**
  * Build CSS Script
  *
- * Emits the package's two CSS entry points:
+ * Emits the package's three CSS entry points:
  *   - dist/theme.css  — the raw design-system source (tokens, @theme inline,
  *     @custom-variant, base reset) for consumers that compile Tailwind
  *     themselves against the token contract.
@@ -21,7 +21,11 @@
 
 import { execSync } from "child_process";
 
-import { scopeCss, findUnscopedRules } from "@nextlyhq/admin-css";
+import {
+  scopeCss,
+  findUnscopedRules,
+  prefixKeyframes,
+} from "@nextlyhq/admin-css";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -38,6 +42,8 @@ const scopedOutput = path.join(outputDir, "styles.scoped.css");
 
 /** Wrapper class a consumer puts on the subtree that should be styled. */
 const UI_SCOPE = ".nextly-ui";
+/** Namespace for animation names, which CSS resolves globally. */
+const KEYFRAME_PREFIX = "nx-";
 
 if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
@@ -66,22 +72,34 @@ try {
     stdio: "inherit",
   });
 
-  const scoped = scopeCss(fs.readFileSync(unminified, "utf8"), UI_SCOPE);
-  const leaks = findUnscopedRules(scoped, UI_SCOPE);
-  if (leaks.length > 0) {
-    console.error(
-      `❌ ${leaks.length} rule(s) escaped ${UI_SCOPE}:\n  ` +
-        leaks.slice(0, 5).join("\n  ")
+  // dist/ is published, so an intermediate left behind by a failed build would
+  // ship. Every exit path from here clears them, including the leak bail-out —
+  // which throws rather than calling process.exit, because process.exit does
+  // not unwind the stack and would skip the cleanup entirely.
+  try {
+    // Selector scoping alone does not isolate animations: `@keyframes` names
+    // are global, and this sheet defines `spin`, `pulse` and `fade-in`, which a
+    // host page may well define too.
+    const scoped = prefixKeyframes(
+      scopeCss(fs.readFileSync(unminified, "utf8"), UI_SCOPE),
+      KEYFRAME_PREFIX
     );
-    process.exit(1);
+    const leaks = findUnscopedRules(scoped, UI_SCOPE);
+    if (leaks.length > 0) {
+      throw new Error(
+        `${leaks.length} rule(s) escaped ${UI_SCOPE}:\n  ` +
+          leaks.slice(0, 5).join("\n  ")
+      );
+    }
+    fs.writeFileSync(scopedTemp, scoped);
+    execSync(
+      `npx @tailwindcss/cli -i "${scopedTemp}" -o "${scopedOutput}" --minify`,
+      { cwd: rootDir, stdio: "inherit" }
+    );
+  } finally {
+    fs.rmSync(unminified, { force: true });
+    fs.rmSync(scopedTemp, { force: true });
   }
-  fs.writeFileSync(scopedTemp, scoped);
-  execSync(`npx @tailwindcss/cli -i "${scopedTemp}" -o "${scopedOutput}" --minify`, {
-    cwd: rootDir,
-    stdio: "inherit",
-  });
-  fs.unlinkSync(unminified);
-  fs.unlinkSync(scopedTemp);
 
   const sizeKB = (fs.statSync(stylesOutput).size / 1024).toFixed(2);
   console.log(`✅ CSS built (styles.css ${sizeKB} KB)`);

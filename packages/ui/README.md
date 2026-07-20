@@ -31,7 +31,7 @@ pnpm add react react-dom lucide-react
 
 ## Setup
 
-The package ships two CSS entry points. Pick one:
+The package ships three CSS entry points. Pick one:
 
 **Zero config — pre-compiled bundle**
 
@@ -109,7 +109,37 @@ import "@nextlyhq/ui/styles.scoped.css";
 
 It keeps preflight rather than dropping it — these components are designed against a
 normalised baseline — but confines it to the wrapper, so your headings, lists and form
-controls outside it are untouched.
+controls outside it are untouched. Animation names are namespaced too, so the sheet
+cannot displace a `spin` or `fade-in` your own app already defines.
+
+### Overlays need a portal container
+
+Dialog, Select, DropdownMenu, Popover, Tooltip and Command render their overlay through
+a portal, which defaults to `document.body` — outside the wrapper, where the scoped rules
+and tokens do not reach. Triggers would look right and the menus they open would not.
+Point them back inside with `PortalProvider`:
+
+```tsx
+import { useState } from "react";
+import { PortalProvider } from "@nextlyhq/ui";
+import "@nextlyhq/ui/styles.scoped.css";
+
+function Kit({ children }: { children: React.ReactNode }) {
+  const [container, setContainer] = useState<HTMLElement | null>(null);
+
+  return (
+    <div className="nextly-ui" ref={setContainer}>
+      <PortalProvider container={container}>{children}</PortalProvider>
+    </div>
+  );
+}
+```
+
+A callback ref rather than `useRef` because the container has to be a state value: on the
+first render it is still `null`, and the overlays need a re-render once the element exists.
+
+This does not apply to `styles.css`, where the rules are document-wide and
+`document.body` is already covered.
 
 ## Compatibility
 

@@ -188,6 +188,9 @@ importers:
       '@eslint/eslintrc':
         specifier: ^3
         version: 3.3.1
+      '@nextlyhq/admin-css':
+        specifier: workspace:^
+        version: link:../../packages/admin-css
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2

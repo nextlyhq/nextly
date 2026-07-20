@@ -44,6 +44,24 @@ export function splitTopLevel(selector) {
 }
 
 /**
+ * Whether a selector is genuinely constrained to `scope`.
+ *
+ * A substring test is not enough. `.nextly-admin-card` contains the scope text
+ * but is an unrelated class, and `[class*=".nextly-admin"]` matches host
+ * elements the wrapper does not contain — both would be left unprefixed and
+ * then pass the leak check, so the sheet escapes while the build reports
+ * success. Attribute selectors are dropped before matching, and the class must
+ * end at a boundary: the next character cannot continue a CSS identifier.
+ */
+export function isScoped(selector, scope = DEFAULT_SCOPE) {
+  const withoutAttributes = selector.replace(/\[[^\]]*\]/g, "");
+  const className = scope.replace(/^\./, "");
+  return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`).test(
+    withoutAttributes
+  );
+}
+
+/**
  * Scope a single selector within `scope` (a class selector such as
  * `.nextly-admin`).
  */
@@ -69,7 +87,7 @@ export function scopeSelector(selector, scope = DEFAULT_SCOPE) {
   }
 
   // Already scoped.
-  if (selector.includes(scope)) return selector;
+  if (isScoped(selector, scope)) return selector;
 
   // Document-root selectors collapse onto the admin root, so the theme and the
   // preflight reset apply inside the admin and never reach the host.
@@ -153,11 +171,10 @@ export function scopeCss(css, scope = DEFAULT_SCOPE) {
         result.push(line);
         continue;
       }
-      if (selector.includes(scope)) {
-        result.push(line);
-        continue;
-      }
 
+      // No whole-prelude "already scoped" shortcut: in a list like
+      // `.nextly-admin .a, .b` it would leave `.b` unscoped. scopeSelector
+      // splits the list and decides per part.
       result.push(`${scopeSelector(selector, scope)}{${rest}`);
     } else {
       result.push(line);
@@ -165,6 +182,55 @@ export function scopeCss(css, scope = DEFAULT_SCOPE) {
   }
 
   return result.join("\n");
+}
+
+/** Escape a string for literal use inside a RegExp. */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Matches a keyframes definition, capturing the vendor prefix and the name. */
+const KEYFRAMES_RE = /@(-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi;
+
+/**
+ * Namespace every `@keyframes` name in a stylesheet.
+ *
+ * Animation names are global no matter where the rule that uses them lives, so
+ * scoping selectors is not enough: this sheet defines `spin`, `pulse` and
+ * `fade-in`, and a host page that defines its own wins or loses by source
+ * order. Prefixing the definitions and every reference to them keeps the
+ * promise that importing the scoped sheet cannot change the host's rendering.
+ *
+ * References are rewritten only inside `animation`, `animation-name` and
+ * `--animate-*` values, so an unrelated identifier that happens to share a
+ * keyframe's name is left alone.
+ */
+export function prefixKeyframes(css, prefix) {
+  const names = new Set();
+  for (const match of css.matchAll(KEYFRAMES_RE)) {
+    names.add(match[2].replace(/^["']|["']$/g, ""));
+  }
+  if (names.size === 0) return css;
+
+  const renamed = css.replace(
+    KEYFRAMES_RE,
+    (_full, webkit, name) =>
+      `@${webkit ?? ""}keyframes ${prefix}${name.replace(/^["']|["']$/g, "")}`
+  );
+
+  return renamed.replace(
+    /(^|[;{\s])(animation(?:-name)?|--animate-[\w-]+)(\s*:\s*)([^;}]*)/gi,
+    (_full, lead, property, colon, value) => {
+      let rewritten = value;
+      for (const name of names) {
+        rewritten = rewritten.replace(
+          new RegExp(`(^|[\\s,])${escapeRegExp(name)}(?=$|[\\s,])`, "g"),
+          `$1${prefix}${name}`
+        );
+      }
+      return `${lead}${property}${colon}${rewritten}`;
+    }
+  );
 }
 
 /**
@@ -210,7 +276,7 @@ export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
         // scopes it, letting `.leak` restyle the host page.
         for (const part of splitTopLevel(prelude)) {
           const trimmed = part.trim();
-          if (trimmed && !trimmed.includes(scope)) {
+          if (trimmed && !isScoped(trimmed, scope)) {
             offenders.push(trimmed.slice(0, 100));
           }
         }

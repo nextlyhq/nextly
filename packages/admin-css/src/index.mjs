@@ -10,6 +10,8 @@
 export {
   scopeCss,
   findUnscopedRules,
+  isScoped,
+  prefixKeyframes,
   scopeSelector,
   splitTopLevel,
 } from "./css-scope.mjs";
