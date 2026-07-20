@@ -70,19 +70,45 @@ jobs:
       # bar here is set where silence is actually dangerous. Lower-severity
       # transitive findings stay visible in the security tab.
       #
-      # The advisory verdict is recorded as an output rather than inferred from
-      # the job status, so checkout, setup or install breaking does not file an
-      # issue claiming an advisory was found. Those still fail the job and stay
-      # visible in the Actions tab; they just do not get misreported.
+      # The verdict comes from the report itself rather than from an exit code,
+      # which conflates "advisories found" with "the registry did not answer".
+      # A completed audit always carries a `metadata.vulnerabilities` block; a
+      # registry failure emits `{"error": …}` instead. Three distinct outcomes:
+      #
+      #   no report        -> infrastructure failure. Fail the job so it is red
+      #                       in Actions, but leave `vulnerable` unset so no
+      #                       issue claims an advisory was found.
+      #   report, 0 found  -> clean.
+      #   report, >0 found -> advisory. Fail the job and file the issue.
+      #
+      # `--ignore-registry-errors` would collapse the first case into exit 0,
+      # which reads as clean and would let the audit die silently — the one
+      # failure mode this workflow exists to prevent.
       - name: Audit
         id: audit
         run: |
-          if pnpm audit --audit-level=high; then
-            echo "vulnerable=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "vulnerable=true" >> "$GITHUB_OUTPUT"
+          set +e
+          report=$(pnpm audit --json 2>&1)
+          set -e
+
+          counts=$(printf '%s' "$report" |
+            jq -r '(.metadata.vulnerabilities.high + .metadata.vulnerabilities.critical) // empty' 2>/dev/null)
+
+          if [ -z "$counts" ]; then
+            echo "::error::pnpm audit returned no report; the registry likely did not answer."
+            printf '%s\n' "$report"
             exit 1
           fi
+
+          if [ "$counts" -gt 0 ]; then
+            echo "vulnerable=true" >> "$GITHUB_OUTPUT"
+            echo "::error::$counts high or critical advisories in the lockfile."
+            printf '%s' "$report" | jq -r '.advisories | to_entries[] | "\(.value.severity)\t\(.value.module_name)\t\(.value.title)"'
+            exit 1
+          fi
+
+          echo "vulnerable=false" >> "$GITHUB_OUTPUT"
+          echo "No high or critical advisories."
 
   report-failure:
     name: File an issue on failure
