@@ -7,9 +7,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 
-const getEntrySpy = vi.fn();
-const findMediaSpy = vi.fn();
-const checkAccessSpy = vi.fn();
+const { getEntrySpy, findMediaSpy, checkAccessSpy } = vi.hoisted(() => ({
+  getEntrySpy: vi.fn(),
+  findMediaSpy: vi.fn(),
+  checkAccessSpy: vi.fn(),
+}));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {

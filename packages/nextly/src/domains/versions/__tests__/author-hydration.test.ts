@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const listByIdsSpy = vi.fn();
+const { listByIdsSpy } = vi.hoisted(() => ({ listByIdsSpy: vi.fn() }));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn(() => ({ listUsersByIds: listByIdsSpy })),
