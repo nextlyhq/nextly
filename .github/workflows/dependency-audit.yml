@@ -25,11 +25,20 @@ on:
 permissions:
   contents: read
 
+# Scheduled and manual runs can otherwise overlap, and two runs that both see
+# no open issue would each file one. Queue rather than cancel: a run that has
+# already found an advisory should finish reporting it.
+concurrency:
+  group: dependency-audit
+  cancel-in-progress: false
+
 jobs:
   audit:
     name: Audit the lockfile
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      vulnerable: ${{ steps.audit.outputs.vulnerable }}
 
     steps:
       - name: Checkout
@@ -60,13 +69,25 @@ jobs:
       # severity; a transitive package behind an override gets nothing, so the
       # bar here is set where silence is actually dangerous. Lower-severity
       # transitive findings stay visible in the security tab.
+      #
+      # The advisory verdict is recorded as an output rather than inferred from
+      # the job status, so checkout, setup or install breaking does not file an
+      # issue claiming an advisory was found. Those still fail the job and stay
+      # visible in the Actions tab; they just do not get misreported.
       - name: Audit
-        run: pnpm audit --audit-level=high
+        id: audit
+        run: |
+          if pnpm audit --audit-level=high; then
+            echo "vulnerable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "vulnerable=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
   report-failure:
     name: File an issue on failure
     needs: [audit]
-    if: failure()
+    if: always() && needs.audit.outputs.vulnerable == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -78,8 +99,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # `// empty` keeps the empty-result case a genuinely empty string
+          # rather than depending on gh suppressing a null for us, so the
+          # branch below turns on the presence of an issue number alone.
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --label ci-dep-audit-failure --state open --json number --jq '.[0].number')
+            --label ci-dep-audit-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
               --body "Weekly dependency audit failed again: $RUN_URL"

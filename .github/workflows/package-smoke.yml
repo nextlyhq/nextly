@@ -150,7 +150,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --label ci-nightly-failure --state open --json number --jq '.[0].number')
+            --label ci-nightly-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
               --body "Nightly package smoke failed again: $RUN_URL"
