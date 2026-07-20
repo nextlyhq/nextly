@@ -444,6 +444,15 @@ async function applyPendingMigrations(label: string): Promise<void> {
           : undefined,
     };
 
+    // Fail fast: migrateCore requires executeQuery to run file migrations
+    if (!cliAdapter.executeQuery) {
+      throw new Error(
+        "Adapter does not support executeQuery, which is required for running migrations. " +
+          "Please ensure your database adapter (postgres, mysql, or sqlite) is correctly configured. " +
+          "Run `nextly migrate` manually for detailed diagnostics."
+      );
+    }
+
     // Create a logger compatible with migrateCore's CommandContext["logger"]
     const logger = {
       header: (msg: string) => console.log(`${label} ${msg}`),
