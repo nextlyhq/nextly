@@ -1,4 +1,7 @@
 "use client";
+// `toast` comes from @nextlyhq/ui, not sonner directly: the Toaster mounted
+// below is ui's, and sonner keeps its queue in module state, so a toast
+// published into admin's own bundled copy would never reach that Toaster.
 import { PortalProvider, toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";

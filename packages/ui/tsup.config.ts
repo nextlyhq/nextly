@@ -24,7 +24,10 @@ export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm", "cjs"],
   dts: true,
-  clean: true,
+  // Cleaning is done once by the build script, not per-config: the two configs
+  // also run as concurrent watchers in dev, where a clean here would wipe the
+  // server-safe entries and leave them missing until their sources changed.
+  clean: false,
   sourcemap: true,
   // Rollup runs the treeshaking pass and drops directives from the bundle,
   // including one declared in the entry source, so treeshaking here is mutually

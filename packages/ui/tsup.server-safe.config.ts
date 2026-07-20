@@ -18,9 +18,9 @@ const external = [
  * tooling and a pure class-name helper. They are built here, without the
  * component bundle's `"use client"` banner, so server code can import them.
  *
- * Built separately from the component bundle, and after it: the two must not
- * emit into `dist` concurrently, because the component config cleans the
- * directory and races this entry's declaration output away.
+ * Built separately from the component bundle so the client banner does not
+ * apply here. Neither config cleans `dist`; the build script does that once up
+ * front, which also keeps the two dev watchers from clobbering each other.
  */
 export default defineConfig({
   // Named so the output stays flat: with plain paths tsup mirrors the source

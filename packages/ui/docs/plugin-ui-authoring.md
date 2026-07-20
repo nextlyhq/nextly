@@ -96,7 +96,7 @@ a stylesheet. They are already token-driven, accessible, and dark-mode-correct.
 
 ```tsx
 import { Button, Input, Select, Switch, Badge } from "@nextlyhq/ui";
-import { cn } from "@nextlyhq/ui";
+import { cn } from "@nextlyhq/ui/utils";
 
 <Button variant="outline" size="sm">Add field</Button>
 <Input placeholder="Form name" />

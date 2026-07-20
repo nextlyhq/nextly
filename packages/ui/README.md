@@ -58,10 +58,10 @@ utilities the components use:
 @source "../node_modules/@nextlyhq/ui/dist";
 ```
 
-`theme.css` defines the tokens as complete OKLCH color values (`--background`, `--primary`,
-`--border`, …) with `@theme inline` mappings and the dark-mode overrides. Reference tokens
-directly (`var(--primary)`) — never wrap them in `hsl()`. The exported `uiPreset` remains
-available as a Tailwind v3 preset.
+`theme.css` defines the tokens as complete OKLCH color values (`--nx-background`, `--nx-primary`,
+`--nx-border`, …) with `@theme inline` mappings and the dark-mode overrides. Reference tokens
+directly (`var(--nx-primary)`) — never wrap them in `hsl()`. `uiPreset` remains available
+as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 
 > Inside a Nextly admin plugin you need neither import — the admin already provides the
 > tokens. See the [**Plugin UI authoring guide**](./docs/plugin-ui-authoring.md).
@@ -77,15 +77,19 @@ available as a Tailwind v3 preset.
 **Feedback:** `Spinner`, `Toaster` (with `toast()` helper)
 **Tables:** `Table` primitives, `ResponsiveTable`, `TableSearch`, `TablePagination`, `TableSkeleton`, `TableEmpty`, `TableError`, `TableLoading`
 **Providers:** `PortalProvider`, `usePortalContainer`
-**Utilities:** `cn`, `uiPreset`
+**Utilities:** `cn` (from `@nextlyhq/ui/utils`), `uiPreset` (from `@nextlyhq/ui/tailwind-preset`)
+
+> Both ship from their own subpaths rather than the root: the root bundle is
+> published with `"use client"`, and neither of these contains a React runtime,
+> so a server component or a Tailwind config can import them safely.
 
 ## Compatibility
 
-| Tool           | Version                                                          |
-| -------------- | ---------------------------------------------------------------- |
-| React          | 18 or 19                                                         |
-| Tailwind CSS   | 4+ (the `uiPreset` JS export also works as a Tailwind v3 preset) |
-| `lucide-react` | 0.400+                                                           |
+| Tool           | Version                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| React          | 18 or 19                                                               |
+| Tailwind CSS   | 4+ (`@nextlyhq/ui/tailwind-preset` also works as a Tailwind v3 preset) |
+| `lucide-react` | 0.400+                                                                 |
 
 ## Documentation
 

@@ -57,8 +57,8 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs && node scripts/build-css.mjs",
-    "build:js": "tsup",
+    "build": "pnpm build:js && node scripts/build-css.mjs",
+    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs",
     "build:css": "node scripts/build-css.mjs",
     "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & wait",
     "check-types": "tsc --noEmit",
@@ -95,6 +95,7 @@
     "postcss": "^8.5.6",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "rimraf": "^6.1.3",
     "tailwindcss": "^4.3.2",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",

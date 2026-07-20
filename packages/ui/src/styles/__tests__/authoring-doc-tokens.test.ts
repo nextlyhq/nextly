@@ -1,12 +1,15 @@
 /**
- * Asserts that every design token named in the plugin authoring guide actually
- * exists in `theme.css`.
+ * Asserts that the package's own documentation stays true to what it ships:
+ * every design token it names exists in `theme.css`, and it never tells anyone
+ * to import from an entry point that does not export the thing.
  *
- * The guide is the contract external plugin authors build against, and CSS
- * fails silently: a token that does not exist resolves to nothing, so a stale
- * name produces unstyled UI with no error anywhere. The guide had drifted to a
- * scope class that is rendered nowhere and to unprefixed token names that
- * nothing reads, which is undetectable without a check like this one.
+ * Docs are the contract external plugin authors build against, and both failure
+ * modes are silent. A token that does not exist resolves to nothing, so a stale
+ * name produces unstyled UI with no error; an import from the wrong entry point
+ * only fails once someone follows the instructions. Both have already happened
+ * here — the guide named a scope class rendered nowhere and unprefixed tokens
+ * nothing reads, and the README advertised `cn`/`uiPreset` on the root barrel
+ * after they moved to their own subpaths.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -15,10 +18,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DOC = resolve(HERE, "../../../docs/plugin-ui-authoring.md");
 const THEME = resolve(HERE, "../theme.css");
 
-const doc = readFileSync(DOC, "utf8");
+/** Every doc that documents the package's public surface. */
+const DOCS = {
+  "plugin-ui-authoring.md": resolve(
+    HERE,
+    "../../../docs/plugin-ui-authoring.md"
+  ),
+  "README.md": resolve(HERE, "../../../README.md"),
+} as const;
+
 const theme = readFileSync(THEME, "utf8");
 
 /** Custom properties the theme actually declares, e.g. `--nx-card`. */
@@ -27,23 +37,53 @@ const declared = new Set(
 );
 
 /**
- * Token names the guide tells authors to use. Wildcard stubs (`--nx-sidebar-*`
+ * Token names a doc tells authors to use. Wildcard stubs (`--nx-sidebar-*`
  * written as prose) and the generic `--token` placeholder are not real names.
  */
-const referenced = [
-  ...new Set([...doc.matchAll(/--[a-z0-9-]+/g)].map(match => match[0])),
-].filter(token => !token.endsWith("-") && token !== "--token");
+function tokensIn(source: string): string[] {
+  return [
+    ...new Set([...source.matchAll(/--[a-z0-9-]+/g)].map(match => match[0])),
+  ].filter(token => !token.endsWith("-") && token !== "--token");
+}
 
-describe("plugin authoring guide", () => {
+/** Exports that deliberately do not live on the client-stamped root barrel. */
+const SUBPATH_ONLY = [
+  { name: "cn", subpath: "@nextlyhq/ui/utils" },
+  { name: "uiPreset", subpath: "@nextlyhq/ui/tailwind-preset" },
+];
+
+describe.each(Object.entries(DOCS))("%s", (_name, path) => {
+  const doc = readFileSync(path, "utf8");
+
   it("references only tokens that theme.css declares", () => {
-    const missing = referenced.filter(token => !declared.has(token));
+    const missing = tokensIn(doc).filter(token => !declared.has(token));
 
     expect(
       missing,
-      `These tokens are documented but not declared in theme.css, so CSS using ` +
-        `them silently resolves to nothing: ${missing.join(", ")}`
+      `Documented but not declared in theme.css, so CSS using them silently ` +
+        `resolves to nothing: ${missing.join(", ")}`
     ).toEqual([]);
   });
+
+  it.each(SUBPATH_ONLY)(
+    "does not show $name being imported from the root barrel",
+    ({ name, subpath }) => {
+      // e.g. `import { cn } from "@nextlyhq/ui"` — the root is published with
+      // "use client" and no longer exports these, so following that fails.
+      const rootImport = new RegExp(
+        `import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*["']@nextlyhq/ui["']`
+      );
+
+      expect(
+        rootImport.test(doc),
+        `${name} must be documented as coming from ${subpath}, not the root.`
+      ).toBe(false);
+    }
+  );
+});
+
+describe("plugin authoring guide", () => {
+  const doc = readFileSync(DOCS["plugin-ui-authoring.md"], "utf8");
 
   it("documents the scope class the admin actually renders", () => {
     // The admin root renders `.nextly-admin`, and the admin stylesheet is
@@ -53,7 +93,8 @@ describe("plugin authoring guide", () => {
   });
 
   it("names at least one real token, so the check cannot pass vacuously", () => {
-    expect(referenced.length).toBeGreaterThan(10);
-    expect(referenced).toContain("--nx-primary");
+    const tokens = tokensIn(doc);
+    expect(tokens.length).toBeGreaterThan(10);
+    expect(tokens).toContain("--nx-primary");
   });
 });
