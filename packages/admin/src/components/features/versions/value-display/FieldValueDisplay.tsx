@@ -134,7 +134,7 @@ defineValueDisplay(["select", "radio"], ({ value, field }) => {
     return (
       <div className="flex flex-wrap gap-1">
         {value.map((entry, i) => (
-          <Badge key={`${String(entry)}-${i}`} variant="secondary">
+          <Badge key={`${String(entry)}-${i}`} variant="default">
             {optionLabel(field, entry)}
           </Badge>
         ))}
@@ -150,7 +150,7 @@ defineValueDisplay(["chips"], ({ value }) => {
   return (
     <div className="flex flex-wrap gap-1">
       {items.map((entry, i) => (
-        <Badge key={`${String(entry)}-${i}`} variant="secondary">
+        <Badge key={`${String(entry)}-${i}`} variant="default">
           {String(entry)}
         </Badge>
       ))}
@@ -170,7 +170,7 @@ function RelationshipValue({ entry }: { entry: unknown }) {
   if (typeof entry === "object" && entry !== null) {
     const { id, label } = entry as { id?: string; label?: string | null };
     return label ? (
-      <Badge variant="secondary">{label}</Badge>
+      <Badge variant="default">{label}</Badge>
     ) : (
       <Badge variant="outline" className="text-muted-foreground">
         {id ?? "Unknown"}
@@ -269,14 +269,16 @@ function NestedFields({
 
   return (
     <div className="flex flex-col gap-2">
-      {fields.map(child => (
-        <FieldValueDisplay
-          key={child.name}
-          field={child}
-          value={row[child.name]}
-          dense
-        />
-      ))}
+      {fields.map(child =>
+        child.name ? (
+          <FieldValueDisplay
+            key={child.name}
+            field={child}
+            value={row[child.name]}
+            dense
+          />
+        ) : null
+      )}
     </div>
   );
 }
