@@ -665,7 +665,6 @@ export async function copyTemplate(
     );
   }
 
-  // Step 1: Copy base template (admin routes, API routes, layout, styles, etc.)
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
@@ -673,10 +672,6 @@ export async function copyTemplate(
     },
   });
 
-  // Step 2: Copy template's src/ directory (frontend pages, components,
-  // src/endpoints/seed/ — the latter contains the demo seed function +
-  // colocated seed-data.json/media).
-  // Skip configs/ and template.json — those are handled separately.
   const templateSrcDir = path.join(typeDir, "src");
   if (await fs.pathExists(templateSrcDir)) {
     await fs.copy(templateSrcDir, path.join(targetDir, "src"), {
@@ -698,7 +693,6 @@ export async function copyTemplate(
     );
   }
 
-  // Step 3: Copy approach-specific config (for content templates with configs/ dir)
   const configsDir = path.join(typeDir, "configs");
   if (approach && (await fs.pathExists(configsDir))) {
     // Map approach name to config filename
@@ -731,9 +725,6 @@ export async function copyTemplate(
   // dashboard's SeedDemoContentCard after running /admin/setup — the
   // CLI no longer asks about it.)
 
-  // Step 4b: Copy migrations directory if present (for SQL-based templates)
-  // This includes both the migration SQL files and metadata snapshots
-  // that are used by boot-apply to register collections at runtime
   const templateMigrationsDir = path.join(typeDir, "migrations");
   if (await fs.pathExists(templateMigrationsDir)) {
     await fs.copy(templateMigrationsDir, path.join(targetDir, "migrations"), {
@@ -741,8 +732,6 @@ export async function copyTemplate(
     });
   }
 
-  // Step 5: Remove base template's page.tsx if blog template has (frontend) route group
-  // Both can't coexist since (frontend)/page.tsx also serves the / route
   const frontendPagePath = path.join(
     targetDir,
     "src",
