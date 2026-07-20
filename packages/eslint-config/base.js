@@ -140,7 +140,10 @@ export const config = [
       // reason: config files (tsup, next, vitest, eslint) aren't in any
       // tsconfig project, so type-aware linting can't resolve them. They
       // are maintained by hand and don't need lint coverage.
+      // Also covers additional tsup entrypoint configs, e.g.
+      // `tsup.preset.config.ts` for a bundle built with different options.
       "**/tsup.config.{js,ts,mjs,cjs}",
+      "**/tsup.*.config.{js,ts,mjs,cjs}",
       "**/next.config.{js,ts,mjs,cjs}",
       "**/vitest.config.{js,ts,mjs,cjs}",
       "**/vite.config.{js,ts,mjs,cjs}",

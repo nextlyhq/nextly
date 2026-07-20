@@ -21,15 +21,23 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
     },
+    "./tailwind-preset": {
+      "types": "./dist/tailwind-preset.d.ts",
+      "import": "./dist/tailwind-preset.mjs",
+      "require": "./dist/tailwind-preset.cjs"
+    },
     "./theme.css": "./dist/theme.css",
     "./styles.css": "./dist/styles.css"
   },
+  "sideEffects": [
+    "**/*.css"
+  ],
   "files": [
     "dist",
     "docs"
   ],
   "scripts": {
-    "build": "tsup && node scripts/build-css.mjs",
+    "build": "tsup && tsup --config tsup.preset.config.ts && node scripts/check-client-directive.mjs && node scripts/build-css.mjs",
     "build:js": "tsup",
     "build:css": "node scripts/build-css.mjs",
     "dev": "tsup --watch",

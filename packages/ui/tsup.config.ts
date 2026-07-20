@@ -1,23 +1,37 @@
 import { defineConfig } from "tsup";
 
+const external = [
+  "react",
+  "react-dom",
+  "lucide-react",
+  "sonner",
+  "cmdk",
+  /^@radix-ui\//,
+];
+
 export default defineConfig({
+  // The component surface. Bundling collapses per-file `"use client"`
+  // directives — they are a per-module property that esbuild drops from
+  // non-entry modules — so the directive is applied to the bundle here. That is
+  // accurate rather than a blunt instrument: all but a couple of these modules
+  // use hooks, context, `forwardRef` or Radix, none of which a Server Component
+  // can render. Build-time-only exports are built by tsup.preset.config.ts so
+  // they stay importable from server code.
   entry: ["src/index.ts"],
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
   sourcemap: true,
-  treeshake: true,
-  external: [
-    "react",
-    "react-dom",
-    "lucide-react",
-    "sonner",
-    "cmdk",
-    /^@radix-ui\//,
-  ],
+  // Rollup runs the treeshaking pass and drops directives from the bundle,
+  // including one declared in the entry source, so treeshaking here is mutually
+  // exclusive with shipping `"use client"`. Correctness wins: the directive is
+  // required for any Server Component import to work, while the bytes it costs
+  // are recovered by consumers, whose own bundlers treeshake this package now
+  // that `sideEffects` is declared.
+  treeshake: false,
+  external,
   outExtension({ format }) {
-    return {
-      js: format === "cjs" ? ".cjs" : ".mjs",
-    };
+    return { js: format === "cjs" ? ".cjs" : ".mjs" };
   },
+  banner: { js: '"use client";' },
 });

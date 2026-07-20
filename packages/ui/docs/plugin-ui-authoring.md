@@ -20,8 +20,8 @@ points:
 | `@nextlyhq/ui/styles.css` | Pre-compiled bundle (Tailwind + tokens + reset). Zero config.             | Standalone UI, or a quick embed with no build wiring.   |
 
 **Inside a Nextly admin plugin you usually need neither.** The admin already loads
-`@nextlyhq/admin/style.css`, which defines every token scoped to `.adminapp` (and
-`.adminapp.dark` for dark mode). Plugin admin views render inside that scope, so the tokens
+`@nextlyhq/admin/style.css`, which defines every token scoped to `.nextly-admin` (and
+`.nextly-admin.dark` for dark mode). Plugin admin views render inside that scope, so the tokens
 are already on the page. Your plugin CSS should **consume** those tokens, never redefine
 them.
 
@@ -36,52 +36,52 @@ Tokens are **complete color values** (OKLCH). Reference them directly:
 
 ```css
 .my-panel {
-  background: var(--card);
-  color: var(--foreground);
-  border: 1px solid var(--border);
+  background: var(--nx-card);
+  color: var(--nx-foreground);
+  border: 1px solid var(--nx-border);
   border-radius: var(--radius);
 }
 ```
 
 ### Never wrap a token in `hsl()` / `rgb()`
 
-Older Nextly builds stored tokens as bare HSL channels (`--primary: 221 83% 53%`) and code
-wrapped them: `hsl(var(--primary))`. **That convention is gone.** Tokens are now full colors
-(`--primary: oklch(0 0 0)`), so `hsl(var(--primary))` becomes `hsl(oklch(0 0 0))`, which is
+Older Nextly builds stored tokens as bare HSL channels (`--nx-primary: 221 83% 53%`) and code
+wrapped them: `hsl(var(--nx-primary))`. **That convention is gone.** Tokens are now full colors
+(`--nx-primary: oklch(0 0 0)`), so `hsl(var(--nx-primary))` becomes `hsl(oklch(0 0 0))`, which is
 invalid CSS — the browser drops the declaration and your element loses its color. Always:
 
 ```css
 /* ✗ wrong — produces hsl(oklch(...)), silently dropped */
-color: hsl(var(--foreground));
+color: hsl(var(--nx-foreground));
 
 /* ✓ right */
-color: var(--foreground);
+color: var(--nx-foreground);
 ```
 
 ### Alpha / transparency
 
-You can no longer do `hsl(var(--primary) / 0.1)`. Use `color-mix`:
+You can no longer do `hsl(var(--nx-primary) / 0.1)`. Use `color-mix`:
 
 ```css
 /* 10% primary over transparent */
-background: color-mix(in srgb, var(--primary) 10%, transparent);
+background: color-mix(in srgb, var(--nx-primary) 10%, transparent);
 
 /* a subtle hover tint from the foreground */
-background: color-mix(in srgb, var(--foreground) 6%, transparent);
+background: color-mix(in srgb, var(--nx-foreground) 6%, transparent);
 ```
 
 ### The tokens you may use
 
-Colors: `--background` / `--foreground`, `--card` / `--card-foreground`,
-`--popover` / `--popover-foreground`, `--primary` / `--primary-foreground`,
-`--secondary` / `--secondary-foreground`, `--muted` / `--muted-foreground`,
-`--accent` / `--accent-foreground`, `--destructive`, `--success`, `--warning`,
-`--border`, `--border-strong`, `--input`, `--ring`,
-`--sidebar-background` and the `--sidebar-*` family.
+Colors: `--nx-background` / `--nx-foreground`, `--nx-card` / `--nx-card-foreground`,
+`--nx-popover` / `--nx-popover-foreground`, `--nx-primary` / `--nx-primary-foreground`,
+`--nx-secondary` / `--nx-secondary-foreground`, `--nx-muted` / `--nx-muted-foreground`,
+`--nx-accent` / `--nx-accent-foreground`, `--nx-destructive`, `--nx-success`, `--nx-warning`,
+`--nx-border`, `--nx-border-strong`, `--nx-input`, `--nx-ring`,
+`--nx-sidebar-background` and the `--nx-sidebar-*` family.
 
 Sizing: `--radius` (the system is square — this is `0`; always route corner radius through
-it so a future rounding is one edit), and the control-height scale `--control-height`,
-`--control-height-sm`, `--control-height-md`, `--control-height-lg` for anything that should
+it so a future rounding is one edit), and the control-height scale `--nx-control-height`,
+`--nx-control-height-sm`, `--nx-control-height-md`, `--nx-control-height-lg` for anything that should
 line up with admin inputs and buttons.
 
 Do not hardcode hex, `rgb()`, `rgba()`, or named colors. The only literals allowed are
@@ -114,13 +114,13 @@ control). When you write it, it must obey the token contract in section 2 and be
 
 ## 4. Dark mode is automatic — don't fight it
 
-The admin flips every token under `.adminapp.dark`. If you only ever reference tokens, your
+The admin flips every token under `.nextly-admin.dark`. If you only ever reference tokens, your
 UI switches with it and you never write a dark rule.
 
 - **Never** hardcode a light or dark color.
 - **Never** gate admin theming on `@media (prefers-color-scheme: dark)` — admin dark mode is
-  class-based (`.dark` / `.adminapp.dark`), independent of the OS. A media query makes your
-  UI ignore the admin's own theme toggle. Use Tailwind's `dark:` variant or `.adminapp.dark`
+  class-based (`.dark` / `.nextly-admin.dark`), independent of the OS. A media query makes your
+  UI ignore the admin's own theme toggle. Use Tailwind's `dark:` variant or `.nextly-admin.dark`
   descendant selectors if you truly need a mode-specific tweak.
 
 ---
@@ -169,7 +169,7 @@ allowlist in the script with a one-line reason — don't silence the whole check
 
 - [ ] Colors come from `var(--token)` — no `hsl()`/`rgb()` wrappers, no hardcoded values.
 - [ ] Alpha uses `color-mix(in srgb, var(--token) N%, transparent)`.
-- [ ] Corner radius routes through `var(--radius)`; control heights use `--control-height*`.
+- [ ] Corner radius routes through `var(--radius)`; control heights use `--nx-control-height*`.
 - [ ] New UI uses `@nextlyhq/ui` components + Tailwind utilities where practical.
 - [ ] No `@media (prefers-color-scheme)`; dark mode inherited from the admin.
 - [ ] Class names are prefixed/scoped; no bare element selectors.

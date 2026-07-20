@@ -157,6 +157,9 @@ importers:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:^
         version: link:../../packages/plugin-sdk
+      '@nextlyhq/ui':
+        specifier: workspace:^
+        version: link:../../packages/ui
       drizzle-orm:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
@@ -510,9 +513,6 @@ importers:
       '@lexical/utils':
         specifier: ^0.47.0
         version: 0.47.0(typescript@5.9.3)
-      '@nextlyhq/ui':
-        specifier: workspace:*
-        version: link:../ui
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.0(@types/react@19.2.0))(@types/react@19.2.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -625,6 +625,9 @@ importers:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      '@nextlyhq/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@tailwindcss/cli':
         specifier: ^4.3.2
         version: 4.3.2

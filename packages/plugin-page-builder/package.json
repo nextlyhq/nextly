@@ -55,7 +55,7 @@
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "@nextlyhq/ui": "workspace:*",
+    "@nextlyhq/ui": "workspace:^",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",

@@ -1,3 +1,8 @@
+// This barrel is published with a `"use client"` banner (see tsup.config.ts):
+// all but a couple of these modules use hooks, context, forwardRef or Radix
+// and cannot render in a Server Component. Build-time-only exports are
+// published separately as "@nextlyhq/ui/tailwind-preset".
+
 // Components — Button
 export { Button, buttonVariants } from "./components/button";
 export type { ButtonProps } from "./types/button";
