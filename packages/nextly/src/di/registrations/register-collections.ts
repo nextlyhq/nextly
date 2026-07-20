@@ -21,7 +21,7 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
-import { MetaService } from "../../domains/meta/services/meta-service";
+import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
@@ -168,7 +168,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
         ? new WebhookRetentionRunner({
             policy: ctx.config.webhookRetention,
             prune: { adapter, logger },
-            gate: new MetaService(adapter, logger),
+            gate: new MetaRetentionGate(adapter),
             logger,
           })
         : undefined

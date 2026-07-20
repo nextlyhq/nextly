@@ -254,7 +254,9 @@ export class CollectionEntryService extends BaseService {
     user?: UserContext;
     overrideAccess?: boolean;
   }) {
-    return this.mutationService.publishAllLocales(params);
+    const result = await this.mutationService.publishAllLocales(params);
+    this.offerRetentionPass();
+    return result;
   }
 
   async deleteEntry(params: {
@@ -264,7 +266,9 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }) {
-    return this.mutationService.deleteEntry(params);
+    const result = await this.mutationService.deleteEntry(params);
+    this.offerRetentionPass();
+    return result;
   }
 
   async createEntryInTransaction(
@@ -318,7 +322,9 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
-    return this.bulkService.bulkDeleteEntries(params);
+    const result = await this.bulkService.bulkDeleteEntries(params);
+    this.offerRetentionPass();
+    return result;
   }
 
   async bulkUpdateEntries(params: {
@@ -366,7 +372,9 @@ export class CollectionEntryService extends BaseService {
     },
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
-    return this.bulkService.bulkDeleteByQuery(params, options);
+    const result = await this.bulkService.bulkDeleteByQuery(params, options);
+    this.offerRetentionPass();
+    return result;
   }
 
   async createEntries(
@@ -406,7 +414,13 @@ export class CollectionEntryService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.updateEntries(params, entries, options);
+    const result = await this.bulkService.updateEntries(
+      params,
+      entries,
+      options
+    );
+    this.offerRetentionPass();
+    return result;
   }
 
   async updateEntriesInTransaction(
@@ -428,7 +442,9 @@ export class CollectionEntryService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.deleteEntries(params, ids, options);
+    const result = await this.bulkService.deleteEntries(params, ids, options);
+    this.offerRetentionPass();
+    return result;
   }
 
   async deleteEntriesInTransaction(

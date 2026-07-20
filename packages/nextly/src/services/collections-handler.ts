@@ -9,8 +9,8 @@ import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
-import { MetaService } from "../domains/meta/services/meta-service";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -83,7 +83,7 @@ export class CollectionsHandler {
       ? new WebhookRetentionRunner({
           policy: webhookRetention,
           prune: { adapter, logger },
-          gate: new MetaService(adapter, logger),
+          gate: new MetaRetentionGate(adapter),
           logger,
         })
       : undefined;

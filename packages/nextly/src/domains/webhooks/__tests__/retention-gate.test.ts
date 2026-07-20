@@ -2,76 +2,137 @@
  * Retention pass gating.
  *
  * There is no scheduler to hang retention off, so passes are gated on a stored
- * timestamp instead. Any caller may offer to run one; at most one gets through
- * per interval per install.
+ * marker instead. Any caller may offer to run one; the claim decides.
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { claimRetentionPass, RETENTION_GATE_KEY } from "../retention-gate";
-
-function memoryStore(initial?: unknown) {
-  const values = new Map<string, unknown>();
-  if (initial !== undefined) values.set(RETENTION_GATE_KEY, initial);
-  return {
-    values,
-    get: async <T>(key: string): Promise<T | null> =>
-      (values.get(key) as T) ?? null,
-    set: async (key: string, value: unknown): Promise<void> => {
-      values.set(key, value);
-    },
-  };
-}
+import {
+  claimRetentionPass,
+  MetaRetentionGate,
+  RETENTION_GATE_KEY,
+} from "../retention-gate";
 
 const T0 = new Date("2026-07-21T12:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
 
+/** A store that records how it was asked, so the claim contract is visible. */
+function recordingStore(result: boolean) {
+  const calls: { key: string; dueBefore: Date; now: Date }[] = [];
+  return {
+    calls,
+    claim: async (
+      key: string,
+      dueBefore: Date,
+      now: Date
+    ): Promise<boolean> => {
+      calls.push({ key, dueBefore, now });
+      return result;
+    },
+  };
+}
+
 describe("claimRetentionPass", () => {
-  it("lets the first caller through when nothing is recorded", async () => {
-    const store = memoryStore();
+  it("asks the store to claim the marker as of one interval ago", async () => {
+    const store = recordingStore(true);
     await expect(claimRetentionPass(store, HOUR, T0)).resolves.toBe(true);
+    expect(store.calls[0].key).toBe(RETENTION_GATE_KEY);
+    expect(store.calls[0].dueBefore).toEqual(new Date(T0.getTime() - HOUR));
   });
 
-  it("holds off a second caller inside the interval", async () => {
-    const store = memoryStore();
-    await claimRetentionPass(store, HOUR, T0);
-    const soon = new Date(T0.getTime() + 60_000);
-    await expect(claimRetentionPass(store, HOUR, soon)).resolves.toBe(false);
-  });
-
-  it("lets a caller through once the interval has elapsed", async () => {
-    const store = memoryStore();
-    await claimRetentionPass(store, HOUR, T0);
-    const later = new Date(T0.getTime() + HOUR + 1);
-    await expect(claimRetentionPass(store, HOUR, later)).resolves.toBe(true);
-  });
-
-  it("records the attempt BEFORE the pass runs", async () => {
-    // A pass that throws must still hold off the next one for a full interval,
-    // or every subsequent write would retry a failing prune.
-    const store = memoryStore();
-    await claimRetentionPass(store, HOUR, T0);
-    expect(store.values.get(RETENTION_GATE_KEY)).toBe(T0.toISOString());
-  });
-
-  it("reads a stored ISO string back", async () => {
-    const store = memoryStore(T0.toISOString());
-    const soon = new Date(T0.getTime() + 1000);
-    await expect(claimRetentionPass(store, HOUR, soon)).resolves.toBe(false);
-  });
-
-  it("treats an unreadable marker as never having run", async () => {
-    const store = memoryStore({ unexpected: "shape" });
-    await expect(claimRetentionPass(store, HOUR, T0)).resolves.toBe(true);
+  it("does not run when the claim is refused", async () => {
+    const store = recordingStore(false);
+    await expect(claimRetentionPass(store, HOUR, T0)).resolves.toBe(false);
   });
 
   it("declines rather than pruning ungated when the store fails", async () => {
-    // If the gate cannot be read, an ungated pass could run on every write.
+    // If the gate cannot be claimed, an ungated pass could run on every write.
     const broken = {
-      get: vi.fn(async () => {
+      claim: vi.fn(async () => {
         throw new Error("meta table unavailable");
       }),
-      set: vi.fn(async () => {}),
     };
     await expect(claimRetentionPass(broken, HOUR, T0)).resolves.toBe(false);
+  });
+});
+
+describe("MetaRetentionGate", () => {
+  /** A `nextly_meta` stand-in whose key is unique, as the real primary key is. */
+  function fakeAdapter(existing?: { updatedAt: Date }) {
+    let row = existing ? { ...existing } : undefined;
+    const ops: string[] = [];
+    return {
+      ops,
+      get row() {
+        return row;
+      },
+      adapter: {
+        delete: async (
+          _t: string,
+          where: { and: { column: string; value?: unknown }[] }
+        ): Promise<number> => {
+          ops.push("delete");
+          const before = where.and.find(c => c.column === "updatedAt")
+            ?.value as Date;
+          if (row && row.updatedAt < before) {
+            row = undefined;
+            return 1;
+          }
+          return 0;
+        },
+        insert: async (
+          _t: string,
+          data: Record<string, unknown>
+        ): Promise<unknown> => {
+          ops.push("insert");
+          // The primary key rejects a second row for the same marker.
+          if (row) throw new Error("duplicate key");
+          row = { updatedAt: data.updated_at as Date };
+          return data;
+        },
+      },
+    };
+  }
+
+  it("claims when no marker exists yet", async () => {
+    const f = fakeAdapter();
+    const gate = new MetaRetentionGate(f.adapter);
+    await expect(
+      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+    ).resolves.toBe(true);
+    expect(f.row?.updatedAt).toEqual(T0);
+  });
+
+  it("claims by removing a stale marker, then restamping it", async () => {
+    const f = fakeAdapter({ updatedAt: new Date(T0.getTime() - 2 * HOUR) });
+    const gate = new MetaRetentionGate(f.adapter);
+    await expect(
+      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+    ).resolves.toBe(true);
+    // The conditional delete IS the claim; the insert only restamps it.
+    expect(f.ops).toEqual(["delete", "insert"]);
+    expect(f.row?.updatedAt).toEqual(T0);
+  });
+
+  it("refuses while the marker is still current", async () => {
+    const f = fakeAdapter({ updatedAt: new Date(T0.getTime() - 60_000) });
+    const gate = new MetaRetentionGate(f.adapter);
+    await expect(
+      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+    ).resolves.toBe(false);
+    // Nothing stale to delete, and the primary key rejects a duplicate.
+    expect(f.ops).toEqual(["delete", "insert"]);
+  });
+
+  it("lets exactly one of two racing callers through", async () => {
+    // The point of the atomic claim: without it every instance of a
+    // multi-instance deployment would run its own pass each interval.
+    const f = fakeAdapter({ updatedAt: new Date(T0.getTime() - 2 * HOUR) });
+    const gate = new MetaRetentionGate(f.adapter);
+    const dueBefore = new Date(T0.getTime() - HOUR);
+
+    const first = await gate.claim(RETENTION_GATE_KEY, dueBefore, T0);
+    const second = await gate.claim(RETENTION_GATE_KEY, dueBefore, T0);
+
+    expect([first, second]).toEqual([true, false]);
   });
 });
