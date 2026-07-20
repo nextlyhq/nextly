@@ -1,5 +1,223 @@
 # @nextlyhq/adapter-postgres
 
+## 0.0.2-alpha.36
+
+### Patch Changes
+
+- [#211](https://github.com/nextlyhq/nextly/pull/211) [`9647453`](https://github.com/nextlyhq/nextly/commit/96474535bd096f61131f9e5853bc8a24e7f84fc2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The avatar initials on the user edit page are now readable in dark mode.
+
+  When a user has no profile picture, the edit page shows their initials on a tinted circle. In dark mode the initials were painted in a near-black color meant for solid buttons, so they nearly disappeared against the tint (about 1.45:1, where 4.5:1 is required). They now use the primary text color in both modes and read at roughly 11:1 in dark mode.
+
+- [#208](https://github.com/nextlyhq/nextly/pull/208) [`79709b8`](https://github.com/nextlyhq/nextly/commit/79709b8f91cabd9815f9e61f3db8310da07f48d3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Admin colors now meet WCAG 2 AA contrast in both light and dark mode.
+
+  Many admin colors sat below the accessibility minimums. Borders and input outlines were nearly invisible against their surface (as low as 1.2:1, where 3:1 is required); status text (destructive, success, warning) and the status badges and alerts fell short of the 4.5:1 needed for text; popovers were too light for their own borders and inputs; and dozens of faint alpha-opacity utilities (like `text-primary/50` and `border-primary/10`) rendered unreadable text and near-invisible boundaries.
+
+  What changed:
+  - Borders, input outlines, and the popover surface are retuned so every boundary clears 3:1. The most visible effect is that hairline borders become distinct medium-contrast lines.
+  - Status colors are split into two roles, the industry-standard pattern: the base token (`--nx-destructive`, `--nx-success`, `--nx-warning`) is now the readable text color, and a new `-solid` token is the button fill under white on-color text. This lets both the colored text on a page and the white text on a solid button pass AA, which a single value cannot do in dark mode.
+  - The status badge and alert shades, and the warning palette, are retuned so their tinted text passes AA.
+  - Faint alpha-opacity utilities that rendered real text or boundaries were replaced across the admin and plugins with their proper semantic tokens; intentionally decorative uses (watermarks, ghost buttons, chart ticks) are left as-is.
+
+  Two checks run with the test suite to keep this from regressing: one asserts every rendered token and color-mix shade pair meets its WCAG minimum in both modes, and one scans the source for faint alpha-opacity color utilities.
+
+- [#238](https://github.com/nextlyhq/nextly/pull/238) [`dd3be32`](https://github.com/nextlyhq/nextly/commit/dd3be329eab4347805258be7549234e7017a7757) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Content writes now commit their relationships and component data in the same transaction as the entry.
+
+  Creating or updating an entry now writes the entry, its component data, and its many-to-many relationships in a single database transaction. Previously the relationship writes ran after the transaction had already committed, so if they failed the entry was left behind without them; now such a failure rolls the whole write back. Single-document updates likewise write the document and its component data in one transaction, so a component failure no longer leaves a half-updated document.
+
+- [#219](https://github.com/nextlyhq/nextly/pull/219) [`37ee3d5`](https://github.com/nextlyhq/nextly/commit/37ee3d54395afbe96e04d02a00d6329127f4c2af) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema Builder saves for collections now reject stale saves reliably.
+
+  The collection schema apply had an optimistic-lock check, but the stored
+  schema_version was never advanced on apply, so the check compared against a
+  value that never changed and a second admin editing the same collection could
+  still overwrite the first (last-write-wins). The apply now persists the bumped
+  schema_version, and the check runs through the same guard as singles and
+  components: an omitted version is rejected and a stale version is reported as a
+  conflict for the client to reload and retry. All three entity kinds now share
+  one optimistic-lock behavior and error surface. If the post-apply metadata
+  write fails, the response reports the current version rather than the bumped
+  one so a retry re-attempts the bump.
+
+- [#217](https://github.com/nextlyhq/nextly/pull/217) [`564bd03`](https://github.com/nextlyhq/nextly/commit/564bd03e6ea0285bfc2f8c8b94e31b0ad93a89d8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fixed inserts failing on collections that use a component field.
+
+  A component field created a column on the parent table, but component values are stored in their own table and stripped from the parent row before insert. That column was therefore never written: when the component field was required it became `NOT NULL` with no value and every insert failed, and even when optional it left a permanently empty column. Component fields no longer create a parent column.
+
+- [#237](https://github.com/nextlyhq/nextly/pull/237) [`972a725`](https://github.com/nextlyhq/nextly/commit/972a7257b071851d2c985ed475936f7d0745c234) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add content localization (multilingual content) for collections, singles, and components.
+
+  Configure an app-level `localization` block (locales, default locale, per-locale fallback and RTL), then mark collections or individual fields `localized`. Translatable fields move into a companion `<table>_locales` table (text-like fields localize by default; opt out per field), so each language stores its own value while the main row keeps shared fields. Reads resolve the requested language with a configurable fallback chain (`?locale=`, `?fallback-locale=`); `?locale=all` returns a language-keyed object per field. Writes target a language with `?locale=`, leaving other translations untouched. Where filters, search, and sort work against localized fields, and on draft-enabled collections each language carries its own publish status, so a published read never surfaces a draft translation.
+
+  The admin gains a language switcher, per-language translation-status pills and a list completeness badge, a copy-from-language action, inline source-language hints while translating, RTL-aware field rendering, and a `_translated` list filter. `nextly migrate:create` emits companion migrations that relocate localized columns while preserving existing default-locale content.
+
+  Non-localized apps are unaffected: without a `localization` config the read/write paths, schema, and admin behave exactly as before.
+
+- [#239](https://github.com/nextlyhq/nextly/pull/239) [`b61b09c`](https://github.com/nextlyhq/nextly/commit/b61b09c9707e0dfb25f741b6d633271017cb37d4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Enable content versioning per collection and single, and record a version snapshot on every create and update.
+
+  A collection or single can now opt into versioning with `versions: true` (or a `versions: { ... }` config); `status: true` also enables it. The resolved config is persisted on a new nullable `versions` column on `dynamic_collections` and `dynamic_singles` (all three dialects, additive) so existing tables pick it up as a plain `ADD COLUMN` on the next schema apply.
+
+  When a collection or single is versioned, every create and update writes one durable `nextly_versions` snapshot inside the same transaction as the content write, so the version commits atomically with the document (no partial history on a rolled-back write). The snapshot is the fully assembled document (parent columns plus component subtrees and many-to-many ids), which is the same shape a read returns, so a restored version equals a normal read. History-only at this stage: the captured status is the document's status when present, otherwise `published`; the draft/publish split, autosave, and retention pruning arrive in later stages. Batch (`createMany` / `updateMany`) capture is a documented fast-follow.
+
+  Concurrent updates to the same document can race on the version number; a lost race is detected as a distinct conflict and the whole transaction is retried (a re-run re-reads the next free number). SQLite serializes transactions and never races; Postgres and MySQL retry.
+
+  Also adds a general `document.statusTransition` event that fires on every status change (carrying `previousStatus` / `status`), alongside the existing `document.published` and `document.statusChanged` events, so workflow logic has one seam to build on.
+
+- [#230](https://github.com/nextlyhq/nextly/pull/230) [`dffdb4c`](https://github.com/nextlyhq/nextly/commit/dffdb4c671ba9f3287a68e23d7c61f4341bafb55) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the `nextly_versions` storage foundation: a managed system table plus its
+  repository, snapshot builder, and capture service, and make the adapter
+  transaction context map property names to SQL columns so core tables can be
+  written inside a transaction. No user-facing behavior changes yet; content
+  versioning is wired into write paths in a later release.
+
+- [#212](https://github.com/nextlyhq/nextly/pull/212) [`0d31e01`](https://github.com/nextlyhq/nextly/commit/0d31e0154491270e896704f1c60444c9bbba8346) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema Builder apply now refuses to drop a column unless the drop was explicitly acknowledged.
+
+  Applying a schema change through the admin Schema Builder or the REST apply route no longer relies on a single request-level `confirmed` flag to authorize data loss. Each column drop is classified on the server, and the apply fails closed (surfacing as a confirmation-declined error, no DDL run) unless the request carries an explicit acknowledgment for that specific column. A buggy client or an automated caller that posts a desired schema with a column removed can no longer silently destroy that column's data. The admin Schema Builder confirmation dialog sends the acknowledgment for every field it lists as removed, so the deletion experience is unchanged for admins. Renames (a drop paired with an add) and code-first deletions applied through the terminal path are unaffected.
+
+- [#204](https://github.com/nextlyhq/nextly/pull/204) [`3cd0d84`](https://github.com/nextlyhq/nextly/commit/3cd0d8404278003cc38e79c3ee45e3ce97f68902) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Migrate to Drizzle V1 (`drizzle-orm` + `drizzle-kit` pinned exactly to `1.0.0-rc.4`).
+
+  **What changed under the hood**
+  - The schema engine now uses drizzle-kit's per-dialect `payload/*` programmatic entrypoints; the removed `drizzle-kit/api` module is gone from every code path.
+  - Runtime relations are assembled centrally with `defineRelations` (relations v2); the 21 per-file `relations()` blocks are deleted. Dynamic (UI-builder) tables register as queryable tables and _can_ carry relation edges through the registry's composition path (the 3-arg `registerDynamicSchema` API); wiring specific edges (e.g. `creator`) at the registration sites is follow-up work.
+  - All internal queries use RQB v2 object filters; adapters construct Drizzle with the object form only.
+  - The data-loss guard was redesigned for v1's semantics: v1 _includes_ destructive statements in its output (the old omit-and-warn contract is gone), so Nextly scans every statement batch and refuses unexpected destructive SQL. The SQLite cascade defense (#5782) is unchanged and re-verified.
+
+  **What you must do when upgrading**
+  - If your app imports `drizzle-orm` directly, move it to **exactly `1.0.0-rc.4`** — the same instance Nextly uses. Mixed versions break Drizzle's internal `is()` checks. Apps that only use Nextly's APIs (the default scaffold) need no change.
+  - If you wrote your own `relations()` definitions, follow Drizzle's relations v1→v2 migration guide (`defineRelations`).
+  - Run `drizzle-kit up` only if you ALSO ran raw drizzle-kit against the same project.
+
+  **One-time schema reconcile on first boot after upgrading** (automatic, non-destructive, verified against databases created by the previous Drizzle):
+  - PostgreSQL: nothing — v1 proposes zero changes on an untouched schema.
+  - MySQL: `created_at`/`updated_at` DDL defaults are normalized to `CURRENT_TIMESTAMP` (metadata-only `MODIFY COLUMN`s; previous versions baked a boot-time literal into the default).
+  - SQLite: the Nextly metadata tables are rebuilt once via SQLite's data-preserving table-rebuild (v1 represents UNIQUE constraints inline). Your content rows survive; this was pinned by an upgrade-simulation test.
+
+  **Advisory (#5782)**: on SQLite, `PRAGMA foreign_keys=OFF` is silently ignored inside a transaction. Nextly's own applies are defended (rebuilds run outside transactions with an integrity check); raw drizzle-kit migrations you run yourself against the same SQLite database are not covered by that defense.
+
+- [#236](https://github.com/nextlyhq/nextly/pull/236) [`e9e5f7b`](https://github.com/nextlyhq/nextly/commit/e9e5f7bcb5cd2d29fa8c32ffa34edd6910293364) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fix many-to-many relationships, which did not work on any database.
+
+  Creating a many-to-many field produced an invalid junction-table migration, so the junction table was never created. Even past that, the target collection was never resolved (so links silently did nothing), the parent table gained a phantom column it should not have, inserts crashed on SQLite, and reads plus inserts failed on MySQL. Many-to-many links now create, read, and delete correctly on Postgres, MySQL, and SQLite.
+
+- [#216](https://github.com/nextlyhq/nextly/pull/216) [`85ef8f0`](https://github.com/nextlyhq/nextly/commit/85ef8f0170f92128195198e49255d7b54e614fe1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Number fields can now store exact decimals for prices and other fractional values.
+
+  Code-first number fields stored whole numbers only, so a value like `19.99` lost its fractional part at the database, even though the field documentation showed prices and cent-level steps. Number fields now accept `dbType: "decimal"` (with optional `precision` and `scale`, defaulting to `DECIMAL(10, 2)`), which stores the value in a fixed-point `DECIMAL`/`NUMERIC` column: exact on Postgres and MySQL, and NUMERIC affinity on SQLite (which has no fixed-precision decimal type). Integer remains the default, so existing fields are unchanged.
+
+  ```ts
+  number({ name: "price", dbType: "decimal", scale: 2 }); // stores 19.99 exactly
+  ```
+
+- [#235](https://github.com/nextlyhq/nextly/pull/235) [`9c41e35`](https://github.com/nextlyhq/nextly/commit/9c41e356ae7ee371bbd675315785c3107299ed91) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add a `created_by` owner column to collection entry tables and stamp it on create.
+
+  Every collection entry table now carries a nullable `created_by` system column (text, matching the id column type on each dialect) alongside `created_at` / `updated_at`, and it is stamped with the creating user's id on every create path. This makes `owner-only` access work zero-config: the stored rule compares `created_by` to the caller with no per-collection setup. System and seed writes (no user context) leave it null.
+
+  Because the column is nullable with no default, existing tables pick it up as a plain additive `ADD COLUMN` on the next schema apply — no backfill and no interactive prompt.
+
+  The owner column is wired end to end:
+  - `owner-only` rules with no `ownerField` now default to the `created_by` column (snake_case), so zero-config owner-only reads/updates/deletes actually match the stamped rows.
+  - On MySQL the column is `varchar(191)` (sized to the Auth.js-compatible `users.id`), since it stores a user id, not the row id.
+  - Updates cannot rewrite it: `created_by` (and `id` / `created_at`) are stripped from update payloads, so an authorized updater can't transfer a row to another user.
+  - It is stripped from list, get, and mutation responses (including populated relationship rows at every depth) so a collection readable by non-creators does not leak the creator's user id, and it is rejected from client-supplied `where` filters (query string and request body, including dotted keys like `created_by.any`) and `sort` so a caller can't target or order rows by creator either.
+  - Reserved as a field name in the collection, code-first, and ui-schema validators; scoped to collections only (singles/components don't get the column, so their owner-only rules keep the historical `createdBy` default). An explicit `ownerField: "createdBy"` on a collection normalizes to the stamped column.
+  - Indexed on collection tables, since owner-only reads/lists/counts and bulk-by-query enumeration all filter on it.
+
+  This also repairs a latent bug in the bulk create transaction path, which passed camelCase `createdAt` / `updatedAt` keys the database driver rejected; the batch create paths now use the real snake_case column names.
+
+- [#240](https://github.com/nextlyhq/nextly/pull/240) [`d349b9e`](https://github.com/nextlyhq/nextly/commit/d349b9e913ae6f958e4201b6481dfe83cc5cfa5a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Third-party plugins can now style their admin UI.
+
+  The admin stylesheet is precompiled and isolated, so utility classes that live only in an npm-installed plugin were silently dropped. This adds three layers, in order of preference: new `Stack`/`Grid`/`Stat` layout primitives alongside `Card` in the plugin UI kit; a curated, token-driven utility safelist that is always available with no build step; and, for anything beyond that, a per-plugin `admin.styles` stylesheet compiled with the new `nextly-build-admin-css` CLI (`@nextlyhq/admin-css`) and declared via `contributes.admin.styles`. Plugin styling stays scoped under `.nextly-admin` and token-driven (light and dark) by construction — the CLI refuses to emit a stylesheet that would leak into the host page or hardcode a color.
+
+- [#210](https://github.com/nextlyhq/nextly/pull/210) [`6f39d5a`](https://github.com/nextlyhq/nextly/commit/6f39d5a2cedd07f9bd4dd0d71fdef95a9adc2aff) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Plugin-contributed field types now appear in the admin field pickers.
+
+  A plugin that contributes a custom field type can opt it into any admin surface — the Schema Builder (collections and singles), the User Fields page, and the Form Builder — via `contributes.fieldTypes[].surfaces`, and give it a picker label, hint, icon, and category. The type then shows up in that surface's field picker, surface-filtered, and works end to end: it is accepted by the surface's validation, persists as its declared storage primitive (a user field gets a real column of the right type instead of a text fallback), and renders through its own admin component. Plugin authors get a shared, storage-agnostic field-UI kit for this via `@nextlyhq/plugin-sdk/admin` (`FieldTypePicker`, `FieldOptionsEditor`, `withOptionIds`, `FieldDefaultValueInput`, and the new `usePluginFieldTypeEntries` hook), plus `isPluginFieldTypeOnSurface` for server-side validation.
+
+- [#229](https://github.com/nextlyhq/nextly/pull/229) [`2ece35b`](https://github.com/nextlyhq/nextly/commit/2ece35bd89b5b8232637da998af9194d94e158d3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Raise the published dependency ranges that carried security advisories, so consumers installing these packages can no longer resolve a vulnerable version. Root `pnpm` overrides only protect this repository's own lockfile; these are the direct-range bumps that travel with the published packages.
+  - `nextly`: `ws` `^8.18.0` → `^8.21.1`. The floor now excludes `ws` before `8.21.1` (memory-exhaustion DoS, plus CVE-2026-62389 fixed in `8.21.1`).
+  - `create-nextly-app`: `tar` `^7.4.0` → `^7.5.19`. `create-nextly-app` extracts downloaded GitHub tarballs via `tar.x`; the floor now excludes the `<=7.5.18` path-traversal / file-smuggling line (patched in `7.5.19`).
+  - `@nextlyhq/storage-s3`: `@aws-sdk/client-s3`, `@aws-sdk/lib-storage`, `@aws-sdk/s3-request-presigner` `^3.966.0` → `^3.1090.0`; the newer AWS SDK no longer pulls the vulnerable `fast-xml-parser` into the S3 path.
+
+  Deliberately NOT changed (documented so a version bump is not mistaken for a fix):
+  - `isomorphic-dompurify` (`nextly`, `@nextlyhq/plugin-page-builder`) stays at `^2`. The DOMPurify `ALLOWED_ATTR` advisory is fixed in `dompurify 3.4.11`, but the first `isomorphic-dompurify` version that lower-bounds its bundled DOMPurify there is the `3.x` major, which requires Node `^20.19.0 || ^22.13.0 || >=24` (via `jsdom@29`) and would drop Nextly's advertised `node >=20.0.0`. That trade-off is not worth it for a moderate issue that a fresh install already avoids (`^2` resolves DOMPurify to the patched `3.4.12`). Raising the floor here is deferred to a future Node-support bump.
+  - `@nextlyhq/storage-vercel-blob` is unchanged. Its only advisory transitive (`undici`) comes through `@vercel/blob`, which pins `undici ^6.x` on every release, so no `@vercel/blob` range reaches a patched floor for stale consumer lockfiles; a fresh install already resolves the patched `undici 6.27.x`. This is upstream-bound. The package is listed above only because releases version in lockstep — this release does not itself change `@nextlyhq/storage-vercel-blob`'s dependencies.
+
+- [#213](https://github.com/nextlyhq/nextly/pull/213) [`30c2b57`](https://github.com/nextlyhq/nextly/commit/30c2b57829827bc682b47a354cacc3fd90a212ba) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Carry the authenticated caller (identity and roles) through REST paths that previously ran without full context, so access control, hooks, and response redaction resolve against the real user.
+  - **Bulk update by query** (`PATCH`-style bulk-by-`where`): now runs as the authenticated caller instead of anonymously. Per-entry access checks and hooks receive the user, and the response is redacted to what that user may read, matching the id-based bulk-update path.
+  - **Standalone Single detail route** (`nextly/api/singles-detail` `PATCH`): forwards the authorized identity (including roles) into the update, so the response is redacted for that user, matching the dispatcher's single-update path.
+  - **Roles in access evaluation**: route-authenticated write requests now carry the caller's role slugs to the service layer, so collection-level `role-based` rules and field-level `access.read` evaluate against real roles instead of an empty context. Role-based rules match on ANY held role (documented OR-logic) for the many-to-many user/role model; the single `role` field is still honored, so existing single-role setups are unchanged.
+
+- [#231](https://github.com/nextlyhq/nextly/pull/231) [`a7fd33d`](https://github.com/nextlyhq/nextly/commit/a7fd33d61c3365d912ec9cd91b4e1ead15c9e5d0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Enforce a collection's stored access rules on REST route writes.
+
+  A collection's stored access rules (`owner-only` / `role-based` / `authenticated` / `custom`) and field-level write access were enforced on the code-first Direct API but silently skipped over the REST route, because route writes forced a full `overrideAccess` bypass — the route only ever ran the coarse RBAC gate, then skipped the stored rules it had never checked. A rule such as "authors may only edit their own posts" was therefore not enforced over HTTP.
+
+  Route writes (collection single, bulk, and singles update) now run with the real user and `overrideAccess: false`; the route's `routeAuthorized` flag only elides the redundant RBAC re-check the middleware already performed, while the stored rules and field-level write access are enforced with the caller. Singles evaluate their persisted `accessRules` (public / authenticated / role-based / custom) on the write path, not just the coarse RBAC permission. `overrideAccess: true` remains the explicit trusted-server escape (seeds, plugin `as:'system'`), and super-admins bypass the stored rules on every write transport.
+
+  Behavior change: collections and Singles that declared stored access rules — and were relying (knowingly or not) on the REST bypass — now have those rules enforced over REST writes. Resources without stored rules are unchanged.
+
+  Read paths are unchanged here: forwarding the authenticated user on REST reads (so owner-only read filtering, field redaction, and the super-admin read bypass apply) is a separate follow-up.
+
+- [#234](https://github.com/nextlyhq/nextly/pull/234) [`4e8f80d`](https://github.com/nextlyhq/nextly/commit/4e8f80d0c0ceb7e17fd935f353495a66112a111e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fix two safeFetch edge cases from the IP-pinning change.
+
+  An empty 2xx/204/304 response that still carries a `Content-Encoding` header no longer fails: inflating zero bytes threw and turned a valid empty delivery into a `SafeFetchError`, so `decodeBody` now passes an empty body straight through.
+
+  A URL-backed email attachment that exceeds the size limit now surfaces the same `EMAIL_ATTACHMENT_SIZE_EXCEEDED` validation error the local/S3 path produces, rather than an opaque storage-read failure: the fetch translates a `response-too-large` result into the size-exceeded error, and the attachment resolver passes a typed `NextlyError` from `readBytes` through instead of re-wrapping it.
+
+- [#209](https://github.com/nextlyhq/nextly/pull/209) [`38af42b`](https://github.com/nextlyhq/nextly/commit/38af42b22d9f1e6de6e4770abb199a9d4ed300db) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Close server-side security gaps in the schema write/read pipeline and fix a component-field regression.
+
+  Component fields (`type: "component"`) can be saved again: the shared field-payload gate no longer rejects them for lacking a nested `fields[]` array, since a component field references a component by slug rather than embedding fields. Password fields are now protected everywhere they can appear: hashes are never returned through an expanded relationship (including the users entity's password hash), inside a component instance, or in a create/update response, and a password inside a component is bcrypt-hashed on write instead of stored in plaintext. Server-side validation now covers component instances and rejects an array value for a single-choice select/radio field, and editing an entry with a required password no longer forces you to re-enter it. Component definitions can no longer be listed without authentication, expired sessions on the standalone routes refresh instead of hard-logging-out, rate-limited callers keep their `Retry-After` backoff, and the components route initializes before its permission check so a valid first request is not rejected.
+
+- [#205](https://github.com/nextlyhq/nextly/pull/205) [`585384d`](https://github.com/nextlyhq/nextly/commit/585384ddc8944f4d08c6f59cd42096e0ad3745fa) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The schema system now enforces what it promises.
+
+  Every entry write — admin, REST, Direct API, bulk, or forms — is validated server-side against the collection's field rules (required, length, range, pattern, options, row bounds), and failures come back with per-field paths the admin renders inline on the exact field. Field-level `validate`, `access`, and `hooks` in code-first configs now actually execute: custom validators run in the write gate, per-field access strips denied fields from writes and reads, and all four field-hook phases fire at their documented points.
+
+  Password fields are finally honest about "Hashed at rest": values are bcrypt-hashed before storage, never returned by any read or mutation response, and edit forms treat a blank input as "keep the current password".
+
+  The standalone `nextly/api/*` route handlers now authenticate for real — verified session or API key plus the same RBAC permissions their admin-API twins require — replacing a header-presence check; media routing consolidates onto the authenticated `media-handlers` surface, and pre-signed upload URLs require create-media.
+
+  Schema apply endpoints and the `ui-schema.json` mirror now validate fields with one shared schema, so a change can no longer apply to the database while silently failing to reach the committed manifest (upload fields no longer require the `relationTo` the builder never collects), and a failed manifest sync after a delete surfaces as a warning instead of disappearing.
+
+- [#220](https://github.com/nextlyhq/nextly/pull/220) [`2d9165c`](https://github.com/nextlyhq/nextly/commit/2d9165cbde2128925d89b800acf77c1861a567eb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Move `nodemailer` to `^9.0.1` (from `^8`) to pick up the patched line for the message-level `raw` file-access bypass advisory. The SMTP provider builds messages from structured fields and never uses the `raw` option, so this was not reachable, but the dependency is now on a supported, patched release.
+
+  The monorepo's own transitive and toolchain dependencies were also refreshed to their patched releases via `pnpm` overrides (undici, dompurify, next, vite, ws, vitest, js-yaml, fast-uri, fast-xml, @babel/core, tar). This hardens this repository's builds, CI, and local development. `pnpm` overrides are root-project settings and do not travel with the published packages, so they do not by themselves change what a consumer of `nextly` / `create-nextly-app` / `@nextlyhq/storage-*` resolves; raising the affected published dependency ranges for consumers is tracked as a separate follow-up. `turbo` is pinned to `2.9.7` to preserve the workspace build ordering.
+
+- [#215](https://github.com/nextlyhq/nextly/pull/215) [`2f1c981`](https://github.com/nextlyhq/nextly/commit/2f1c98199b06843b381758f1dacea061b29b2d41) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema Builder saves for singles and components now reject stale saves.
+
+  Applying a schema change to a single or a component through the Schema Builder previously ignored the version the editor was loaded at, so two admins editing the same single or component would silently overwrite each other (last-write-wins on both the DDL and the stored metadata). Both now compare the submitted version against the current one and reject a stale save with a version-conflict error before any DDL runs, matching the collection apply path. All three entity kinds report the conflict identically, so the client can prompt the editor to reload and retry. Code-first schema changes applied through the dev HMR path are unaffected.
+
+- [#222](https://github.com/nextlyhq/nextly/pull/222) [`f988a69`](https://github.com/nextlyhq/nextly/commit/f988a691a95a2371833b8ba424a7da3402668f5c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Auto-generate a collection entry's `slug` from its `title` before validation.
+
+  Every collection carries an auto-injected required, unique `slug`. Creating an entry with only a title (`create({ data: { title: "Hello World" } })`) now derives the slug (`hello-world`) and dedupes repeats (`hello-world-2`, …) instead of failing with "Slug is required." An explicitly provided slug is still respected and sanitized. This matches the WordPress/Ghost slug-from-title convention and restores the intended behavior after server-side write validation began running ahead of slug generation.
+
+- [#224](https://github.com/nextlyhq/nextly/pull/224) [`e6074bc`](https://github.com/nextlyhq/nextly/commit/e6074bc9f21a048717fa239270d2bd9bebc68429) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Populate a valid `slug` when a title has no URL-safe characters, and re-sanitize hook-set slugs.
+
+  Creating an entry whose title is entirely non-ASCII, emoji, or punctuation (for example `create({ data: { title: "你好世界" } })`) previously produced an empty slug and failed required-field validation, because slug derivation stripped every character. It now falls back to a unique generated token so the required, unique `slug` column stays populated. Additionally, a slug set by a field-level `beforeValidate` hook is re-sanitized before validation and storage, so hook-provided values stay URL-safe.
+
+- [#232](https://github.com/nextlyhq/nextly/pull/232) [`d96bf6a`](https://github.com/nextlyhq/nextly/commit/d96bf6abb9ff94c3463d5da1d32339a8718b0f2c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Pin the validated IP when `safeFetch` connects, closing DNS rebinding.
+
+  `safeFetch` previously validated a URL's resolved addresses and then handed the raw URL to `fetch`, which resolved DNS a second time at connect. An attacker controlling DNS could answer with a public IP during validation and a private one at connect, reaching internal services. It now issues the request over `node:http`/`node:https` with a `lookup` that forces the socket to the exact address validation vetted, so no second resolution can occur. It also stops following redirects (a 3xx is returned as-is), caps the response body, and bounds the whole request (including DNS validation) with a deadline. A new `SafeFetchError` (a `NextlyError`) distinguishes an over-large, timed-out, or undecodable fetch from an SSRF rejection, and gzip/deflate/br response bodies are content-decoded (with a bomb guard) to match the previous behavior. The URL validator now also rejects IPv4-mapped IPv6 literals in their hex-normalized form (for example `[::ffff:127.0.0.1]`, which `URL` rewrites to `::ffff:7f00:1`), closing a loopback/private bypass, and a caller-supplied `Host` header is dropped so it cannot route a request to an internal virtual host behind the validated IP.
+
+- [#226](https://github.com/nextlyhq/nextly/pull/226) [`3086cf4`](https://github.com/nextlyhq/nextly/commit/3086cf4953a3be251d527ef8dadc73f07fbe7796) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Run a transaction's `select`/`selectOne`/`update`/`delete`/`upsert` inside the transaction.
+
+  The `TransactionContext` CRUD methods delegated to the adapter's pool-bound Drizzle instance, so on the pooled adapters (Postgres, MySQL) a read inside a transaction ran on a different connection and could not see rows written earlier in the same uncommitted transaction. Two same-title creates in one transaction (or bulk batch) both chose the base slug and the second hit the unique constraint instead of receiving `-2`. The base CRUD methods now accept an optional transaction-bound executor, and each dialect binds a Drizzle instance to its checked-out connection so context CRUD reads its own writes. SQLite was already correct by virtue of being single-connection; the fix makes all three dialects consistent.
+
+- [#223](https://github.com/nextlyhq/nextly/pull/223) [`7fcdd89`](https://github.com/nextlyhq/nextly/commit/7fcdd89188acb342e536a88a7bdc187b128aa85e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the webhook event envelope and filter-matching primitives.
+
+  Pure, storage-agnostic building blocks for the webhook system: the versioned `WebhookEvent` envelope (with computed `changedFields` and mandatory sensitive-field stripping), the endpoint and filter-spec types, `buildEnvelope()` for assembling an envelope from a resource's current and prior state, and `matchesFilter()` for evaluating a per-webhook filter at fan-out time. No delivery behavior yet; these feed the outbox-capture and delivery slices.
+
+- [#233](https://github.com/nextlyhq/nextly/pull/233) [`0566849`](https://github.com/nextlyhq/nextly/commit/05668498f248a3d4e5ff754a2c0c045507b75fc0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add webhook fan-out: turn durable events into per-endpoint delivery rows.
+
+  `fanOutDueEvents` is the drain's first phase. `recordEvent` writes only the durable event inside the content transaction; fan-out runs separately and matches each un-fanned event to the enabled endpoints (subscribed type plus the endpoint filter) and inserts one `nextly_webhook_deliveries` row per match. This keeps content writes fully decoupled from the webhook registry (the transactional-outbox split), so creating, disabling, or deleting a webhook can never fail an unrelated content write.
+
+  A new `fanned_out_at` marker column on `nextly_events` lets the drain find events still needing fan-out. Fan-out is idempotent under concurrent drains: each event is processed in its own transaction that inserts only the deliveries not already present, with the unique `(webhook_id, event_id)` index as the hard backstop, and a losing race simply retries on the next pass. Also adds the race-safe `WebhookEndpointRegistry` (cached enabled-endpoint load) and the pure `selectDeliveryTargets`. Delivery (signing, sending, retries) lands in a following change.
+
+- [#225](https://github.com/nextlyhq/nextly/pull/225) [`71843e4`](https://github.com/nextlyhq/nextly/commit/71843e4047e8b90650da4631d94e4e0e7d155131) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the webhook transactional-outbox capture.
+
+  `recordEvent` is the single choke-point every write path calls to durably record a content event inside the caller's transaction, so the event commits atomically with the change and can never be lost or fired for a rolled-back change. It writes only the `nextly_events` row; fan-out to endpoints happens later in the drain, keeping content writes fully decoupled from the webhook registry (the canonical transactional-outbox split). Also adds `sensitiveFieldNames`, the password/hidden strip policy (walking nested groups, repeaters, and blocks) that feeds the envelope builder.
+
+- [#227](https://github.com/nextlyhq/nextly/pull/227) [`24b5c85`](https://github.com/nextlyhq/nextly/commit/24b5c856c13c4c3984fe7d6fe7d4975c6ddd139e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add Standard Webhooks payload signing.
+
+  Pure signing primitives for outbound webhook deliveries: `signPayload` and `buildSignatureHeaders` produce the `webhook-id`/`webhook-timestamp`/`webhook-signature` headers (`v1,<base64 HMAC-SHA256 of "<id>.<timestamp>.<body>">`), and `verifySignature` is a constant-time verify helper covering secret rotation. `whsec_`-prefixed secrets are base64-decoded to key bytes. The delivery engine wires these in later; secrets live encrypted at rest and are decrypted before signing.
+
+- [#221](https://github.com/nextlyhq/nextly/pull/221) [`f29d765`](https://github.com/nextlyhq/nextly/commit/f29d7655565c76eeb7b2bd88581659e71b0ec120) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the webhook and event system tables (nextly_events, nextly_webhooks, nextly_webhook_deliveries).
+
+  These three per-dialect core tables back the durable-outbox webhook system: an append-only event ledger (also the substrate for audit logging and workflows), the outbound-webhook endpoint registry (hashed secrets, subscribed events, structured filter), and the per-endpoint delivery ledger with retry state and an attempt log. They are registered as first-class managed tables, so the schema pipeline creates them on boot. No delivery behavior yet; this is the data model only.
+
+- Updated dependencies [[`9647453`](https://github.com/nextlyhq/nextly/commit/96474535bd096f61131f9e5853bc8a24e7f84fc2), [`79709b8`](https://github.com/nextlyhq/nextly/commit/79709b8f91cabd9815f9e61f3db8310da07f48d3), [`dd3be32`](https://github.com/nextlyhq/nextly/commit/dd3be329eab4347805258be7549234e7017a7757), [`37ee3d5`](https://github.com/nextlyhq/nextly/commit/37ee3d54395afbe96e04d02a00d6329127f4c2af), [`564bd03`](https://github.com/nextlyhq/nextly/commit/564bd03e6ea0285bfc2f8c8b94e31b0ad93a89d8), [`972a725`](https://github.com/nextlyhq/nextly/commit/972a7257b071851d2c985ed475936f7d0745c234), [`b61b09c`](https://github.com/nextlyhq/nextly/commit/b61b09c9707e0dfb25f741b6d633271017cb37d4), [`dffdb4c`](https://github.com/nextlyhq/nextly/commit/dffdb4c671ba9f3287a68e23d7c61f4341bafb55), [`0d31e01`](https://github.com/nextlyhq/nextly/commit/0d31e0154491270e896704f1c60444c9bbba8346), [`3cd0d84`](https://github.com/nextlyhq/nextly/commit/3cd0d8404278003cc38e79c3ee45e3ce97f68902), [`e9e5f7b`](https://github.com/nextlyhq/nextly/commit/e9e5f7bcb5cd2d29fa8c32ffa34edd6910293364), [`85ef8f0`](https://github.com/nextlyhq/nextly/commit/85ef8f0170f92128195198e49255d7b54e614fe1), [`9c41e35`](https://github.com/nextlyhq/nextly/commit/9c41e356ae7ee371bbd675315785c3107299ed91), [`d349b9e`](https://github.com/nextlyhq/nextly/commit/d349b9e913ae6f958e4201b6481dfe83cc5cfa5a), [`6f39d5a`](https://github.com/nextlyhq/nextly/commit/6f39d5a2cedd07f9bd4dd0d71fdef95a9adc2aff), [`2ece35b`](https://github.com/nextlyhq/nextly/commit/2ece35bd89b5b8232637da998af9194d94e158d3), [`30c2b57`](https://github.com/nextlyhq/nextly/commit/30c2b57829827bc682b47a354cacc3fd90a212ba), [`a7fd33d`](https://github.com/nextlyhq/nextly/commit/a7fd33d61c3365d912ec9cd91b4e1ead15c9e5d0), [`4e8f80d`](https://github.com/nextlyhq/nextly/commit/4e8f80d0c0ceb7e17fd935f353495a66112a111e), [`38af42b`](https://github.com/nextlyhq/nextly/commit/38af42b22d9f1e6de6e4770abb199a9d4ed300db), [`585384d`](https://github.com/nextlyhq/nextly/commit/585384ddc8944f4d08c6f59cd42096e0ad3745fa), [`2d9165c`](https://github.com/nextlyhq/nextly/commit/2d9165cbde2128925d89b800acf77c1861a567eb), [`2f1c981`](https://github.com/nextlyhq/nextly/commit/2f1c98199b06843b381758f1dacea061b29b2d41), [`f988a69`](https://github.com/nextlyhq/nextly/commit/f988a691a95a2371833b8ba424a7da3402668f5c), [`e6074bc`](https://github.com/nextlyhq/nextly/commit/e6074bc9f21a048717fa239270d2bd9bebc68429), [`d96bf6a`](https://github.com/nextlyhq/nextly/commit/d96bf6abb9ff94c3463d5da1d32339a8718b0f2c), [`3086cf4`](https://github.com/nextlyhq/nextly/commit/3086cf4953a3be251d527ef8dadc73f07fbe7796), [`7fcdd89`](https://github.com/nextlyhq/nextly/commit/7fcdd89188acb342e536a88a7bdc187b128aa85e), [`0566849`](https://github.com/nextlyhq/nextly/commit/05668498f248a3d4e5ff754a2c0c045507b75fc0), [`71843e4`](https://github.com/nextlyhq/nextly/commit/71843e4047e8b90650da4631d94e4e0e7d155131), [`24b5c85`](https://github.com/nextlyhq/nextly/commit/24b5c856c13c4c3984fe7d6fe7d4975c6ddd139e), [`f29d765`](https://github.com/nextlyhq/nextly/commit/f29d7655565c76eeb7b2bd88581659e71b0ec120)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.36
+
 ## 0.0.2-alpha.35
 
 ### Patch Changes
