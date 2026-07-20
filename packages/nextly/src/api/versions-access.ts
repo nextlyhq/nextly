@@ -18,7 +18,6 @@
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import type { UserContext } from "../domains/singles/types";
-import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -225,9 +224,7 @@ export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
-  user: UserContext,
-  /** Pre-resolved field list, when the caller has already looked it up. */
-  knownFields?: FieldConfig[]
+  user: UserContext
 ): Promise<void> {
   if (typeof snapshot !== "object" || snapshot === null) return;
   if (scopeKind !== "collection" && scopeKind !== "single") return;
@@ -238,8 +235,7 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields =
-    knownFields ?? (await resolveFieldsForRedaction(scopeKind, slug));
+  const fields = await resolveFieldsForRedaction(scopeKind, slug);
   if (fields.length > 0) {
     stripPasswordFieldValues(entry, fields);
   }
@@ -251,37 +247,6 @@ export async function redactSnapshotForUser(
     user,
     overrideAccess: false,
   });
-}
-
-/**
- * Prepare a stored snapshot for display: strip what the caller may not read,
- * then resolve relationship and upload ids to something human-readable.
- *
- * Both read surfaces call this one function so they cannot drift apart. The
- * order is load-bearing — redaction runs first, so references living inside a
- * field the caller may not read are never resolved. Hydrating first would spend
- * reads on values about to be discarded, and would let the timing of those
- * reads say something about a field the response does not contain.
- */
-export async function prepareSnapshotForUser(
-  snapshot: unknown,
-  scopeKind: VersionScopeKind,
-  slug: string,
-  user: UserContext
-): Promise<void> {
-  if (scopeKind !== "collection" && scopeKind !== "single") {
-    await redactSnapshotForUser(snapshot, scopeKind, slug, user);
-    return;
-  }
-
-  // Resolved once and threaded through both passes: they need the same field
-  // list, and looking it up twice is a second registry round-trip per read.
-  const fields = await resolveFieldsForRedaction(scopeKind, slug);
-
-  await redactSnapshotForUser(snapshot, scopeKind, slug, user, fields);
-
-  if (fields.length === 0) return;
-  await hydrateSnapshotReferences(snapshot, user, fields);
 }
 
 /**

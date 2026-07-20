@@ -3,8 +3,8 @@
  *
  * The admin talks to the catch-all handler rather than the standalone route
  * exports, so version history needs a dispatcher surface too. Both surfaces
- * share the document gate and the snapshot-preparation step from
- * `api/versions-access`, so the access rules have exactly one definition.
+ * share the document gate and the redaction step from `api/versions-access`, so
+ * the access rules have exactly one definition.
  *
  * @module dispatcher/handlers/versions-methods
  */
@@ -12,7 +12,7 @@
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertVersionDocumentReadable,
-  prepareSnapshotForUser,
+  redactSnapshotForUser,
 } from "../../api/versions-access";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
@@ -155,10 +155,7 @@ export async function listVersionsForDocument(
   };
 }
 
-/**
- * One version, including its snapshot, redacted for the caller and with its
- * relationship and upload ids resolved for display.
- */
+/** One version, including its snapshot, redacted for the caller. */
 export async function getVersionForDocument(
   args: VersionMethodArgs & { versionNo: number }
 ): Promise<VersionRow> {
@@ -191,7 +188,7 @@ export async function getVersionForDocument(
     args.versionNo
   );
 
-  await prepareSnapshotForUser(
+  await redactSnapshotForUser(
     row.snapshot,
     args.scopeKind,
     args.slug,

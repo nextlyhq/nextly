@@ -22,7 +22,7 @@ import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondDoc } from "./response-shapes";
 import {
-  prepareSnapshotForUser,
+  redactSnapshotForUser,
   requireRouteVersionReadAccess,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
@@ -98,7 +98,7 @@ export const GET = withErrorHandler(
       parsed
     );
 
-    await prepareSnapshotForUser(row.snapshot, scopeKind, slug, user);
+    await redactSnapshotForUser(row.snapshot, scopeKind, slug, user);
 
     return respondDoc(row);
   }

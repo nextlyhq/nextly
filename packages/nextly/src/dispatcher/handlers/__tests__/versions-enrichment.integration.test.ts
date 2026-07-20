@@ -1,11 +1,10 @@
 /**
- * Version reads return data a person can read: the display name of whoever
- * wrote each version, and relationship values resolved to labels rather than
- * the ids actually stored.
+ * Version reads carry the display name of whoever wrote each version, so a
+ * history list can name a person rather than an identifier.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text, relationship } from "../../../config";
+import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -23,61 +22,17 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function bootWithAuthorRelation(): Promise<TestNextly> {
-  return createTestNextly({
-    collections: [
-      defineCollection({
-        slug: "authors",
-        fields: [text({ name: "name" })],
-      }),
-      defineCollection({
-        slug: "posts",
-        versions: true,
-        fields: [
-          text({ name: "title" }),
-          relationship({ name: "writtenBy", relationTo: "authors" }),
-        ],
-      }),
-    ],
-  });
-}
-
 describe("version read enrichment (integration)", () => {
-  it("resolves a relationship id in the snapshot to an id and label", async () => {
-    current = await bootWithAuthorRelation();
-    const handler =
-      current.getService<CollectionsHandler>("collectionsHandler");
-
-    const author = await handler.createEntry(
-      { collectionName: "authors", overrideAccess: true },
-      { name: "Ada Lovelace" }
-    );
-    const authorId = (author.data as { id: string }).id;
-
-    const post = await handler.createEntry(
-      { collectionName: "posts", overrideAccess: true },
-      { title: "First", writtenBy: authorId }
-    );
-    const postId = (post.data as { id: string }).id;
-
-    const version = await getVersionForDocument({
-      scopeKind: "collection",
-      slug: "posts",
-      entryId: postId,
-      user: { id: "system", roles: ["super-admin"] },
-      versionNo: 1,
-    });
-
-    const snapshot = version.snapshot as Record<string, unknown>;
-    // The stored value is a bare id; the read path is what makes it legible.
-    expect(snapshot.writtenBy).toEqual({
-      id: authorId,
-      label: "Ada Lovelace",
-    });
-  });
-
   it("returns an author field on every listed version", async () => {
-    current = await bootWithAuthorRelation();
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          versions: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 

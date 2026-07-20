@@ -20,8 +20,8 @@
 "@nextlyhq/ui": patch
 ---
 
-Version history now says who made each change, and shows linked entries and media by name instead of by id.
+Version history now says who made each change.
 
-Reading a document's version history previously returned only the raw user id of whoever wrote each version, and any relationship or media field inside a stored snapshot came back as a bare identifier. Both are now resolved on the server: each version carries the display name of its author, and snapshot references resolve to a name (or, for media, a filename and thumbnail).
+Reading a document's version history previously returned only the raw user id of whoever wrote each version, so a history view had nothing to show but an identifier. Each version now carries the display name of its author, resolved in a single batched lookup.
 
-References are resolved through the same access-checked read path a normal request uses, so this never exposes a linked document the caller is not allowed to read; one they cannot read comes back with its id and no label. Attribution and reference lookups never fail a history read: a deleted user, or an unreadable link, degrades to an unlabelled value.
+The projection is a name only, deliberately not an email address, so reading history does not require permission to read users. Attribution never fails a history read: a deleted user, or an unavailable lookup, leaves the version unattributed rather than erroring.
