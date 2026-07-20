@@ -22,7 +22,7 @@ import { eq, ne, and, like, ilike } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import type { RequestActor } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
@@ -1508,7 +1508,7 @@ export class CollectionMutationService extends BaseService {
           data: assembleDocument(documentParts),
           previous: null,
           fields,
-          actor: params.actor ?? null,
+          actor: actorForWrite(params.actor, params.user),
         });
       });
 
@@ -2661,7 +2661,7 @@ export class CollectionMutationService extends BaseService {
                 data: assembleDocument(documentParts),
                 previous: previousDocument,
                 fields,
-                actor: params.actor ?? null,
+                actor: actorForWrite(params.actor, params.user),
               });
             }
           }

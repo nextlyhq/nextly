@@ -43,6 +43,24 @@ export const SYSTEM_ACTOR: RequestActor = Object.freeze({ type: "system" });
  * without one it falls back to the key owner's user id, which is still better
  * attribution than dropping the actor entirely.
  */
+/**
+ * The actor to record for a write.
+ *
+ * Prefers the transport-resolved actor. A Direct API, plugin, or other
+ * server-side caller has no transport actor but often does know the user it is
+ * acting for, so fall back to that; only a genuinely uninitiated write records
+ * as `system`. Never returns null — durable history that cannot distinguish
+ * "nobody" from "we forgot to record it" is not worth keeping.
+ */
+export function actorForWrite(
+  actor: RequestActor | undefined | null,
+  user: { id?: string } | undefined | null
+): RequestActor {
+  if (actor) return actor;
+  if (user?.id) return { type: "user", id: user.id };
+  return SYSTEM_ACTOR;
+}
+
 export function actorFromAuthContext(context: AuthContext): RequestActor {
   if (context.authMethod === "api-key") {
     return { type: "apiKey", id: context.apiKeyId ?? context.userId };
