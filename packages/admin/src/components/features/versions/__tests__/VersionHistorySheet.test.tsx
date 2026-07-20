@@ -7,16 +7,31 @@ import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, waitFor } from "@admin/__tests__/utils";
 
-const { useVersionsMock, useVersionMock, restoreMock, mutateMock } = vi.hoisted(
-  () => ({
-    useVersionsMock: vi.fn(),
-    useVersionMock: vi.fn(),
-    restoreMock: vi.fn(),
-    mutateMock: vi.fn(),
-  })
-);
+const {
+  useVersionsMock,
+  useVersionMock,
+  restoreMock,
+  mutateMock,
+  toastErrorMock,
+} = vi.hoisted(() => ({
+  useVersionsMock: vi.fn(),
+  useVersionMock: vi.fn(),
+  restoreMock: vi.fn(),
+  mutateMock: vi.fn(),
+  toastErrorMock: vi.fn(),
+}));
+
+vi.mock("@admin/components/ui", async () => {
+  const actual = await vi.importActual<typeof import("@admin/components/ui")>(
+    "@admin/components/ui"
+  );
+  return {
+    ...actual,
+    toast: { success: vi.fn(), error: toastErrorMock },
+  };
+});
 
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
@@ -248,6 +263,38 @@ describe("VersionHistorySheet", () => {
 
     expect(mutateMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Restore version 3\?/)).toBeInTheDocument();
+  });
+
+  it("tells the editor when a restore was refused", async () => {
+    // Three separate reviewers flagged the silent failure: the spinner simply
+    // stops, which reads as the click not having registered.
+    let onErrorHandler: ((e: Error) => void) | undefined;
+    restoreMock.mockImplementation((opts: { onError?: (e: Error) => void }) => {
+      onErrorHandler = opts.onError;
+      return { mutate: mutateMock, isPending: false };
+    });
+
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+
+    expect(onErrorHandler).toBeDefined();
+    onErrorHandler?.(new Error("nope"));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
   });
 
   it("does not query while closed", () => {

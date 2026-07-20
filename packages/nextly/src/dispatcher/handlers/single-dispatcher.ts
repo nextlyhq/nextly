@@ -68,6 +68,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -338,6 +339,7 @@ export const SINGLE_VERSION_METHODS: Record<
         slug,
         entryId,
         user: userFromParams(p),
+        actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
       });
       return respondAction("Version restored.", result);

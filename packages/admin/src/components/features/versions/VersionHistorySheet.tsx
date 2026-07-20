@@ -28,6 +28,7 @@ import {
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
@@ -103,6 +104,13 @@ export function VersionHistorySheet({
         return;
       }
       toast.success(`Restored version ${result.restoredFrom}.`);
+    },
+    onError: error => {
+      // A refused restore must say so. The dialog stays open on failure so the
+      // action is still there to retry, and silence would read as the click
+      // simply not having registered.
+      setConfirmingRestore(false);
+      toast.error(apiErrorMessage(error) || "Could not restore this version.");
     },
   });
 

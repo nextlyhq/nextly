@@ -14,6 +14,7 @@ import {
   assertVersionDocumentReadable,
   redactSnapshotForUser,
 } from "../../api/versions-access";
+import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
 import {
@@ -208,7 +209,7 @@ export async function getVersionForDocument(
  * terms, so an update the caller may not make still fails.
  */
 export async function restoreVersionForDocument(
-  args: VersionMethodArgs & { versionNo: number }
+  args: VersionMethodArgs & { versionNo: number; actor?: RequestActor }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
   await assertVersionDocumentReadable(
     args.scopeKind,
@@ -223,5 +224,8 @@ export async function restoreVersionForDocument(
     entryId: args.entryId,
     versionNo: args.versionNo,
     user: args.user,
+    // Forwarded so an API-key restore is attributed to the key on the outbox
+    // event rather than to the person who owns it.
+    ...(args.actor ? { actor: args.actor } : {}),
   });
 }

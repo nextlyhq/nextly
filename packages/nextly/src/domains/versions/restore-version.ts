@@ -14,6 +14,7 @@
  * @module domains/versions/restore-version
  */
 
+import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
@@ -28,6 +29,12 @@ export interface RestoreVersionArgs {
   entryId: string;
   versionNo: number;
   user: UserContext;
+  /**
+   * Who performed the write, recorded on the outbox event. Forwarded so an
+   * API-key restore is attributed to the key rather than to its owner, which
+   * would make it indistinguishable from that person editing by hand.
+   */
+  actor?: RequestActor;
 }
 
 export interface RestoreVersionResult {
@@ -45,13 +52,14 @@ export interface RestoreVersionResult {
 async function describeEntity(
   scopeKind: VersionScopeKind,
   slug: string
-): Promise<{ fields: FieldConfig[]; localized: boolean }> {
+): Promise<{ fields: FieldConfig[]; localized: boolean; hasStatus: boolean }> {
   if (scopeKind === "single") {
     const registry = getService("singleRegistryService");
     const record = await registry.getSingleBySlug(slug);
     return {
       fields: record?.fields ?? [],
       localized: Boolean(record?.localized),
+      hasStatus: Boolean(record?.status),
     };
   }
 
@@ -60,11 +68,13 @@ async function describeEntity(
   const record = collection as {
     fields?: unknown[];
     localized?: boolean;
+    status?: boolean;
   } | null;
 
   return {
     fields: (record?.fields ?? []) as FieldConfig[],
     localized: Boolean(record?.localized),
+    hasStatus: Boolean(record?.status),
   };
 }
 
@@ -100,7 +110,10 @@ export async function restoreVersion(
     args.versionNo
   );
 
-  const { fields, localized } = await describeEntity(args.scopeKind, args.slug);
+  const { fields, localized, hasStatus } = await describeEntity(
+    args.scopeKind,
+    args.slug
+  );
 
   // A localized snapshot holds exactly one locale's values. Writing one that
   // does not say which would put a language's content into whichever locale
@@ -127,7 +140,8 @@ export async function restoreVersion(
 
   const { payload, droppedFields } = buildRestorePayload(
     version.snapshot,
-    fields
+    fields,
+    { hasStatus }
   );
 
   if (Object.keys(payload).length === 0) {
@@ -170,6 +184,7 @@ export async function restoreVersion(
         overrideAccess: false,
         routeAuthorized: true,
         ...(version.locale ? { locale: version.locale } : {}),
+        ...(args.actor ? { actor: args.actor } : {}),
         sourceVersionNo: args.versionNo,
       },
       payload
@@ -188,7 +203,10 @@ function assertWriteSucceeded(
   result: { success?: boolean; statusCode?: number; message?: string },
   args: RestoreVersionArgs
 ): void {
-  if (result.success !== false) return;
+  // Fail closed: a result that does not explicitly report success is treated
+  // as failure, so a path that omits the field cannot report a restore that
+  // never happened.
+  if (result.success === true) return;
 
   if (result.statusCode === 403 || result.statusCode === 404) {
     throw NextlyError.notFound({

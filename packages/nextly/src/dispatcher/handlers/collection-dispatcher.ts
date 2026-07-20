@@ -174,6 +174,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
+        actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
       });
       return respondAction("Version restored.", result);

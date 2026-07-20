@@ -30,8 +30,29 @@ const IMMUTABLE_FIELDS = new Set([
   "created_by",
 ]);
 
-/** Keys a document carries that are writable but not schema fields. */
-const WRITABLE_SYSTEM_FIELDS = new Set(["status", "slug"]);
+/**
+ * Columns every document carries whether or not the schema declares a field of
+ * that name — the schema pipeline synthesizes them when it does not.
+ */
+const ALWAYS_WRITABLE_COLUMNS = new Set(["title", "slug"]);
+
+/**
+ * Whether any field in this subtree stores a password.
+ *
+ * Capture strips password values wherever they appear, including inside a
+ * group or repeater. The update path replaces a container wholesale, so
+ * resubmitting one that held a password would overwrite the stored credential
+ * with the stripped snapshot's blank.
+ */
+function containsPasswordField(fields: FieldConfig[]): boolean {
+  return fields.some(field => {
+    if (field.type === "password") return true;
+    const nested = (field as { fields?: unknown }).fields;
+    return Array.isArray(nested)
+      ? containsPasswordField(nested as FieldConfig[])
+      : false;
+  });
+}
 
 /**
  * Every name the current schema accepts, including nested container names,
@@ -45,6 +66,15 @@ function currentFieldNames(fields: FieldConfig[]): Set<string> {
     }
   }
   return names;
+}
+
+/** What the current schema accepts, beyond its declared fields. */
+export interface RestoreSchemaContext {
+  /**
+   * Whether the entity has draft/published status. Turning it off drops the
+   * column, so a snapshot taken while it was on still carries `status`.
+   */
+  hasStatus: boolean;
 }
 
 export interface RestorePayloadResult {
@@ -69,25 +99,57 @@ export interface RestorePayloadResult {
  */
 export function buildRestorePayload(
   snapshot: unknown,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  context: RestoreSchemaContext = { hasStatus: true }
 ): RestorePayloadResult {
   if (typeof snapshot !== "object" || snapshot === null) {
     return { payload: {}, droppedFields: [] };
   }
 
   const known = currentFieldNames(fields);
+  const byName = new Map(
+    fields
+      .filter(
+        (f): f is FieldConfig & { name: string } => typeof f.name === "string"
+      )
+      .map(f => [f.name, f])
+  );
+
   const payload: Record<string, unknown> = {};
   const droppedFields: string[] = [];
 
   for (const [key, value] of Object.entries(snapshot)) {
     if (IMMUTABLE_FIELDS.has(key)) continue;
 
-    if (known.has(key) || WRITABLE_SYSTEM_FIELDS.has(key)) {
-      payload[key] = value;
+    // Turning draft/published off drops the column, so a snapshot from before
+    // that still names it. Sending it would fail the whole restore.
+    if (key === "status" && !context.hasStatus) {
+      droppedFields.push(key);
       continue;
     }
 
-    droppedFields.push(key);
+    if (
+      !known.has(key) &&
+      !ALWAYS_WRITABLE_COLUMNS.has(key) &&
+      key !== "status"
+    ) {
+      droppedFields.push(key);
+      continue;
+    }
+
+    // A container whose subtree holds a password cannot be resubmitted: the
+    // snapshot's copy has the password stripped, and the update replaces the
+    // container whole, which would wipe the stored credential.
+    const field = byName.get(key);
+    const nested = field
+      ? ((field as { fields?: unknown }).fields as FieldConfig[] | undefined)
+      : undefined;
+    if (Array.isArray(nested) && containsPasswordField(nested)) {
+      droppedFields.push(key);
+      continue;
+    }
+
+    payload[key] = value;
   }
 
   return { payload, droppedFields };

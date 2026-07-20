@@ -152,6 +152,7 @@ export function useVersion({
 export interface UseRestoreVersionOptions {
   scope: VersionScope;
   onSuccess?: (result: RestoreVersionResponse) => void;
+  onError?: (error: Error) => void;
 }
 
 /**
@@ -165,11 +166,20 @@ export interface UseRestoreVersionOptions {
 export function useRestoreVersion({
   scope,
   onSuccess,
+  onError,
 }: UseRestoreVersionOptions) {
   const queryClient = useQueryClient();
 
   return useMutation<RestoreVersionResponse, Error, number>({
     mutationFn: versionNo => versionApi.restore(scope, versionNo),
+    // Mutations retry twice by default. A restore is not idempotent — each
+    // attempt is a fresh write that records another version and another outbox
+    // event — so a dropped response would otherwise multiply into several
+    // restores of the same version.
+    retry: false,
+    onError: error => {
+      onError?.(error);
+    },
     onSuccess: result => {
       void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
       void queryClient.invalidateQueries({ queryKey: entryKeys.all });

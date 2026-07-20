@@ -55,14 +55,75 @@ describe("buildRestorePayload", () => {
     expect(payload).toEqual({ title: "Hello" });
   });
 
-  it("keeps status and slug, which are writable but not schema fields", () => {
+  it("keeps the columns every document carries", () => {
+    // `title` and `slug` are synthesized as columns when the schema declares no
+    // field of that name, so they are always writable even though the field
+    // list does not mention them.
     const { payload, droppedFields } = buildRestorePayload(
       { title: "Hello", status: "draft", slug: "hello" },
-      fields
+      [{ name: "body", type: "text" }] as FieldConfig[]
     );
 
-    expect(payload).toMatchObject({ status: "draft", slug: "hello" });
+    expect(payload).toMatchObject({
+      title: "Hello",
+      slug: "hello",
+      status: "draft",
+    });
     expect(droppedFields).toEqual([]);
+  });
+
+  it("drops status when the entity no longer has it", () => {
+    // Turning draft/published off drops the column, so a snapshot from before
+    // still names it and sending it would fail the whole restore.
+    const { payload, droppedFields } = buildRestorePayload(
+      { title: "Hello", status: "draft" },
+      fields,
+      { hasStatus: false }
+    );
+
+    expect(payload).toEqual({ title: "Hello" });
+    expect(droppedFields).toEqual(["status"]);
+  });
+
+  it("does not resubmit a container holding a password", () => {
+    // Capture strips passwords wherever they are, including inside a group, and
+    // the update replaces a container whole — so restoring this one would wipe
+    // the stored credential with the snapshot's blank.
+    const withSecret = [
+      {
+        name: "account",
+        type: "group",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "secret", type: "password" },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { account: { label: "Primary" } },
+      withSecret
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["account"]);
+  });
+
+  it("still restores a container with no password in it", () => {
+    const plain = [
+      {
+        name: "address",
+        type: "group",
+        fields: [{ name: "city", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { address: { city: "Lisbon" } },
+      plain
+    );
+
+    expect(payload).toEqual({ address: { city: "Lisbon" } });
   });
 
   it("keeps a value that was deliberately emptied", () => {
