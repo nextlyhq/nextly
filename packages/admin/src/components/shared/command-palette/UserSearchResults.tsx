@@ -7,11 +7,11 @@ import {
   CommandGroup,
   CommandItem,
 } from "@nextlyhq/ui";
-import { useRouter } from "next/navigation";
 
 import { User as UserIcon } from "@admin/components/icons";
 import { useUsers } from "@admin/hooks/queries/useUsers";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { navigateTo } from "@admin/lib/navigation";
 import { getInitials } from "@admin/lib/utils";
 
 /**
@@ -95,8 +95,6 @@ export function UserSearchResults({
   search,
   onSelect,
 }: UserSearchResultsProps) {
-  const router = useRouter();
-
   // Debounce search input using reusable hook
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 
@@ -186,9 +184,7 @@ export function UserSearchResults({
           key={user.id}
           value={`${user.name} ${user.email}`}
           keywords={[user.email, user.id]}
-          onSelect={() =>
-            onSelect(() => router.push(`/admin/users/${user.id}`))
-          }
+          onSelect={() => onSelect(() => navigateTo(`/admin/users/${user.id}`))}
         >
           <Avatar size="md" className="mr-2">
             <AvatarImage src={user.image || undefined} alt={user.name} />

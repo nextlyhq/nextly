@@ -1,7 +1,6 @@
 "use client";
 
 import { CommandGroup, CommandItem, CommandShortcut } from "@nextlyhq/ui";
-import { useRouter } from "next/navigation";
 
 import {
   FileText,
@@ -9,6 +8,7 @@ import {
   ShieldPlus,
   UserPlus,
 } from "@admin/components/icons";
+import { navigateTo } from "@admin/lib/navigation";
 import type { ActionCommand } from "@admin/types/ui/command-palette";
 
 /**
@@ -107,8 +107,6 @@ export interface ActionCommandsProps {
  * @param onSelect - Callback to handle command selection
  */
 export function ActionCommands({ onSelect }: ActionCommandsProps) {
-  const router = useRouter();
-
   return (
     <CommandGroup heading="Actions">
       {actionCommands.map(command => {
@@ -119,7 +117,7 @@ export function ActionCommands({ onSelect }: ActionCommandsProps) {
             value={command.label}
             keywords={command.keywords}
             disabled={command.disabled}
-            onSelect={() => onSelect(() => router.push(command.href))}
+            onSelect={() => onSelect(() => navigateTo(command.href))}
           >
             <Icon className="h-4 w-4" aria-hidden="true" />
             <span>{command.label}</span>

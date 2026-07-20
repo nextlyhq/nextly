@@ -10,11 +10,11 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@nextlyhq/ui";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Home, Settings, Shield, Users } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
+import { navigateTo } from "@admin/lib/navigation";
 
 import { ActionCommands } from "./ActionCommands";
 import { UserSearchResults } from "./UserSearchResults";
@@ -113,7 +113,6 @@ const navigationCommands: NavigationCommand[] = [
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const router = useRouter();
 
   /**
    * Handle command selection
@@ -170,22 +169,22 @@ export function CommandPalette() {
           switch (e.key.toLowerCase()) {
             case "d":
               e.preventDefault();
-              handleSelect(() => router.push(ROUTES.DASHBOARD));
+              handleSelect(() => navigateTo(ROUTES.DASHBOARD));
               lastKey = "";
               break;
             case "u":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/users"));
+              handleSelect(() => navigateTo("/admin/users"));
               lastKey = "";
               break;
             case "r":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/roles"));
+              handleSelect(() => navigateTo("/admin/roles"));
               lastKey = "";
               break;
             case "s":
               e.preventDefault();
-              handleSelect(() => router.push("/admin/settings"));
+              handleSelect(() => navigateTo("/admin/settings"));
               lastKey = "";
               break;
             default:
@@ -204,7 +203,7 @@ export function CommandPalette() {
 
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
-  }, [open, handleSelect, router]);
+  }, [open, handleSelect]);
 
   /**
    * Handle dialog open/close state changes
@@ -237,7 +236,7 @@ export function CommandPalette() {
                 key={command.id}
                 value={command.label}
                 keywords={command.keywords}
-                onSelect={() => handleSelect(() => router.push(command.href))}
+                onSelect={() => handleSelect(() => navigateTo(command.href))}
               >
                 <Icon className="h-4 w-4" />
                 <span>{command.label}</span>

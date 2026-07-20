@@ -12,7 +12,6 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import { useSearchParams } from "next/navigation";
 import { useState, useCallback, useMemo, useRef } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
@@ -29,9 +28,11 @@ import { useColumnVisibility } from "@admin/hooks/useColumnVisibility";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
+import { useSearchParams } from "@admin/hooks/useSearchParams";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
+import { getSearchParam } from "@admin/lib/routing";
 import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -249,7 +250,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
 
   // Read where parameter from URL for filtering (e.g., from SubmissionsFilter)
   const searchParams = useSearchParams();
-  const whereParam = searchParams.get("where");
+  const whereParam = getSearchParam(searchParams, "where");
 
   const whereFilter = useMemo(() => {
     return buildEntryWhereFilter({
