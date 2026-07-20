@@ -96,7 +96,23 @@ function optionLabel(field: FieldConfig, value: unknown): string {
 
 defineValueDisplay(
   ["text", "textarea", "email", "slug", "id", "url", "phone"],
-  ({ value }) => <PlainText>{String(value)}</PlainText>
+  ({ value }) => {
+    // A `hasMany` text field stores a list; the generic path would collapse it
+    // into comma-joined text and lose the item boundaries.
+    if (Array.isArray(value)) {
+      if (value.length === 0) return <EmptyValue />;
+      return (
+        <div className="flex flex-wrap gap-1">
+          {value.map((entry, i) => (
+            <Badge key={`${String(entry)}-${i}`} variant="default">
+              {String(entry)}
+            </Badge>
+          ))}
+        </div>
+      );
+    }
+    return <PlainText>{String(value)}</PlainText>;
+  }
 );
 
 defineValueDisplay(["code"], ({ value }) => (
@@ -267,6 +283,13 @@ function UploadValue({ entry }: { entry: unknown }) {
     return <Badge variant="outline">{entry}</Badge>;
   }
   if (typeof entry !== "object" || entry === null) return <EmptyValue />;
+
+  // A polymorphic upload stores `{ relationTo, value }`. Unresolved, the id
+  // lives under `value`; reading only the file keys would show "Unknown file".
+  const poly = entry as { relationTo?: string; value?: unknown };
+  if (typeof poly.value === "string" && poly.relationTo !== undefined) {
+    return <Badge variant="outline">{poly.value}</Badge>;
+  }
 
   const file = entry as {
     id?: string;

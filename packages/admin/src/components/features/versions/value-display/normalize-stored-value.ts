@@ -73,7 +73,11 @@ export function normalizeStoredValue(
   field: FieldConfig,
   raw: unknown
 ): unknown {
-  if (raw === undefined || raw === null || raw === "") return null;
+  if (raw === undefined || raw === null) return null;
+
+  // An empty string means "absent" for every type except `json`, where it is a
+  // legitimate stored primitive and must survive to be displayed as one.
+  if (raw === "" && field.type !== "json") return null;
 
   const value =
     isJsonBacked(field) && typeof raw === "string" ? parseJson(raw) : raw;

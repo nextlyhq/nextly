@@ -14,6 +14,25 @@ function field(type: string, extra: Record<string, unknown> = {}): FieldConfig {
   return { name: "sample", type, ...extra } as FieldConfig;
 }
 
+/**
+ * Run `fn` with the process timezone pinned, restoring it exactly afterwards.
+ *
+ * Restoring by assignment is wrong when TZ was unset: Node stringifies the
+ * value, so `process.env.TZ` becomes the literal "undefined" — an invalid zone
+ * that silently changes how every later date resolves. The unset case has to
+ * delete the key instead.
+ */
+function withTimeZone(timeZone: string, fn: () => void): void {
+  const original = process.env.TZ;
+  process.env.TZ = timeZone;
+  try {
+    fn();
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+}
+
 describe("FieldValueDisplay", () => {
   it("shows the field label alongside the value", () => {
     render(
@@ -186,9 +205,7 @@ describe("FieldValueDisplay", () => {
     // Day-only values are stored as UTC midnight, so reading them in a local
     // negative-offset zone moves the date back a day. The zone is pinned west
     // of UTC because the bug is invisible anywhere at or east of it.
-    const original = process.env.TZ;
-    process.env.TZ = "America/Los_Angeles";
-    try {
+    withTimeZone("America/Los_Angeles", () => {
       const f = field("date", {
         admin: { date: { pickerAppearance: "dayOnly" } },
       });
@@ -196,9 +213,19 @@ describe("FieldValueDisplay", () => {
       render(<FieldValueDisplay field={f} value="2025-01-31T00:00:00Z" />);
 
       expect(screen.getByText(/Jan 31, 2025/)).toBeInTheDocument();
-    } finally {
-      process.env.TZ = original;
-    }
+    });
+  });
+
+  it("leaves the process timezone exactly as it found it", () => {
+    // The pin above must not leak. Restoring an unset TZ by assignment would
+    // set it to the string "undefined", changing later date resolution.
+    const before = process.env.TZ;
+    const had = "TZ" in process.env;
+
+    withTimeZone("America/Los_Angeles", () => undefined);
+
+    expect("TZ" in process.env).toBe(had);
+    expect(process.env.TZ).toBe(before);
   });
 
   it("renders a time-only value as a time, not as 1970", () => {
@@ -274,6 +301,51 @@ describe("FieldValueDisplay", () => {
     const f = field("number", { hasMany: true });
 
     render(<FieldValueDisplay field={f} value="[]" />);
+
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
+  it("renders a hasMany text list as separate values", () => {
+    const f = field("text", { hasMany: true });
+
+    render(<FieldValueDisplay field={f} value='["alpha","beta"]' />);
+
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.getByText("beta")).toBeInTheDocument();
+  });
+
+  it("shows an empty hasMany text list as not set", () => {
+    const f = field("text", { hasMany: true });
+
+    render(<FieldValueDisplay field={f} value="[]" />);
+
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
+  it("shows an unresolved polymorphic upload by its stored id", () => {
+    const f = field("upload", { relationTo: ["media", "docs"] });
+
+    render(
+      <FieldValueDisplay
+        field={f}
+        value={JSON.stringify({ relationTo: "docs", value: "d1" })}
+      />
+    );
+
+    expect(screen.getByText("d1")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown file")).not.toBeInTheDocument();
+  });
+
+  it("keeps an empty string that is a real JSON value", () => {
+    // For a json field the empty string is a stored primitive, not an absent
+    // value, so it must not be flattened into the empty state.
+    render(<FieldValueDisplay field={field("json")} value="" />);
+
+    expect(screen.queryByText("Not set")).not.toBeInTheDocument();
+  });
+
+  it("still treats an empty string as absent for a text field", () => {
+    render(<FieldValueDisplay field={field("text")} value="" />);
 
     expect(screen.getByText("Not set")).toBeInTheDocument();
   });
