@@ -42,6 +42,10 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           tableName: c.tableName,
           fields: c.fields ?? [],
           status: (c as { status?: boolean }).status === true,
+          // i18n: carry the localized flag so the push/preview diff omits
+          // translatable columns from the main table (they live in the
+          // companion `_locales` table) instead of re-adding them.
+          localized: (c as { localized?: boolean }).localized === true,
         };
       }
     } catch {
@@ -60,6 +64,9 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           tableName: s.tableName,
           fields: s.fields ?? [],
           status: (s as { status?: boolean }).status === true,
+          // i18n: carry localized so the diff omits translatable columns from the
+          // single's main table (they live in single_<slug>_locales).
+          localized: (s as { localized?: boolean }).localized === true,
         };
       }
     } catch {
@@ -77,6 +84,9 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           slug: c.slug,
           tableName: c.tableName,
           fields: c.fields ?? [],
+          // i18n: carry localized so the diff omits translatable columns from the
+          // component's main table (they live in comp_<slug>_locales).
+          localized: (c as { localized?: boolean }).localized === true,
         };
       }
     } catch {

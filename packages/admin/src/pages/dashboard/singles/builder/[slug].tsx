@@ -159,6 +159,9 @@ export default function SingleBuilderEditPage({
       // Status: defaults false for legacy Singles written before the column
       // existed.
       status: single.status === true,
+      // i18n: reflect the saved localization flag so the Internationalization toggle shows its
+      // real state (mirrors the collection builder).
+      i18n: (single as { localized?: boolean }).localized === true,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
@@ -188,7 +191,9 @@ export default function SingleBuilderEditPage({
       originalSettings.slug !== settings.slug ||
       originalSettings.description !== settings.description ||
       originalSettings.icon !== settings.icon ||
-      originalSettings.status !== settings.status
+      originalSettings.status !== settings.status ||
+      // i18n: toggling Internationalization on its own must enable Save.
+      originalSettings.i18n !== settings.i18n
     );
   }, [originalSettings, settings]);
 
@@ -223,7 +228,10 @@ export default function SingleBuilderEditPage({
           fieldDefinitions,
           schemaVersion,
           resolutions,
-          renameResolutions
+          renameResolutions,
+          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
+          // the companion in the same apply.
+          settings?.i18n === true
         );
         if (result.success) {
           const label = settings?.singularName?.trim() || slug;
@@ -294,6 +302,10 @@ export default function SingleBuilderEditPage({
             // silently dropped the OFF case so the toggle could never
             // be turned back off after enabling.
             status: settings.status === true,
+            // i18n: the single-level Internationalization toggle. Toggling on provisions the
+            // companion single_<slug>_locales table; always send the boolean so OFF also reaches
+            // the server. Mirrors the collection builder.
+            localized: settings.i18n === true,
           },
         },
         {

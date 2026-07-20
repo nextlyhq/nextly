@@ -517,8 +517,11 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               // Thread the status flag so the diff includes the status system
-              // column when Draft/Published is enabled.
-              { hasStatus: c.status === true }
+              // column when Draft/Published is enabled. Thread `localized` so a
+              // localized collection's translatable columns are omitted from the
+              // main table's desired snapshot (they live in the companion
+              // `_locales` table) rather than being re-added by the diff.
+              { hasStatus: c.status === true, localized: c.localized === true }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -528,7 +531,10 @@ export class PushSchemaPipeline {
                 typeof buildDesiredTableFromFields
               >[1],
               dialect,
-              { hasStatus: s.status === true }
+              {
+                hasStatus: s.status === true,
+                localized: (s as { localized?: boolean }).localized === true,
+              }
             )
           ),
           ...Object.values(desired.components).map(c =>
@@ -537,7 +543,8 @@ export class PushSchemaPipeline {
               c.fields as unknown as Parameters<
                 typeof buildDesiredTableFromComponentFields
               >[1],
-              dialect
+              dialect,
+              { localized: (c as { localized?: boolean }).localized === true }
             )
           ),
         ],
@@ -1054,25 +1061,39 @@ export class PushSchemaPipeline {
       // already classified the add as safe. The two paths must agree on
       // table shape; they share the same `desired.collections` input but
       // had different defaults for the status flag.
+      // i18n: forward `localized` too. This is the DDL-generating schema handed
+      // to drizzle-kit's pushSchema — without the flag, drizzle-kit's main table
+      // still carries the translatable columns and pushSchema ADDs them to the
+      // main table, even though the snapshot diff (buildDesiredTableFromFields,
+      // used only for rename detection) already omits them. Both views must agree
+      // or a localized collection's translatable columns leak onto main. The
+      // companion `_locales` table is provisioned out-of-band.
       const { table } = generateRuntimeSchema(
         c.tableName,
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
-        { status: c.status === true }
+        {
+          status: c.status === true,
+          localized: (c as { localized?: boolean }).localized === true,
+        }
       );
       out[c.tableName] = table;
     }
     // Singles (single_* tables) use identical field/column logic to
     // collections; include them so drizzle-kit sees the full desired schema.
     for (const s of Object.values(desired.singles)) {
-      // Why: same status forwarding rationale as the collection branch
-      // above — keep the drizzle-kit and Nextly views in lockstep for
-      // singles too.
+      // Why: same status + localized forwarding rationale as the collection
+      // branch above — keep the drizzle-kit and Nextly views in lockstep for
+      // singles too (a localized single also stores translatable fields in its
+      // companion `single_<slug>_locales` table, not on the main table).
       const { table } = generateRuntimeSchema(
         s.tableName,
         s.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
-        { status: s.status === true }
+        {
+          status: s.status === true,
+          localized: (s as { localized?: boolean }).localized === true,
+        }
       );
       out[s.tableName] = table;
     }
@@ -1083,9 +1104,13 @@ export class PushSchemaPipeline {
     // system columns.
     const componentSchemaService = new ComponentSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
+      // i18n: omit a localized component's translatable columns from the main
+      // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
+      // provisioned out-of-band) — same rule as collections/singles above.
       const componentTable = componentSchemaService.generateRuntimeSchema(
         c.tableName,
-        c.fields
+        c.fields,
+        { localized: (c as { localized?: boolean }).localized === true }
       );
       out[c.tableName] = componentTable;
     }

@@ -219,6 +219,12 @@ export function defineSingle(config: SingleConfig): SingleConfig {
       name: "title",
       label: "Title",
       required: true,
+      // i18n: the auto-injected system title is SHARED by default, matching
+      // collections (define-collection.ts). Localizing title/slug is a deliberate
+      // opt-in via a user-defined localized field, not a side effect of text fields
+      // localizing by default — otherwise a localized single would relocate its
+      // identity columns into the companion `_locales` table.
+      localized: false,
     });
   }
 
@@ -229,6 +235,8 @@ export function defineSingle(config: SingleConfig): SingleConfig {
       label: "Slug",
       required: true,
       unique: true,
+      // i18n: auto-injected system slug is SHARED by default (see title above).
+      localized: false,
     });
   }
 

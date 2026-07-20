@@ -28,6 +28,9 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -49,6 +52,7 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
@@ -56,6 +60,7 @@ import {
 import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -69,6 +74,7 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -345,6 +351,13 @@ const COLLECTIONS_METHODS: Record<
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
+        // i18n: carry the localized flag so the push diff OMITS translatable
+        // columns from the main table's desired snapshot (they live in the
+        // companion `_locales` table). buildFullDesiredSchema already sets this
+        // from the registry, but the splice above overwrites that entry, so we
+        // must re-supply it or the preview would show translatable columns being
+        // added to the main table.
+        localized: (collection as { localized?: boolean }).localized === true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -428,10 +441,14 @@ const COLLECTIONS_METHODS: Record<
         renameResolutions,
         eventResolutions,
         hints,
+        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
+        // i18n: the request's Internationalization flag. Forwarded so a toggle+field-change
+        // save applies with the NEW state instead of the stale persisted `collection.localized`.
+        localized?: boolean;
         // Legacy admin UI shape (per-field, used by the old
         // SchemaChangeService path). Kept alive while admin dialogs
         // still send it.
@@ -483,6 +500,16 @@ const COLLECTIONS_METHODS: Record<
       assertSchemaVersionMatch(schemaVersion, currentVersion, p.collectionName);
       const tableName = collection.tableName;
 
+      // i18n: prefer the request's localized flag over the persisted one, so a simultaneous
+      // toggle+field-change save applies with the NEW state (the persisted flag is only written
+      // after this apply). `wasLocalized` drives enable/disable detection for the companion.
+      const wasLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      const isLocalized =
+        requestLocalized !== undefined
+          ? requestLocalized === true
+          : wasLocalized;
+
       // Legacy per-field resolutions get translated to typed
       // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
       // pipeline emits events. Until admin dialogs ship the new
@@ -509,6 +536,12 @@ const COLLECTIONS_METHODS: Record<
         // Mirror previewSchemaChanges so apply diffs against the same
         // desired schema preview classified.
         status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Uses the request's flag so a
+        // toggle applies immediately; without this the apply re-adds translatable
+        // columns to the main table.
+        localized: isLocalized,
       };
 
       // Resolve adapter for the pipeline construction.
@@ -602,6 +635,70 @@ const COLLECTIONS_METHODS: Record<
         throw new Error(result.error.message);
       }
 
+      // i18n: the push pipeline deliberately EXCLUDES companion `_locales`
+      // tables from its diff (managed-tables `isCompanionTable`) — they are
+      // owned by the localization layer, not drizzle-kit. So we reconcile the
+      // companion out-of-band here for any localization change: enabling seeds
+      // the companion default locale from the existing main columns then drops
+      // them, disabling restores + archives them, and a field change ADD/DROPs
+      // localized columns. Without this, a localized collection edited in the
+      // builder has its translatable columns omitted from main (correct) but
+      // NOWHERE to store per-language values. Runs in-process (no migration file).
+      if (wasLocalized || isLocalized) {
+        try {
+          const oldFields = (collection.fields ??
+            []) as unknown as FieldDefinition[];
+          const newFields = fields as unknown as FieldDefinition[];
+          const defaultLocale =
+            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const companionExists = await adapter.tableExists(
+            `${tableName}_locales`
+          );
+          const companionHasStatus =
+            companionExists && wasLocalized && isLocalized
+              ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
+              : undefined;
+          const plan = buildCompanionTransitionStatements({
+            slug: p.collectionName,
+            tableName,
+            dialect,
+            defaultLocale,
+            status: collection.status === true,
+            wasLocalized,
+            isLocalized,
+            oldFields,
+            newFields,
+            companionExists,
+            companionHasStatus,
+          });
+          // A disable archives non-default translations, so ensure the archive
+          // table exists first. Run each statement individually (executeQuery is
+          // single-statement on some drivers, e.g. sqlite).
+          if (plan.needsArchive) {
+            for (const stmt of getI18nArchiveDdl(dialect)) {
+              await adapter.executeQuery(stmt);
+            }
+          }
+          for (const stmt of plan.statements) {
+            await adapter.executeQuery(stmt);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Fatal to correctness (translatable values have nowhere to live), but
+          // the main-table apply already committed — surface loudly rather than
+          // silently leaving the collection half-migrated.
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "companionReconcile",
+              collection: p.collectionName,
+              detail: msg,
+              note: "main table updated but localized companion out of sync; re-apply to retry",
+            },
+          });
+        }
+      }
+
       // pipeline.apply mutates the live DB (renamed/added/dropped
       // columns) but does NOT persist the updated `fields` JSON on
       // `dynamic_collections`. Without this post-apply write, subsequent
@@ -662,16 +759,41 @@ const COLLECTIONS_METHODS: Record<
       // request could arrive between the invalidation and the DB write of
       // the new `dynamic_collections.fields`, picking up the stale schema.
       try {
+        // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+        // omits translatable columns (kept in lockstep with the desired snapshot
+        // above), then register the companion `_locales` runtime table too so
+        // per-language reads/writes resolve in THIS process without a restart.
         const { table: freshTable } = generateRuntimeSchema(
           tableName,
           fields as FieldDefinition[],
-          dialect
+          dialect,
+          { localized: isLocalized, status: collection.status === true }
         );
         getCollectionsHandlerFromDI()?.refreshCollectionSchema(
           tableName,
           freshTable
         );
         getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
+        if (isLocalized) {
+          const companion = buildCompanionRuntimeTable({
+            slug: p.collectionName,
+            tableName,
+            fields: fields as FieldDefinition[],
+            dialect,
+            localized: true,
+            status: collection.status === true,
+          });
+          if (companion) {
+            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+              companion.companionTableName,
+              companion.table
+            );
+            getSchemaRegistryFromDI()?.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(

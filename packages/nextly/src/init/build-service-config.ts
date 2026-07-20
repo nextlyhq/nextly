@@ -157,6 +157,16 @@ export function buildServiceConfig(
     if (!serviceConfig.auth && nextlyConfig?.auth) {
       serviceConfig.auth = nextlyConfig.auth;
     }
+
+    // Localization (i18n) - carry the normalized block through so the
+    // data-layer services (CollectionQueryService / CollectionMutationService /
+    // CollectionsHandler) receive it. Without this, ctx.config.localization is
+    // undefined and every localized read/write silently no-ops to the main
+    // table while the admin chrome still shows the switcher.
+    // `nextlyConfig` is a SanitizedNextlyConfig, so this is already normalized.
+    if (!serviceConfig.localization && nextlyConfig?.localization) {
+      serviceConfig.localization = nextlyConfig.localization;
+    }
   }
 
   // Ensure imageProcessor is always provided

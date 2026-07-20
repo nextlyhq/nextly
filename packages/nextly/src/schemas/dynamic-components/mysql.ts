@@ -139,6 +139,10 @@ export const dynamicComponentsMysql = mysqlTable(
      */
     locked: boolean("locked").default(false).notNull(),
 
+    // i18n: whether the component is localized (translatable fields live in the
+    // companion `comp_<slug>_locales` table). Mirrors dynamic_collections/singles.
+    localized: boolean("localized").default(false).notNull(),
+
     /**
      * Path to the config file (code-first Components only).
      * @example "src/components/seo.ts"

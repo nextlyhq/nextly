@@ -57,12 +57,31 @@ describe("FieldEditorSheet — AdvancedTab", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("toggles localized through onChange.advanced.localized", async () => {
+  // H4: the localized switch reflects the backend smart default when unset — a
+  // text field localizes by default, so the switch starts ON and a click writes
+  // an explicit `false` (the author opting out), not `true`.
+  it("localized switch reflects the smart default (on for text) and toggles to explicit false", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<Controlled initial={f} onChange={onChange} />);
     const sw = screen.getByRole("switch", { name: /^localized$/i });
     expect(sw).not.toBeDisabled();
+    expect(sw).toBeChecked();
+    await user.click(sw);
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.advanced?.localized).toBe(false);
+  });
+
+  // A value/structural field (number) is shared by default → switch starts OFF
+  // and a click writes an explicit `true`.
+  it("localized switch starts off for a non-text field and toggles to explicit true", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled initial={{ ...f, type: "number" }} onChange={onChange} />
+    );
+    const sw = screen.getByRole("switch", { name: /^localized$/i });
+    expect(sw).not.toBeChecked();
     await user.click(sw);
     const last = onChange.mock.lastCall?.[0] as BuilderField;
     expect(last.advanced?.localized).toBe(true);

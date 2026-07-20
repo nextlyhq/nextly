@@ -1,0 +1,13 @@
+/**
+ * Layer-3 escape-hatch source for the style-fixture plugin. Compiled by
+ * `nextly-build-admin-css` into admin.css (scoped under .nextly-admin). Uses a
+ * class the built-in safelist does not provide, to exercise the admin.styles
+ * path. Tokens come from the admin stylesheet at runtime, so nothing is
+ * re-imported here.
+ */
+.sf-panel {
+  background-color: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+  padding: 1rem;
+  border-radius: 0.5rem;
+}

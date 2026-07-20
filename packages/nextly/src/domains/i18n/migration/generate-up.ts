@@ -1,4 +1,4 @@
-import { ddlType, q } from "./ddl-types";
+import { ddlType, lit, q } from "./ddl-types";
 import type { CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
@@ -46,20 +46,33 @@ export function buildCompanionCreateOnlySql(
  * Companion columns are created nullable (localized columns are always nullable).
  */
 export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
+  return buildLocalizationUpStatements(spec)
+    .map(s => `${s};`)
+    .join("\n\n");
+}
+
+/**
+ * Statement-array form of {@link buildLocalizationUpSql} (no trailing `;` per element). The
+ * runtime enable path (a Builder-entity localization toggle, which has no migration file) runs
+ * these individually via the adapter, so it does not have to split a joined string on `;`.
+ */
+export function buildLocalizationUpStatements(
+  spec: CompanionMigrationSpec
+): string[] {
   const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
   const colNames = columns.map(c => q(c.name, dialect));
 
   const create = buildCompanionCreateStatement(spec);
 
-  // i18n M6: when the collection has Draft/Published, the seeded default-locale rows carry the
-  // existing main row's `status` into the companion `_status` so enabling localization doesn't
-  // silently un-publish live content.
+  // When the collection has Draft/Published, the seeded default-locale rows carry the existing
+  // main row's `status` into the companion `_status` so enabling localization doesn't silently
+  // un-publish live content.
   const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
   const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
   const seed =
     `INSERT INTO ${q(companionTable, dialect)} ` +
     `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}, ${colNames.join(", ")}) ` +
-    `SELECT ${q("id", dialect)}, '${defaultLocale}'${statusSelectCol}, ${colNames.join(", ")} ` +
+    `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}, ${colNames.join(", ")} ` +
     `FROM ${q(mainTable, dialect)}`;
 
   const drops = columns.map(
@@ -67,5 +80,5 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
       `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
   );
 
-  return [create, seed, ...drops].map(s => `${s};`).join("\n\n");
+  return [create, seed, ...drops];
 }

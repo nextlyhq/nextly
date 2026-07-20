@@ -213,15 +213,20 @@ export class CollectionMetadataService extends BaseService {
   private async registerRuntimeSchema(
     tableName: string,
     fields: FieldDefinition[],
-    options?: { hasStatus?: boolean }
+    options?: { hasStatus?: boolean; localized?: boolean }
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
         "../../schema/services/runtime-schema-generator"
       );
       const dialect = this.adapter.getCapabilities().dialect;
+      const localized = options?.localized === true;
       const { table } = generateRuntimeSchema(tableName, fields, dialect, {
         status: options?.hasStatus === true,
+        // i18n: omit translatable columns from the main runtime table (they live in
+        // the companion), so reads/writes in the current process are correct without
+        // a restart — matching the just-created physical table.
+        localized,
       });
       const resolver = (
         this.adapter as unknown as {
@@ -232,6 +237,27 @@ export class CollectionMetadataService extends BaseService {
       ).tableResolver;
       if (resolver && typeof resolver.registerDynamicSchema === "function") {
         resolver.registerDynamicSchema(tableName, table);
+        // i18n: also register the companion `_locales` runtime table so the current
+        // process can resolve it for localized reads/writes before any restart.
+        if (localized) {
+          const { buildCompanionRuntimeTable } = await import(
+            "../../i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: tableName,
+            tableName,
+            fields: fields,
+            dialect,
+            localized: true,
+            status: options?.hasStatus === true,
+          });
+          if (companion) {
+            resolver.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch {
       // Non-fatal: schema will be registered on next server restart
@@ -278,6 +304,8 @@ export class CollectionMetadataService extends BaseService {
     sidebarGroup?: string;
     /** Whether the collection has the Draft/Published status feature enabled. */
     status?: boolean;
+    /** i18n: whether the collection is localized (translatable fields + companion table). */
+    localized?: boolean;
     fields: FieldDefinition[];
     hooks?: Record<string, unknown>[];
     createdBy?: string;
@@ -304,6 +332,9 @@ export class CollectionMetadataService extends BaseService {
             artifacts.metadata.migrationStatus = "applied";
             await this.registerRuntimeSchema(artifacts.tableName, data.fields, {
               hasStatus: data.status === true,
+              // i18n: register the main table without translatable columns and register
+              // the companion, so reads/writes route localized fields correctly.
+              localized: data.localized === true,
             });
           } else {
             artifacts.metadata.migrationStatus = "failed";
@@ -613,6 +644,8 @@ export class CollectionMetadataService extends BaseService {
       sidebarGroup?: string;
       /** Toggle Draft/Published. Honoured when defined; undefined leaves it unchanged. */
       status?: boolean;
+      /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
+      localized?: boolean;
       fields?: FieldDefinition[];
       hooks?: Record<string, unknown>[];
     }
@@ -644,7 +677,18 @@ export class CollectionMetadataService extends BaseService {
             );
             if (tableExists) {
               updateArtifacts.metadataUpdates.migrationStatus = "applied";
-              if (body.fields) {
+              // i18n: a localization enable/disable toggle changes the main table's column
+              // shape (drops or restores translatable columns) even with no field edit, so the
+              // runtime schema must be re-registered on a flag-only toggle too, not only when
+              // `body.fields` is present.
+              const wasLocalizedNow =
+                (existingCollection as { localized?: boolean }).localized ===
+                true;
+              const isLocalizedNow =
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalizedNow;
+              if (body.fields || wasLocalizedNow !== isLocalizedNow) {
                 // Resolve hasStatus from the update payload, falling back
                 // to the collection's existing flag so the runtime
                 // schema descriptor matches the table the migration
@@ -655,8 +699,15 @@ export class CollectionMetadataService extends BaseService {
                   body.status !== undefined ? body.status === true : wasStatus;
                 await this.registerRuntimeSchema(
                   existingCollection.tableName,
-                  body.fields,
-                  { hasStatus }
+                  body.fields ??
+                    (existingCollection.fields as FieldDefinition[]),
+                  {
+                    hasStatus,
+                    // i18n: re-register the main table with the new localized shape and
+                    // (re)register/drop the companion after the update, so the current process
+                    // resolves them correctly without a restart.
+                    localized: isLocalizedNow,
+                  }
                 );
               }
             } else {

@@ -253,6 +253,9 @@ export function FieldWrapper({
               {error}
             </p>
           )}
+          {/* show the default-language source hint in the horizontal
+              (checkbox) layout too — it was only rendered in the vertical layout. */}
+          {sourceHint}
         </div>
       </div>
     );

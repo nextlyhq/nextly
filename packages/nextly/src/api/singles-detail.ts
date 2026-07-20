@@ -145,11 +145,21 @@ export const GET = withErrorHandler(
       ? parseInt(searchParams.get("depth")!, 10)
       : undefined;
     const locale = searchParams.get("locale") || undefined;
+    // i18n: `?fallback-locale=none` disables fallback so an untranslated field reads empty
+    // (the admin editor relies on this); `?translation-status=1` attaches the per-locale
+    // `_translations` overview for the language pills. Both no-op for non-localized singles.
+    const fallbackLocale = searchParams.get("fallback-locale") || undefined;
+    const translationStatus = searchParams.get("translation-status") === "1";
     const richTextFormat = parseRichTextFormat(
       searchParams.get("richTextFormat")
     );
 
-    const result = await service.get(slug, { depth, locale });
+    const result = await service.get(slug, {
+      depth,
+      locale,
+      fallbackLocale,
+      translationStatus,
+    });
 
     if (!result.success) {
       throwFromSingleResult(result, slug);

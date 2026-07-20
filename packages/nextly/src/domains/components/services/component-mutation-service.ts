@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
@@ -18,6 +21,13 @@ import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  buildCompanionSchema,
+  splitLocalizedWrite,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
 
 import {
   COMPONENT_META_KEYS,
@@ -42,6 +52,13 @@ export interface SaveComponentDataParams {
 
   /** The full data object from the parent entry (contains component field values) */
   data: Record<string, unknown>;
+
+  /**
+   * i18n: write locale. When set and an embedded component is localized, its translatable
+   * field values are written to the component's companion `_locales` row for this locale
+   * (shared fields still go to the main comp_ row). Threaded from the parent entity's write.
+   */
+  locale?: string;
 }
 
 /**
@@ -63,17 +80,132 @@ export class ComponentMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    registryService: ComponentRegistryService
+    registryService: ComponentRegistryService,
+    // i18n: when set and an embedded component is localized, translatable field values are
+    // routed to the component's companion `comp_<slug>_locales` row for the write locale.
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
     this.registryService = registryService;
   }
 
   /**
+   * i18n: split a component instance's write into the values that stay on the main comp_
+   * table (shared) and the translatable values that belong on the companion row. Returns the
+   * companion schema (or null when the component isn't localized) plus the split payloads.
+   * The caller writes `main` to the instance row and, after it has the instance id, upserts
+   * the companion via {@link upsertLocalizedComponent}.
+   */
+  private splitLocalizedComponent(
+    meta: DynamicComponentRecord,
+    data: Record<string, unknown>
+  ): {
+    schema: ReturnType<typeof buildCompanionSchema>;
+    main: Record<string, unknown>;
+    companion: Record<string, unknown>;
+  } {
+    if (!this.localization || meta.localized !== true) {
+      return { schema: null, main: data, companion: {} };
+    }
+    const schema = buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: false,
+    });
+    if (!schema) return { schema: null, main: data, companion: {} };
+    const { main, companion } = splitLocalizedWrite(
+      data,
+      schema.localizedFields
+    );
+    // The main row goes through serializeComponentRow, but the companion is upserted directly.
+    // Serialize the companion values the same way so a JSON-backed localized field (richText/
+    // group/json) is JSON-stringified and a Date is stored as text, not written as a raw object.
+    return {
+      schema,
+      main,
+      companion: this.serializeCompanionValues(companion, schema, meta.fields),
+    };
+  }
+
+  /**
+   * Serialize a localized component's companion payload (keyed by snake_case column) so its
+   * values match the storage form serializeComponentRow produces for the main row: object
+   * values for JSON-backed fields become JSON strings; Date values become ISO strings.
+   */
+  private serializeCompanionValues(
+    companion: Record<string, unknown>,
+    schema: NonNullable<ReturnType<typeof buildCompanionSchema>>,
+    fields: FieldConfig[]
+  ): Record<string, unknown> {
+    const fieldByColumn = new Map<string, FieldConfig>();
+    for (const lf of schema.localizedFields) {
+      const field = fields.find(f => "name" in f && f.name === lf.name);
+      if (field) fieldByColumn.set(lf.column, field);
+    }
+    const out: Record<string, unknown> = {};
+    for (const [column, value] of Object.entries(companion)) {
+      const field = fieldByColumn.get(column);
+      if (value instanceof Date) {
+        out[column] = value.toISOString();
+      } else if (
+        field &&
+        shouldTreatAsJson(field) &&
+        value != null &&
+        typeof value === "object"
+      ) {
+        out[column] = JSON.stringify(value);
+      } else {
+        out[column] = value;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * i18n: upsert a component instance's translatable values into its companion for `locale`.
+   * The write goes through `writeAdapter` so both the direct adapter and a transaction
+   * context (which exposes the same `dialect` + raw `execute`) are supported.
+   */
+  private async upsertLocalizedComponent(
+    schema: NonNullable<ReturnType<typeof buildCompanionSchema>>,
+    instanceId: string,
+    companionData: Record<string, unknown>,
+    locale: string | undefined,
+    writeAdapter: {
+      dialect: SupportedDialect;
+      executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    } = this.adapter
+  ): Promise<void> {
+    if (Object.keys(companionData).length === 0) return;
+    const writeLocale = resolveRequestedLocale(this.localization!, locale);
+    await upsertCompanionRow(
+      writeAdapter,
+      schema.companionTableName,
+      instanceId,
+      writeLocale,
+      companionData
+    );
+  }
+
+  /** Wrap a transaction context as a companion write adapter (raw execute within the tx). */
+  private txWriteAdapter(tx: TransactionContext): {
+    dialect: SupportedDialect;
+    executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+  } {
+    return {
+      dialect: this.adapter.dialect,
+      executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
+        tx.execute<T>(sql, params as never),
+    };
+  }
+
+  /**
    * Save component data for all component fields of a parent entry.
    */
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
-    const { parentId, parentTable, fields, data } = params;
+    const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
       if (!isComponentField(field)) continue;
@@ -101,6 +233,7 @@ export class ComponentMutationService extends BaseService {
           fieldName,
           field,
           data: fieldData,
+          locale,
         });
       } else if (field.component) {
         if (field.repeatable) {
@@ -110,6 +243,7 @@ export class ComponentMutationService extends BaseService {
             fieldName,
             componentSlug: field.component,
             data: fieldData,
+            locale,
           });
         } else {
           await this.saveSingleComponent({
@@ -118,6 +252,7 @@ export class ComponentMutationService extends BaseService {
             fieldName,
             componentSlug: field.component,
             data: fieldData as ComponentInstanceData,
+            locale,
           });
         }
       }
@@ -128,7 +263,7 @@ export class ComponentMutationService extends BaseService {
     tx: TransactionContext,
     params: SaveComponentDataParams
   ): Promise<void> {
-    const { parentId, parentTable, fields, data } = params;
+    const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
       if (!isComponentField(field)) continue;
@@ -156,6 +291,7 @@ export class ComponentMutationService extends BaseService {
           fieldName,
           field,
           data: fieldData,
+          locale,
         });
       } else if (field.component) {
         if (field.repeatable) {
@@ -165,6 +301,7 @@ export class ComponentMutationService extends BaseService {
             fieldName,
             componentSlug: field.component,
             data: fieldData,
+            locale,
           });
         } else {
           await this.saveSingleComponentInTx(tx, {
@@ -173,6 +310,7 @@ export class ComponentMutationService extends BaseService {
             fieldName,
             componentSlug: field.component,
             data: fieldData as ComponentInstanceData,
+            locale,
           });
         }
       }
@@ -222,8 +360,10 @@ export class ComponentMutationService extends BaseService {
     fieldName: string;
     componentSlug: string;
     data: ComponentInstanceData;
+    locale?: string;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data } = params;
+    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
+      params;
 
     try {
       const componentMeta =
@@ -238,21 +378,32 @@ export class ComponentMutationService extends BaseService {
         fieldName
       );
 
+      // Hash/prepare password fields on `data` BEFORE splitting: splitLocalizedComponent
+      // copies `main`/`companion` from `data` by value, so hashing after the split would
+      // leave the pre-hash plaintext in `main` and write it to the comp_ row.
       await this.prepareInstanceForWrite(
         data,
         componentFields,
         existing.length > 0 ? "update" : "create"
       );
 
+      // i18n: split translatable values out of the main comp_ write — they live on the
+      // companion. `main === data` when the component isn't localized (unchanged path).
+      const { schema, main, companion } = this.splitLocalizedComponent(
+        componentMeta,
+        data
+      );
+
+      let instanceId: string;
       if (existing.length > 0) {
-        const rowId = existing[0].id;
-        const updateData = this.serializeComponentRow(data, componentFields);
+        instanceId = existing[0].id;
+        const updateData = this.serializeComponentRow(main, componentFields);
         updateData.updated_at = this.formatDateForDb();
 
         await this.adapter.update(
           tableName,
           updateData,
-          this.whereEq("id", rowId),
+          this.whereEq("id", instanceId),
           { returning: ["id"] }
         );
 
@@ -260,11 +411,11 @@ export class ComponentMutationService extends BaseService {
           componentSlug,
           parentId,
           fieldName,
-          rowId,
+          rowId: instanceId,
         });
       } else {
         const row = this.buildInsertRow({
-          data,
+          data: main,
           componentFields,
           parentId,
           parentTable,
@@ -272,6 +423,7 @@ export class ComponentMutationService extends BaseService {
           order: 0,
           componentType: null,
         });
+        instanceId = row.id as string;
 
         await this.adapter.insert(tableName, row, { returning: ["id"] });
 
@@ -280,6 +432,16 @@ export class ComponentMutationService extends BaseService {
           parentId,
           fieldName,
         });
+      }
+
+      // i18n: upsert the instance's translatable values into its companion for the locale.
+      if (schema) {
+        await this.upsertLocalizedComponent(
+          schema,
+          instanceId,
+          companion,
+          locale
+        );
       }
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
@@ -299,9 +461,11 @@ export class ComponentMutationService extends BaseService {
       fieldName: string;
       componentSlug: string;
       data: ComponentInstanceData;
+      locale?: string;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data } = params;
+    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
+      params;
 
     try {
       const componentMeta =
@@ -317,23 +481,33 @@ export class ComponentMutationService extends BaseService {
         fieldName
       );
 
+      // Hash/prepare password fields on `data` BEFORE splitting: splitLocalizedComponent
+      // copies `main`/`companion` from `data` by value, so hashing after the split would
+      // leave the pre-hash plaintext in `main` and write it to the comp_ row.
       await this.prepareInstanceForWrite(
         data,
         componentFields,
         existing.length > 0 ? "update" : "create"
       );
 
+      // i18n: split translatable values out of the main comp_ write (companion-owned).
+      const { schema, main, companion } = this.splitLocalizedComponent(
+        componentMeta,
+        data
+      );
+
+      let instanceId: string;
       if (existing.length > 0) {
-        const rowId = existing[0].id;
-        const updateData = this.serializeComponentRow(data, componentFields);
+        instanceId = existing[0].id;
+        const updateData = this.serializeComponentRow(main, componentFields);
         updateData.updated_at = this.formatDateForDb();
 
-        await tx.update(tableName, updateData, this.whereEq("id", rowId), {
+        await tx.update(tableName, updateData, this.whereEq("id", instanceId), {
           returning: ["id"],
         });
       } else {
         const row = this.buildInsertRow({
-          data,
+          data: main,
           componentFields,
           parentId,
           parentTable,
@@ -341,8 +515,20 @@ export class ComponentMutationService extends BaseService {
           order: 0,
           componentType: null,
         });
+        instanceId = row.id as string;
 
         await tx.insert(tableName, row, { returning: ["id"] });
+      }
+
+      // i18n: upsert the translatable values into the companion within the transaction.
+      if (schema) {
+        await this.upsertLocalizedComponent(
+          schema,
+          instanceId,
+          companion,
+          locale,
+          this.txWriteAdapter(tx)
+        );
       }
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
@@ -361,8 +547,10 @@ export class ComponentMutationService extends BaseService {
     fieldName: string;
     componentSlug: string;
     data: unknown;
+    locale?: string;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data } = params;
+    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
+      params;
 
     if (!Array.isArray(data)) {
       this.logger.warn("Repeatable component data is not an array", {
@@ -391,6 +579,13 @@ export class ComponentMutationService extends BaseService {
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
         const instanceId = instance.id;
+        // i18n: split translatable values out per instance (companion-owned). The
+        // diff-by-id update keeps the instance id stable, so companion rows for OTHER
+        // locales survive a re-save in one locale.
+        const { schema, main, companion } = this.splitLocalizedComponent(
+          componentMeta,
+          instance
+        );
 
         await this.prepareInstanceForWrite(
           instance,
@@ -400,10 +595,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            instance,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData.updated_at = this.formatDateForDb();
 
@@ -413,9 +605,17 @@ export class ComponentMutationService extends BaseService {
             this.whereEq("id", instanceId),
             { returning: ["id"] }
           );
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              instanceId,
+              companion,
+              locale
+            );
+          }
         } else {
           const row = this.buildInsertRow({
-            data: instance,
+            data: main,
             componentFields,
             parentId,
             parentTable,
@@ -425,6 +625,14 @@ export class ComponentMutationService extends BaseService {
           });
 
           await this.adapter.insert(tableName, row, { returning: ["id"] });
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              row.id as string,
+              companion,
+              locale
+            );
+          }
         }
       }
 
@@ -453,9 +661,11 @@ export class ComponentMutationService extends BaseService {
       fieldName: string;
       componentSlug: string;
       data: unknown;
+      locale?: string;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data } = params;
+    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
+      params;
 
     if (!Array.isArray(data)) {
       this.logger.warn("Repeatable component data is not an array", {
@@ -485,6 +695,11 @@ export class ComponentMutationService extends BaseService {
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
         const instanceId = instance.id;
+        // i18n: split translatable values out (companion-owned) per instance.
+        const { schema, main, companion } = this.splitLocalizedComponent(
+          componentMeta,
+          instance
+        );
 
         await this.prepareInstanceForWrite(
           instance,
@@ -494,10 +709,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            instance,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData.updated_at = this.formatDateForDb();
 
@@ -507,9 +719,18 @@ export class ComponentMutationService extends BaseService {
             this.whereEq("id", instanceId),
             { returning: ["id"] }
           );
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              instanceId,
+              companion,
+              locale,
+              this.txWriteAdapter(tx)
+            );
+          }
         } else {
           const row = this.buildInsertRow({
-            data: instance,
+            data: main,
             componentFields,
             parentId,
             parentTable,
@@ -519,6 +740,15 @@ export class ComponentMutationService extends BaseService {
           });
 
           await tx.insert(tableName, row, { returning: ["id"] });
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              row.id as string,
+              companion,
+              locale,
+              this.txWriteAdapter(tx)
+            );
+          }
         }
       }
 
@@ -546,8 +776,9 @@ export class ComponentMutationService extends BaseService {
     fieldName: string;
     field: ComponentFieldConfig;
     data: unknown;
+    locale?: string;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data } = params;
+    const { parentId, parentTable, fieldName, field, data, locale } = params;
     const allowedSlugs = field.components ?? [];
 
     const instances = field.repeatable
@@ -631,6 +862,11 @@ export class ComponentMutationService extends BaseService {
         const tableName = meta.tableName;
         const componentFields = meta.fields;
         const instanceId = instance.id;
+        // i18n: split translatable values out per instance using its own component meta.
+        const { schema, main, companion } = this.splitLocalizedComponent(
+          meta,
+          instance
+        );
 
         await this.prepareInstanceForWrite(
           instance,
@@ -640,10 +876,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            instance,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData._component_type = componentType;
           updateData.updated_at = this.formatDateForDb();
@@ -655,9 +888,17 @@ export class ComponentMutationService extends BaseService {
             this.whereEq("id", instanceId),
             { returning: ["id"] }
           );
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              instanceId,
+              companion,
+              locale
+            );
+          }
         } else {
           const row = this.buildInsertRow({
-            data: instance,
+            data: main,
             componentFields,
             parentId,
             parentTable,
@@ -667,6 +908,14 @@ export class ComponentMutationService extends BaseService {
           });
 
           await this.adapter.insert(tableName, row, { returning: ["id"] });
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              row.id as string,
+              companion,
+              locale
+            );
+          }
         }
       }
 
@@ -698,9 +947,10 @@ export class ComponentMutationService extends BaseService {
       fieldName: string;
       field: ComponentFieldConfig;
       data: unknown;
+      locale?: string;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data } = params;
+    const { parentId, parentTable, fieldName, field, data, locale } = params;
     const allowedSlugs = field.components ?? [];
 
     const instances = field.repeatable
@@ -766,6 +1016,11 @@ export class ComponentMutationService extends BaseService {
         const tableName = meta.tableName;
         const componentFields = meta.fields;
         const instanceId = instance.id;
+        // i18n: split translatable values out per instance using its own component meta.
+        const { schema, main, companion } = this.splitLocalizedComponent(
+          meta,
+          instance
+        );
 
         await this.prepareInstanceForWrite(
           instance,
@@ -775,10 +1030,7 @@ export class ComponentMutationService extends BaseService {
 
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(
-            instance,
-            componentFields
-          );
+          const updateData = this.serializeComponentRow(main, componentFields);
           updateData._order = i;
           updateData._component_type = componentType;
           updateData.updated_at = this.formatDateForDb();
@@ -790,9 +1042,18 @@ export class ComponentMutationService extends BaseService {
             this.whereEq("id", instanceId),
             { returning: ["id"] }
           );
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              instanceId,
+              companion,
+              locale,
+              this.txWriteAdapter(tx)
+            );
+          }
         } else {
           const row = this.buildInsertRow({
-            data: instance,
+            data: main,
             componentFields,
             parentId,
             parentTable,
@@ -802,6 +1063,15 @@ export class ComponentMutationService extends BaseService {
           });
 
           await tx.insert(tableName, row, { returning: ["id"] });
+          if (schema) {
+            await this.upsertLocalizedComponent(
+              schema,
+              row.id as string,
+              companion,
+              locale,
+              this.txWriteAdapter(tx)
+            );
+          }
         }
       }
 

@@ -28,20 +28,25 @@ export interface TranslationCompletenessBadgeProps {
 export function TranslationCompletenessBadge({
   translations,
 }: TranslationCompletenessBadgeProps) {
-  const { enabled, locales } = useLocalization();
+  const { enabled, locales, defaultLocale } = useLocalization();
 
   if (!enabled || !translations || locales.length === 0) {
     return <span className="text-muted-foreground">-</span>;
   }
 
-  const total = locales.length;
-  const translated = locales.reduce(
+  // measure only the TRANSLATABLE locales (exclude the default — it is the source,
+  // always "translated"). This matches the list language filter, which also excludes the
+  // default, and keeps `n/total` reachable regardless of whether the backend includes the
+  // default key in the `_translations` map.
+  const translatable = locales.filter(l => l.code !== defaultLocale);
+  const total = translatable.length;
+  const translated = translatable.reduce(
     (n, l) => (translations[l.code]?.translated ? n + 1 : n),
     0
   );
 
   const complete = translated >= total;
-  const missing = locales
+  const missing = translatable
     .filter(l => !translations[l.code]?.translated)
     .map(l => l.label);
 

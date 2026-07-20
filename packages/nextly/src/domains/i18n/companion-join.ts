@@ -246,18 +246,29 @@ export function buildLocalizedOrderExpr(args: {
   /** The companion column name (snake_case). */
   column: string;
   localeChain: string[];
+  /**
+   * Per-locale status filter. When set, each subquery also requires
+   * `_status = statusValue`, so a public read never orders by a draft translation's
+   * value (an ordering-only leak otherwise).
+   */
+  statusValue?: string;
 }): SQL {
   const {
     companionTableName,
     mainIdColumn,
     column: columnName,
     localeChain,
+    statusValue,
   } = args;
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
+  const statusPredicate =
+    statusValue !== undefined
+      ? sql` AND ${t}.${sql.identifier("_status")} = ${statusValue}`
+      : sql``;
   const perLocale = localeChain.map(
     code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}), '')`
+      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
   );
   return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }

@@ -58,6 +58,7 @@ import type {
   DataFieldConfig,
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -130,9 +131,25 @@ export class ComponentSchemaService {
   /**
    * Generate SQL migration for creating a new component data table.
    */
-  generateMigrationSQL(tableName: string, fields: FieldConfig[]): string {
+  generateMigrationSQL(
+    tableName: string,
+    fields: FieldConfig[],
+    options: { localized?: boolean } = {}
+  ): string {
     const types = SQL_COLUMN_TYPES[this.dialect];
     const tsDefault = TIMESTAMP_DEFAULT[this.dialect];
+    // i18n: a localized component omits its translatable columns from the main comp_ CREATE
+    // (they live in the companion `comp_<slug>_locales` table, provisioned out-of-band).
+    const localizedNames = options.localized
+      ? new Set(
+          resolveLocalizedFieldNames(
+            fields as unknown as Parameters<
+              typeof resolveLocalizedFieldNames
+            >[0],
+            true
+          )
+        )
+      : new Set<string>();
 
     const lines: string[] = [];
     lines.push(`-- Create component data table: ${tableName}`);
@@ -162,6 +179,10 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
       if (isComponentField(field)) continue;
+      // i18n: translatable columns live in the companion, not the main comp_ table.
+      if ("name" in field && field.name && localizedNames.has(field.name)) {
+        continue;
+      }
 
       const columnSQL = this.generateColumnSQL(field);
       if (columnSQL) {
@@ -203,6 +224,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!this.fieldHasForeignKey(field)) continue;
 
       const columnName = this.toSnakeCase(field.name);
@@ -223,6 +246,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!("index" in field && field.index)) continue;
       if (this.fieldHasForeignKey(field)) continue;
 
@@ -244,6 +269,8 @@ export class ComponentSchemaService {
       if (!isDataField(field)) continue;
       if (isComponentField(field)) continue;
       if (!("name" in field) || !field.name) continue;
+      // Localized fields live in the companion, not the main comp_ table — no main index.
+      if (localizedNames.has(field.name)) continue;
       if (!("unique" in field && field.unique)) continue;
 
       const columnName = this.toSnakeCase(field.name);
@@ -394,14 +421,36 @@ export class ComponentSchemaService {
   // Returns an opaque Drizzle table object (PgTable | MySqlTable | SQLiteTable).
   // Typed as `unknown` because the column shape is dynamic at compile time;
   // callers cast at the use site.
-  generateRuntimeSchema(tableName: string, fields: FieldConfig[]): unknown {
+  generateRuntimeSchema(
+    tableName: string,
+    fields: FieldConfig[],
+    options: { localized?: boolean } = {}
+  ): unknown {
+    // i18n: when the component is localized, its translatable fields live in the
+    // companion `comp_<slug>_locales` table and are omitted from the main runtime
+    // table — kept in lockstep with buildDesiredTableFromComponentFields' `localized`
+    // option so the diff and the DDL agree.
+    const localizedNames = options.localized
+      ? new Set(
+          resolveLocalizedFieldNames(
+            fields as unknown as Parameters<
+              typeof resolveLocalizedFieldNames
+            >[0],
+            true
+          )
+        )
+      : new Set<string>();
+    const mainFields = fields.filter(f => {
+      const name = "name" in f ? (f as { name?: string }).name : undefined;
+      return !name || !localizedNames.has(name);
+    });
     switch (this.dialect) {
       case "postgresql":
-        return this.generatePostgresSchema(tableName, fields);
+        return this.generatePostgresSchema(tableName, mainFields);
       case "mysql":
-        return this.generateMySQLSchema(tableName, fields);
+        return this.generateMySQLSchema(tableName, mainFields);
       case "sqlite":
-        return this.generateSQLiteSchema(tableName, fields);
+        return this.generateSQLiteSchema(tableName, mainFields);
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }

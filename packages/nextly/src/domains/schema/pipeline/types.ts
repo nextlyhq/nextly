@@ -30,6 +30,13 @@ export interface DesiredCollection {
    * pipeline knows to add it on first enable and drop it on disable.
    */
   status?: boolean;
+  /**
+   * Whether the collection is localized (i18n). When true, translatable fields
+   * are omitted from the main table's desired snapshot because they live in the
+   * companion `_locales` table. Without this the push/HMR/preview diff re-adds
+   * the localized columns to the main table.
+   */
+  localized?: boolean;
 }
 
 export interface DesiredSingle {
@@ -39,6 +46,9 @@ export interface DesiredSingle {
   indexes?: IndexConfig[];
   /** Same semantics as DesiredCollection.status. */
   status?: boolean;
+  /** Same semantics as DesiredCollection.localized — translatable fields live in
+   *  the companion `single_<slug>_locales` table and are omitted from main. */
+  localized?: boolean;
 }
 
 export interface DesiredComponent {
@@ -46,4 +56,7 @@ export interface DesiredComponent {
   tableName: string;
   fields: FieldConfig[];
   indexes?: IndexConfig[];
+  /** Same semantics as DesiredCollection.localized — translatable fields live in
+   *  the companion `comp_<slug>_locales` table and are omitted from main. */
+  localized?: boolean;
 }

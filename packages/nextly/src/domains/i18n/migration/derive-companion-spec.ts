@@ -46,7 +46,13 @@ export function deriveCompanionSpec(
   }
   if (columns.length === 0) return null;
 
-  const mainTable = resolveCollectionTableName(args.slug, args.dbName);
+  // Use the caller-supplied physical table name verbatim (all callers pass the resolved
+  // `tableName`, e.g. `dc_authors`, `single_site_settings`, `comp_seo`). Only fall back to
+  // the `dc_` collection convention when no dbName is given. Do NOT route through
+  // resolveCollectionTableName here — it force-prepends `dc_`, which would double-prefix a
+  // single/component companion (e.g. `dc_single_site_settings_locales`).
+  const mainTable =
+    args.dbName ?? resolveCollectionTableName(args.slug, args.dbName);
   return {
     dialect: args.dialect,
     collection: args.slug,

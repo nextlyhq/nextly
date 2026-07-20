@@ -12,12 +12,14 @@ function normalizeLocale(input: LocaleInput): ResolvedLocale {
   const fallbackLocale =
     input.fallbackLocale === undefined
       ? []
-      : Array.isArray(input.fallbackLocale)
-        ? input.fallbackLocale
+      : // Copy the array (don't alias the caller's) so later use can't mutate user input (L19).
+        Array.isArray(input.fallbackLocale)
+        ? [...input.fallbackLocale]
         : [input.fallbackLocale];
   return {
     code: input.code,
-    label: input.label ?? input.code,
+    // Treat an empty/whitespace-only label as absent so the UI falls back to the code (L19).
+    label: input.label && input.label.trim() !== "" ? input.label : input.code,
     rtl: input.rtl ?? false,
     fallbackLocale,
   };

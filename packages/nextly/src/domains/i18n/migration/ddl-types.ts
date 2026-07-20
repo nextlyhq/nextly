@@ -74,6 +74,16 @@ export function q(id: string, dialect: SupportedDialect): string {
   return dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
 }
 
+/**
+ * Escape a value for use inside a single-quoted SQL string literal (doubles embedded quotes).
+ * Defense-in-depth (L9): the values interpolated into generated migration SQL — locale codes,
+ * collection slugs, column names — are already validated upstream, but they are written to an
+ * executable `.sql` file, so escaping removes any residual injection surface.
+ */
+export function lit(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 /** Cast a column expression to text for archival, per dialect. */
 export function castText(colExpr: string, dialect: SupportedDialect): string {
   return dialect === "mysql"

@@ -62,7 +62,10 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { resolveRequestedLocale } from "../../i18n/resolve-locale";
+import {
+  isValidLocale,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -297,6 +300,27 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * reject an unrecognized write locale with a 400 instead of silently mapping it to
+   * the default locale (which would write the translatable values into the DEFAULT companion
+   * row, potentially overwriting real default content). Returns a 400 result, or null when the
+   * locale is absent/valid or localization is off.
+   */
+  private rejectInvalidWriteLocale(
+    locale: string | undefined
+  ): CollectionServiceResult | null {
+    if (!locale || !this.localization) return null;
+    if (isValidLocale(this.localization, locale)) return null;
+    return {
+      success: false,
+      statusCode: 400,
+      message:
+        `Unknown locale '${locale}'. Configured locales: ` +
+        `${this.localization.locales.map(l => l.code).join(", ")}.`,
+      data: null,
+    };
+  }
+
+  /**
    * Upsert the companion `_locales` row for `(parentId, locale)` with the provided localized
    * columns (i18n M5, updateEntry). Only the provided columns are written — an existing row for
    * another locale, or other localized fields on this locale's row, are left untouched. Uses the
@@ -416,7 +440,7 @@ export class CollectionMutationService extends BaseService {
     // i18n M6: per-locale draft/publish. The companion `_status` for the write's locale comes
     // from the write's status value. On create it defaults to 'draft'; on update it changes
     // ONLY when `status` is explicitly in the patch (so editing German content doesn't
-    // un-publish German). The main table keeps its own `status` column unchanged.
+    // un-publish German).
     if (companion.hasStatus) {
       const statusVal = entryData.status;
       if (typeof statusVal === "string") {
@@ -424,11 +448,17 @@ export class CollectionMutationService extends BaseService {
       } else if (isCreate) {
         companionData._status = "draft";
       }
-      if (!isCreate) {
-        // Per-locale draft/publish lives on the companion row's `_status`; a
-        // single-locale update must not rewrite the main table's own status
-        // column (that global publish is publishAllLocales' job), so drop the
-        // status from the main update payload. Create still seeds the main row.
+
+      // the main table's `status` gates entry-level visibility (the read
+      // path filters rows on it). A per-locale status change for a NON-default
+      // locale must NOT clobber it — otherwise unpublishing e.g. German would
+      // unpublish the whole entry (all locales). Only the default-locale write is
+      // the entry-level status action, so strip `status` from the main payload for
+      // any other locale. `writeLocale` is already resolved/validated above.
+      if (
+        writeLocale !== this.localization.defaultLocale &&
+        Object.prototype.hasOwnProperty.call(entryData, "status")
+      ) {
         delete entryData.status;
       }
     }
@@ -935,6 +965,10 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
+      // reject an unknown write locale before doing anything else.
+      const badLocale = this.rejectInvalidWriteLocale(params.locale);
+      if (badLocale) return badLocale;
+
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       // 1. Check collection-level access FIRST
@@ -1372,6 +1406,9 @@ export class CollectionMutationService extends BaseService {
             parentTable: tableName,
             fields: fields as unknown as FieldConfig[],
             data: componentFieldData,
+            // i18n: thread the write locale so an embedded localized component writes
+            // translatable fields to its companion within the same transaction.
+            locale: params.locale,
           });
         }
 
@@ -1679,13 +1716,21 @@ export class CollectionMutationService extends BaseService {
         !!versionsConfig?.enabled ||
         (hasMainStatus && previousStatus !== "published");
 
+      // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
+      // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
+      // as an integer Unix-seconds column (Drizzle `integer` timestamp mode), so `unixepoch()`
+      // keeps the value numeric; `CURRENT_TIMESTAMP` would write a text string and corrupt
+      // decoding/ordering. Postgres/MySQL use the native timestamp default.
+      const nowExpr =
+        this.dialect === "sqlite" ? "unixepoch()" : "CURRENT_TIMESTAMP";
+
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           if (hasMainStatus) {
             await tx.execute(
-              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)} WHERE ${q("id")} = ${ph(2)}`,
+              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
               ["published", params.entryId]
             );
           }
@@ -1779,6 +1824,27 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
+      // emit the post-commit "updated" reaction event so cache
+      // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
+      // reaction failure must not fail the already-committed publish.
+      try {
+        const [updated] = await this.db
+          .select()
+          .from(schema)
+          .where(eq(schema.id, params.entryId))
+          .limit(1);
+        if (updated) {
+          emitCollectionEvent(
+            "updated",
+            params.collectionName,
+            updated as Record<string, unknown>,
+            params.user
+          );
+        }
+      } catch {
+        // Reaction/event emission is non-critical; the publish already committed.
+      }
+
       return {
         success: true,
         statusCode: 200,
@@ -1816,6 +1882,10 @@ export class CollectionMutationService extends BaseService {
     depth?: number
   ): Promise<CollectionServiceResult> {
     try {
+      // reject an unknown write locale before doing anything else.
+      const badLocale = this.rejectInvalidWriteLocale(params.locale);
+      if (badLocale) return badLocale;
+
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       const schema = await this.fileManager.loadDynamicSchema(
@@ -2350,6 +2420,9 @@ export class CollectionMutationService extends BaseService {
               parentTable: tableName,
               fields: fields as unknown as FieldConfig[],
               data: attemptComponentData,
+              // i18n: thread the write locale so an embedded localized component writes
+              // translatable fields to its companion within the same transaction.
+              locale: params.locale,
             });
           }
 

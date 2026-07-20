@@ -18,6 +18,7 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
+import { useState } from "react";
 
 import {
   SingleForm,
@@ -34,6 +35,7 @@ import {
   useSingleSchema,
   useUpdateSingleDocument,
 } from "@admin/hooks/queries/useSingles";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
 
 // ============================================================================
@@ -156,6 +158,12 @@ export default function SingleEditPage({
 }: SingleEditPageProps): React.ReactElement {
   const slug = params?.slug;
 
+  // i18n: active content language for this editor. `undefined` = the app's default locale (the
+  // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
+  // routes saves to the chosen language. Inert for non-localized singles.
+  const [locale, setLocale] = useState<string | undefined>(undefined);
+  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+
   // Fetch Single schema (field definitions)
   const {
     data: schema,
@@ -168,11 +176,28 @@ export default function SingleEditPage({
     data: document,
     isLoading: isLoadingDocument,
     error: documentError,
-  } = useSingleDocument(slug);
+  } = useSingleDocument(slug, {
+    locale,
+    // i18n: edit the ACTUAL per-locale values — disable fallback so an untranslated field shows
+    // empty (not the default-language value, which would bleed the source text into the field and
+    // risk saving it into the target locale). The inline source hint is shown from `sourceDoc`.
+    fallbackLocale: localizationEnabled ? "none" : undefined,
+    translationStatus: localizationEnabled,
+  });
 
-  // Update mutation
+  // i18n: while translating a non-default language, also load the default-language document so the
+  // editor can show the source text inline on each translatable field. Gated so it only fires when
+  // actually translating another language.
+  const isNonDefaultLocale =
+    !!locale && !!defaultLocale && locale !== defaultLocale;
+  const { data: sourceDoc } = useSingleDocument(slug, {
+    locale: defaultLocale,
+    queryOptions: { enabled: isNonDefaultLocale && !!slug },
+  });
+
+  // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
-    useUpdateSingleDocument(slug || "");
+    useUpdateSingleDocument(slug || "", locale);
 
   const isLoading = isLoadingSchema || isLoadingDocument;
   const error = schemaError || documentError;
@@ -287,6 +312,10 @@ export default function SingleEditPage({
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}
+          // i18n: active language + switcher + inline source values for translatable fields.
+          locale={locale}
+          onLocaleChange={setLocale}
+          sourceValues={isNonDefaultLocale ? sourceDoc : undefined}
           // collections, so the page route owns navigation. Breadcrumbs and
           // DocumentTabs (Edit / API) are removed; the API view is reachable
           // via the consolidated dropdown in the system header.

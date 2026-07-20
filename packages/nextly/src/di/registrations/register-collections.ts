@@ -99,7 +99,9 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
 
     const dynamicCollectionService = new DynamicCollectionService(
       adapter,
-      logger
+      logger,
+      // i18n: the default locale seeds/restores the companion on a localization toggle.
+      ctx.config.localization?.defaultLocale
     );
 
     const metadataService = new CollectionMetadataService(

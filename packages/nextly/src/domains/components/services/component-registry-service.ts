@@ -50,6 +50,8 @@ export interface CodeFirstComponentConfig {
   tableName?: string;
   admin?: ComponentAdminOptions;
   configPath?: string;
+  /** i18n: whether the component is localized (translatable fields → companion table). */
+  localized?: boolean;
 }
 
 export interface SyncComponentResult {
@@ -179,6 +181,9 @@ export class ComponentRegistryService extends BaseRegistryService<
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
       locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      // i18n: persist the localized flag so embedded instances route translatable
+      // fields to the companion `comp_<slug>_locales` table.
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -241,6 +246,9 @@ export class ComponentRegistryService extends BaseRegistryService<
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
       locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      // i18n: persist the localized flag so embedded instances route translatable
+      // fields to the companion `comp_<slug>_locales` table.
+      localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
       schema_version: data.schemaVersion ?? 1,
@@ -314,6 +322,13 @@ export class ComponentRegistryService extends BaseRegistryService<
 
     if (data.locked !== undefined) {
       updateData.locked = data.locked ? 1 : 0;
+    }
+
+    // i18n: persist the Internationalization flag on update. Previously omitted, so a component
+    // toggled localized in the UI (or a code-first sync flag flip) could never update the column
+    // — only registerComponent (create) ever wrote it. Mirrors the collection/single registries.
+    if (data.localized !== undefined) {
+      updateData.localized = data.localized === true ? 1 : 0;
     }
 
     if (data.configPath !== undefined) {
@@ -444,11 +459,15 @@ export class ComponentRegistryService extends BaseRegistryService<
             admin: config.admin,
             source: "code",
             locked: true,
+            localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
           });
           result.created.push(config.slug);
-        } else if (!schemaHashesMatch(schemaHash, existing.schemaHash)) {
+        } else if (
+          !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+          (config.localized === true) !== (existing.localized === true)
+        ) {
           await this.updateComponent(
             config.slug,
             {
@@ -459,6 +478,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               configPath: config.configPath,
               schemaHash,
               locked: true,
+              localized: config.localized === true,
             },
             { source: "code" }
           );
@@ -904,6 +924,7 @@ export class ComponentRegistryService extends BaseRegistryService<
         : undefined,
       source: r.source as ComponentSource,
       locked: Boolean(r.locked),
+      localized: Boolean(r.localized),
       configPath,
       schemaHash,
       schemaVersion,

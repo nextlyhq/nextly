@@ -140,7 +140,11 @@ describe("document status-transition events (integration)", () => {
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");
-    await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    // The code-first boot sync now provisions the companion for a localized collection, so only
+    // create it here if it isn't already present (older setups relied on this manual create).
+    if (!(await current.adapter.tableExists(spec.companionTable))) {
+      await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    }
 
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
@@ -202,7 +206,11 @@ describe("document status-transition events (integration)", () => {
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");
-    await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    // The code-first boot sync now provisions the companion for a localized collection, so only
+    // create it here if it isn't already present (older setups relied on this manual create).
+    if (!(await current.adapter.tableExists(spec.companionTable))) {
+      await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
+    }
 
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");

@@ -129,7 +129,11 @@ export async function previewDesiredSchema(
       c.tableName,
       c.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
       dialect,
-      { hasStatus: c.status === true }
+      // Forward `localized` so a localized collection's translatable columns are
+      // omitted from the preview's desired snapshot (they live in the companion
+      // `_locales` table); otherwise the diff reports them as missing and the
+      // SchemaChangeDialog tries to re-add them to the main table.
+      { hasStatus: c.status === true, localized: c.localized === true }
     )
   );
   const singleTables = Object.values(desired.singles).map(s =>
@@ -137,7 +141,10 @@ export async function previewDesiredSchema(
       s.tableName,
       s.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
       dialect,
-      { hasStatus: s.status === true }
+      // Forward `localized` so a localized single's translatable columns are omitted from the
+      // preview's desired snapshot (they live in the companion), matching the collection path —
+      // otherwise the diff reports phantom main-table changes the apply never makes.
+      { hasStatus: s.status === true, localized: s.localized === true }
     )
   );
   const componentTables = Object.values(desired.components).map(c =>
@@ -146,7 +153,10 @@ export async function previewDesiredSchema(
       c.fields as unknown as Parameters<
         typeof buildDesiredTableFromComponentFields
       >[1],
-      dialect
+      dialect,
+      // Forward `localized` so a localized component's translatable columns are omitted from the
+      // preview's desired snapshot (they live in the companion), matching collections/singles.
+      { localized: (c as { localized?: boolean }).localized === true }
     )
   );
   const desiredSnapshot: NextlySchemaSnapshot = {

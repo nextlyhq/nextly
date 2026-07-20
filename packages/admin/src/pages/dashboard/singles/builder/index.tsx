@@ -59,6 +59,10 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         // first enable. Not yet on ApiSingle's typed shape on the create
         // payload — cast through the Partial<ApiSingle>.
         ...(values.status === true ? { status: true } : {}),
+        // i18n: persist the Internationalization flag at create. Fields are empty here, so the
+        // companion has no columns yet — it is provisioned when the first translatable field is
+        // added on the builder page (updateSingleSchema/applySchemaChanges reconcile).
+        ...(values.i18n === true ? { localized: true } : {}),
         // Empty user-fields list — system columns are auto-injected by
         // the server; user adds custom fields on the next page.
         fields: [],
@@ -76,6 +80,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                   settings: {
                     singularName: singular,
                     status: values.status === true,
+                    // i18n: mirror the Internationalization flag into ui-schema.json.
+                    localized: values.i18n === true,
                   },
                   fields: [],
                 })

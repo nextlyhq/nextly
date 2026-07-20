@@ -100,3 +100,6 @@ e2e/.playwright/
 docs/superpowers/
 docs/guides/manual-testing-migrations.md
 docs/guides/testing-migrations.md
+
+# Generated dynamic migrations leaked when the package src is used as an app root in tests/playground
+packages/nextly/src/db/migrations/dynamic/*.sql

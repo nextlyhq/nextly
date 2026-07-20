@@ -158,6 +158,13 @@ export const dynamicComponentsPg = pgTable(
     locked: boolean("locked").default(false).notNull(),
 
     /**
+     * i18n: whether the component is localized. When true, translatable fields live in
+     * the companion `comp_<slug>_locales` table and embedded instances resolve/write them
+     * per language (mirrors `dynamic_collections.localized` / `dynamic_singles.localized`).
+     */
+    localized: boolean("localized").default(false).notNull(),
+
+    /**
      * Path to the config file (code-first Components only).
      * Used for syncing and displaying source location.
      * @example "src/components/seo.ts"

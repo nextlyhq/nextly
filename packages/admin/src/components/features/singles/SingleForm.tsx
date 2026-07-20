@@ -24,7 +24,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -40,9 +40,14 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import {
+  EntryLocaleProvider,
+  type EntryLocaleContextValue,
+} from "@admin/components/features/entries/EntryLocaleContext";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   takeoverControllerNames,
@@ -78,6 +83,12 @@ export interface SingleSchema {
    * `dynamic_singles.status` boolean column.
    */
   status?: boolean;
+  /**
+   * Whether this Single is localized (i18n). Drives the per-language switcher
+   * and per-field translatability in the editor. Backed by
+   * `dynamic_singles.localized`.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -105,6 +116,19 @@ export interface SingleFormProps {
    *  header dropdown. Singles' API URL pattern differs from collections,
    *  so the page route handles navigation. */
   onViewApi?: () => void;
+  /**
+   * i18n: the active content language (undefined = app default). Drives the per-language
+   * switcher and per-field translatability; saves target this locale. Inert for non-localized
+   * singles. Mirrors EntryForm.
+   */
+  locale?: string;
+  /** i18n: switch the active editing language (from the in-form status pills). */
+  onLocaleChange?: (locale: string) => void;
+  /**
+   * i18n: default-language field values, so a translatable field can show its source text
+   * inline while translating a non-default language. Supplied by the page's source fetch.
+   */
+  sourceValues?: Record<string, unknown>;
   /** Additional CSS classes */
   className?: string;
 }
@@ -300,6 +324,9 @@ export function SingleForm({
   isSubmitting = false,
   onCancel,
   onViewApi,
+  locale,
+  onLocaleChange,
+  sourceValues,
   className,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations. Singles render title/slug
@@ -343,16 +370,30 @@ export function SingleForm({
     mode: "onSubmit",
   });
 
-  // Reset form only when the actual document changes (different ID or new version).
-  // Reason: defaultValues and form.reset are intentionally excluded — React Query
-  // refetches produce new object references even for identical data, and including
-  // the full object would reset the form mid-edit, discarding unsaved changes.
+  // Keep the latest computed defaultValues in a ref so the reset effect can read
+  // them without depending on the `defaultValues` object identity: React Query
+  // refetches produce a fresh reference even for identical data, so depending on
+  // it would reset the form mid-edit and discard unsaved changes.
+  const defaultValuesRef = useRef(defaultValues);
+  defaultValuesRef.current = defaultValues;
+
+  // Reset the form only when the document's identity actually changes (different
+  // ID or new version) or the active locale changes — not on every refetch. The
+  // effect depends on the full reactive values (document, locale, form), but a
+  // last-applied key guards the reset so a refetch that returns the same
+  // id/updatedAt/locale is a no-op and preserves in-progress edits. `locale` is a
+  // trigger so switching to an already-cached language (no refetch, so no
+  // unmount/remount) still resets the form to that locale's values; otherwise the
+  // previous language's inputs would linger. A first-time switch refetches and
+  // remounts via the page's loading gate, which resets naturally.
+  const lastResetKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (document) {
-      form.reset(defaultValues);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document?.id, document?.updatedAt]);
+    if (!document) return;
+    const resetKey = `${document.id}:${String(document.updatedAt)}:${locale}`;
+    if (lastResetKeyRef.current === resetKey) return;
+    lastResetKeyRef.current = resetKey;
+    form.reset(defaultValuesRef.current);
+  }, [document, locale, form]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -458,6 +499,10 @@ export function SingleForm({
   // localStorage key).
   const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
 
+  // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
+  // context passed to field components and the language pills. Inert for non-localized singles.
+  const { getLocale, defaultLocale } = useLocalization();
+
   // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -469,95 +514,120 @@ export function SingleForm({
     createdAt: (document as { createdAt?: string }).createdAt,
     updatedAt: document.updatedAt,
     title: (document as { title?: string }).title,
+    // forward the per-locale translation-status map so the rail's Document panel renders
+    // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
+    // singles / when translation-status wasn't requested → pills render nothing.
+    _translations: (document as { _translations?: unknown })._translations,
   } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
 
-  return (
-    <div className={cn("space-y-0", className)}>
-      <EntryFormProvider form={form} onSubmit={handleSubmit}>
-        <FormErrorSummary
-          errors={errors}
-          submitCount={submitCount}
-          className="mx-6 mt-3"
-        />
+  // i18n: content-locale context for field components + the rail's language pills. Built like
+  // EntryForm's, but `collectionSlug`/`entryId` are intentionally omitted so the collection-only
+  // in-form actions (copy-from-language, publish-all-languages) hide for singles — they return
+  // null without a collectionSlug. Inert for non-localized singles.
+  const localeCtx: EntryLocaleContextValue = {
+    locale,
+    rtl: getLocale(locale)?.rtl ?? false,
+    collectionLocalized: schema.localized === true,
+    isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
+    sourceValues,
+    onLocaleChange,
+  };
 
-        <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
-          {/* Main column */}
-          <div className="flex-1 min-w-0 flex flex-col">
-            {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
+  return (
+    <EntryLocaleProvider value={localeCtx}>
+      <div className={cn("space-y-0", className)}>
+        <EntryFormProvider form={form} onSubmit={handleSubmit}>
+          <FormErrorSummary
+            errors={errors}
+            submitCount={submitCount}
+            className="mx-6 mt-3"
+          />
+
+          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+            {/* Main column */}
+            <div className="flex-1 min-w-0 flex flex-col">
+              {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
                 already cancels PageContainer's px-8, so wrapping the header / meta
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}
-            <EntrySystemHeader
-              mode="edit"
-              titleField={titleField}
-              hasStatus={hasStatus}
-              isSubmitting={isSubmitting}
-              isDirty={isDirty}
-              entry={entryLike}
-              collectionSlug={schema.slug}
-              toolbarSlot={
-                <EntryFormToolbarSlots
-                  context="single"
-                  controllerField={controllerNames[0]}
-                />
-              }
-              onSaveDraft={() => {
-                void handleSubmit(undefined, "save-draft");
-              }}
-              onPublish={() => {
-                void handleSubmit(undefined, "publish");
-              }}
-              onSaveChanges={() => {
-                void handleSubmit(undefined, "save-changes");
-              }}
-              onUnpublish={() => {
-                void handleSubmit(undefined, "unpublish");
-              }}
-              onCancel={handleCancel}
-              onViewApi={onViewApi}
-              /* Why: Singles share the Show JSON dialog with collections,
+              <EntrySystemHeader
+                mode="edit"
+                titleField={titleField}
+                hasStatus={hasStatus}
+                isSubmitting={isSubmitting}
+                isDirty={isDirty}
+                entry={entryLike}
+                collectionSlug={schema.slug}
+                /* i18n: forward the active locale + switch handler so a localized single shows
+                   the primary header language switcher (the sidebar pills are unavailable when
+                   the rail is collapsed or on narrow layouts). The switcher self-hides when the
+                   single isn't localized / localization isn't configured. */
+                locale={locale}
+                onLocaleChange={onLocaleChange}
+                toolbarSlot={
+                  <EntryFormToolbarSlots
+                    context="single"
+                    controllerField={controllerNames[0]}
+                  />
+                }
+                onSaveDraft={() => {
+                  void handleSubmit(undefined, "save-draft");
+                }}
+                onPublish={() => {
+                  void handleSubmit(undefined, "publish");
+                }}
+                onSaveChanges={() => {
+                  void handleSubmit(undefined, "save-changes");
+                }}
+                onUnpublish={() => {
+                  void handleSubmit(undefined, "unpublish");
+                }}
+                onCancel={handleCancel}
+                onViewApi={onViewApi}
+                /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-              scope="single"
-              lockIdentity
-              isRailCollapsed={railCollapsed}
-              onToggleRail={toggleRail}
-            />
-            <EntryMetaStrip
-              slugField={slugField}
-              hasStatus={hasStatus}
-              status={documentStatus}
-              isRailCollapsed={railCollapsed}
-              lockSlug
-            />
+                scope="single"
+                lockIdentity
+                isRailCollapsed={railCollapsed}
+                onToggleRail={toggleRail}
+              />
+              <EntryMetaStrip
+                slugField={slugField}
+                hasStatus={hasStatus}
+                status={documentStatus}
+                isRailCollapsed={railCollapsed}
+                lockSlug
+              />
 
-            {mainFields.length > 0 && (
-              <div className="@4xl/content:p-8 pt-6">
-                <EntryFormContent
-                  fields={mainFields}
-                  disabled={isSubmitting}
-                  withCard
-                />
+              {mainFields.length > 0 && (
+                <div className="@4xl/content:p-8 pt-6">
+                  <EntryFormContent
+                    fields={mainFields}
+                    disabled={isSubmitting}
+                    withCard
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Rail (collapsible). Same shape and width as collections. */}
+            {!railCollapsed && (
+              <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                  <EntryFormSidebar
+                    mode="edit"
+                    entry={entryLike}
+                    hasStatus={hasStatus}
+                    isDirty={isDirty}
+                  />
+                </div>
               </div>
             )}
           </div>
-
-          {/* Rail (collapsible). Same shape and width as collections. */}
-          {!railCollapsed && (
-            <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-              <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                <EntryFormSidebar
-                  mode="edit"
-                  entry={entryLike}
-                  hasStatus={hasStatus}
-                  isDirty={isDirty}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </EntryFormProvider>
-    </div>
+        </EntryFormProvider>
+      </div>
+    </EntryLocaleProvider>
   );
 }

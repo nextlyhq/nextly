@@ -46,10 +46,26 @@ export interface GetSingleOptions {
   depth?: number;
 
   /**
-   * Locale for localized fields.
-   * Reserved for future i18n support.
+   * Locale for localized fields. Translatable fields resolve to this language
+   * (with fallback) from the companion `single_<slug>_locales` table.
    */
   locale?: string;
+
+  /**
+   * Fallback control (i18n). `false` / `"none"` disables fallback — an
+   * untranslated field returns empty instead of the default-locale value (so
+   * the admin editor can show blanks for a language that hasn't been
+   * translated yet). Otherwise the configured fallback chain + default locale
+   * is used. Mirrors the collection read path.
+   */
+  fallbackLocale?: string | false;
+
+  /**
+   * When true, attach a per-locale `_translations` map (translated + status)
+   * to the document for the admin's per-language status pills. No-op when the
+   * Single isn't localized. Mirrors the collection read path.
+   */
+  translationStatus?: boolean;
 
   /** User context for access control and hooks. */
   user?: UserContext;

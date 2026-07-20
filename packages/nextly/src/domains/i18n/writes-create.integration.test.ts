@@ -38,7 +38,7 @@ async function createCompanionTable(t: TestNextly): Promise<void> {
     executeQuery: (sql: string) => Promise<unknown>;
   };
   await adapter.executeQuery(
-    'CREATE TABLE "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
+    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
   );
 }
 
@@ -47,7 +47,12 @@ function handlerOf(t: TestNextly) {
     createEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
-    ) => Promise<{ success: boolean; message?: string; item?: { id: string } }>;
+    ) => Promise<{
+      success: boolean;
+      statusCode?: number;
+      message?: string;
+      item?: { id: string };
+    }>;
     updateEntry: (
       p: Record<string, unknown>,
       body: Record<string, unknown>
@@ -57,6 +62,20 @@ function handlerOf(t: TestNextly) {
     }>;
   };
 }
+
+describe("createEntry — write locale validation (L2)", () => {
+  it("rejects an unknown write locale with a 400 instead of writing to the default", async () => {
+    const t = await boot();
+    await createCompanionTable(t);
+    const res = await handlerOf(t).createEntry(
+      { collectionName: "pages", locale: "xx", overrideAccess: true },
+      { title: "T", heading: "Hallo" }
+    );
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(400);
+    expect(res.message).toMatch(/unknown locale 'xx'/i);
+  });
+});
 
 describe("createEntry — localized write routing (M5a)", () => {
   it("routes the localized value to the companion row for the write locale", async () => {
@@ -116,15 +135,22 @@ describe("createEntry — localized write routing (M5a)", () => {
   it("dev (no companion table): localized value stays on the main table, write succeeds", async () => {
     const t = await boot();
     const handler = handlerOf(t);
-    // No companion table created → dev/unmigrated path.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
+    };
+    // Recreate the pre-migration shape: the collection was just marked localized, so the
+    // main table still carries the translatable column and no companion exists yet. The
+    // code-first boot sync provisions the companion and drops the column from main, so undo
+    // that here to exercise the unmigrated fallback (values stay on main until migrate runs).
+    await adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
+    await adapter.executeQuery(
+      'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
+    );
     const res = await handler.createEntry(
       { collectionName: "pages", locale: "de", overrideAccess: true },
       { title: "T", heading: "Hallo" }
     );
     expect(res.success).toBe(true);
-    const adapter = t.adapter as unknown as {
-      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
-    };
     const rows = await adapter.executeQuery('SELECT "heading" FROM "dc_pages"');
     expect(rows).toEqual([{ heading: "Hallo" }]);
   });

@@ -44,6 +44,16 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  isValidLocale,
+  resolveRequestedLocale,
+} from "../../i18n/resolve-locale";
+import {
+  buildCompanionSchema,
+  splitLocalizedWrite,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -95,6 +105,9 @@ export class SingleMutationService extends BaseService {
     private readonly hookRegistry: HookRegistry,
     private readonly componentDataService?: ComponentDataService,
     private readonly rbacAccessControlService?: RBACAccessControlService,
+    // i18n: when set and the single is localized, writes route translatable field
+    // values to the companion `single_<slug>_locales` row for the write's locale.
+    private readonly localization?: SanitizedLocalizationConfig,
     accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
@@ -106,7 +119,8 @@ export class SingleMutationService extends BaseService {
       singleRegistryService,
       hookRegistry,
       componentDataService,
-      rbacAccessControlService
+      rbacAccessControlService,
+      localization
     );
   }
 
@@ -135,6 +149,23 @@ export class SingleMutationService extends BaseService {
           success: false,
           statusCode: 404,
           message: `Single "${slug}" not found`,
+        };
+      }
+
+      // 1.1. reject an unknown write locale rather than silently writing the
+      // translatable values into the DEFAULT companion row (which would overwrite real
+      // default content). Mirrors the collection write path.
+      if (
+        this.localization &&
+        options.locale &&
+        !isValidLocale(this.localization, options.locale)
+      ) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Unknown locale '${options.locale}'. Configured locales: ` +
+            `${this.localization.locales.map(l => l.code).join(", ")}.`,
         };
       }
 
@@ -242,6 +273,35 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
+      // i18n: build the companion schema + write-locale context up front so validation is
+      // language-aware and the split/upsert below reuse it. `companion` is null when the single
+      // isn't localized (unchanged path) — gate on THIS single's `localized` flag so a
+      // non-localized single in a localized app doesn't route to a companion never created.
+      const companion =
+        this.localization && singleMeta.localized === true
+          ? buildCompanionSchema({
+              slug,
+              tableName: singleMeta.tableName,
+              fields: singleMeta.fields as { name: string; type: string }[],
+              dialect: this.adapter.dialect,
+              status: (singleMeta as { status?: boolean }).status === true,
+            })
+          : null;
+      const writeLocale =
+        companion && this.localization
+          ? resolveRequestedLocale(this.localization, options.locale)
+          : undefined;
+      const localizedFieldNames = new Set(
+        (companion?.localizedFields ?? []).map(f => f.name)
+      );
+      // A non-default-locale write may leave required localized fields blank (they fall back
+      // until translated); only the default-locale write enforces required. Mirrors collections.
+      const enforceLocalizedRequired =
+        !companion ||
+        writeLocale === undefined ||
+        !this.localization ||
+        writeLocale === this.localization.defaultLocale;
+
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
@@ -252,6 +312,8 @@ export class SingleMutationService extends BaseService {
           {
             mode: "update",
             req: options.user ? { user: options.user } : {},
+            localizedFieldNames,
+            enforceLocalizedRequired,
           }
         );
         if (validationIssues.length > 0) {
@@ -306,11 +368,12 @@ export class SingleMutationService extends BaseService {
         string,
         unknown
       >;
-      // Commit the scalar update and the component subtree writes atomically so
-      // a component-save failure rolls back the scalar update (no partial single
-      // state). The scalar row and comp_ tables both write on the same tx. The
-      // rows are RETURNED from the callback (not assigned to an outer variable),
-      // so the value read below is only ever the committed result.
+      // Commit the scalar update, the component subtree writes, the companion
+      // upsert, AND the version snapshot atomically so any failure rolls back the
+      // others (no partial single/localized/version state). The rows are RETURNED
+      // from the callback (not assigned to an outer variable), so the value read
+      // below is only ever the committed result. A localized single writes
+      // `mainPayload` (translatable columns moved to the companion).
       let updatedRows: SingleDocument[];
       try {
         // Retry the whole update+capture transaction on a version_no allocation
@@ -325,9 +388,45 @@ export class SingleMutationService extends BaseService {
               ...snakeCaseData,
               updated_at: new Date(),
             };
+
+            // 8.5. i18n: for a localized single, split translatable columns out of
+            // the main update — they live on the companion `single_<slug>_locales`
+            // row, not the main table. `companion` and `writeLocale` were resolved
+            // above (before validation); the split reuses them. Done inside the
+            // closure so a retry re-splits the freshly-timestamped payload.
+            const { main: mainPayload, companion: companionData } = companion
+              ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+              : {
+                  main: updatePayload,
+                  companion: {} as Record<string, unknown>,
+                };
+
+            // per-locale status. The status the companion row carries —
+            // from `updatePayload` (not `mainPayload`, which may have `status`
+            // stripped just below). Captured so a status-only unpublish still
+            // stamps the per-locale `_status`.
+            const companionStatus =
+              companion?.hasStatus &&
+              typeof (updatePayload as Record<string, unknown>).status ===
+                "string"
+                ? ((updatePayload as Record<string, unknown>).status as string)
+                : undefined;
+            // The main table's `status` is the single's entry-level (default-locale)
+            // publish state, so a per-locale write for a NON-default locale must not
+            // clobber it — that language's draft/publish lives on the companion
+            // `_status` (stamped by the upsert after commit).
+            if (
+              writeLocale !== undefined &&
+              this.localization &&
+              writeLocale !== this.localization.defaultLocale &&
+              Object.prototype.hasOwnProperty.call(mainPayload, "status")
+            ) {
+              delete (mainPayload as Record<string, unknown>).status;
+            }
+
             const rows = await tx.update<SingleDocument>(
               singleMeta.tableName,
-              updatePayload,
+              mainPayload,
               this.whereEq("id", existingDoc.id),
               { returning: "*" }
             );
@@ -344,7 +443,9 @@ export class SingleMutationService extends BaseService {
             // uses this post-save copy (ids populated) rather than the raw input.
             const attemptComponentData = structuredClone(componentFieldData);
 
-            // 9.5. Save component field data to separate comp_{slug} tables
+            // 9.5. Save component field data to separate comp_{slug} tables. The
+            // write locale is threaded so an embedded localized component stores
+            // its translatable fields to the companion for this language.
             if (
               this.componentDataService &&
               Object.keys(attemptComponentData).length > 0
@@ -356,8 +457,44 @@ export class SingleMutationService extends BaseService {
                   parentTable: singleMeta.tableName,
                   fields: fieldConfigs,
                   data: attemptComponentData,
+                  locale: options.locale,
                 }
               );
+            }
+
+            // 9.6. i18n: upsert the companion row for the write locale in the SAME
+            // transaction, stamping the per-locale `_status`. Fires even when only
+            // status changed (companionData empty) so a per-locale unpublish still
+            // updates `_status`. Then merge the written values back onto the
+            // returned row so the PATCH response and afterChange/afterUpdate hooks
+            // see the just-saved translation (the main row omits these columns).
+            if (
+              companion &&
+              writeLocale !== undefined &&
+              (Object.keys(companionData).length > 0 ||
+                companionStatus !== undefined)
+            ) {
+              const txWriteAdapter = {
+                dialect: this.adapter.dialect,
+                executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
+                  tx.execute<T>(sql, params as never),
+              };
+              await upsertCompanionRow(
+                txWriteAdapter,
+                companion.companionTableName,
+                existingDoc.id,
+                writeLocale,
+                companionData,
+                companionStatus
+              );
+              const row = rows[0] as Record<string, unknown>;
+              for (const f of companion.localizedFields) {
+                if (
+                  Object.prototype.hasOwnProperty.call(companionData, f.column)
+                ) {
+                  row[f.column] = companionData[f.column];
+                }
+              }
             }
 
             // Capture a version snapshot atomically with the write when the single
@@ -373,6 +510,25 @@ export class SingleMutationService extends BaseService {
               const parentRow = convertTimestampsToCamelCase({
                 ...(rows[0] as Record<string, unknown>),
               });
+              // i18n: a localized single's main row omits translatable columns
+              // (split to the companion above), so overlay this locale's written
+              // translatable values back onto the snapshot — otherwise the version
+              // records blank translations. Keyed by field.name to match the read
+              // shape; the JSON-parse pass below then normalizes any JSON-backed
+              // localized values (companionData holds serialized strings). Mirrors
+              // the collection capture path.
+              if (companion) {
+                for (const f of companion.localizedFields) {
+                  if (
+                    Object.prototype.hasOwnProperty.call(
+                      companionData,
+                      f.column
+                    )
+                  ) {
+                    parentRow[f.name] = companionData[f.column];
+                  }
+                }
+              }
               // Never let password hashes into durable version history: the row
               // carries bcrypt hashes (hashPasswordFieldValues ran before the
               // write), and a later password change would otherwise leave the
@@ -447,7 +603,12 @@ export class SingleMutationService extends BaseService {
                   scopeSlug: slug,
                   entryId: existingDoc.id,
                 },
-                contentStatus: (parentRow as { status?: unknown }).status,
+                // Prefer the written status; for a per-locale status change it moved
+                // to the companion `_status`, so fall back to that before the row's.
+                contentStatus:
+                  (updatePayload as { status?: unknown }).status ??
+                  companionStatus ??
+                  (parentRow as { status?: unknown }).status,
                 parts: { parentRow, components },
                 createdBy: options.user?.id ?? null,
               });

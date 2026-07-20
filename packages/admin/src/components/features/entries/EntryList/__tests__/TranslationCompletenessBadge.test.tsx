@@ -38,7 +38,9 @@ describe("TranslationCompletenessBadge", () => {
     expect(screen.getByText("-")).toBeInTheDocument();
   });
 
-  it("shows n/total translated and lists the missing languages", () => {
+  // L14: the denominator counts only the translatable (non-default) locales — the
+  // default (en) is the source and is excluded, matching the list language filter.
+  it("shows n/total translated (excluding the default) and lists the missing languages", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     render(
       <TranslationCompletenessBadge
@@ -49,12 +51,13 @@ describe("TranslationCompletenessBadge", () => {
         }}
       />
     );
-    const badge = screen.getByText("2/3");
+    // de + ar are translatable; de done, ar missing → 1/2.
+    const badge = screen.getByText("1/2");
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveAttribute("title", expect.stringContaining("Arabic"));
   });
 
-  it("marks all-translated as complete", () => {
+  it("marks all translatable languages done as complete", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     render(
       <TranslationCompletenessBadge
@@ -65,7 +68,8 @@ describe("TranslationCompletenessBadge", () => {
         }}
       />
     );
-    const badge = screen.getByText("3/3");
+    // Two non-default locales, both translated → 2/2, complete.
+    const badge = screen.getByText("2/2");
     expect(badge).toHaveAttribute("title", "All languages translated");
   });
 });
