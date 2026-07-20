@@ -426,6 +426,10 @@ export class CollectionMutationService extends BaseService {
     // parent so the read-shape snapshot carries this locale's translatable
     // values instead of dropping them.
     localizedFieldValues: Record<string, unknown>;
+    // Whether the companion carries a per-locale `_status` column. Reading that
+    // column on a collection without it fails the whole write, so every read of
+    // it must be gated on this.
+    hasStatus: boolean;
   } | null> {
     if (!this.localization) return null;
     const companion =
@@ -489,6 +493,7 @@ export class CollectionMutationService extends BaseService {
       writeLocale,
       companionData,
       localizedFieldValues,
+      hasStatus: companion.hasStatus,
     };
   }
 
@@ -624,6 +629,13 @@ export class CollectionMutationService extends BaseService {
               // Read on the transaction so components written earlier in it are
               // visible (read-your-writes); the read path strips password fields.
               executor: tx.getDrizzle(),
+              // References only. Expanding a relationship would embed a row from
+              // another collection, which this snapshot has no business copying:
+              // the sensitive-field list describes THIS collection's tree, so a
+              // hidden field on the target would ship unredacted, and the
+              // expansion reads through the pooled relationship service — taking
+              // a second connection while this write holds its own.
+              depth: 0,
               // The write's locale, so a localized component is read back in the
               // same language it was just written in. Without it the read falls
               // back to the default component locale and the snapshot records
@@ -2479,6 +2491,10 @@ export class CollectionMutationService extends BaseService {
             updatedAt: new Date(),
           };
 
+          // This locale's committed status before the write, reused by both the
+          // prior document and the post-write overlay so the two stay symmetric.
+          let committedLocaleStatus: string | null = null;
+
           // Take the row lock the UPDATE below needs anyway, before reading the
           // prior state. Without it two concurrent updates to the same entry
           // interleave: this transaction reads the old row, the other commits,
@@ -2535,16 +2551,15 @@ export class CollectionMutationService extends BaseService {
                   localizedUpdate.writeLocale
                 )
               : {};
-            // Only when this write actually sets a per-locale status. That is
-            // both when it matters for the diff (`data` carries the companion
-            // status only in that case, so anything else keeps previous and data
-            // symmetric on the main-row status) and the precondition that makes
-            // the read safe: companion `_status` is present exactly when the
-            // collection is migrated for per-locale status, and querying it
-            // otherwise fails the whole write.
-            const previousCompanionStatus =
-              localizedUpdate &&
-              typeof localizedUpdate.companionData._status === "string"
+            // The locale's committed status, read before the write. Gated on
+            // `hasStatus` rather than on the patch carrying a status: a content-
+            // only translation update still has to report THIS locale's status,
+            // which can differ from the main row (a German draft under a
+            // published entry). The gate is what keeps the read safe — companion
+            // `_status` exists only on collections migrated for per-locale
+            // status, and querying it otherwise fails the whole write.
+            committedLocaleStatus =
+              localizedUpdate && localizedUpdate.hasStatus
                 ? await this.readCompanionStatus(
                     tx,
                     localizedUpdate.companionTableName,
@@ -2552,6 +2567,7 @@ export class CollectionMutationService extends BaseService {
                     localizedUpdate.writeLocale
                   )
                 : null;
+            const previousCompanionStatus = committedLocaleStatus;
             const previousParent = this.deserializeJsonFieldsForSnapshot(
               {
                 ...convertTimestampsToCamelCase({
@@ -2731,6 +2747,12 @@ export class CollectionMutationService extends BaseService {
               // timestamp and cannot persist forged system values — `preImage`
               // keeps the real committed system columns.
               const companionStatus = localizedUpdate?.companionData?._status;
+              // What this locale's status IS after the write: the value the
+              // patch set, else the one already committed for the locale.
+              const effectiveLocaleStatus =
+                typeof companionStatus === "string"
+                  ? companionStatus
+                  : committedLocaleStatus;
               // A partial translatable update only carries the *changed*
               // localized values in `localizedFieldValues`; the write locale's
               // other companion fields (set by a prior write, untouched here)
@@ -2756,12 +2778,13 @@ export class CollectionMutationService extends BaseService {
                   ...updatePayload,
                   ...priorLocalizedValues,
                   ...(localizedUpdate?.localizedFieldValues ?? {}),
-                  // A per-locale status write moves `status` out of the main
-                  // update payload and into the companion `_status`, so the main
-                  // row still carries the old value. Overlay the written one, or
-                  // the snapshot reports a publish that the payload contradicts.
-                  ...(typeof companionStatus === "string"
-                    ? { status: companionStatus }
+                  // Per-locale status lives in the companion, so the main row's
+                  // `status` is not this locale's. Overlay the value this write
+                  // committed, or — for a content-only update that carried no
+                  // status — the one already stored for the locale, so the
+                  // document never reports another locale's state.
+                  ...(typeof effectiveLocaleStatus === "string"
+                    ? { status: effectiveLocaleStatus }
                     : {}),
                 },
                 fields
