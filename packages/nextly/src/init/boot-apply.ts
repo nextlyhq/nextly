@@ -136,38 +136,38 @@ async function reloadDynamicTables(label: string): Promise<void> {
     await loadDynamicTables(
       adapter as Parameters<typeof loadDynamicTables>[0],
       "dynamic_collections",
-      ((tableName, fields, hasStatus) => {
+      async (tableName, fields, hasStatus, localized) => {
         const { table } = generateRuntimeSchema(
           tableName,
           fields as Parameters<typeof generateRuntimeSchema>[1],
           dialect,
-          { status: hasStatus === true }
+          { status: hasStatus === true, localized: localized === true }
         );
         (
           schemaRegistry as {
             registerDynamicSchema: (tableName: string, table: unknown) => void;
           }
         ).registerDynamicSchema(tableName, table);
-      }) as Parameters<typeof loadDynamicTables>[2]
+      }
     );
 
     // Reload singles
     await loadDynamicTables(
       adapter as Parameters<typeof loadDynamicTables>[0],
       "dynamic_singles",
-      ((tableName, fields, hasStatus) => {
+      async (tableName, fields, hasStatus, localized) => {
         const { table } = generateRuntimeSchema(
           tableName,
           fields as Parameters<typeof generateRuntimeSchema>[1],
           dialect,
-          { status: hasStatus === true }
+          { status: hasStatus === true, localized: localized === true }
         );
         (
           schemaRegistry as {
             registerDynamicSchema: (tableName: string, table: unknown) => void;
           }
         ).registerDynamicSchema(tableName, table);
-      }) as Parameters<typeof loadDynamicTables>[2]
+      }
     );
 
     console.log(
