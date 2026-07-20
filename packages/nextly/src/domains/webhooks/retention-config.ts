@@ -47,7 +47,10 @@ export interface WebhookRetentionConfig {
    * so a delivery can never outlive it and a larger value would be a lie.
    */
   deliveriesMaxAgeMs?: number | false;
-  /** Rows deleted per statement. */
+  /**
+   * Rows deleted per statement. Clamped to {@link MAX_BATCH_SIZE}, above which a
+   * pass would exceed SQLite's bind-parameter limit and fail every time.
+   */
   batchSize?: number;
   /** Batches per pass, so one pass stays bounded on a serverless request. */
   maxBatchesPerRun?: number;
@@ -90,17 +93,32 @@ export const DEFAULT_DELIVERIES_MAX_AGE_MS = 7 * DAY_MS;
  */
 export const DEFAULT_BATCH_SIZE = 500;
 
+/**
+ * The largest batch that stays portable.
+ *
+ * A batch becomes an `IN` list of ids, and ids are text, so the batch size IS
+ * the bind-parameter count. SQLite builds before 3.32 cap a statement at 999
+ * parameters, and the live-delivery lookup adds a few more on top. Above this a
+ * pass would fail on every run, and because the runner swallows the failure
+ * after the gate has recorded the attempt, retention would simply stop making
+ * progress with no visible error. Clamped rather than rejected so a large value
+ * still prunes, just in portable-sized pieces.
+ */
+export const MAX_BATCH_SIZE = 900;
+
 /** 20 batches, so a single pass deletes at most 10k rows and then stops. */
 export const DEFAULT_MAX_BATCHES_PER_RUN = 20;
 
 /** One hour between passes. */
 export const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 
-/** A positive, finite integer, or the fallback. Never throws. */
-function positiveInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
+/** A positive, finite integer, optionally capped, or the fallback. Never throws. */
+function positiveInt(value: unknown, fallback: number, max?: number): number {
+  const resolved =
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : fallback;
+  return max === undefined ? resolved : Math.min(resolved, max);
 }
 
 /** A non-negative duration, `false` for "keep forever", or the fallback. */
@@ -164,7 +182,7 @@ export function resolveWebhookRetentionConfig(
     eventsMaxAgeMs,
     auditEventsMaxAgeMs,
     deliveriesMaxAgeMs,
-    batchSize: positiveInt(input.batchSize, DEFAULT_BATCH_SIZE),
+    batchSize: positiveInt(input.batchSize, DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE),
     maxBatchesPerRun: positiveInt(
       input.maxBatchesPerRun,
       DEFAULT_MAX_BATCHES_PER_RUN

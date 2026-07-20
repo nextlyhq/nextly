@@ -98,14 +98,46 @@ describe("webhook retention (integration)", () => {
     expect(await events(t)).toHaveLength(0);
   });
 
-  it("leaves an aged event alone while its fan-out has not run", async () => {
-    // The row is old enough, but nothing has delivered it. Pruning here would
-    // discard an event no subscriber ever saw.
+  it("leaves an aged, un-fanned-out event alone while an endpoint exists", async () => {
+    // The row is old enough, but an endpoint could still receive it and the
+    // drain has not run. Pruning here would discard an event a subscriber is
+    // owed.
     const t = await boot();
     const handler = t.getService<CollectionsHandler>("collectionsHandler");
     await handler.createEntry(
       { collectionName: "posts", overrideAccess: true },
       { title: "never fanned out" }
+    );
+    const [row] = await events(t);
+    await ageEvent(t, row.id, OLD, false);
+    await t.adapter.insert("nextly_webhooks", {
+      id: "wh-waiting",
+      name: "endpoint",
+      url: "https://example.test/hook",
+      enabled: true,
+      event_types: ["entry.created"],
+      secret_hash: [],
+      secret_prefix: "whsec_y",
+    });
+
+    const result = await pruneWebhookData(
+      { adapter: t.adapter },
+      resolveWebhookRetentionConfig({})!
+    );
+
+    expect(result.events.webhook).toBe(0);
+    expect(await events(t)).toHaveLength(1);
+  });
+
+  it("prunes an aged, un-fanned-out event when no endpoint exists", async () => {
+    // The majority install: no webhooks, so no drain ever runs and
+    // fanned_out_at stays NULL forever. Requiring it would leave the ledger
+    // unbounded for exactly the case retention was built for.
+    const t = await boot();
+    const handler = t.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "nobody is listening" }
     );
     const [row] = await events(t);
     await ageEvent(t, row.id, OLD, false);
@@ -115,8 +147,8 @@ describe("webhook retention (integration)", () => {
       resolveWebhookRetentionConfig({})!
     );
 
-    expect(result.events.webhook).toBe(0);
-    expect(await events(t)).toHaveLength(1);
+    expect(result.events.webhook).toBe(1);
+    expect(await events(t)).toHaveLength(0);
   });
 
   it("keeps a recent event", async () => {
@@ -181,6 +213,48 @@ describe("webhook retention (integration)", () => {
 
     expect(result.events.audit).toBe(0);
     expect(await events(t)).toHaveLength(1);
+  });
+
+  it("spares an event whose delivery is still live, against a real adapter", async () => {
+    // The unit suite drives this through a fake, which cannot catch a column
+    // projection that silently returns undefined. Only a real row proves the
+    // guard holds — and the delivery FK cascades, so a guard that failed would
+    // take a pending delivery with the event and the drain would never retry it.
+    const t = await boot();
+    const handler = t.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "has a live delivery" }
+    );
+    const [row] = await events(t);
+    await ageEvent(t, row.id, OLD, true);
+
+    await t.adapter.insert("nextly_webhooks", {
+      id: "wh-live",
+      name: "endpoint",
+      url: "https://example.test/hook",
+      enabled: true,
+      event_types: ["entry.created"],
+      secret_hash: [],
+      secret_prefix: "whsec_x",
+    });
+    await t.adapter.insert("nextly_webhook_deliveries", {
+      id: "dl-live",
+      webhook_id: "wh-live",
+      event_id: row.id,
+      status: "retrying",
+      attempt_count: 1,
+    });
+
+    const result = await pruneWebhookData(
+      { adapter: t.adapter },
+      resolveWebhookRetentionConfig({})!
+    );
+
+    expect(result.events.webhook).toBe(0);
+    expect(await events(t)).toHaveLength(1);
+    const deliveries = await t.adapter.select("nextly_webhook_deliveries");
+    expect(deliveries).toHaveLength(1);
   });
 
   it("bounds a pass to the configured batch budget", async () => {

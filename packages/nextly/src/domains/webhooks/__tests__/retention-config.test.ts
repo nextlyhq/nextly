@@ -12,6 +12,7 @@ import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_DELIVERIES_MAX_AGE_MS,
   DEFAULT_EVENTS_MAX_AGE_MS,
+  MAX_BATCH_SIZE,
   resolveWebhookRetentionConfig,
   windowForClass,
 } from "../retention-config";
@@ -70,6 +71,14 @@ describe("resolveWebhookRetentionConfig", () => {
     expect(policy?.batchSize).toBe(DEFAULT_BATCH_SIZE);
     expect(policy?.maxBatchesPerRun).toBeGreaterThan(0);
     expect(policy?.intervalMs).toBeGreaterThan(0);
+  });
+
+  it("clamps an oversized batch to the portable bind-parameter limit", () => {
+    // Above this a pass exceeds SQLite's parameter cap and fails every time,
+    // and the safe runner swallows it, so retention would stop making progress
+    // with nothing visible to explain why.
+    const policy = resolveWebhookRetentionConfig({ batchSize: 100_000 });
+    expect(policy?.batchSize).toBe(MAX_BATCH_SIZE);
   });
 
   it("routes each class to its own window", () => {

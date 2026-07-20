@@ -733,7 +733,11 @@ export class CollectionsHandler {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
+    const result = await this.entryService.bulkUpdateEntries(
+      this.resolveUserParam(params)
+    );
+    this.offerRetentionPass();
+    return result;
   }
 
   /**
@@ -769,10 +773,12 @@ export class CollectionsHandler {
     // Resolve userId -> user and mark route-authorized, mirroring
     // bulkUpdateEntries so the query-based bulk update honors access control
     // and redaction instead of running as an anonymous caller.
-    return this.entryService.bulkUpdateByQuery(
+    const result = await this.entryService.bulkUpdateByQuery(
       this.resolveUserParam(params),
       options
     );
+    this.offerRetentionPass();
+    return result;
   }
 
   /**
@@ -838,7 +844,11 @@ export class CollectionsHandler {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    return this.entryService.duplicateEntry(this.resolveUserParam(params));
+    const result = await this.entryService.duplicateEntry(
+      this.resolveUserParam(params)
+    );
+    this.offerRetentionPass();
+    return result;
   }
 
   /**

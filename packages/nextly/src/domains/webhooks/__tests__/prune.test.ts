@@ -14,6 +14,7 @@ interface SelectCall {
   table: string;
   where?: { and: { column: string; op: string; value?: unknown }[] };
   limit?: number;
+  offset?: number;
 }
 
 /**
@@ -24,6 +25,8 @@ function fakeAdapter(script: {
   events?: string[][];
   deliveries?: string[][];
   liveEventIds?: string[];
+  /** Whether an enabled endpoint exists; drives the fan-out requirement. */
+  hasEndpoint?: boolean;
 }) {
   const selects: SelectCall[] = [];
   const deletes: { table: string; ids: unknown }[] = [];
@@ -35,7 +38,15 @@ function fakeAdapter(script: {
     deletes,
     adapter: {
       select: async <T>(table: string, options?: SelectCall): Promise<T[]> => {
-        selects.push({ table, where: options?.where, limit: options?.limit });
+        selects.push({
+          table,
+          where: options?.where,
+          limit: options?.limit,
+          offset: options?.offset,
+        });
+        if (table === "nextly_webhooks") {
+          return (script.hasEndpoint ? [{ id: "wh1" }] : []) as T[];
+        }
         const isLiveLookup =
           table === "nextly_webhook_deliveries" &&
           options?.where?.and.some(c => c.column === "eventId");
@@ -66,7 +77,7 @@ describe("pruneWebhookData", () => {
   it("never deletes an event whose fan-out has not run", async () => {
     // fanned_out_at IS NULL means the event still needs fan-out; deleting one
     // would discard an event nobody ever delivered.
-    const f = fakeAdapter({ events: [["e1"]] });
+    const f = fakeAdapter({ events: [["e1"]], hasEndpoint: true });
     await pruneWebhookData({ adapter: f.adapter }, policy());
 
     const eventSelect = f.selects.find(s => s.table === "nextly_events");
@@ -79,12 +90,44 @@ describe("pruneWebhookData", () => {
   it("never deletes an event that still has a live delivery", async () => {
     // The delivery FK cascades, so deleting the event would silently take a
     // pending or retrying delivery with it.
-    const f = fakeAdapter({ events: [["e1", "e2"]], liveEventIds: ["e1"] });
+    const f = fakeAdapter({
+      events: [["e1", "e2"]],
+      liveEventIds: ["e1"],
+      hasEndpoint: true,
+    });
     const result = await pruneWebhookData({ adapter: f.adapter }, policy());
 
     const eventDeletes = f.deletes.filter(d => d.table === "nextly_events");
     expect(eventDeletes).toHaveLength(1);
     expect(eventDeletes[0].ids).toEqual(["e2"]);
+    expect(result.events.webhook).toBe(1);
+  });
+
+  it("requires a completed fan-out only when an endpoint could receive it", async () => {
+    const withEndpoint = fakeAdapter({ events: [["e1"]], hasEndpoint: true });
+    await pruneWebhookData({ adapter: withEndpoint.adapter }, policy());
+    expect(
+      withEndpoint.selects
+        .find(s => s.table === "nextly_events")
+        ?.where?.and.some(c => c.column === "fannedOutAt")
+    ).toBe(true);
+  });
+
+  it("prunes un-fanned-out events when no endpoint exists at all", async () => {
+    // The case retention exists for. With no endpoint the drain never runs, so
+    // fanned_out_at stays NULL forever — demanding it would delete nothing in
+    // exactly the installs that grow unbounded.
+    const noEndpoint = fakeAdapter({ events: [["e1"]], hasEndpoint: false });
+    const result = await pruneWebhookData(
+      { adapter: noEndpoint.adapter },
+      policy()
+    );
+
+    expect(
+      noEndpoint.selects
+        .find(s => s.table === "nextly_events")
+        ?.where?.and.some(c => c.column === "fannedOutAt")
+    ).toBe(false);
     expect(result.events.webhook).toBe(1);
   });
 
@@ -119,17 +162,54 @@ describe("pruneWebhookData", () => {
     expect(result.deliveries).toBe(6);
   });
 
-  it("stops instead of spinning when every candidate is blocked", async () => {
-    // Re-reading would return the same blocked rows forever.
-    const f = fakeAdapter({
-      events: Array.from({ length: 20 }, () => ["e1", "e2"]),
-      liveEventIds: ["e1", "e2"],
-    });
-    const result = await pruneWebhookData({ adapter: f.adapter }, policy());
+  it("scans past blocked rows instead of stopping at them", async () => {
+    // A batch-sized wall of stuck deliveries must not hide the younger eligible
+    // rows behind it. The cursor steps over what it cannot delete, while deleted
+    // rows leave the table — so the blocked pair stays at the front and the
+    // offset lands past exactly them.
+    let table = ["blocked1", "blocked2", "free1", "free2"];
+    const offsets: (number | undefined)[] = [];
+    const deletes: unknown[] = [];
 
-    expect(result.events.webhook).toBe(0);
-    expect(f.deletes).toHaveLength(0);
-    expect(result.batches).toBeLessThanOrEqual(2);
+    const adapter = {
+      select: async <T>(t: string, options?: SelectCall): Promise<T[]> => {
+        if (t === "nextly_webhooks") return [{ id: "wh1" }] as T[];
+        if (
+          t === "nextly_webhook_deliveries" &&
+          options?.where?.and.some(c => c.column === "eventId")
+        ) {
+          const ids = options.where.and[0].value as string[];
+          return ids
+            .filter(id => id.startsWith("blocked"))
+            .map(id => ({ eventId: id })) as T[];
+        }
+        if (t === "nextly_events") {
+          offsets.push(options?.offset);
+          const from = options?.offset ?? 0;
+          return table
+            .slice(from, from + (options?.limit ?? table.length))
+            .map(id => ({ id })) as T[];
+        }
+        return [] as T[];
+      },
+      delete: async (
+        _t: string,
+        where: { and: { value?: unknown }[] }
+      ): Promise<number> => {
+        const ids = where.and[0]?.value as string[];
+        deletes.push(ids);
+        table = table.filter(id => !ids.includes(id));
+        return ids.length;
+      },
+    };
+
+    const result = await pruneWebhookData({ adapter }, policy());
+
+    expect(deletes).toEqual([["free1", "free2"]]);
+    expect(result.events.webhook).toBe(2);
+    // Second read starts past the blocked pair; the third finds nothing left.
+    expect(offsets.slice(0, 3)).toEqual([0, 2, 2]);
+    expect(table).toEqual(["blocked1", "blocked2"]);
   });
 
   it("skips a class configured to be kept forever", async () => {

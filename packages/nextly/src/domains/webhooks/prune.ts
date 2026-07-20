@@ -27,7 +27,6 @@
 
 import type { WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../errors";
 import type { Logger } from "../../shared/types";
 
 import {
@@ -39,6 +38,7 @@ import {
 
 const EVENTS_TABLE = "nextly_events";
 const DELIVERIES_TABLE = "nextly_webhook_deliveries";
+const WEBHOOKS_TABLE = "nextly_webhooks";
 
 /** Delivery states that still represent work the drain may pick up. */
 const LIVE_DELIVERY_STATUSES = ["pending", "processing", "retrying"] as const;
@@ -54,6 +54,7 @@ export interface PruneAdapter {
       where?: { and: WhereCondition[] };
       orderBy?: { column: string; direction: "asc" | "desc" }[];
       limit?: number;
+      offset?: number;
       columns?: string[];
     }
   ): Promise<T[]>;
@@ -98,6 +99,28 @@ function cutoffFor(now: Date, maxAgeMs: number | false): Date | null {
 }
 
 /**
+ * Whether any endpoint could ever receive an event.
+ *
+ * With no enabled endpoint there is nothing to fan out to, so `fanned_out_at`
+ * stays NULL forever — the drain only runs where webhooks are configured. That
+ * is the majority install, and requiring a completed fan-out there would make
+ * retention delete nothing at all, leaving the ledger unbounded for exactly the
+ * population the policy exists for.
+ *
+ * An endpoint added later does not get a backlog of historical events, which is
+ * the intended contract: webhooks deliver what happens after you subscribe, not
+ * what happened before.
+ */
+async function deliveryIsPossible(adapter: PruneAdapter): Promise<boolean> {
+  const rows = await adapter.select<{ id: string }>(WEBHOOKS_TABLE, {
+    where: { and: [{ column: "enabled", op: "=", value: true }] },
+    limit: 1,
+    columns: ["id"],
+  });
+  return rows.length > 0;
+}
+
+/**
  * Of the given event ids, those that still have a live delivery.
  *
  * Expressed as a second query rather than a `NOT EXISTS` subquery because the
@@ -139,21 +162,32 @@ async function pruneEventClass(
   eventClass: EventRetentionClass,
   cutoff: Date,
   budget: { batchesLeft: number },
-  options: PruneOptions
+  options: PruneOptions,
+  requireFanOut: boolean
 ): Promise<{ deleted: number; exhausted: boolean }> {
   let deleted = 0;
+  // Rows this pass has looked at and will not delete: those held by a live
+  // delivery, and in a dry run every row it merely counted. Deleted rows leave
+  // the table, so the skipped ones collect at the front of the next read and
+  // the cursor steps over them. Without it a batch-sized wall of stuck
+  // deliveries would hide every younger eligible row behind it forever, and a
+  // dry run would keep recounting its first batch.
+  let skipped = 0;
 
   while (budget.batchesLeft > 0) {
     const candidates = await deps.adapter.select<{ id: string }>(EVENTS_TABLE, {
       where: {
         and: [
           { column: "retentionClass", op: "=", value: eventClass },
-          { column: "fannedOutAt", op: "IS NOT NULL" },
+          ...(requireFanOut
+            ? ([{ column: "fannedOutAt", op: "IS NOT NULL" }] as const)
+            : []),
           { column: "createdAt", op: "<", value: cutoff },
         ],
       },
       orderBy: [{ column: "createdAt", direction: "asc" }],
       limit: policy.batchSize,
+      offset: skipped,
       columns: ["id"],
     });
 
@@ -167,21 +201,22 @@ async function pruneEventClass(
 
     budget.batchesLeft -= 1;
 
-    if (deletable.length > 0 && !options.dryRun) {
-      deleted += await deps.adapter.delete(EVENTS_TABLE, {
-        and: [{ column: "id", op: "IN", value: deletable }],
-      });
-    } else {
+    if (options.dryRun) {
       deleted += deletable.length;
+      skipped += candidates.length;
+    } else {
+      if (deletable.length > 0) {
+        deleted += await deps.adapter.delete(EVENTS_TABLE, {
+          and: [{ column: "id", op: "IN", value: deletable }],
+        });
+      }
+      skipped += blocked.size;
     }
 
     // A short read means no more rows match; a full one may have more behind it.
     if (candidates.length < policy.batchSize) {
       return { deleted, exhausted: true };
     }
-    // Every candidate was blocked by a live delivery, so re-reading would return
-    // the same rows forever. Stop rather than spin.
-    if (deletable.length === 0) return { deleted, exhausted: true };
   }
 
   return { deleted, exhausted: false };
@@ -196,6 +231,9 @@ async function pruneDeliveries(
   options: PruneOptions
 ): Promise<{ deleted: number; exhausted: boolean }> {
   let deleted = 0;
+  // Only meaningful in a dry run, where nothing leaves the table; a real pass
+  // deletes every row it reads here, so the next read starts fresh.
+  let skipped = 0;
 
   while (budget.batchesLeft > 0) {
     const candidates = await deps.adapter.select<{ id: string }>(
@@ -213,6 +251,7 @@ async function pruneDeliveries(
         },
         orderBy: [{ column: "createdAt", direction: "asc" }],
         limit: policy.batchSize,
+        offset: skipped,
         columns: ["id"],
       }
     );
@@ -222,12 +261,13 @@ async function pruneDeliveries(
     budget.batchesLeft -= 1;
     const ids = candidates.map(c => c.id);
 
-    if (!options.dryRun) {
+    if (options.dryRun) {
+      deleted += ids.length;
+      skipped += ids.length;
+    } else {
       deleted += await deps.adapter.delete(DELIVERIES_TABLE, {
         and: [{ column: "id", op: "IN", value: ids }],
       });
-    } else {
-      deleted += ids.length;
     }
 
     if (candidates.length < policy.batchSize) {
@@ -269,6 +309,17 @@ export async function pruneWebhookData(
     if (!outcome.exhausted) result.truncated = true;
   }
 
+  // Resolved once per pass rather than per class: an install either has an
+  // endpoint or it does not, and this decides whether an un-fanned-out event is
+  // safe to remove. Skipped entirely when every class is kept forever, so a
+  // policy that prunes nothing costs no queries at all.
+  const anyClassPrunable = EVENT_RETENTION_CLASSES.some(
+    c => windowForClass(policy, c) !== false
+  );
+  const requireFanOut = anyClassPrunable
+    ? await deliveryIsPossible(deps.adapter)
+    : false;
+
   for (const eventClass of EVENT_RETENTION_CLASSES) {
     const cutoff = cutoffFor(now, windowForClass(policy, eventClass));
     if (!cutoff) continue;
@@ -278,7 +329,8 @@ export async function pruneWebhookData(
       eventClass,
       cutoff,
       budget,
-      options
+      options,
+      requireFanOut
     );
     result.events[eventClass] = outcome.deleted;
     if (!outcome.exhausted) result.truncated = true;
@@ -317,12 +369,7 @@ export async function pruneWebhookDataSafely(
     deps.logger?.warn?.(
       "webhook retention pass failed; rows stay until the next pass",
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : NextlyError.is(error)
-              ? error.message
-              : String(error),
+        error: error instanceof Error ? error.message : String(error),
       }
     );
     return emptyResult();
