@@ -37,14 +37,21 @@ interface LexicalNode {
  * document made only of media would otherwise extract as empty and display as
  * though the field were never filled in.
  */
-const TEXT_BEARING_PROPS = ["caption", "altText", "title", "label"] as const;
+const TEXT_BEARING_PROPS = [
+  "caption",
+  "altText",
+  "alt",
+  "title",
+  "label",
+] as const;
 
 /**
  * Properties holding a list of objects whose own text is visible — a button
- * group keeps its labels in `buttons[].text`. Those nodes carry no `children`,
- * so without reading these a call-to-action group extracts as empty.
+ * group keeps its labels in `buttons[].text`, a gallery keeps its captions on
+ * the images. Those nodes carry no `children`, so without reading these a
+ * call-to-action group or a gallery extracts as empty.
  */
-const TEXT_BEARING_LISTS = ["buttons", "items", "links"] as const;
+const TEXT_BEARING_LISTS = ["buttons", "items", "links", "images"] as const;
 
 function asNode(value: unknown): LexicalNode | null {
   if (typeof value !== "object" || value === null) return null;
@@ -78,20 +85,34 @@ function collect(node: LexicalNode | null, lines: string[]): void {
     const list = node[prop];
     if (!Array.isArray(list)) continue;
     for (const item of list) {
-      const text = asNode(item)?.text;
-      if (typeof text === "string" && text.trim().length > 0) {
-        lines.push(text.trim());
+      const entry = asNode(item);
+      if (!entry) continue;
+      // A gallery keeps its labels on the images themselves, under the same
+      // property names a node uses, so read both `text` and those.
+      for (const key of ["text", ...TEXT_BEARING_PROPS] as const) {
+        const text = entry[key];
+        if (typeof text === "string" && text.trim().length > 0) {
+          lines.push(text.trim());
+          break;
+        }
       }
     }
   }
 
   if (typeof node.text === "string" && node.text.length > 0) {
-    // Text nodes append to the block being built rather than starting one.
-    // A malformed document can carry text before any block has opened, so a
-    // block is opened here rather than writing to index -1, which would set a
-    // named property on the array and silently drop the content.
-    if (lines.length === 0) lines.push("");
-    lines[lines.length - 1] = (lines[lines.length - 1] ?? "") + node.text;
+    // Only a real text node continues the run being built — that is what makes
+    // formatted spans read as one sentence. A decorator carrying its own `text`
+    // (a button link, say) is a visible element in its own right, so it starts
+    // a block instead of appending to whatever preceded it.
+    if (node.type !== undefined && node.type !== "text") {
+      lines.push(node.text.trim());
+    } else {
+      // A malformed document can carry text before any block has opened, so a
+      // block is opened here rather than writing to index -1, which would set a
+      // named property on the array and silently drop the content.
+      if (lines.length === 0) lines.push("");
+      lines[lines.length - 1] = (lines[lines.length - 1] ?? "") + node.text;
+    }
   }
 
   if (Array.isArray(node.children)) {

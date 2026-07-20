@@ -122,6 +122,29 @@ describe("richTextToText", () => {
     expect(result).toContain("Read the docs");
   });
 
+  it("starts a new line for a decorator that carries its own text", () => {
+    // A button link is a visible element, not a continuation of the paragraph
+    // before it, so its label must not join onto that text.
+    const button = { type: "button-link", text: "Click" };
+
+    expect(richTextToText(doc([paragraph("Intro"), button]))).toBe(
+      "Intro\nClick"
+    );
+  });
+
+  it("keeps gallery image labels", () => {
+    // A gallery with no caption of its own keeps its labels on the images.
+    const gallery = {
+      type: "gallery",
+      images: [{ alt: "First shot" }, { title: "Second shot" }],
+    };
+
+    const result = richTextToText(doc([gallery]));
+
+    expect(result).toContain("First shot");
+    expect(result).toContain("Second shot");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(richTextToText(doc([]))).toBe("");
   });

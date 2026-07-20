@@ -255,9 +255,25 @@ function RelationshipValue({ entry }: { entry: unknown }) {
   if (typeof entry === "object" && entry !== null) {
     // A polymorphic reference stores `{ relationTo, value }`. Unresolved, the
     // id lives under `value`; showing the object itself would print JSON.
-    const poly = entry as { relationTo?: string; value?: unknown };
+    const poly = entry as {
+      relationTo?: string;
+      value?: unknown;
+      label?: unknown;
+      title?: unknown;
+      name?: unknown;
+    };
     if (typeof poly.value === "string" && poly.relationTo !== undefined) {
-      return <Badge variant="outline">{poly.value}</Badge>;
+      // The form stores the selected item alongside the reference, so prefer a
+      // display field when one came with it rather than showing a bare id.
+      const inline = [poly.label, poly.title, poly.name].find(
+        (candidate): candidate is string =>
+          typeof candidate === "string" && candidate.length > 0
+      );
+      return inline ? (
+        <Badge variant="default">{inline}</Badge>
+      ) : (
+        <Badge variant="outline">{poly.value}</Badge>
+      );
     }
     const { id, label } = entry as { id?: string; label?: string | null };
     return label ? (
@@ -398,16 +414,30 @@ function NestedFields({
 
   return (
     <div className="flex flex-col gap-2">
-      {fields.map(child =>
-        child.name ? (
-          <FieldValueDisplay
-            key={child.name}
-            field={child}
-            value={row[child.name]}
-            dense
-          />
-        ) : null
-      )}
+      {fields.map((child, i) => {
+        if (child.name) {
+          return (
+            <FieldValueDisplay
+              key={child.name}
+              field={child}
+              value={row[child.name]}
+              dense
+            />
+          );
+        }
+
+        // A group may be presentational, grouping fields for layout without
+        // owning a key. Its children live directly on this row, so they are
+        // rendered against it rather than dropped with the nameless parent.
+        const inline = childFields(child);
+        if (child.type === "group" && inline.length > 0) {
+          return (
+            <NestedFields key={`group-${i}`} fields={inline} source={row} />
+          );
+        }
+
+        return null;
+      })}
     </div>
   );
 }
@@ -498,9 +528,20 @@ export function FieldValueDisplay({
   const label =
     (field as { label?: string }).label ?? field.name ?? "Untitled field";
 
+  // A `json` field may legitimately store the JSON primitive `null`, which
+  // normalizes to the same value as an absent field. Where the storage keeps
+  // them apart — a serialized column holds the characters "null" — the stored
+  // primitive is shown rather than reported as unset. A dialect that returns
+  // JSON `null` already parsed is indistinguishable from an absent value here,
+  // and needs the read path to settle the shape.
+  const isStoredJsonNull =
+    field.type === "json" &&
+    typeof value === "string" &&
+    value.trim() === "null";
+
   const render = registry.get(field.type);
   const body =
-    normalized === null ? (
+    normalized === null && !isStoredJsonNull ? (
       <EmptyValue />
     ) : (
       (render?.({ value: normalized, field }) ?? (

@@ -350,6 +350,52 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByText("Not set")).toBeInTheDocument();
   });
 
+  it("renders the children of a presentational group with no name", () => {
+    // A group may exist only to lay fields out. Its children live directly on
+    // the parent row, so dropping the nameless group would hide them all.
+    const f = field("group", {
+      fields: [
+        {
+          name: "",
+          type: "group",
+          fields: [{ name: "city", type: "text", label: "City" }],
+        },
+      ],
+    });
+
+    render(<FieldValueDisplay field={f} value={{ city: "Lisbon" }} />);
+
+    expect(screen.getByText("City")).toBeInTheDocument();
+    expect(screen.getByText("Lisbon")).toBeInTheDocument();
+  });
+
+  it("prefers an inline label on a polymorphic relationship", () => {
+    // The form stores the selected item alongside the reference; showing the
+    // raw id when a title came with it is a needless downgrade.
+    const f = field("relationship", { relationTo: ["posts", "pages"] });
+
+    render(
+      <FieldValueDisplay
+        field={f}
+        value={JSON.stringify({
+          relationTo: "pages",
+          value: "p1",
+          title: "About us",
+        })}
+      />
+    );
+
+    expect(screen.getByText("About us")).toBeInTheDocument();
+    expect(screen.queryByText("p1")).not.toBeInTheDocument();
+  });
+
+  it("shows a stored JSON null rather than reporting it unset", () => {
+    render(<FieldValueDisplay field={field("json")} value="null" />);
+
+    expect(screen.queryByText("Not set")).not.toBeInTheDocument();
+    expect(screen.getByText("null")).toBeInTheDocument();
+  });
+
   it("falls back to text for a field type with no renderer", () => {
     // A plugin field type must still show its value rather than nothing.
     render(
