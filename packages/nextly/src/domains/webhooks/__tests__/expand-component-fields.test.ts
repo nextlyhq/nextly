@@ -120,6 +120,47 @@ describe("expandComponentFields", () => {
     ).resolves.toHaveLength(1);
   });
 
+  it("expands every member of a dynamic zone, not just a single component", async () => {
+    // A dynamic zone lists the component types an editor may pick from, and an
+    // instance of ANY of them can be stored in the field. Reading only the
+    // singular `component` key leaves all of them unexpanded, so their hidden
+    // fields ship in cleartext.
+    const expanded = await expandComponentFields(
+      [{ name: "zone", type: "component", components: ["hero", "cta"] }],
+      resolver({
+        hero: [
+          { name: "headline", type: "text" },
+          { name: "heroToken", type: "password" },
+        ],
+        cta: [{ name: "ctaSecret", type: "text", admin: { hidden: true } }],
+      })
+    );
+
+    const names = sensitiveFieldNames(expanded);
+    expect(names).toContain("heroToken");
+    expect(names).toContain("ctaSecret");
+    expect(names).not.toContain("headline");
+  });
+
+  it("keeps expanding a dynamic zone's other members when one is self-referential", async () => {
+    // The cycle guard is per-slug, so a member that embeds itself must not stop
+    // its siblings from being expanded.
+    const expanded = await expandComponentFields(
+      [{ name: "zone", type: "component", components: ["loop", "safe"] }],
+      resolver({
+        loop: [
+          { name: "loopSecret", type: "password" },
+          { name: "again", type: "component", component: "loop" },
+        ],
+        safe: [{ name: "safeSecret", type: "password" }],
+      })
+    );
+
+    const names = sensitiveFieldNames(expanded);
+    expect(names).toContain("loopSecret");
+    expect(names).toContain("safeSecret");
+  });
+
   it("descends into nested containers to reach a component reference", async () => {
     const expanded = await expandComponentFields(
       [

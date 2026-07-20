@@ -22,20 +22,36 @@ export type ComponentFieldResolver = (
 ) => Promise<readonly SensitiveFieldSource[] | null>;
 
 /**
- * The slug a component field points at. Config-defined fields name it
- * `component`; the stored/dynamic shape uses `componentSlug`. Both are read so
- * expansion works regardless of which layer produced the field.
+ * Every component slug a component field can hold values for.
+ *
+ * Single-component mode names one target: `component` in config, or
+ * `componentSlug` in the stored/dynamic shape. A dynamic zone instead lists the
+ * component types an editor may pick from in `components`, and an instance of
+ * ANY of them can end up stored in the field — so every listed slug has to be
+ * expanded, or a hidden field inside whichever component the editor chose never
+ * reaches the deny list.
  */
-function referencedSlug(field: SensitiveFieldSource): string | undefined {
-  if (field.type !== "component") return undefined;
+function referencedSlugs(field: SensitiveFieldSource): string[] {
+  if (field.type !== "component") return [];
   const candidate = field as {
     component?: unknown;
     componentSlug?: unknown;
+    components?: unknown;
   };
+
+  const slugs: string[] = [];
   if (typeof candidate.componentSlug === "string")
-    return candidate.componentSlug;
-  if (typeof candidate.component === "string") return candidate.component;
-  return undefined;
+    slugs.push(candidate.componentSlug);
+  if (typeof candidate.component === "string") slugs.push(candidate.component);
+  if (Array.isArray(candidate.components)) {
+    for (const slug of candidate.components) {
+      if (typeof slug === "string") slugs.push(slug);
+    }
+  }
+  // A field could name the same slug twice (`component` plus a `components`
+  // entry); resolution is memoized anyway, but deduping keeps the grafted tree
+  // from carrying the component's fields more than once.
+  return [...new Set(slugs)];
 }
 
 /** Memoized resolutions, so one slug is fetched at most once per expansion. */
@@ -99,27 +115,29 @@ export async function expandComponentFields(
       : undefined;
     const blocks = await expandBlocks(field.blocks, resolve, seen, cache);
 
-    const slug = referencedSlug(field);
-    if (slug && !seen.has(slug)) {
+    // A dynamic zone contributes several; each is expanded under its own cycle
+    // path so one self-referential member cannot suppress its siblings.
+    const grafted: SensitiveFieldSource[] = [];
+    for (const slug of referencedSlugs(field)) {
+      if (seen.has(slug)) continue;
       const resolved = await resolveOnce(slug, resolve, cache);
-      if (resolved) {
-        const nested = new Set(seen);
-        nested.add(slug);
-        const componentFields = await expandComponentFields(
-          resolved,
-          resolve,
-          nested,
-          cache
-        );
-        expanded.push({
-          ...field,
-          // Merge rather than replace: a component field may also declare inline
-          // children, and both sets must be visible to the deny-list walk.
-          fields: [...(inline ?? []), ...componentFields],
-          ...(blocks ? { blocks } : {}),
-        });
-        continue;
-      }
+      if (!resolved) continue;
+      const nested = new Set(seen);
+      nested.add(slug);
+      grafted.push(
+        ...(await expandComponentFields(resolved, resolve, nested, cache))
+      );
+    }
+
+    if (grafted.length > 0) {
+      expanded.push({
+        ...field,
+        // Merge rather than replace: a component field may also declare inline
+        // children, and both sets must be visible to the deny-list walk.
+        fields: [...(inline ?? []), ...grafted],
+        ...(blocks ? { blocks } : {}),
+      });
+      continue;
     }
 
     expanded.push({
