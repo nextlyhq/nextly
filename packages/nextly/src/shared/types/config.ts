@@ -736,7 +736,7 @@ export interface SanitizedNextlyConfig {
    * Resolved webhook retention policy, or null when retention is switched off.
    * Always present after sanitization so consumers never re-resolve it.
    */
-  webhookRetention?: ResolvedWebhookRetentionConfig | null;
+  webhookRetention: ResolvedWebhookRetentionConfig | null;
 }
 
 // ============================================================
