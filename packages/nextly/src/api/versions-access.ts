@@ -38,7 +38,7 @@ import { requireRouteCollectionAccess } from "./route-auth";
  *
  * @returns The resolved caller, for redacting whatever is returned next.
  */
-export async function requireVersionReadAccess(
+export async function requireRouteVersionReadAccess(
   request: Request,
   scopeKind: VersionScopeKind,
   slug: string,
@@ -61,6 +61,29 @@ export async function requireVersionReadAccess(
     role: roles?.[0],
   };
 
+  await assertVersionDocumentReadable(scopeKind, slug, entryId, user);
+
+  return user;
+}
+
+/**
+ * Confirm a caller may see this document's history, assuming they are already
+ * authenticated and coarsely authorized.
+ *
+ * The dispatcher authorizes centrally before dispatching, so it needs the
+ * document-level half of the gate on its own — owner-only rules,
+ * draft/published visibility, and (for Singles) the live-id match. Keeping this
+ * separate from {@link requireRouteVersionReadAccess} means those rules are defined
+ * once instead of drifting between the two entry points.
+ *
+ * @throws NextlyError.notFound when the caller may not see the document.
+ */
+export async function assertVersionDocumentReadable(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext
+): Promise<void> {
   const readable = await canReadLiveDocument(scopeKind, slug, entryId, user);
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
@@ -75,8 +98,6 @@ export async function requireVersionReadAccess(
       },
     });
   }
-
-  return user;
 }
 
 /**
@@ -137,11 +158,10 @@ async function canReadLiveSingle(
   const record = await registry.getSingleBySlug(slug);
   if (!record?.tableName) return false;
 
-  const adapter = getService("adapter");
-  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
   // Not materialized yet, or the live document is a different one than the
   // requested history belongs to.
-  if (!row || row.id !== entryId) return false;
+  const liveId = await resolveSingleDocumentId(slug);
+  if (liveId === null || liveId !== entryId) return false;
 
   const singles = getService("singleEntryService");
   const result = await singles.get(slug, {
@@ -151,6 +171,29 @@ async function canReadLiveSingle(
     status: "all",
   });
   return interpretReadResult(result.success, result.statusCode);
+}
+
+/**
+ * The id of a Single's live document, or `null` when it has not been
+ * materialized yet.
+ *
+ * A Single's URL carries no entry id (there is only ever one document), so
+ * callers must resolve it from the backing row rather than trusting a
+ * client-supplied value — otherwise the id check that stops a recreated Single
+ * exposing its predecessor's snapshots could simply be bypassed. Reads the row
+ * directly instead of going through `SingleEntryService.get`, which would
+ * materialize a missing Single as a side effect of a read.
+ */
+export async function resolveSingleDocumentId(
+  slug: string
+): Promise<string | null> {
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return null;
+
+  const adapter = getService("adapter");
+  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
+  return typeof row?.id === "string" ? row.id : null;
 }
 
 /**

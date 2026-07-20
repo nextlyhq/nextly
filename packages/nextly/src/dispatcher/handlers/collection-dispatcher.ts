@@ -98,6 +98,11 @@ import type { MethodHandler, Params } from "../types";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import {
+  getVersionForDocument,
+  listVersionsForDocument,
+  userFromParams,
+} from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -136,10 +141,49 @@ function formatToastSummary(summary: {
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
+/**
+ * Version-history reads for a collection entry.
+ *
+ * Split out so the dispatcher registration and the auth method set in
+ * `routeHandler.ts` stay in step, and so the Single equivalent can mirror it.
+ * The shared methods return data; the canonical envelope is applied here.
+ */
+export const COLLECTION_VERSION_METHODS: Record<
+  string,
+  MethodHandler<CollectionsHandlerType>
+> = {
+  listEntryVersions: {
+    execute: async (_svc, p) => {
+      const result = await listVersionsForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        limit: p.limit !== undefined ? Number(p.limit) : undefined,
+        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+      });
+      return respondList(result.items, result.meta);
+    },
+  },
+  getEntryVersion: {
+    execute: async (_svc, p) => {
+      const row = await getVersionForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondDoc(row);
+    },
+  },
+};
+
 const COLLECTIONS_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
 > = {
+  ...COLLECTION_VERSION_METHODS,
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through

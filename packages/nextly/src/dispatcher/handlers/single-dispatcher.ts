@@ -27,6 +27,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { resolveSingleDocumentId } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
@@ -90,6 +91,11 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import {
+  getVersionForDocument,
+  listVersionsForDocument,
+  userFromParams,
+} from "./versions-methods";
 
 // ============================================================
 // Default field helpers
@@ -293,7 +299,65 @@ async function reconcileSingleCompanion(args: {
 // Method definitions
 // ============================================================
 
+/**
+ * Version-history reads for a Single document.
+ *
+ * A Single's URL carries no entry id — there is only ever one document — so the
+ * id is resolved from the live row rather than taken from params. Trusting a
+ * client-supplied value would defeat the check that stops a Single recreated
+ * under a new id from exposing its predecessor's snapshots.
+ */
+export const SINGLE_VERSION_METHODS: Record<
+  string,
+  MethodHandler<SinglesServices>
+> = {
+  listSingleVersions: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const result = await listVersionsForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        limit: p.limit !== undefined ? Number(p.limit) : undefined,
+        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+      });
+      return respondList(result.items, result.meta);
+    },
+  },
+  getSingleVersion: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const row = await getVersionForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondDoc(row);
+    },
+  },
+};
+
+/**
+ * The live document's id, or a not-found error when the Single has never been
+ * materialized — in which case it has no history to show either.
+ */
+async function requireLiveSingleId(slug: string): Promise<string> {
+  const id = await resolveSingleDocumentId(slug);
+  if (id === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "single-not-materialized", slug },
+    });
+  }
+  return id;
+}
+
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
+  ...SINGLE_VERSION_METHODS,
   listSingles: {
     // Permission filtering is pushed into the registry as a slug allowlist
     // so the SQL count and the row results share the same scope. This keeps
