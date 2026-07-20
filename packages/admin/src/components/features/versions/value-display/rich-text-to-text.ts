@@ -28,10 +28,20 @@ interface LexicalNode {
   type?: string;
   text?: string;
   children?: unknown[];
+  [key: string]: unknown;
 }
 
+/**
+ * Properties that carry visible text on decorator nodes — images, videos,
+ * galleries, buttons. Those nodes hold no `text` and often no `children`, so a
+ * document made only of media would otherwise extract as empty and display as
+ * though the field were never filled in.
+ */
+const TEXT_BEARING_PROPS = ["caption", "altText", "title", "label"] as const;
+
 function asNode(value: unknown): LexicalNode | null {
-  return typeof value === "object" && value !== null ? value : null;
+  if (typeof value !== "object" || value === null) return null;
+  return value as LexicalNode;
 }
 
 /** Whether a value looks like a Lexical document rather than arbitrary JSON. */
@@ -43,6 +53,13 @@ export function isLexicalDocument(value: unknown): boolean {
 
 function collect(node: LexicalNode | null, lines: string[]): void {
   if (!node) return;
+
+  for (const prop of TEXT_BEARING_PROPS) {
+    const text = node[prop];
+    if (typeof text === "string" && text.trim().length > 0) {
+      lines.push(text.trim());
+    }
+  }
 
   if (typeof node.text === "string" && node.text.length > 0) {
     // Text nodes append to the block being built rather than starting one.

@@ -122,15 +122,58 @@ defineValueDisplay(["checkbox", "boolean"], ({ value }) => (
   <span className="text-foreground">{value === true ? "Yes" : "No"}</span>
 ));
 
-defineValueDisplay(["date", "datetime"], ({ value }) => {
-  // Formatted in the admin's configured timezone, matching every other date
-  // the admin shows.
-  const formatted = formatDateTime(value as string);
+/**
+ * Format a stored date the way its picker stores it.
+ *
+ * `dayOnly`, `monthOnly`, and `timeOnly` values are written as UTC (midnight,
+ * or 1970-01-01 for a time), so reading them in the viewer's local zone shifts
+ * the day backwards in any negative-offset timezone — a date saved as the 31st
+ * displays as the 30th. Only `dayAndTime` denotes a real instant and is the
+ * only appearance formatted in the admin's configured timezone.
+ */
+function formatByPickerAppearance(field: FieldConfig, value: unknown): string {
+  const appearance =
+    (field as { admin?: { date?: { pickerAppearance?: string } } }).admin?.date
+      ?.pickerAppearance ?? "dayOnly";
+
+  if (appearance === "dayAndTime") return formatDateTime(value as string);
+
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+
+  switch (appearance) {
+    case "timeOnly":
+      return date.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "UTC",
+      });
+    case "monthOnly":
+      return date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "long",
+        timeZone: "UTC",
+      });
+    default:
+      return date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      });
+  }
+}
+
+defineValueDisplay(["date", "datetime"], ({ value, field }) => {
+  const formatted = formatByPickerAppearance(field, value);
   return formatted ? <PlainText>{formatted}</PlainText> : <EmptyValue />;
 });
 
 defineValueDisplay(["select", "radio"], ({ value, field }) => {
   if (Array.isArray(value)) {
+    // An empty multi-select is a field holding nothing, not a rendering
+    // failure, so it reads the same as any other empty value.
+    if (value.length === 0) return <EmptyValue />;
     return (
       <div className="flex flex-wrap gap-1">
         {value.map((entry, i) => (
@@ -168,6 +211,12 @@ function RelationshipValue({ entry }: { entry: unknown }) {
     return <Badge variant="outline">{entry}</Badge>;
   }
   if (typeof entry === "object" && entry !== null) {
+    // A polymorphic reference stores `{ relationTo, value }`. Unresolved, the
+    // id lives under `value`; showing the object itself would print JSON.
+    const poly = entry as { relationTo?: string; value?: unknown };
+    if (typeof poly.value === "string" && poly.relationTo !== undefined) {
+      return <Badge variant="outline">{poly.value}</Badge>;
+    }
     const { id, label } = entry as { id?: string; label?: string | null };
     return label ? (
       <Badge variant="default">{label}</Badge>
@@ -256,6 +305,37 @@ function childFields(field: FieldConfig): FieldConfig[] {
   return Array.isArray(nested) ? (nested as FieldConfig[]) : [];
 }
 
+/**
+ * Child fields for one component instance.
+ *
+ * A component field does not carry its children inline. The API enriches it
+ * with `componentFields` when the field holds a single component type, and with
+ * `componentSchemas` keyed by type when it is a dynamic zone — so the instance
+ * decides which schema applies. Reading `field.fields` alone finds neither and
+ * renders an empty shell.
+ */
+function componentChildFields(
+  field: FieldConfig,
+  instance: unknown
+): FieldConfig[] {
+  const enriched = field as {
+    componentFields?: FieldConfig[];
+    componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
+  };
+
+  const typeName =
+    typeof instance === "object" && instance !== null
+      ? (instance as { _componentType?: string })._componentType
+      : undefined;
+
+  if (typeName && enriched.componentSchemas?.[typeName]?.fields) {
+    return enriched.componentSchemas[typeName].fields;
+  }
+  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
+
+  return childFields(field);
+}
+
 /** A labelled stack of child values, used by every container type. */
 function NestedFields({
   fields,
@@ -328,7 +408,10 @@ defineValueDisplay(["component"], ({ value, field }) => {
                 {typeName}
               </div>
             ) : null}
-            <NestedFields fields={childFields(field)} source={instance} />
+            <NestedFields
+              fields={componentChildFields(field, instance)}
+              source={instance}
+            />
           </div>
         );
       })}

@@ -33,11 +33,25 @@ function hasMany(field: FieldConfig): boolean {
 }
 
 /**
+ * Whether a relation or upload field is polymorphic, meaning it names several
+ * possible targets and stores `{ relationTo, value }` rather than a bare id.
+ * Such a value is JSON even when the field holds only one.
+ */
+function isPolymorphicRelation(field: FieldConfig): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return Array.isArray((field as { relationTo?: unknown }).relationTo);
+}
+
+/**
  * Whether this field's value is stored as JSON, and so may arrive as a string.
  * A `hasMany` field of any type stores an array, which is JSON too.
  */
 function isJsonBacked(field: FieldConfig): boolean {
-  return JSON_BACKED_TYPES.has(field.type) || hasMany(field);
+  return (
+    JSON_BACKED_TYPES.has(field.type) ||
+    hasMany(field) ||
+    isPolymorphicRelation(field)
+  );
 }
 
 /** Parse a JSON string, or return the original value when it is not one. */

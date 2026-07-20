@@ -81,6 +81,18 @@ describe("richTextToText", () => {
     );
   });
 
+  it("keeps the caption of a media-only document", () => {
+    // A document holding only an image has no text node; without reading the
+    // caption the field would display as though it were never filled in.
+    const image = {
+      type: "image",
+      altText: "A chart",
+      caption: "Revenue by quarter",
+    };
+
+    expect(richTextToText(doc([image]))).toContain("Revenue by quarter");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(richTextToText(doc([]))).toBe("");
   });
