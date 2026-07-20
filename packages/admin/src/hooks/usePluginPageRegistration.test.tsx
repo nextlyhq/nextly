@@ -19,8 +19,13 @@ import type { PluginMetadata } from "@admin/types/branding";
 import { usePluginPageRegistration } from "./usePluginPageRegistration";
 
 // The registry + component-registry internals have their own tests; here we
-// only care about the routing side-effect (the locationchange emit).
-vi.mock("@admin/lib/plugins/plugin-route-registry", () => ({
+// only care about the routing side-effect (the locationchange emit). The real
+// `pluginPagePath` is kept, since the signature is built from the route it
+// derives and normalization is part of what these tests cover.
+vi.mock("@admin/lib/plugins/plugin-route-registry", async importActual => ({
+  ...(await importActual<
+    typeof import("@admin/lib/plugins/plugin-route-registry")
+  >()),
   registerPluginPages: vi.fn(),
   clearPluginPages: vi.fn(),
 }));
@@ -37,11 +42,23 @@ function locationChangeCount(
 }
 
 /** A fresh object each call, so rerenders get a new identity, same content. */
-function pluginWithPage(): PluginMetadata {
+function pluginWithPage(path = "/reports"): PluginMetadata {
   return {
     name: "acme",
     collections: [],
-    pages: [{ path: "/reports", component: "@acme/x/admin#Reports" }],
+    pages: [{ path, component: "@acme/x/admin#Reports" }],
+  };
+}
+
+/** A plugin whose single page carries the given component/permission pair. */
+function pluginWithPageFields(
+  component: string,
+  requiredPermission: string
+): PluginMetadata {
+  return {
+    name: "acme",
+    collections: [],
+    pages: [{ path: "/reports", component, requiredPermission }],
   };
 }
 
@@ -106,6 +123,31 @@ describe("usePluginPageRegistration", () => {
 
     // The plugin is still present but no longer contributes pages.
     rerender({ plugins: [{ name: "acme", collections: [] }] });
+
+    expect(locationChangeCount(spy)).toBe(2);
+    spy.mockRestore();
+  });
+
+  it("treats slash-equivalent page paths as one route and stays quiet", () => {
+    const spy = vi.spyOn(window, "dispatchEvent");
+    const { rerender } = renderWith([pluginWithPage("/reports")]);
+    expect(locationChangeCount(spy)).toBe(1);
+
+    // The registry strips leading slashes, so this registers the same route.
+    rerender({ plugins: [pluginWithPage("reports")] });
+
+    expect(locationChangeCount(spy)).toBe(1);
+    spy.mockRestore();
+  });
+
+  it("distinguishes routes whose component and permission share the delimiter", () => {
+    const spy = vi.spyOn(window, "dispatchEvent");
+    const { rerender } = renderWith([pluginWithPageFields("a:b", "c")]);
+    expect(locationChangeCount(spy)).toBe(1);
+
+    // A flat `component:permission` join would flatten both of these to the
+    // same string; it is a real route change and must re-resolve.
+    rerender({ plugins: [pluginWithPageFields("a", "b:c")] });
 
     expect(locationChangeCount(spy)).toBe(2);
     spy.mockRestore();

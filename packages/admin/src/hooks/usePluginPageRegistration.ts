@@ -4,8 +4,14 @@ import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-regis
 import {
   registerPluginPages,
   clearPluginPages,
+  pluginPagePath,
 } from "@admin/lib/plugins/plugin-route-registry";
 import type { PluginMetadata } from "@admin/types/branding";
+
+/** Order-independent signature of a set of registered plugin routes. */
+function routeSignature(routes: string[]): string {
+  return JSON.stringify([...routes].sort());
+}
 
 /** Derive a plugin's admin slug from its name (matches the server's derivation). */
 function toSlug(name: string): string {
@@ -28,8 +34,10 @@ export function usePluginPageRegistration(
   plugins: PluginMetadata[] | undefined
 ): void {
   // Signature of the plugin routes registered by the last run, so the effect
-  // can tell an actual route change from an unrelated admin-meta change.
-  const registeredRoutesRef = useRef("");
+  // can tell an actual route change from an unrelated admin-meta change. Seeded
+  // with the empty-set signature (built the same way as below, so the two
+  // cannot drift) — the first run with no plugin pages is then not a change.
+  const registeredRoutesRef = useRef(routeSignature([]));
 
   useEffect(() => {
     clearPluginPages();
@@ -52,8 +60,17 @@ export function usePluginPageRegistration(
         );
         for (const page of plugin.pages) {
           componentPaths.push(page.component);
+          // Key on the resolved route (the registry strips leading slashes, so
+          // "/reports" and "reports" are one route) and encode the tuple as
+          // JSON, since component and permission values can themselves contain
+          // the delimiter — `posts:read` style permissions being the common
+          // case — which a flat join would render ambiguous.
           registeredRoutes.push(
-            `${slug}:${page.path}:${page.component}:${page.requiredPermission ?? ""}`
+            JSON.stringify([
+              pluginPagePath(slug, page.path),
+              page.component,
+              page.requiredPermission ?? "",
+            ])
           );
         }
       }
@@ -90,7 +107,7 @@ export function usePluginPageRegistration(
     // navigation. Admin-meta refetches periodically, so comparing the route set
     // (rather than just "did anything register") keeps unrelated branding
     // changes from forcing a redundant re-resolution.
-    const signature = registeredRoutes.sort().join("|");
+    const signature = routeSignature(registeredRoutes);
     const previousSignature = registeredRoutesRef.current;
     registeredRoutesRef.current = signature;
     if (signature !== previousSignature && typeof window !== "undefined") {
