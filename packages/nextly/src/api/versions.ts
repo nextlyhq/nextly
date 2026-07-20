@@ -22,7 +22,7 @@ import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondList } from "./response-shapes";
-import { requireVersionReadAccess } from "./versions-access";
+import { requireRouteVersionReadAccess } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
 /** Page size when the caller does not ask for one. */
@@ -102,7 +102,7 @@ export const GET = withErrorHandler(
     // clamped, so no single request can serialize an entire long history.
     const limit = Math.min(requestedLimit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-    await requireVersionReadAccess(request, scopeKind, slug, id);
+    await requireRouteVersionReadAccess(request, scopeKind, slug, id);
 
     const versions = getService("versionsService");
     // Fetch one more than asked for: its presence is what proves another page
