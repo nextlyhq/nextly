@@ -1598,7 +1598,12 @@ export class CollectionMutationService extends BaseService {
             tableName,
             fields,
             manyToManyFields,
-            params.locale
+            // The RESOLVED write locale, not the raw request param: a localized
+            // write with no `?locale` still writes the default locale, and the
+            // parent's translatable values are read for that resolved locale.
+            // Passing the raw param would read components under different rules
+            // than the rest of the same document.
+            localizedWrite?.writeLocale ?? params.locale
           );
         const documentParts = {
           parentRow: snapshotParent,
@@ -1615,7 +1620,15 @@ export class CollectionMutationService extends BaseService {
               scopeSlug: params.collectionName,
               entryId: entry.id as string,
             },
-            contentStatus: (entry as { status?: unknown }).status,
+            // A localized create with an explicit status moves it to the
+            // companion, leaving the main row on its table default. The snapshot
+            // records the companion value, so the version must be indexed with
+            // the same one or history reports a draft whose own document says
+            // published.
+            contentStatus:
+              typeof createCompanionStatus === "string"
+                ? createCompanionStatus
+                : (entry as { status?: unknown }).status,
             parts: documentParts,
             createdBy: params.user?.id ?? null,
             maxPerDoc: versionsConfig.maxPerDoc,
@@ -2599,7 +2612,8 @@ export class CollectionMutationService extends BaseService {
                 tableName,
                 fields,
                 manyToManyFields,
-                params.locale
+                // The resolved write locale — see the create path.
+                localizedUpdate?.writeLocale ?? params.locale
               );
             previousDocument = assembleDocument({
               parentRow: previousParent,
@@ -2763,11 +2777,19 @@ export class CollectionMutationService extends BaseService {
               // `_status` lands on its DEFAULT. Without this the document would
               // report the main row's status, telling receivers a brand-new
               // translation is published when the row just written is a draft.
+              // The upsert below runs only when there are companion columns to
+              // write, so an update touching shared fields alone leaves the
+              // locale with no row at all. Claiming the default then would
+              // invent a draft the write never committed and report a status
+              // change against the main row.
+              const writesCompanionRow =
+                !!localizedUpdate &&
+                Object.keys(localizedUpdate.companionData).length > 0;
               const effectiveLocaleStatus =
                 typeof companionStatus === "string"
                   ? companionStatus
                   : (committedLocaleStatus ??
-                    (localizedUpdate?.hasStatus
+                    (localizedUpdate?.hasStatus && writesCompanionRow
                       ? COMPANION_DEFAULT_STATUS
                       : null));
               // A partial translatable update only carries the *changed*
@@ -2819,7 +2841,8 @@ export class CollectionMutationService extends BaseService {
                 tableName,
                 fields,
                 manyToManyFields,
-                params.locale
+                // The resolved write locale — see the create path.
+                localizedUpdate?.writeLocale ?? params.locale
               );
               const documentParts = {
                 parentRow,

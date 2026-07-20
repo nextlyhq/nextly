@@ -313,6 +313,79 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(latest.status).toBe(snapshot.status);
   });
 
+  it("leaves the status alone when a shared-field update writes no locale row", async () => {
+    // `title` is not translatable, so this update has no companion columns to
+    // write and no locale row is created. Reporting the companion default then
+    // would invent a draft the write never committed.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Shared field only, into a locale that has no companion row.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { title: "T2" }
+    );
+
+    const envelope = await updatedEnvelope(t);
+    expect(envelope.data.title).toBe("T2");
+    // No locale row exists, so the entry's own status stands.
+    expect(envelope.data.status).toBe("published");
+    expect(envelope.changedFields).not.toContain("status");
+  });
+
+  it("indexes a localized create with the status it committed", async () => {
+    // The explicit status moves to the companion, so the main row keeps its
+    // table default. The version must be indexed with the committed value, or
+    // history lists a draft whose snapshot says published.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          localized: true,
+          status: true,
+          versions: true,
+          fields: [
+            text({ name: "title", localized: false }),
+            text({ name: "heading" }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const t = current;
+    await migrate(t);
+
+    await handlerOf(t).createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "T", heading: "Deutsch", status: "published" }
+    );
+
+    const versions = await t.adapter.select<{
+      status: string;
+      snapshot: unknown;
+    }>("nextly_versions");
+    const latest = versions[versions.length - 1];
+    const snapshot = (
+      typeof latest.snapshot === "string"
+        ? JSON.parse(latest.snapshot)
+        : latest.snapshot
+    ) as { status?: string };
+    expect(snapshot.status).toBe("published");
+    expect(latest.status).toBe(snapshot.status);
+  });
+
   it("records the per-locale status a create committed, not the main-row default", async () => {
     const t = await boot();
     await migrate(t);
