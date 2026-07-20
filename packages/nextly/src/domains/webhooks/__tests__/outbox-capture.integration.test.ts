@@ -8,7 +8,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, password, text } from "../../../config";
+import {
+  component,
+  defineCollection,
+  defineComponent,
+  password,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -143,6 +149,56 @@ describe("webhook outbox capture (integration)", () => {
     expect(envelope.data).not.toHaveProperty("secret");
     expect(envelope.changedFields).not.toContain("secret");
     expect(JSON.stringify(envelope)).not.toContain("SuperSecret123!");
+  });
+
+  it("never ships a hidden field declared inside a component", async () => {
+    // A component reference names its target by slug and carries no inline
+    // children, so the secret walk cannot see fields declared inside the
+    // component unless the reference is expanded first. Without that expansion
+    // this value ships in cleartext.
+    current = await createTestNextly({
+      components: [
+        defineComponent({
+          slug: "profile",
+          fields: [
+            text({ name: "heading" }),
+            text({ name: "internalNote", admin: { hidden: true } }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [
+            text({ name: "title" }),
+            component({ name: "profile", component: "profile" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      {
+        title: "page",
+        profile: { heading: "shown", internalNote: "CONFIDENTIAL_NOTE" },
+      }
+    );
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(1);
+    const envelope = envelopeOf(rows[0]);
+    // The visible component value survives...
+    expect((envelope.data.profile as { heading?: string })?.heading).toBe(
+      "shown"
+    );
+    // ...but the hidden one never leaves the system, at any depth.
+    expect(JSON.stringify(envelope)).not.toContain("CONFIDENTIAL_NOTE");
+    expect(
+      (envelope.data.profile as { internalNote?: string })?.internalNote
+    ).toBeUndefined();
   });
 
   it("records entry.updated with a real prior document and an accurate diff", async () => {

@@ -71,7 +71,9 @@ import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -241,6 +243,22 @@ export class CollectionMutationService extends BaseService {
    * subscriber can tell a single-language transition apart from a document-wide
    * one (a document-wide publish carries no `locale`).
    */
+  /**
+   * The collection's field tree with component references expanded.
+   *
+   * A component reference names its target by slug and carries no inline
+   * children, so without this the secret/hidden walk never sees fields declared
+   * inside a component and their values would ship in the event payload.
+   */
+  private async webhookFieldTree(
+    fields: readonly SensitiveFieldSource[]
+  ): Promise<SensitiveFieldSource[]> {
+    const dataService = this.componentDataService;
+    return expandComponentFields(fields, async slug =>
+      dataService ? await dataService.getComponentFields(slug) : null
+    );
+  }
+
   private transitionStatus(args: {
     collection: string;
     id: unknown;
@@ -1507,7 +1525,7 @@ export class CollectionMutationService extends BaseService {
           },
           data: assembleDocument(documentParts),
           previous: null,
-          fields,
+          fields: await this.webhookFieldTree(fields),
           actor: actorForWrite(params.actor, params.user),
         });
       });
@@ -2660,7 +2678,7 @@ export class CollectionMutationService extends BaseService {
                 },
                 data: assembleDocument(documentParts),
                 previous: previousDocument,
-                fields,
+                fields: await this.webhookFieldTree(fields),
                 actor: actorForWrite(params.actor, params.user),
               });
             }

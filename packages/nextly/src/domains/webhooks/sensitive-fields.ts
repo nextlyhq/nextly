@@ -24,11 +24,12 @@ export interface SensitiveFieldSource {
   /** Top-level hidden flag. */
   hidden?: boolean;
   /**
-   * Admin-scoped options; real collection fields put `hidden` here. Other admin
-   * keys (placeholder, description, ...) are tolerated so any field config can
-   * satisfy this shape without a cast at the call site.
+   * Admin-scoped options; real collection fields put `hidden` here. Typed as
+   * `unknown` and narrowed at runtime so every field-config shape satisfies this
+   * contract — the per-type admin options are closed interfaces, which no
+   * structural annotation here could accept without a cast at the call site.
    */
-  admin?: { hidden?: boolean; [key: string]: unknown };
+  admin?: unknown;
   /** Inline sub-fields of a group/repeater field, if any. */
   fields?: SensitiveFieldSource[];
   /** Block definitions of a blocks field; each carries its own `fields`. */
@@ -55,7 +56,9 @@ export function sensitiveFieldNames(
       const hidden =
         inheritedHidden ||
         field.hidden === true ||
-        field.admin?.hidden === true;
+        (typeof field.admin === "object" &&
+          field.admin !== null &&
+          (field.admin as { hidden?: unknown }).hidden === true);
       if ((field.type === "password" || hidden) && field.name) {
         names.add(field.name);
       }
