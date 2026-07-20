@@ -187,6 +187,132 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(envelopeOf(updatedEvent!).resource).toMatchObject({ locale: "en" });
   });
 
+  it("reports a brand-new translation as the draft it was written as", async () => {
+    // Translating into a locale for the first time creates the companion row,
+    // so `_status` lands on the column default. Reporting the main row's status
+    // instead would tell receivers the new translation is already published.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Content-only write into a locale that has no companion row yet.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Deutsch" }
+    );
+
+    const envelope = await updatedEnvelope(t);
+    expect(envelope.resource).toMatchObject({ locale: "de" });
+    expect(envelope.data.status).toBe("draft");
+  });
+
+  it("reports the locale's own status on a content-only translation update", async () => {
+    // The German row is a draft under a published entry. A content-only German
+    // edit must report German's status, not the main row's.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Establish a German draft, then edit its content without touching status.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Entwurf", status: "draft" }
+    );
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Entwurf 2" }
+    );
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const updates = rows.filter(r => r.type === "entry.updated");
+    const last = envelopeOf(updates[updates.length - 1]);
+    expect(last.data.heading).toBe("Entwurf 2");
+    expect(last.data.status).toBe("draft");
+    // Status did not move, so it must not appear as a change.
+    expect(last.changedFields).not.toContain("status");
+  });
+
+  it("indexes the version with the same status its snapshot records", async () => {
+    // The version row's `status` column drives history filters. If it reports
+    // the main row while the snapshot it stores says otherwise, a localized
+    // draft is listed as a published version of itself.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          localized: true,
+          status: true,
+          versions: true,
+          fields: [
+            text({ name: "title", localized: false }),
+            text({ name: "heading" }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const t = current;
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Deutsch" }
+    );
+
+    const versions = await t.adapter.select<{
+      status: string;
+      snapshot: unknown;
+    }>("nextly_versions");
+    const latest = versions[versions.length - 1];
+    const snapshot = (
+      typeof latest.snapshot === "string"
+        ? JSON.parse(latest.snapshot)
+        : latest.snapshot
+    ) as { status?: string };
+    expect(snapshot.status).toBe("draft");
+    // The indexed status must agree with the document it indexes.
+    expect(latest.status).toBe(snapshot.status);
+  });
+
   it("records the per-locale status a create committed, not the main-row default", async () => {
     const t = await boot();
     await migrate(t);

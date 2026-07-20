@@ -63,6 +63,7 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -471,7 +472,7 @@ export class CollectionMutationService extends BaseService {
       if (typeof statusVal === "string") {
         companionData._status = statusVal;
       } else if (isCreate) {
-        companionData._status = "draft";
+        companionData._status = COMPANION_DEFAULT_STATUS;
       }
 
       // the main table's `status` gates entry-level visibility (the read
@@ -640,7 +641,15 @@ export class CollectionMutationService extends BaseService {
               // same language it was just written in. Without it the read falls
               // back to the default component locale and the snapshot records
               // values this write never touched.
-              ...(locale !== undefined ? { locale } : {}),
+              //
+              // Fallback is suppressed for the same reason: an untranslated
+              // component field would otherwise resolve to another locale's
+              // value, and the document is labelled as THIS locale. The parent's
+              // own translatable values are already read without fallback, so
+              // this keeps the two halves of the document consistent.
+              ...(locale !== undefined
+                ? { locale, fallbackLocale: false as const }
+                : {}),
             });
           for (const f of componentFields) {
             if (populated[f.name] !== undefined) {
@@ -2748,11 +2757,19 @@ export class CollectionMutationService extends BaseService {
               // keeps the real committed system columns.
               const companionStatus = localizedUpdate?.companionData?._status;
               // What this locale's status IS after the write: the value the
-              // patch set, else the one already committed for the locale.
+              // patch set, else the one already committed for the locale, else
+              // the column default — a locale being translated for the first
+              // time has no companion row, so the upsert creates one and
+              // `_status` lands on its DEFAULT. Without this the document would
+              // report the main row's status, telling receivers a brand-new
+              // translation is published when the row just written is a draft.
               const effectiveLocaleStatus =
                 typeof companionStatus === "string"
                   ? companionStatus
-                  : committedLocaleStatus;
+                  : (committedLocaleStatus ??
+                    (localizedUpdate?.hasStatus
+                      ? COMPANION_DEFAULT_STATUS
+                      : null));
               // A partial translatable update only carries the *changed*
               // localized values in `localizedFieldValues`; the write locale's
               // other companion fields (set by a prior write, untouched here)
@@ -2817,12 +2834,14 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  // Prefer the written status; for a localized status change it is
-                  // moved to the companion `_status`, so fall back to that before the
-                  // prior main-row status.
+                  // Prefer the written status; for a localized write the status
+                  // lives in the companion, so use this locale's effective value
+                  // before the prior main-row status. The same value the snapshot
+                  // records, or the version row would be indexed published while
+                  // its own document says draft.
                   contentStatus:
                     (updatePayload as { status?: unknown }).status ??
-                    companionStatus ??
+                    effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
                   parts: documentParts,
                   createdBy: params.user?.id ?? null,
