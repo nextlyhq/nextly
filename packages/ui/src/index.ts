@@ -1,3 +1,13 @@
+// `cn` and the Tailwind preset are deliberately NOT re-exported here: this
+// barrel ships a `"use client"` banner, and a server-rendered page or a
+// Tailwind config importing them through it would load a client module. They
+// are published as "@nextlyhq/ui/utils" and "@nextlyhq/ui/tailwind-preset".
+//
+// This barrel is published with a `"use client"` banner (see tsup.config.ts):
+// all but a couple of these modules use hooks, context, forwardRef or Radix
+// and cannot render in a Server Component. Build-time-only exports are
+// published separately as "@nextlyhq/ui/tailwind-preset".
+
 // Components — Button
 export { Button, buttonVariants } from "./components/button";
 export type { ButtonProps } from "./types/button";
@@ -313,7 +323,5 @@ export {
 } from "./providers/portal-provider";
 
 // Utilities
-export { cn } from "./lib/utils";
 
 // Tailwind Preset
-export { default as uiPreset } from "./tailwind-preset";

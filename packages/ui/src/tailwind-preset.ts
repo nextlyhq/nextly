@@ -4,10 +4,15 @@
  * Defines the CSS custom property contract that all UI components expect.
  * Consumers must provide the actual CSS variable values in their stylesheets.
  *
- * Usage (Tailwind v3):
+ * Usage (Tailwind v3, ESM):
  *   // tailwind.config.ts
  *   import uiPreset from "@nextlyhq/ui/tailwind-preset";
  *   export default { presets: [uiPreset], ... };
+ *
+ * Usage (Tailwind v3, CommonJS):
+ *   // tailwind.config.js
+ *   const { uiPreset } = require("@nextlyhq/ui/tailwind-preset");
+ *   module.exports = { presets: [uiPreset], ... };
  *
  * Usage (Tailwind v4 with @config):
  *   Consumers define the equivalent @theme tokens in their CSS.
@@ -107,4 +112,9 @@ const uiPreset = {
   },
 };
 
+// Exported both ways on purpose. CommonJS cannot represent a default-only
+// module without `module.exports =`, which makes the emitted declarations
+// disagree with the runtime shape (attw's FalseExportDefault); a named export
+// alongside it keeps `require()` and `import` consistent and typed.
+export { uiPreset };
 export default uiPreset;

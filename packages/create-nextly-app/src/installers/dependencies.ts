@@ -19,6 +19,8 @@ const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
  * Core Nextly packages that are always installed.
  * @nextlyhq/ui is a peer dependency of admin (externalized from admin bundle).
  * @tanstack/react-query is externalized from admin to avoid duplicate instances.
+ * lucide-react is a peer dependency of @nextlyhq/ui, so it must exist in the
+ * consumer project rather than only inside admin's own tree.
  */
 const CORE_PACKAGES = [
   "nextly",
@@ -26,6 +28,7 @@ const CORE_PACKAGES = [
   "@nextlyhq/adapter-drizzle",
   "@nextlyhq/ui",
   "@tanstack/react-query",
+  "lucide-react",
 ];
 
 /**
@@ -131,6 +134,19 @@ export async function installDependencies(
           ...pluginPackages,
         ]),
       ];
+
+      // Everything else in the install set comes from npm, not the yalc store:
+      // @tanstack/react-query and lucide-react are externalised from the admin
+      // bundle and peer-required by @nextlyhq/ui, so `yalc add` would never
+      // provide them and the peers would stay unresolved.
+      const registryPackages = allPackages.filter(
+        pkg => !yalcPackages.includes(pkg)
+      );
+
+      if (registryPackages.length > 0) {
+        const [cmd, ...args] = INSTALL_COMMANDS[pm];
+        await execa(cmd, [...args, ...registryPackages], { cwd });
+      }
 
       for (const pkg of yalcPackages) {
         await execa("yalc", ["add", pkg], { cwd });

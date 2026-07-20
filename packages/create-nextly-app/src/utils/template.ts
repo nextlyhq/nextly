@@ -322,6 +322,11 @@ export async function generatePackageJson(
   // instances - must be installed in the consumer project
   dependencies["@tanstack/react-query"] = "^5.62.0";
 
+  // @nextlyhq/ui declares lucide-react as a peer, so the consumer project has
+  // to provide it. Admin bundles its own copy, which does not satisfy that peer
+  // under isolated node_modules layouts.
+  dependencies["lucide-react"] = "^0.544.0";
+
   if (!useYalc) {
     const versions = await resolveNextlyVersions();
     dependencies["nextly"] = versions["nextly"];

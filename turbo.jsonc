@@ -271,6 +271,12 @@
         // theme.css), so CSS is a real test input; without it a CSS-only change
         // could reuse a cached pass and skip the assertion.
         "src/**/*.css",
+        // Same reasoning for the package's markdown: the authoring guide and
+        // README are asserted against the real tokens and entry points, so a
+        // docs-only edit must invalidate the cached result rather than reuse a
+        // pass that never checked it.
+        "docs/**/*.md",
+        "README.md",
         "vitest.config.ts",
         "tsconfig.json"
       ],
