@@ -21,6 +21,10 @@ vi.mock("../../../di", () => ({
   getService: vi.fn(() => ({ list: listSpy, get: getSpy })),
 }));
 
+vi.mock("../../../domains/versions/author-hydration", () => ({
+  attachVersionAuthors: (rows: unknown[]) => Promise.resolve(rows),
+}));
+
 import {
   getVersionForDocument,
   listVersionsForDocument,

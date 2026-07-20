@@ -16,10 +16,11 @@ import {
 } from "../../api/versions-access";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
-import type {
-  VersionMeta,
-  VersionRow,
-} from "../../domains/versions/versions-repository";
+import {
+  attachVersionAuthors,
+  type VersionMetaWithAuthor,
+} from "../../domains/versions/author-hydration";
+import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import type { Params } from "../types";
@@ -100,12 +101,13 @@ export function userFromParams(p: Params): UserContext {
 }
 
 /**
- * Version metadata for one document, newest-first. Snapshots are never included
- * here — a history list does not need them and they are large.
+ * Version metadata for one document, newest-first, each row carrying the
+ * display identity of whoever wrote it. Snapshots are never included here — a
+ * history list does not need them and they are large.
  */
 export async function listVersionsForDocument(
   args: VersionMethodArgs
-): Promise<{ items: VersionMeta[]; meta: PaginationMeta }> {
+): Promise<{ items: VersionMetaWithAuthor[]; meta: PaginationMeta }> {
   // Validate before the gate so malformed pagination fails fast, and validate
   // here rather than per dispatcher so every caller of this core is covered.
   if (args.limit !== undefined) assertPositiveInteger(args.limit, "limit");
@@ -140,7 +142,8 @@ export async function listVersionsForDocument(
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
   return {
-    items,
+    // Rows record only an author id; a history list shows a person.
+    items: await attachVersionAuthors(items),
     meta: {
       total: items.length,
       page: 1,
