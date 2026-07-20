@@ -1,16 +1,18 @@
 /**
  * Color utility functions for admin branding.
  *
- * Converts user-supplied hex colors to the HSL triplet format expected by
- * Tailwind v4 CSS custom properties (bare "H S% L%" without hsl() wrapper).
+ * Emits complete CSS color values. The `--nx-*` design tokens hold full colors
+ * (`--nx-primary: oklch(...)`) and are consumed directly, e.g.
+ * `--color-primary: var(--nx-primary)`, so a bare "H S% L%" triplet would land
+ * in `background-color` as an invalid value and be dropped.
  */
 
 /**
- * Convert a 6-digit hex color string to a Tailwind-style HSL triplet.
+ * Convert a 6-digit hex color string to a CSS `hsl()` color.
  *
- * @example hexToHslTriplet("#6366f1") → "239 84.3% 64.7%"
+ * @example hexToCssColor("#6366f1") → "hsl(238.7 83.5% 66.7%)"
  */
-export function hexToHslTriplet(hex: string): string {
+export function hexToCssColor(hex: string): string {
   const clean = hex.replace("#", "");
   const r = parseInt(clean.slice(0, 2), 16) / 255;
   const g = parseInt(clean.slice(2, 4), 16) / 255;
@@ -44,16 +46,16 @@ export function hexToHslTriplet(hex: string): string {
   const sPct = Math.round(s * 100 * 10) / 10;
   const lPct = Math.round(l * 100 * 10) / 10;
 
-  return `${hDeg} ${sPct}% ${lPct}%`;
+  return `hsl(${hDeg} ${sPct}% ${lPct}%)`;
 }
 
 /**
  * Determine the best foreground color (white or dark) for readable text on
  * the given background hex color, using WCAG relative luminance.
  *
- * Returns an HSL triplet string:
- * - "0 0% 100%"        → white (used on dark/saturated backgrounds)
- * - "222.2 47.4% 11.2%" → slate-900 (used on light backgrounds)
+ * Returns a CSS color:
+ * - "hsl(0 0% 100%)"          → white (used on dark/saturated backgrounds)
+ * - "hsl(222.2 47.4% 11.2%)"  → slate-900 (used on light backgrounds)
  */
 export function getForegroundForBackground(hex: string): string {
   const clean = hex.replace("#", "");
@@ -70,7 +72,9 @@ export function getForegroundForBackground(hex: string): string {
   const whiteContrast = 1.05 / (L + 0.05);
   const darkContrast = (L + 0.05) / 0.05;
 
-  return whiteContrast >= darkContrast ? "0 0% 100%" : "222.2 47.4% 11.2%";
+  return whiteContrast >= darkContrast
+    ? "hsl(0 0% 100%)"
+    : "hsl(222.2 47.4% 11.2%)";
 }
 
 /**
@@ -82,7 +86,8 @@ export function isValidHex(value: string): boolean {
 
 /**
  * Generate a CSS string that sets admin branding custom properties on
- * `.adminapp`. Intended to be injected as a `<style>` tag in the
+ * `.nextly-admin`, the class the admin root renders and that the admin
+ * stylesheet is scoped to. Intended to be injected as a `<style>` tag in the
  * server-side layout so colors are present in the initial HTML —
  * no FOUC while waiting for the client-side `/admin-meta` fetch.
  *
@@ -112,25 +117,25 @@ export function getBrandingCss(
   const rules: string[] = [];
 
   if (colors.primary && isValidHex(colors.primary)) {
-    const hsl = hexToHslTriplet(colors.primary);
+    const hsl = hexToCssColor(colors.primary);
     const fg = getForegroundForBackground(colors.primary);
-    rules.push(`--primary: ${hsl};`);
-    rules.push(`--primary-foreground: ${fg};`);
-    rules.push(`--ring: ${hsl};`);
-    rules.push(`--focus-ring: ${hsl};`);
-    rules.push(`--sidebar-ring: ${hsl};`);
-    rules.push(`--chart-1: ${hsl};`);
+    rules.push(`--nx-primary: ${hsl};`);
+    rules.push(`--nx-primary-foreground: ${fg};`);
+    rules.push(`--nx-ring: ${hsl};`);
+    rules.push(`--nx-focus-ring: ${hsl};`);
+    rules.push(`--nx-sidebar-ring: ${hsl};`);
+    rules.push(`--nx-chart-1: ${hsl};`);
   }
 
   if (colors.accent && isValidHex(colors.accent)) {
-    const hsl = hexToHslTriplet(colors.accent);
+    const hsl = hexToCssColor(colors.accent);
     const fg = getForegroundForBackground(colors.accent);
-    rules.push(`--accent: ${hsl};`);
-    rules.push(`--accent-foreground: ${fg};`);
-    rules.push(`--chart-2: ${hsl};`);
+    rules.push(`--nx-accent: ${hsl};`);
+    rules.push(`--nx-accent-foreground: ${fg};`);
+    rules.push(`--nx-chart-2: ${hsl};`);
   }
 
   if (rules.length === 0) return null;
 
-  return `.adminapp, .adminapp.dark { ${rules.join(" ")} }`;
+  return `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} }`;
 }
