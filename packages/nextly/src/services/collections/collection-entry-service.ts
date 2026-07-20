@@ -39,6 +39,7 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -85,7 +86,14 @@ export class CollectionEntryService extends BaseService {
     componentDataService?: ComponentDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
-    localization?: SanitizedLocalizationConfig
+    localization?: SanitizedLocalizationConfig,
+    /**
+     * Offers a webhook-retention pass after a write. Wired here rather than at
+     * a caller because every write path that appends an event runs through this
+     * service — the dispatcher-facing handler, `CollectionService`, and direct
+     * callers alike — so this is the one place that covers them all.
+     */
+    private readonly retentionRunner?: WebhookRetentionRunner
   ) {
     super(adapter, logger);
 
@@ -189,6 +197,17 @@ export class CollectionEntryService extends BaseService {
     return this.queryService.getEntry(params);
   }
 
+  /**
+   * Offer a retention pass after a successful write.
+   *
+   * Deliberately not awaited: a pass can delete thousands of rows and no user's
+   * save should wait on housekeeping. `maybeRun` absorbs its own failures, so
+   * nothing can reject here.
+   */
+  private offerRetentionPass(): void {
+    void this.retentionRunner?.maybeRun();
+  }
+
   async createEntry(
     params: {
       collectionName: string;
@@ -203,7 +222,9 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    return this.mutationService.createEntry(params, body, depth);
+    const result = await this.mutationService.createEntry(params, body, depth);
+    this.offerRetentionPass();
+    return result;
   }
 
   async updateEntry(
@@ -221,7 +242,9 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    return this.mutationService.updateEntry(params, body, depth);
+    const result = await this.mutationService.updateEntry(params, body, depth);
+    this.offerRetentionPass();
+    return result;
   }
 
   /** i18n M7: publish every language of an entry at once (spec §10). */
@@ -281,7 +304,9 @@ export class CollectionEntryService extends BaseService {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    return this.bulkService.duplicateEntry(params);
+    const result = await this.bulkService.duplicateEntry(params);
+    this.offerRetentionPass();
+    return result;
   }
 
   // Phase 4.5: bulk methods carry full records on update (caller needs
@@ -306,7 +331,9 @@ export class CollectionEntryService extends BaseService {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
-    return this.bulkService.bulkUpdateEntries(params);
+    const result = await this.bulkService.bulkUpdateEntries(params);
+    this.offerRetentionPass();
+    return result;
   }
 
   async bulkUpdateByQuery(
@@ -324,7 +351,9 @@ export class CollectionEntryService extends BaseService {
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
-    return this.bulkService.bulkUpdateByQuery(params, options);
+    const result = await this.bulkService.bulkUpdateByQuery(params, options);
+    this.offerRetentionPass();
+    return result;
   }
 
   async bulkDeleteByQuery(
@@ -349,7 +378,13 @@ export class CollectionEntryService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.createEntries(params, entries, options);
+    const result = await this.bulkService.createEntries(
+      params,
+      entries,
+      options
+    );
+    this.offerRetentionPass();
+    return result;
   }
 
   async createEntriesInTransaction(

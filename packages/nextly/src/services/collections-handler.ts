@@ -60,9 +60,6 @@ export class CollectionsHandler {
   private readonly fileManager: CollectionFileManager;
   private readonly logger: Logger;
 
-  /** Present only when retention is configured; see the constructor. */
-  private readonly retentionRunner?: WebhookRetentionRunner;
-
   constructor(
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
@@ -80,15 +77,16 @@ export class CollectionsHandler {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
 
-    if (webhookRetention) {
-      const meta = new MetaService(adapter, logger);
-      this.retentionRunner = new WebhookRetentionRunner({
-        policy: webhookRetention,
-        prune: { adapter, logger },
-        gate: meta,
-        logger,
-      });
-    }
+    // Built here because this is where the resolved policy arrives, but handed
+    // to the entry service, which is the seam every write path runs through.
+    const retentionRunner = webhookRetention
+      ? new WebhookRetentionRunner({
+          policy: webhookRetention,
+          prune: { adapter, logger },
+          gate: new MetaService(adapter, logger),
+          logger,
+        })
+      : undefined;
 
     const hookRegistry = getHookRegistry();
 
@@ -172,7 +170,8 @@ export class CollectionsHandler {
       accessControlService,
       componentDataService,
       undefined,
-      this.localization
+      this.localization,
+      retentionRunner
     );
   }
 
@@ -465,7 +464,7 @@ export class CollectionsHandler {
     },
     body: Record<string, unknown>
   ) {
-    const result = await this.entryService.createEntry(
+    return this.entryService.createEntry(
       {
         ...this.resolveUserParam(params),
         locale: params.locale,
@@ -474,22 +473,6 @@ export class CollectionsHandler {
       body,
       params.depth
     );
-    this.offerRetentionPass();
-    return result;
-  }
-
-  /**
-   * Offer a retention pass after a successful write.
-   *
-   * Deliberately not awaited: a pass can delete thousands of rows, and no
-   * user's save should wait on housekeeping. `maybeRun` absorbs its own
-   * failures, so nothing can reject here. On a serverless runtime the process
-   * may be frozen before a pass finishes — that is acceptable, because the
-   * deletes are batched and already committed, and the gate has recorded the
-   * attempt either way.
-   */
-  private offerRetentionPass(): void {
-    void this.retentionRunner?.maybeRun();
   }
 
   /**
@@ -604,7 +587,7 @@ export class CollectionsHandler {
     },
     body: Record<string, unknown>
   ) {
-    const result = await this.entryService.updateEntry(
+    return this.entryService.updateEntry(
       {
         ...this.resolveUserParam(params),
         locale: params.locale,
@@ -613,8 +596,6 @@ export class CollectionsHandler {
       body,
       params.depth
     );
-    this.offerRetentionPass();
-    return result;
   }
 
   /**
@@ -733,11 +714,7 @@ export class CollectionsHandler {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    const result = await this.entryService.bulkUpdateEntries(
-      this.resolveUserParam(params)
-    );
-    this.offerRetentionPass();
-    return result;
+    return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
   }
 
   /**
@@ -773,12 +750,10 @@ export class CollectionsHandler {
     // Resolve userId -> user and mark route-authorized, mirroring
     // bulkUpdateEntries so the query-based bulk update honors access control
     // and redaction instead of running as an anonymous caller.
-    const result = await this.entryService.bulkUpdateByQuery(
+    return this.entryService.bulkUpdateByQuery(
       this.resolveUserParam(params),
       options
     );
-    this.offerRetentionPass();
-    return result;
   }
 
   /**
@@ -844,11 +819,7 @@ export class CollectionsHandler {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    const result = await this.entryService.duplicateEntry(
-      this.resolveUserParam(params)
-    );
-    this.offerRetentionPass();
-    return result;
+    return this.entryService.duplicateEntry(this.resolveUserParam(params));
   }
 
   /**

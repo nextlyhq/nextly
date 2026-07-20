@@ -125,6 +125,6 @@ export const nextlyWebhookDeliveries = mysqlTable(
     // schema is identical across dialects and the diff pipeline round-trips.
     index("nextly_webhook_deliveries_event_idx").on(t.eventId),
     // Retention scans terminal rows oldest-first; see the PostgreSQL definition.
-    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.createdAt),
+    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.updatedAt),
   ]
 );

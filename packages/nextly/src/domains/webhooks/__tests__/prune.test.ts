@@ -25,6 +25,8 @@ function fakeAdapter(script: {
   events?: string[][];
   deliveries?: string[][];
   liveEventIds?: string[];
+  /** Events holding a terminal delivery that has not aged past its window. */
+  youngDeliveryEventIds?: string[];
   /** Whether an enabled endpoint exists; drives the fan-out requirement. */
   hasEndpoint?: boolean;
 }) {
@@ -47,13 +49,16 @@ function fakeAdapter(script: {
         if (table === "nextly_webhooks") {
           return (script.hasEndpoint ? [{ id: "wh1" }] : []) as T[];
         }
-        const isLiveLookup =
+        const isDeliveryLookup =
           table === "nextly_webhook_deliveries" &&
           options?.where?.and.some(c => c.column === "eventId");
-        if (isLiveLookup) {
-          return (script.liveEventIds ?? []).map(id => ({
-            eventId: id,
-          })) as T[];
+        if (isDeliveryLookup) {
+          // Two lookups now: live deliveries, then deliveries too young to drop.
+          const byStatus = options?.where?.and.some(c => c.column === "status");
+          const ids = byStatus
+            ? (script.liveEventIds ?? [])
+            : (script.youngDeliveryEventIds ?? []);
+          return ids.map(id => ({ eventId: id })) as T[];
         }
         const queue = table === "nextly_events" ? events : deliveries;
         return ((queue.shift() ?? []).map(id => ({ id })) as T[]) ?? [];
@@ -129,6 +134,38 @@ describe("pruneWebhookData", () => {
         ?.where?.and.some(c => c.column === "fannedOutAt")
     ).toBe(false);
     expect(result.events.webhook).toBe(1);
+  });
+
+  it("keeps an event whose delivery log is younger than the delivery window", async () => {
+    // A delayed drain routinely finishes an event that is already past its own
+    // window. Deleting it would cascade an attempt log seconds old and defeat
+    // the delivery retention the user configured.
+    const f = fakeAdapter({
+      events: [["e1", "e2"]],
+      youngDeliveryEventIds: ["e1"],
+      hasEndpoint: true,
+    });
+    const result = await pruneWebhookData({ adapter: f.adapter }, policy());
+
+    const eventDeletes = f.deletes.filter(d => d.table === "nextly_events");
+    expect(eventDeletes[0].ids).toEqual(["e2"]);
+    expect(result.events.webhook).toBe(1);
+  });
+
+  it("ages terminal deliveries from when they finished, not when they began", async () => {
+    // A delivery that retried for days before succeeding must still be kept for
+    // its window; created_at would delete it the moment it finished.
+    const f = fakeAdapter({ deliveries: [["d1"]] });
+    await pruneWebhookData({ adapter: f.adapter }, policy());
+
+    const scan = f.selects.find(
+      s =>
+        s.table === "nextly_webhook_deliveries" &&
+        s.where?.and.some(c => c.column === "status") &&
+        !s.where?.and.some(c => c.column === "eventId")
+    );
+    expect(scan?.where?.and.some(c => c.column === "updatedAt")).toBe(true);
+    expect(scan?.where?.and.some(c => c.column === "createdAt")).toBe(false);
   });
 
   it("prunes only terminal deliveries, so it cannot race the drain", async () => {

@@ -121,32 +121,57 @@ async function deliveryIsPossible(adapter: PruneAdapter): Promise<boolean> {
 }
 
 /**
- * Of the given event ids, those that still have a live delivery.
+ * Of the given event ids, those whose deliveries must outlive them.
  *
- * Expressed as a second query rather than a `NOT EXISTS` subquery because the
- * adapter's where vocabulary has no correlated-subquery form, and reaching for
- * raw SQL here would put dialect-specific strings in product code. The
- * `(event_id)` index serves this lookup.
+ * Two reasons a delivery holds its event back. It may still be live, in which
+ * case removing the event would cascade away work the drain has not finished.
+ * Or it may be terminal but younger than the delivery window: the attempt log is
+ * the only record of how a webhook was behaving, and a delayed drain routinely
+ * produces a fresh terminal delivery on an event that is already past its own
+ * window — deleting the event then would cascade an attempt log that is seconds
+ * old and silently defeat the configured delivery retention.
+ *
+ * Expressed as two queries rather than one disjunction because the narrow
+ * adapter surface this module declares takes conjunctions only, and widening it
+ * to carry an `or` for a single call site buys nothing. The `(event_id)` index
+ * serves both.
  */
-async function eventIdsWithLiveDeliveries(
+async function eventIdsWithRetainedDeliveries(
   adapter: PruneAdapter,
-  eventIds: string[]
+  eventIds: string[],
+  deliveryCutoff: Date | null
 ): Promise<Set<string>> {
   if (eventIds.length === 0) return new Set();
-  const rows = await adapter.select<{ eventId: string }>(DELIVERIES_TABLE, {
+
+  const live = await adapter.select<{ eventId: string }>(DELIVERIES_TABLE, {
     where: {
       and: [
         { column: "eventId", op: "IN", value: eventIds },
-        {
-          column: "status",
-          op: "IN",
-          value: [...LIVE_DELIVERY_STATUSES],
-        },
+        { column: "status", op: "IN", value: [...LIVE_DELIVERY_STATUSES] },
       ],
     },
     columns: ["event_id"],
   });
-  return new Set(rows.map(r => r.eventId));
+  const retained = new Set(live.map(r => r.eventId));
+
+  // With deliveries kept forever there is no cutoff to compare against, so any
+  // delivery at all pins its event.
+  const young = await adapter.select<{ eventId: string }>(DELIVERIES_TABLE, {
+    where: {
+      and: [
+        { column: "eventId", op: "IN", value: eventIds },
+        ...(deliveryCutoff
+          ? ([
+              { column: "updatedAt", op: ">=", value: deliveryCutoff },
+            ] as const)
+          : []),
+      ],
+    },
+    columns: ["event_id"],
+  });
+  for (const row of young) retained.add(row.eventId);
+
+  return retained;
 }
 
 /**
@@ -163,7 +188,8 @@ async function pruneEventClass(
   cutoff: Date,
   budget: { batchesLeft: number },
   options: PruneOptions,
-  requireFanOut: boolean
+  requireFanOut: boolean,
+  deliveryCutoff: Date | null
 ): Promise<{ deleted: number; exhausted: boolean }> {
   let deleted = 0;
   // Rows this pass has looked at and will not delete: those held by a live
@@ -196,7 +222,11 @@ async function pruneEventClass(
     if (candidates.length === 0) return { deleted, exhausted: true };
 
     const ids = candidates.map(c => c.id);
-    const blocked = await eventIdsWithLiveDeliveries(deps.adapter, ids);
+    const blocked = await eventIdsWithRetainedDeliveries(
+      deps.adapter,
+      ids,
+      deliveryCutoff
+    );
     const deletable = ids.filter(id => !blocked.has(id));
 
     budget.batchesLeft -= 1;
@@ -246,10 +276,15 @@ async function pruneDeliveries(
               op: "IN",
               value: [...TERMINAL_DELIVERY_STATUSES],
             },
-            { column: "createdAt", op: "<", value: cutoff },
+            // Aged from the terminal transition, which `finalizeDelivery`
+            // stamps on `updated_at`, not from creation. A delivery that
+            // retried for days before succeeding would otherwise be deleted the
+            // moment it finished, losing the attempt log exactly when it became
+            // worth reading.
+            { column: "updatedAt", op: "<", value: cutoff },
           ],
         },
-        orderBy: [{ column: "createdAt", direction: "asc" }],
+        orderBy: [{ column: "updatedAt", direction: "asc" }],
         limit: policy.batchSize,
         offset: skipped,
         columns: ["id"],
@@ -330,7 +365,8 @@ export async function pruneWebhookData(
       cutoff,
       budget,
       options,
-      requireFanOut
+      requireFanOut,
+      deliveryCutoff
     );
     result.events[eventClass] = outcome.deleted;
     if (!outcome.exhausted) result.truncated = true;

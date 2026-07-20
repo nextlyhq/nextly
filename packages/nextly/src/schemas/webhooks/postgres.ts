@@ -167,6 +167,6 @@ export const nextlyWebhookDeliveries = pgTable(
     index("nextly_webhook_deliveries_event_idx").on(t.eventId),
     // Retention scans terminal rows oldest-first; without this the prune would
     // sequentially scan the fastest-growing table in the system.
-    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.createdAt),
+    index("nextly_webhook_deliveries_retention_idx").on(t.status, t.updatedAt),
   ]
 );

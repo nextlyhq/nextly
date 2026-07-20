@@ -21,6 +21,8 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { MetaService } from "../../domains/meta/services/meta-service";
+import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
@@ -159,7 +161,17 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.
-      ctx.config.localization
+      ctx.config.localization,
+      // CollectionService writes append events through this same service, so it
+      // needs its own runner — the handler's is not on this path.
+      ctx.config.webhookRetention
+        ? new WebhookRetentionRunner({
+            policy: ctx.config.webhookRetention,
+            prune: { adapter, logger },
+            gate: new MetaService(adapter, logger),
+            logger,
+          })
+        : undefined
     );
 
     return new CollectionService(
