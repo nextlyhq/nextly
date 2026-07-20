@@ -1,46 +1,53 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { parseSearchParams, type SearchParams } from "@admin/lib/routing";
 
-import { useHydration } from "./useHydration";
+/**
+ * Subscribe to the signals that change the URL without a document load:
+ * `popstate` for back/forward, plus the `locationchange` event `useRouter`'s
+ * history patch emits on pushState/replaceState.
+ */
+function subscribe(onStoreChange: () => void): () => void {
+  window.addEventListener("popstate", onStoreChange);
+  window.addEventListener("locationchange", onStoreChange);
+  return () => {
+    window.removeEventListener("popstate", onStoreChange);
+    window.removeEventListener("locationchange", onStoreChange);
+  };
+}
+
+/** The raw query string compares by value, so React can skip equal snapshots. */
+function getSearchSnapshot(): string {
+  return window.location.search;
+}
+
+/** No query string exists while rendering on the server. */
+function getServerSearchSnapshot(): string {
+  return "";
+}
 
 /**
  * Reactive read of the current URL's query string, independent of the host
  * framework's router.
  *
- * Subscribes to the same signals `useRouter` reacts to — `popstate`, plus the
- * `locationchange` event that its history patch emits on pushState/replaceState
- * — but deliberately does not patch history itself. Each `useRouter` instance
- * wraps the previous instance's pushState, so components that only need to read
- * the query string stay out of that chain rather than lengthening it.
+ * Reads through `useSyncExternalStore` rather than an effect so the value is
+ * present on the first render: consumers key data fetches off these params, and
+ * an initial empty pass would fetch once unfiltered and again once the real
+ * params arrived. The server snapshot keeps that safe under SSR, where React
+ * hydrates against the empty string and then re-reads.
  *
- * The raw search string is what's held in state: it compares by value, so an
- * unrelated navigation that leaves the query untouched re-renders nothing.
+ * Deliberately does not patch history, unlike `useRouter` — each of those
+ * instances wraps the previous one's pushState, so components that only read
+ * the query string stay out of that chain rather than lengthening it.
  */
 export function useSearchParams(): SearchParams {
-  const isHydrated = useHydration();
-  const [search, setSearch] = useState("");
-
-  useEffect(() => {
-    if (!isHydrated) return;
-
-    let mounted = true;
-    const read = () => {
-      if (mounted) setSearch(window.location.search);
-    };
-
-    read();
-    window.addEventListener("popstate", read);
-    window.addEventListener("locationchange", read);
-
-    return () => {
-      mounted = false;
-      window.removeEventListener("popstate", read);
-      window.removeEventListener("locationchange", read);
-    };
-  }, [isHydrated]);
+  const search = useSyncExternalStore(
+    subscribe,
+    getSearchSnapshot,
+    getServerSearchSnapshot
+  );
 
   return useMemo(() => parseSearchParams(search), [search]);
 }

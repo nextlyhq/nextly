@@ -184,6 +184,8 @@ export function UserSearchResults({
           key={user.id}
           value={`${user.name} ${user.email}`}
           keywords={[user.email, user.id]}
+          // Opening a user stays inside the admin SPA, so this routes through
+          // its router rather than reloading the page.
           onSelect={() => onSelect(() => navigateTo(`/admin/users/${user.id}`))}
         >
           <Avatar size="md" className="mr-2">

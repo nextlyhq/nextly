@@ -4,7 +4,7 @@
  * picking up pushState-driven changes (via the `locationchange` event the
  * router's history patch emits) and back/forward via `popstate`.
  */
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { getSearchParam } from "@admin/lib/routing";
@@ -30,6 +30,21 @@ describe("useSearchParams", () => {
     expect(result.current.status).toBe("draft");
   });
 
+  it("has the params on the very first render, with no empty initial pass", () => {
+    // Consumers key data fetches off these params. An initial empty render
+    // would fetch once unfiltered and again once the real params landed.
+    window.history.pushState({}, "", "/admin/entries?where=abc");
+    const renders: (string | null)[] = [];
+
+    renderHook(() => {
+      const params = useSearchParams();
+      renders.push(getSearchParam(params, "where"));
+      return params;
+    });
+
+    expect(renders[0]).toBe("abc");
+  });
+
   it("updates when a pushState navigation changes the query", () => {
     window.history.pushState({}, "", "/admin/entries?where=abc");
     const { result } = renderHook(() => useSearchParams());
@@ -40,16 +55,26 @@ describe("useSearchParams", () => {
     expect(result.current.where).toBe("xyz");
   });
 
-  it("updates on back/forward (popstate)", () => {
-    window.history.pushState({}, "", "/admin/entries?where=abc");
+  it("updates on real back/forward traversal", async () => {
+    window.history.pushState({}, "", "/admin/entries?where=first");
     const { result } = renderHook(() => useSearchParams());
 
     act(() => {
       window.history.pushState({}, "", "/admin/entries?where=second");
-      window.dispatchEvent(new Event("popstate"));
+      window.dispatchEvent(new Event("locationchange"));
     });
-
     expect(result.current.where).toBe("second");
+
+    // Real traversal: the browser changes the URL and emits popstate itself.
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => expect(result.current.where).toBe("first"));
+
+    act(() => {
+      window.history.forward();
+    });
+    await waitFor(() => expect(result.current.where).toBe("second"));
   });
 
   it("keeps a stable result when a navigation leaves the query untouched", () => {

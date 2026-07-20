@@ -34,7 +34,7 @@ import { UserSearchResults } from "./UserSearchResults";
  * @features
  * - Keyboard shortcut: Cmd+K / Ctrl+K
  * - Fuzzy search across navigation commands
- * - Next.js router integration for navigation
+ * - Admin SPA router integration for navigation
  * - Dark mode compatible
  * - WCAG 2.2 AA compliant
  *
@@ -165,6 +165,8 @@ export function CommandPalette() {
         const timeSinceLastKey = currentTime - lastKeyTime;
 
         // If 'g' was pressed recently (within timeout window)
+        // The "g <key>" shortcuts jump between admin sections, so they route
+        // through the admin's own SPA navigation rather than a full page load.
         if (lastKey === "g" && timeSinceLastKey < SEQUENTIAL_KEY_TIMEOUT) {
           switch (e.key.toLowerCase()) {
             case "d":
@@ -236,6 +238,8 @@ export function CommandPalette() {
                 key={command.id}
                 value={command.label}
                 keywords={command.keywords}
+                // Navigation commands move within the admin SPA, so they go
+                // through its router and keep the loaded app state.
                 onSelect={() => handleSelect(() => navigateTo(command.href))}
               >
                 <Icon className="h-4 w-4" />

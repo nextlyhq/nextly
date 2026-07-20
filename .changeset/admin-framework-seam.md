@@ -20,6 +20,8 @@
 "@nextlyhq/ui": patch
 ---
 
-Route the admin's remaining framework-specific navigation through its own router.
+Fix admin links ignoring modifier clicks, and route the admin's remaining framework-specific navigation through its own router.
 
-The admin panel is a client-side SPA with its own router, but a handful of places still reached for the host framework's navigation directly: the command palette pushed routes through it, the entry list read the URL query string through it, and one entry page used its link component. Those now go through the admin's own navigation, link, and a new query-string hook, so behavior is unchanged while the admin stops depending on the host framework for routing.
+Links in the admin panel now behave like normal links: Cmd/Ctrl-click and middle-click open them in a new tab, `target="_blank"` is honored, and links that point outside the admin (such as the Help entry in the account menu, which goes to the documentation site) open properly instead of being rewritten into a dead admin route. Previously every one of these was captured and turned into an in-app navigation.
+
+Internally, the few remaining places that reached for the host framework's navigation directly — the command palette, the entry list's reading of the URL query string, and one entry page's links — now go through the admin's own navigation, link, and a new query-string hook. The entry list also no longer issues an unfiltered request before its URL filter is applied.

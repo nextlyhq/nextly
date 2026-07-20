@@ -117,6 +117,8 @@ export function ActionCommands({ onSelect }: ActionCommandsProps) {
             value={command.label}
             keywords={command.keywords}
             disabled={command.disabled}
+            // Action commands are in-app destinations, so selection routes
+            // through the admin SPA router instead of a full page load.
             onSelect={() => onSelect(() => navigateTo(command.href))}
           >
             <Icon className="h-4 w-4" aria-hidden="true" />
