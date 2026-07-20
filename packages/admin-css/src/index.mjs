@@ -9,8 +9,10 @@
  */
 export {
   scopeCss,
+  confineVariantClasses,
   findUnscopedRules,
   isScoped,
+  namespaceInternalProperties,
   prefixKeyframes,
   scopeSelector,
   splitTopLevel,

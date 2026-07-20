@@ -22,8 +22,10 @@
 import { execSync } from "child_process";
 
 import {
+  confineVariantClasses,
   scopeCss,
   findUnscopedRules,
+  namespaceInternalProperties,
   prefixKeyframes,
 } from "@nextlyhq/admin-css";
 import fs from "fs";
@@ -77,11 +79,22 @@ try {
   // which throws rather than calling process.exit, because process.exit does
   // not unwind the stack and would skip the cleanup entirely.
   try {
-    // Selector scoping alone does not isolate animations: `@keyframes` names
-    // are global, and this sheet defines `spin`, `pulse` and `fade-in`, which a
-    // host page may well define too.
-    const scoped = prefixKeyframes(
-      scopeCss(fs.readFileSync(unminified, "utf8"), UI_SCOPE),
+    // Selector scoping alone leaves three things global. `@keyframes` names
+    // resolve document-wide, and this sheet defines `spin`, `pulse` and
+    // `fade-in`, which a host page may well define too. Variants like `dark:`
+    // and `group-*:` reach for an ancestor class the rule does not own, so a
+    // host `<html class="dark">` would flip the utilities while the tokens,
+    // declared on the wrapper, stayed light. And `@property` registrations
+    // apply to the whole document, redefining the semantics of any `--tw-*` the
+    // host uses itself.
+    const scoped = namespaceInternalProperties(
+      prefixKeyframes(
+        confineVariantClasses(
+          scopeCss(fs.readFileSync(unminified, "utf8"), UI_SCOPE),
+          UI_SCOPE
+        ),
+        KEYFRAME_PREFIX
+      ),
       KEYFRAME_PREFIX
     );
     const leaks = findUnscopedRules(scoped, UI_SCOPE);

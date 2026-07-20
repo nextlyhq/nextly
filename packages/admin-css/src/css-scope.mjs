@@ -44,21 +44,93 @@ export function splitTopLevel(selector) {
 }
 
 /**
+ * Split a selector into its compounds and the combinators between them, at the
+ * top level only, so combinators inside `:is(...)` / `:where(...)` stay put.
+ */
+function splitCombinators(selector) {
+  const compounds = [];
+  const combinators = [];
+  let depth = 0;
+  let current = "";
+  let i = 0;
+
+  while (i < selector.length) {
+    const ch = selector[i];
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+
+    if (depth === 0 && (ch === ">" || ch === "+" || ch === "~")) {
+      compounds.push(current.trim());
+      combinators.push(ch);
+      current = "";
+      i++;
+      continue;
+    }
+    if (depth === 0 && /\s/.test(ch)) {
+      // Collapse whitespace, and let an explicit combinator that follows win.
+      let j = i;
+      while (j < selector.length && /\s/.test(selector[j])) j++;
+      const next = selector[j];
+      if (next === ">" || next === "+" || next === "~") {
+        i = j;
+        continue;
+      }
+      if (current.trim()) {
+        compounds.push(current.trim());
+        combinators.push(" ");
+        current = "";
+      }
+      i = j;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  if (current.trim()) compounds.push(current.trim());
+  return { compounds, combinators };
+}
+
+/**
  * Whether a selector is genuinely constrained to `scope`.
  *
- * A substring test is not enough. `.nextly-admin-card` contains the scope text
- * but is an unrelated class, and `[class*=".nextly-admin"]` matches host
- * elements the wrapper does not contain — both would be left unprefixed and
- * then pass the leak check, so the sheet escapes while the build reports
- * success. Attribute selectors are dropped before matching, and the class must
- * end at a boundary: the next character cannot continue a CSS identifier.
+ * Presence of the scope's text is not enough, and neither is presence of the
+ * class token. The scope has to be an ancestor of (or the same element as) the
+ * element the rule actually styles:
+ *
+ *   - `.nextly-admin-card` is a different class that merely shares a prefix.
+ *   - `[class*=".nextly-admin"]` matches host elements by substring.
+ *   - `:not(.nextly-admin)` matches everything the scope does not.
+ *   - `.nextly-admin + .host` styles a sibling of the wrapper, outside it.
+ *
+ * So negations are stripped, attribute selectors are dropped, the class must
+ * end at an identifier boundary, and everything after the scope's compound must
+ * be a descendant or child step — a sibling combinator leaves the wrapper.
  */
 export function isScoped(selector, scope = DEFAULT_SCOPE) {
-  const withoutAttributes = selector.replace(/\[[^\]]*\]/g, "");
+  // Tailwind escapes arbitrary variants into the class name itself, so a
+  // selector can contain `\~`, `\[` or `\:not\(` as literal characters. Collapse
+  // every escape sequence to one inert placeholder first, or the structural
+  // parsing below reads those as real combinators and brackets.
+  // The placeholder is an identifier character, so `.nextly-ui\~x` — a
+  // different class that merely starts with the scope — still fails the
+  // boundary check below.
+  const literal = selector.replace(/\\./g, "_");
+  // A scope inside a negation is the opposite of being scoped by it.
+  const withoutNegation = literal.replace(/:not\(([^()]*)\)/g, "");
+  const withoutAttributes = withoutNegation.replace(/\[[^\]]*\]/g, "");
   const className = scope.replace(/^\./, "");
-  return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`).test(
-    withoutAttributes
-  );
+  const token = new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`);
+
+  const { compounds, combinators } = splitCombinators(withoutAttributes);
+  const index = compounds.findIndex(part => token.test(part));
+  if (index === -1) return false;
+
+  // Only the step taken directly from the scope matters. `.scope + .x` is a
+  // sibling of the wrapper and therefore outside it, but `.scope .a + .b` is
+  // not: `.b` shares a parent with `.a`, which is already inside, so every
+  // later combinator stays within the subtree.
+  const next = combinators[index];
+  return next === undefined || next === " " || next === ">";
 }
 
 /**
@@ -182,6 +254,51 @@ export function scopeCss(css, scope = DEFAULT_SCOPE) {
   }
 
   return result.join("\n");
+}
+
+/**
+ * Confine the bare state classes Tailwind's variants reference to `scope`.
+ *
+ * Scoping a rule's own compound is not enough when the variant reaches for an
+ * ancestor. `dark:` compiles to `:where(.dark, .dark *)` and `group-*:` to
+ * `:is(:where(.group)… *)`, and both name a class the rule does not own — so a
+ * host `<html class="dark">` or a host `.group` ancestor activates them inside
+ * the wrapper. Dark is the damaging one: the dark tokens are declared on
+ * `<scope>.dark`, so the utilities would flip while the tokens did not, painting
+ * dark-mode rules with light-mode values.
+ *
+ * Rewriting the reference to sit under the scope ties both to the wrapper the
+ * consumer actually controls.
+ */
+export function confineVariantClasses(css, scope = DEFAULT_SCOPE) {
+  return (
+    css
+      // `:where(.dark, .dark *)` — the wrapper itself carries `.dark`, so the
+      // first branch is the scope element and the second its descendants.
+      .replace(
+        /:where\(\s*\.dark\s*,\s*\.dark\s+\*\s*\)/g,
+        `:where(${scope}.dark,${scope}.dark *)`
+      )
+      // A lone `.dark` ancestor reference, same reasoning.
+      .replace(/:where\(\s*\.dark\s*\)/g, `:where(${scope}.dark)`)
+      // `group` / `peer` markers must be ones inside the wrapper.
+      .replace(/:where\(\s*\.(group|peer)\s*\)/g, `:where(${scope} .$1)`)
+  );
+}
+
+/**
+ * Namespace Tailwind's internal `--tw-*` custom properties.
+ *
+ * `@property` registrations are document-global no matter which selector they
+ * accompany, so a scoped sheet still publishes ~50 of them. Registering a name
+ * changes its semantics everywhere — an inherited property becomes
+ * non-inheriting, and it gains an initial value — which is a real behaviour
+ * change for a host that uses those names itself, as a Tailwind v3 application
+ * does. Renaming the registrations and every reference together keeps the
+ * utilities working while leaving the host's `--tw-*` untouched.
+ */
+export function namespaceInternalProperties(css, prefix) {
+  return css.replace(/--tw-/g, `--${prefix}tw-`);
 }
 
 /** Escape a string for literal use inside a RegExp. */

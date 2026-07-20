@@ -109,15 +109,19 @@ import "@nextlyhq/ui/styles.scoped.css";
 
 It keeps preflight rather than dropping it — these components are designed against a
 normalised baseline — but confines it to the wrapper, so your headings, lists and form
-controls outside it are untouched. Animation names are namespaced too, so the sheet
-cannot displace a `spin` or `fade-in` your own app already defines.
+controls outside it are untouched. Three things CSS resolves globally are namespaced
+along with the selectors, so the sheet cannot reach outside the wrapper through them
+either: animation names (it will not displace a `spin` or `fade-in` you define),
+Tailwind's internal `--tw-*` registrations, and the ancestor classes `dark:` and
+`group-*:` variants look for. Dark mode is therefore driven by the wrapper, not by a
+`dark` class higher up your page.
 
 ### Overlays need a portal container
 
-Dialog, Select, DropdownMenu, Popover, Tooltip and Command render their overlay through
-a portal, which defaults to `document.body` — outside the wrapper, where the scoped rules
-and tokens do not reach. Triggers would look right and the menus they open would not.
-Point them back inside with `PortalProvider`:
+AlertDialog, Command, Dialog, DropdownMenu, Popover, Select, Sheet and Tooltip render
+their overlay through a portal, which defaults to `document.body` — outside the wrapper,
+where the scoped rules and tokens do not reach. Triggers would look right and the menus
+they open would not. Point them back inside with `PortalProvider`:
 
 ```tsx
 import { useState } from "react";

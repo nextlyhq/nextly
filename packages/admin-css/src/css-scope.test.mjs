@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  confineVariantClasses,
   findUnscopedRules,
   isScoped,
   prefixKeyframes,
@@ -226,6 +227,72 @@ describe("a custom scope", () => {
     expect(isScoped(".nextly-ui.dark .card", ".nextly-ui")).toBe(true);
     expect(isScoped(".nextly-ui > .card", ".nextly-ui")).toBe(true);
     expect(isScoped(".nextly-uix", ".nextly-ui")).toBe(false);
+  });
+
+  // The scope class can appear in a selector without constraining the rule to
+  // the wrapper: negated, or on a sibling the wrapper does not contain.
+  it("rejects a negated scope", () => {
+    expect(isScoped(":not(.nextly-ui)", ".nextly-ui")).toBe(false);
+    expect(isScoped(".card:not(.nextly-ui)", ".nextly-ui")).toBe(false);
+    expect(
+      findUnscopedRules(":not(.nextly-ui){color:red}", ".nextly-ui")
+    ).toEqual([":not(.nextly-ui)"]);
+  });
+
+  it("rejects a sibling of the wrapper", () => {
+    expect(isScoped(".nextly-ui + .host", ".nextly-ui")).toBe(false);
+    expect(isScoped(".nextly-ui ~ .host", ".nextly-ui")).toBe(false);
+    expect(
+      findUnscopedRules(".nextly-ui + .host{color:red}", ".nextly-ui")
+    ).toEqual([".nextly-ui + .host"]);
+  });
+
+  it("accepts a sibling of an element already inside the wrapper", () => {
+    // `.b` shares a parent with `.a`, and `.a` is inside, so `.b` is too. Only
+    // a sibling of the wrapper itself escapes.
+    expect(isScoped(".nextly-ui .a + .b", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui .a ~ .b", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui > .a + .b", ".nextly-ui")).toBe(true);
+    expect(
+      findUnscopedRules(".nextly-ui .a + .b{color:red}", ".nextly-ui")
+    ).toEqual([]);
+  });
+
+  it("accepts descendant and child steps below the wrapper", () => {
+    expect(isScoped(".nextly-ui > .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui .a > .b", ".nextly-ui")).toBe(true);
+    // A sibling BEFORE the scope is fine: the subject is still inside it.
+    expect(isScoped(".host + .nextly-ui .card", ".nextly-ui")).toBe(true);
+  });
+
+  it("keeps combinators inside :is()/:where() out of the structural check", () => {
+    expect(isScoped(".nextly-ui .a:is(.x + .y)", ".nextly-ui")).toBe(true);
+  });
+
+  // Tailwind escapes arbitrary variants into the class name, so `~`, `[` and
+  // `:not(` can appear as literal characters that are not structure.
+  it("reads escaped characters in a class name as literals", () => {
+    const cmdk =
+      ".nextly-ui .\\[\\&_\\[cmdk-group\\]\\:not\\(\\[hidden\\]\\)_\\~\\[cmdk-group\\]\\]\\:pt-0";
+    expect(isScoped(cmdk, ".nextly-ui")).toBe(true);
+    expect(findUnscopedRules(`${cmdk}{color:red}`, ".nextly-ui")).toEqual([]);
+  });
+
+  it("does not read an escaped class as the scope itself", () => {
+    expect(isScoped(".nextly-ui\\~x", ".nextly-ui")).toBe(false);
+  });
+
+  it("confines dark and group variants to the scope", () => {
+    const css =
+      ".nextly-ui .dark\\:bg-x:where(.dark, .dark *){color:red}" +
+      ".nextly-ui .group-hover\\:x:is(:where(.group):hover *){color:blue}";
+    const out = confineVariantClasses(css, ".nextly-ui");
+
+    expect(out).toContain(":where(.nextly-ui.dark,.nextly-ui.dark *)");
+    expect(out).toContain(":where(.nextly-ui .group)");
+    // No bare ancestor reference is left for the host to satisfy.
+    expect(out).not.toContain(":where(.dark, .dark *)");
+    expect(out).not.toContain(":where(.group)");
   });
 
   it("namespaces keyframe names and the references to them", () => {
