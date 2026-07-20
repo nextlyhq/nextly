@@ -36,6 +36,13 @@ export default defineConfig({
       logoUrlLight: "/Nextly_Icon_dark.svg",
       logoUrlDark: "/Nextly_Icon_Light.svg",
       logoText: "Nextly Playground",
+      // Exercised by e2e/tests/admin-branding.spec.ts. Branded colors were
+      // silently broken for as long as the harness only configured logos, so
+      // the harness now configures colors too.
+      colors: {
+        primary: "#6366f1",
+        accent: "#f59e0b",
+      },
     },
     devAutoLogin: {
       email: "dev@nextly.local",

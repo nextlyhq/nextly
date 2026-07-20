@@ -94,7 +94,7 @@ import {
   isBuilderRoute,
 } from "./shared/builder-access";
 import {
-  hexToHslTriplet,
+  hexToCssColor,
   getForegroundForBackground,
   isValidHex,
 } from "./utils/color-utils";
@@ -957,8 +957,10 @@ async function handleServiceRequest(
  *
  * Returns the admin branding configuration to the admin UI.
  * Public — no authentication required.
- * Colors are converted from user-supplied hex to HSL triplets here on the
- * server so the client only has to inject them as CSS variables.
+ * Colors are converted from user-supplied hex to complete CSS colors here on
+ * the server so the client only has to inject them as CSS variables. They must
+ * be complete colors: the `--nx-*` tokens are consumed directly by the theme,
+ * so a bare "H S% L%" triplet would be an invalid value and get dropped.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
   const config = getHandlerConfig();
@@ -991,11 +993,11 @@ async function handleAdminMetaRequest(): Promise<Response> {
     const resolved: Record<string, string> = {};
 
     if (colors.primary && isValidHex(colors.primary)) {
-      resolved.primary = hexToHslTriplet(colors.primary);
+      resolved.primary = hexToCssColor(colors.primary);
       resolved.primaryForeground = getForegroundForBackground(colors.primary);
     }
     if (colors.accent && isValidHex(colors.accent)) {
-      resolved.accent = hexToHslTriplet(colors.accent);
+      resolved.accent = hexToCssColor(colors.accent);
       resolved.accentForeground = getForegroundForBackground(colors.accent);
     }
 
