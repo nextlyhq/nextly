@@ -386,6 +386,10 @@ export function EntryForm({
                   entry={entry}
                   collectionSlug={collection.name}
                   historyFields={getCollectionFields(collection)}
+                  historyEnabled={
+                    (collection as { versions?: { enabled?: boolean } | null })
+                      .versions?.enabled
+                  }
                   locale={locale}
                   onLocaleChange={onLocaleChange}
                   toolbarSlot={

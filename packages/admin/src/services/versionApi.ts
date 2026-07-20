@@ -20,7 +20,16 @@ import type { ListResponse } from "@admin/lib/api/response-types";
  */
 export type VersionScope =
   | { kind: "collection"; slug: string; entryId: string }
-  | { kind: "single"; slug: string };
+  | {
+      kind: "single";
+      slug: string;
+      /**
+       * The live document's id. Not sent — the server resolves it itself — but
+       * carried so a client cache can tell one incarnation of a Single from a
+       * recreated one.
+       */
+      documentId: string;
+    };
 
 /** Display identity of whoever wrote a version. */
 export interface VersionAuthor {

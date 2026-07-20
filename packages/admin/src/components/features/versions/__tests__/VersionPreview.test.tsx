@@ -3,8 +3,9 @@
  * matter are the ones that could mislead: a field that was blank then, and a
  * snapshot that failed to load.
  */
+import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
@@ -71,6 +72,55 @@ describe("VersionPreview", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(/Loading/);
     expect(screen.queryByText("Not set")).not.toBeInTheDocument();
+  });
+
+  it("offers an in-place retry when a version fails to load", async () => {
+    // Without it the only recovery is going back and reopening the same
+    // version, which is the same request with extra steps.
+    const onRetry = vi.fn();
+    render(
+      <VersionPreview
+        versionNo={3}
+        fields={fields}
+        snapshot={undefined}
+        error={new Error("boom")}
+        onRetry={onRetry}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it("names the locale a version was captured in", () => {
+    render(
+      <VersionPreview versionNo={3} fields={fields} snapshot={{}} locale="de" />
+    );
+
+    expect(screen.getByText(/\(de\)/)).toBeInTheDocument();
+  });
+
+  it("renders the children of a top-level presentational group", () => {
+    // A nameless group stores its children at this level; dropping it would
+    // hide every field inside from the historical document.
+    const grouped = [
+      {
+        name: "",
+        type: "group",
+        fields: [{ name: "city", type: "text", label: "City" }],
+      },
+    ] as FieldConfig[];
+
+    render(
+      <VersionPreview
+        versionNo={3}
+        fields={grouped}
+        snapshot={{ city: "Lisbon" }}
+      />
+    );
+
+    expect(screen.getByText("City")).toBeInTheDocument();
+    expect(screen.getByText("Lisbon")).toBeInTheDocument();
   });
 
   it("reports a failed load instead of rendering an empty document", () => {

@@ -95,6 +95,8 @@ export function VersionHistorySheet({
               snapshot={detail.data?.snapshot}
               isLoading={detail.isLoading}
               error={detail.error}
+              onRetry={() => void detail.refetch()}
+              locale={detail.data?.locale ?? null}
             />
           ) : list.isLoading ? (
             <ListSkeleton />
@@ -116,8 +118,7 @@ export function VersionHistorySheet({
           ) : isEmpty ? (
             <div className="px-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">
-                No earlier versions yet. Each time this document is saved, a
-                version is recorded here.
+                No versions recorded for this document yet.
               </p>
             </div>
           ) : (

@@ -136,6 +136,14 @@ export interface EntrySystemHeaderProps {
    * panel. Absent means the caller cannot show history, so the control hides.
    */
   historyFields?: FieldConfig[];
+
+  /**
+   * Whether this entity captures versions. Only writes on a versioning-enabled
+   * entity record a snapshot, so offering history elsewhere leads to a panel
+   * that can never fill. Undefined means the caller could not determine it, in
+   * which case the control is still offered and the panel reports honestly.
+   */
+  historyEnabled?: boolean;
 }
 
 export function EntrySystemHeader({
@@ -161,6 +169,7 @@ export function EntrySystemHeader({
   showJson = true,
   scope = "collection",
   historyFields,
+  historyEnabled,
   lockIdentity = false,
   isRailCollapsed = false,
   onToggleRail,
@@ -275,7 +284,7 @@ export function EntrySystemHeader({
         {toolbarSlot}
         {/* A document only has history once it has been saved, and rendering a
             snapshot needs the schema, so both are required to offer this. */}
-        {showEditMenuItems && historyFields ? (
+        {showEditMenuItems && historyFields && historyEnabled !== false ? (
           <Button
             type="button"
             variant="outline"
@@ -492,8 +501,16 @@ export function EntrySystemHeader({
           onOpenChange={setHistoryOpen}
           scope={
             scope === "single"
-              ? { kind: "single", slug: collectionSlug }
-              : { kind: "collection", slug: collectionSlug, entryId: entry.id }
+              ? {
+                  kind: "single",
+                  slug: collectionSlug,
+                  documentId: String(entry.id),
+                }
+              : {
+                  kind: "collection",
+                  slug: collectionSlug,
+                  entryId: String(entry.id),
+                }
           }
           fields={historyFields}
         />

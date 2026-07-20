@@ -19,7 +19,11 @@ const collection = {
   slug: "posts",
   entryId: "e1",
 };
-const single = { kind: "single" as const, slug: "settings" };
+const single = {
+  kind: "single" as const,
+  slug: "settings",
+  documentId: "s1",
+};
 
 describe("versionApi.list", () => {
   beforeEach(() => {
@@ -36,6 +40,8 @@ describe("versionApi.list", () => {
   });
 
   it("addresses a Single's history without an entry id", async () => {
+    // The document id is carried for cache identity only; sending it would let
+    // a client name which document's history to read.
     await versionApi.list(single);
 
     expect(getSpy).toHaveBeenCalledWith("/singles/settings/versions");

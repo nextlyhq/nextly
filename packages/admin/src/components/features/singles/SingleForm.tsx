@@ -554,6 +554,10 @@ export function SingleForm({
                 mode="edit"
                 titleField={titleField}
                 historyFields={schema.fields}
+                historyEnabled={
+                  (schema as { versions?: { enabled?: boolean } | null })
+                    .versions?.enabled
+                }
                 hasStatus={hasStatus}
                 isSubmitting={isSubmitting}
                 isDirty={isDirty}

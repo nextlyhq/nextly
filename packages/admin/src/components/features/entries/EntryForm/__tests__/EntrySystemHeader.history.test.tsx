@@ -78,6 +78,26 @@ describe("EntrySystemHeader version history", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not offer history for an entity that records no versions", () => {
+    // Writes only capture a snapshot when versioning is enabled, so offering
+    // history elsewhere leads to a panel that can never fill.
+    renderHeader({ historyEnabled: false });
+
+    expect(
+      screen.queryByRole("button", { name: "Version history" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("still offers history when the setting could not be determined", () => {
+    // Hiding on an absent flag would silently remove the feature wherever the
+    // schema payload omits it.
+    renderHeader({ historyEnabled: undefined });
+
+    expect(
+      screen.getByRole("button", { name: "Version history" })
+    ).toBeInTheDocument();
+  });
+
   it("addresses a collection entry by its id", () => {
     renderHeader();
 
@@ -93,8 +113,12 @@ describe("EntrySystemHeader version history", () => {
     // is sent even though the header has one.
     renderHeader({ scope: "single", collectionSlug: "settings" });
 
+    // The document id travels for cache identity only, so a recreated Single
+    // cannot be served its predecessor's cached history.
     expect(sheetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: { kind: "single", slug: "settings" } })
+      expect.objectContaining({
+        scope: { kind: "single", slug: "settings", documentId: "e1" },
+      })
     );
   });
 });

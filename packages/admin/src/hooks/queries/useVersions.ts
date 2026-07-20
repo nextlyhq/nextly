@@ -23,11 +23,30 @@ import {
 /** Page size for the history list. */
 const PAGE_SIZE = 25;
 
-/** Stable cache identity for a scope, so two documents never share a page. */
+/**
+ * Stable cache identity for a scope, so two documents never share a page.
+ *
+ * A Single's URL carries no entry id, but its cache key does: the server
+ * refuses to serve a recreated Single its predecessor's snapshots, and keying
+ * only on the slug would let a client that fetched before the recreation
+ * re-render those cached pages without asking again.
+ */
 function scopeKey(scope: VersionScope): readonly string[] {
   return scope.kind === "single"
-    ? ["single", scope.slug]
+    ? ["single", scope.slug, scope.documentId]
     : ["collection", scope.slug, scope.entryId];
+}
+
+/**
+ * Whether the scope names a document at all. A collection entry that has never
+ * been saved has no id, and interpolating an empty one builds a URL that
+ * addresses the collection rather than an entry.
+ */
+function isAddressable(scope: VersionScope): boolean {
+  if (!scope.slug) return false;
+  return scope.kind === "single"
+    ? Boolean(scope.documentId)
+    : Boolean(scope.entryId);
 }
 
 // ============================================================
@@ -78,8 +97,10 @@ export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
       const last = lastPage.items.at(-1);
       return typeof last?.versionNo === "number" ? last.versionNo : undefined;
     },
-    enabled: enabled && Boolean(scope.slug),
-    staleTime: 30_000,
+    enabled: enabled && isAddressable(scope),
+    // Saving the document adds a version, and the panel is opened on demand, so
+    // each open re-reads rather than serving a list captured before the save.
+    staleTime: 0,
   });
 }
 
@@ -101,16 +122,18 @@ export function useVersion({
   enabled = true,
 }: UseVersionOptions) {
   return useQuery<VersionDetail, Error>({
+    // A disabled placeholder must not occupy the parent key, which a broad
+    // `invalidateQueries({ queryKey: versionKeys.details() })` would match.
     queryKey:
       versionNo === null
-        ? versionKeys.details()
+        ? ([...versionKeys.details(), "none"] as const)
         : versionKeys.detail(scope, versionNo),
     queryFn: () => {
       // Guarded by `enabled`; this is defence against a direct queryFn call.
       if (versionNo === null) throw new Error("A version number is required");
       return versionApi.get(scope, versionNo);
     },
-    enabled: enabled && versionNo !== null,
+    enabled: enabled && versionNo !== null && isAddressable(scope),
     staleTime: 60_000,
   });
 }

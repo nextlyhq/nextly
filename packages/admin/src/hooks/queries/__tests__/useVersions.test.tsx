@@ -90,6 +90,28 @@ describe("useVersions", () => {
     expect(result.current.hasNextPage).toBe(false);
   });
 
+  it("stays idle for an entry that has no id yet", () => {
+    // An empty entryId interpolates into a URL that addresses the collection
+    // rather than an entry, so the request must not be made at all.
+    renderHook(() => useVersions({ scope: { ...scope, entryId: "" } }), {
+      wrapper,
+    });
+
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it("stays idle for a Single whose live document is unknown", () => {
+    renderHook(
+      () =>
+        useVersions({
+          scope: { kind: "single", slug: "settings", documentId: "" },
+        }),
+      { wrapper }
+    );
+
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps two documents' histories in separate cache entries", async () => {
     listSpy.mockResolvedValue(page([{ versionNo: 1 }], false));
     const other = { ...scope, entryId: "e2" };

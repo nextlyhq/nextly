@@ -98,7 +98,9 @@ describe("VersionHistorySheet", () => {
   it("says a document with no history has none, rather than erroring", () => {
     renderSheet();
 
-    expect(screen.getByText(/No earlier versions yet/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No versions recorded for this document yet/)
+    ).toBeInTheDocument();
   });
 
   it("offers a retry when history could not be loaded", () => {
@@ -112,7 +114,7 @@ describe("VersionHistorySheet", () => {
     expect(
       screen.getByRole("button", { name: /Try again/ })
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No earlier versions/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No versions recorded/)).not.toBeInTheDocument();
   });
 
   it("offers more only when another page exists", () => {
