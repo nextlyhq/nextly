@@ -9,6 +9,9 @@ import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
+import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -63,10 +66,27 @@ export class CollectionsHandler {
     logger: Logger = consoleLogger,
     consumerAppRoot?: string,
     /** Normalized localization config (i18n M4) — enables companion-aware reads. */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    /**
+     * Resolved webhook retention policy. Content writes offer to run a pass so
+     * the event ledger stays bounded in installs that never configure a webhook
+     * and therefore never run the drain. Null or absent disables it.
+     */
+    webhookRetention?: ResolvedWebhookRetentionConfig | null
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
+
+    // Built here because this is where the resolved policy arrives, but handed
+    // to the entry service, which is the seam every write path runs through.
+    const retentionRunner = webhookRetention
+      ? new WebhookRetentionRunner({
+          policy: webhookRetention,
+          prune: { adapter, logger },
+          gate: new MetaRetentionGate(adapter),
+          logger,
+        })
+      : undefined;
 
     const hookRegistry = getHookRegistry();
 
@@ -150,7 +170,8 @@ export class CollectionsHandler {
       accessControlService,
       componentDataService,
       undefined,
-      this.localization
+      this.localization,
+      retentionRunner
     );
   }
 

@@ -21,6 +21,8 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
+import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
@@ -159,7 +161,17 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.
-      ctx.config.localization
+      ctx.config.localization,
+      // CollectionService writes append events through this same service, so it
+      // needs its own runner — the handler's is not on this path.
+      ctx.config.webhookRetention
+        ? new WebhookRetentionRunner({
+            policy: ctx.config.webhookRetention,
+            prune: { adapter, logger },
+            gate: new MetaRetentionGate(adapter),
+            logger,
+          })
+        : undefined
     );
 
     return new CollectionService(
@@ -181,7 +193,10 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       logger,
       basePath,
       // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
-      ctx.config.localization
+      ctx.config.localization,
+      // Content writes offer a retention pass, so the event ledger stays
+      // bounded in installs that never run the drain.
+      ctx.config.webhookRetention
     );
 
     if (container.has("permissionSeedService")) {

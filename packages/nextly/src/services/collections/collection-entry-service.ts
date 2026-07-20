@@ -39,6 +39,7 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -85,7 +86,14 @@ export class CollectionEntryService extends BaseService {
     componentDataService?: ComponentDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
-    localization?: SanitizedLocalizationConfig
+    localization?: SanitizedLocalizationConfig,
+    /**
+     * Offers a webhook-retention pass after a write. Wired here rather than at
+     * a caller because every write path that appends an event runs through this
+     * service — the dispatcher-facing handler, `CollectionService`, and direct
+     * callers alike — so this is the one place that covers them all.
+     */
+    private readonly retentionRunner?: WebhookRetentionRunner
   ) {
     super(adapter, logger);
 
@@ -189,6 +197,32 @@ export class CollectionEntryService extends BaseService {
     return this.queryService.getEntry(params);
   }
 
+  /**
+   * Batches a write-triggered pass may run. Small on purpose: the write path is
+   * the only retention trigger an install without a drain has, so the pass must
+   * be awaited to survive a serverless invocation being frozen after the
+   * response — which means one save per interval pays for it, and that save
+   * should not be waiting on a full backlog sweep. Ten thousand rows an hour
+   * from this path alone keeps ahead of most sites; anything with a drain gets
+   * the full budget there.
+   */
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  /**
+   * Run a retention pass after a successful write, if one is due.
+   *
+   * Awaited rather than fired and forgotten: on a serverless runtime the
+   * invocation can be frozen or torn down as soon as the response is returned,
+   * so a detached promise may never get past the gate — and for an install with
+   * no drain this is the only trigger there is. `maybeRun` absorbs its own
+   * failures, so this cannot turn a successful save into an error.
+   */
+  private async offerRetentionPass(): Promise<void> {
+    await this.retentionRunner?.maybeRun(
+      CollectionEntryService.WRITE_PATH_PRUNE_BATCHES
+    );
+  }
+
   async createEntry(
     params: {
       collectionName: string;
@@ -203,7 +237,9 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    return this.mutationService.createEntry(params, body, depth);
+    const result = await this.mutationService.createEntry(params, body, depth);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async updateEntry(
@@ -221,7 +257,9 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    return this.mutationService.updateEntry(params, body, depth);
+    const result = await this.mutationService.updateEntry(params, body, depth);
+    await this.offerRetentionPass();
+    return result;
   }
 
   /** i18n M7: publish every language of an entry at once (spec §10). */
@@ -231,7 +269,9 @@ export class CollectionEntryService extends BaseService {
     user?: UserContext;
     overrideAccess?: boolean;
   }) {
-    return this.mutationService.publishAllLocales(params);
+    const result = await this.mutationService.publishAllLocales(params);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async deleteEntry(params: {
@@ -241,7 +281,9 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }) {
-    return this.mutationService.deleteEntry(params);
+    const result = await this.mutationService.deleteEntry(params);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async createEntryInTransaction(
@@ -281,7 +323,9 @@ export class CollectionEntryService extends BaseService {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }) {
-    return this.bulkService.duplicateEntry(params);
+    const result = await this.bulkService.duplicateEntry(params);
+    await this.offerRetentionPass();
+    return result;
   }
 
   // Phase 4.5: bulk methods carry full records on update (caller needs
@@ -293,7 +337,9 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
-    return this.bulkService.bulkDeleteEntries(params);
+    const result = await this.bulkService.bulkDeleteEntries(params);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async bulkUpdateEntries(params: {
@@ -306,7 +352,9 @@ export class CollectionEntryService extends BaseService {
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
-    return this.bulkService.bulkUpdateEntries(params);
+    const result = await this.bulkService.bulkUpdateEntries(params);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async bulkUpdateByQuery(
@@ -324,7 +372,9 @@ export class CollectionEntryService extends BaseService {
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
-    return this.bulkService.bulkUpdateByQuery(params, options);
+    const result = await this.bulkService.bulkUpdateByQuery(params, options);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async bulkDeleteByQuery(
@@ -337,7 +387,9 @@ export class CollectionEntryService extends BaseService {
     },
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
-    return this.bulkService.bulkDeleteByQuery(params, options);
+    const result = await this.bulkService.bulkDeleteByQuery(params, options);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async createEntries(
@@ -349,7 +401,13 @@ export class CollectionEntryService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.createEntries(params, entries, options);
+    const result = await this.bulkService.createEntries(
+      params,
+      entries,
+      options
+    );
+    await this.offerRetentionPass();
+    return result;
   }
 
   async createEntriesInTransaction(
@@ -371,7 +429,13 @@ export class CollectionEntryService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.updateEntries(params, entries, options);
+    const result = await this.bulkService.updateEntries(
+      params,
+      entries,
+      options
+    );
+    await this.offerRetentionPass();
+    return result;
   }
 
   async updateEntriesInTransaction(
@@ -393,7 +457,9 @@ export class CollectionEntryService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.deleteEntries(params, ids, options);
+    const result = await this.bulkService.deleteEntries(params, ids, options);
+    await this.offerRetentionPass();
+    return result;
   }
 
   async deleteEntriesInTransaction(

@@ -18,6 +18,11 @@ import type {
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
+import { resolveWebhookRetentionConfig } from "../../domains/webhooks/retention-config";
+import type {
+  ResolvedWebhookRetentionConfig,
+  WebhookRetentionConfig,
+} from "../../domains/webhooks/retention-config";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
@@ -635,6 +640,28 @@ export interface NextlyConfig {
    * See docs/superpowers/specs/2026-07-08-multilingual-i18n-design.md.
    */
   localization?: LocalizationConfig;
+
+  /** Outbound webhook configuration. */
+  webhooks?: WebhookConfig;
+}
+
+/**
+ * Outbound webhook configuration.
+ *
+ * Only retention is configurable today; endpoints are registered as rows rather
+ * than declared here, so this is where operational policy lives rather than the
+ * subscription list.
+ */
+export interface WebhookConfig {
+  /**
+   * How long recorded events and delivery attempts are kept.
+   *
+   * Enabled by default. A row is appended to the event ledger on every content
+   * write, whether or not this install uses webhooks at all, so leaving it
+   * unbounded would tax people who never opted in. `false` keeps everything
+   * forever and accepts that growth.
+   */
+  retention?: WebhookRetentionConfig | false;
 }
 
 /**
@@ -704,6 +731,12 @@ export interface SanitizedNextlyConfig {
 
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
+
+  /**
+   * Resolved webhook retention policy, or null when retention is switched off.
+   * Always present after sanitization so consumers never re-resolve it.
+   */
+  webhookRetention: ResolvedWebhookRetentionConfig | null;
 }
 
 // ============================================================
@@ -871,5 +904,9 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,
+    // Resolved once at boot so nothing downstream re-derives it. Null means the
+    // user switched retention off; an absent `webhooks` key resolves to the
+    // defaults, since the event ledger fills whether or not webhooks are used.
+    webhookRetention: resolveWebhookRetentionConfig(config.webhooks?.retention),
   };
 }
