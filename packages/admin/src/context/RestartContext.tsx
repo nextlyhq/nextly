@@ -5,6 +5,7 @@
 // then invalidates caches and shows success/error toast.
 "use client";
 
+import { toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
@@ -14,7 +15,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { toast } from "sonner";
 
 interface RestartContextValue {
   isRestarting: boolean;

@@ -14,19 +14,41 @@ import { fileURLToPath } from "node:url";
 
 const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
-/** The directive is only meaningful on the first line of the module. */
-function hasClientDirective(file) {
-  const first = readFileSync(join(DIST, file), "utf8").trimStart().split("\n")[0];
+/**
+ * The directive is only meaningful on the first line of the module. Returns
+ * null when the artifact is absent, which is itself a failure worth naming
+ * rather than an exception from deep inside the check.
+ */
+function readClientDirective(file) {
+  let source;
+  try {
+    source = readFileSync(join(DIST, file), "utf8");
+  } catch {
+    return null;
+  }
+  const first = source.trimStart().split("\n")[0];
   return /^["']use client["'];?$/.test(first.trim());
 }
 
 const mustHave = ["index.mjs", "index.cjs"];
-const mustNotHave = ["tailwind-preset.mjs", "tailwind-preset.cjs"];
+// The server-safe entries: build tooling and a pure helper, both of which
+// server code must be able to import.
+const mustNotHave = [
+  "tailwind-preset.mjs",
+  "tailwind-preset.cjs",
+  "utils.mjs",
+  "utils.cjs",
+];
 
 const problems = [];
 
 for (const file of mustHave) {
-  if (!hasClientDirective(file)) {
+  const directive = readClientDirective(file);
+  if (directive === null) {
+    problems.push(`${file} was not emitted by the build.`);
+    continue;
+  }
+  if (!directive) {
     problems.push(
       `${file} is missing the "use client" directive on its first line. ` +
         `Components using hooks, context, forwardRef or Radix cannot render in ` +
@@ -36,9 +58,14 @@ for (const file of mustHave) {
 }
 
 for (const file of mustNotHave) {
-  if (hasClientDirective(file)) {
+  const directive = readClientDirective(file);
+  if (directive === null) {
+    problems.push(`${file} was not emitted by the build.`);
+    continue;
+  }
+  if (directive) {
     problems.push(
-      `${file} carries "use client" but is build-time-only tooling, which ` +
+      `${file} carries "use client" but contains no React runtime, so it ` +
         `should stay importable from server code.`
     );
   }

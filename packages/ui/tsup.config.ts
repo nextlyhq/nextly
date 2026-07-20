@@ -1,5 +1,9 @@
 import { defineConfig } from "tsup";
 
+// Left to the consumer rather than bundled: React and Radix keep component
+// state and portals in module-level stores, so a second copy inside this
+// bundle would not share that state with the host app's copy. lucide-react,
+// sonner and cmdk are declared dependencies the consumer resolves once.
 const external = [
   "react",
   "react-dom",

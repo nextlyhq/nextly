@@ -17,14 +17,34 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./tailwind-preset": {
-      "types": "./dist/tailwind-preset.d.ts",
-      "import": "./dist/tailwind-preset.mjs",
-      "require": "./dist/tailwind-preset.cjs"
+      "import": {
+        "types": "./dist/tailwind-preset.d.ts",
+        "default": "./dist/tailwind-preset.mjs"
+      },
+      "require": {
+        "types": "./dist/tailwind-preset.d.cts",
+        "default": "./dist/tailwind-preset.cjs"
+      }
+    },
+    "./utils": {
+      "import": {
+        "types": "./dist/utils.d.ts",
+        "default": "./dist/utils.mjs"
+      },
+      "require": {
+        "types": "./dist/utils.d.cts",
+        "default": "./dist/utils.cjs"
+      }
     },
     "./theme.css": "./dist/theme.css",
     "./styles.css": "./dist/styles.css"
@@ -37,10 +57,10 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsup && tsup --config tsup.preset.config.ts && node scripts/check-client-directive.mjs && node scripts/build-css.mjs",
+    "build": "tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs && node scripts/build-css.mjs",
     "build:js": "tsup",
     "build:css": "node scripts/build-css.mjs",
-    "dev": "tsup --watch",
+    "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & wait",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",

@@ -1,9 +1,8 @@
 "use client";
-import { PortalProvider } from "@nextlyhq/ui";
+import { PortalProvider, toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
-import { toast } from "sonner";
 
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
