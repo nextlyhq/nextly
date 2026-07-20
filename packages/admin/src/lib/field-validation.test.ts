@@ -212,3 +212,65 @@ describe("Task 5 PR 7 — Pattern coverage on password and code", () => {
     expect(schema.safeParse({ color: "" }).success).toBe(true);
   });
 });
+
+describe("generateClientSchema — optional fields tolerate empty string", () => {
+  it("optional email field accepts an empty string", () => {
+    const schema = generateClientSchema([
+      {
+        type: "email",
+        name: "supportEmail",
+        required: false,
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ supportEmail: "" }).success).toBe(true);
+  });
+
+  it("optional text field with minLength accepts an empty string", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "nickname",
+        required: false,
+        validation: { minLength: 3 },
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ nickname: "" }).success).toBe(true);
+  });
+
+  it("optional hasMany select accepts an empty string", () => {
+    const schema = generateClientSchema([
+      {
+        type: "select",
+        name: "channels",
+        required: false,
+        hasMany: true,
+        options: [{ label: "Web", value: "web" }],
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ channels: "" }).success).toBe(true);
+  });
+
+  it("required email field still rejects an empty string", () => {
+    const schema = generateClientSchema([
+      {
+        type: "email",
+        name: "supportEmail",
+        required: true,
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ supportEmail: "" }).success).toBe(false);
+  });
+
+  it("optional email field still rejects a malformed non-empty value", () => {
+    const schema = generateClientSchema([
+      {
+        type: "email",
+        name: "supportEmail",
+        required: false,
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ supportEmail: "not-an-email" }).success).toBe(
+      false
+    );
+  });
+});
