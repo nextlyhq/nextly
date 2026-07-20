@@ -44,6 +44,7 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
+import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
@@ -554,10 +555,7 @@ export function SingleForm({
                 mode="edit"
                 titleField={titleField}
                 historyFields={schema.fields}
-                historyEnabled={
-                  (schema as { versions?: { enabled?: boolean } | null })
-                    .versions?.enabled
-                }
+                historyEnabled={historyEnabledFrom(schema)}
                 hasStatus={hasStatus}
                 isSubmitting={isSubmitting}
                 isDirty={isDirty}
