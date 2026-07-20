@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin-css",
-  "version": "0.0.2-alpha.35",
+  "version": "0.0.2-alpha.36",
   "description": "Build tooling to scope and compile Nextly admin CSS (shared by the admin build and third-party plugins).",
   "type": "module",
   "exports": {
