@@ -3,10 +3,10 @@
  *
  * `@nextlyhq/ui` is the presentational half of the plugin-author API: every
  * plugin's admin components compile against these exports, so removing or
- * renaming one breaks installed plugins on a host upgrade. This snapshots the
- * exported names of each published entry point so a change fails CI and forces
- * an intentional review, and cross-checks the source against `STABILITY.md` in
- * both directions so the ledger and the code cannot drift apart.
+ * renaming one breaks installed plugins on a host upgrade. The exported names
+ * of each published entry point are snapshotted, so any change to the surface
+ * has to be made deliberately, and the source is cross-checked against
+ * `STABILITY.md` in both directions so the ledger and the code cannot drift.
  *
  * It reads the source rather than importing it: the root barrel is published
  * with `"use client"` and pulls in the whole component tree, which does not
@@ -86,24 +86,40 @@ function barrelNames(): Set<string> {
 }
 
 /**
- * Names carried by `@public`-tagged export clauses in the barrel. Each clause
- * is tagged with exactly one release tag, so the tag preceding a clause applies
- * to every name in it. A group heading may sit between the tag and the clause.
+ * Names carried by each release tag in the barrel. Every export clause is
+ * tagged with exactly one tag, so the tag preceding a clause applies to every
+ * name in it. A group heading may sit between the tag and the clause.
  */
-function publicPerSource(): Set<string> {
+function taggedPerSource(): { public: Set<string>; experimental: Set<string> } {
   const source = readFileSync(path.join(SRC, "index.ts"), "utf8");
-  const names = new Set<string>();
+  const tagged = { public: new Set<string>(), experimental: new Set<string>() };
+
   for (const m of source.matchAll(
-    /\/\*\*[\s\S]*?@public[\s\S]*?\*\/\s*(?:\/\/[^\n]*\n\s*)*export(?:\s+type)?\s*\{([^}]*)\}/g
+    // The doc capture must not run past its own `*/`, or the module header —
+    // which mentions both tags in prose — merges into the next clause's tag and
+    // makes it look ambiguous.
+    /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*(?:\/\/[^\n]*\n\s*)*export(?:\s+type)?\s*\{([^}]*)\}/g
   )) {
-    for (const raw of m[1].split(",")) {
+    const doc = m[1];
+    const isPublic = /@public/.test(doc);
+    const isExperimental = /@experimental/.test(doc);
+    // A clause carrying both tags is ambiguous; leave it in neither bucket so
+    // the coverage check below reports it rather than silently picking one.
+    if (isPublic === isExperimental) continue;
+    const bucket = isPublic ? tagged.public : tagged.experimental;
+    for (const raw of m[2].split(",")) {
       const entry = raw.trim().replace(/^type\s+/, "");
       if (!entry) continue;
       const asMatch = entry.match(/\bas\s+([A-Za-z0-9_$]+)$/);
-      names.add(asMatch ? asMatch[1] : entry);
+      bucket.add(asMatch ? asMatch[1] : entry);
     }
   }
-  return names;
+  return tagged;
+}
+
+/** Backwards-compatible view for the ledger comparison below. */
+function publicPerSource(): Set<string> {
+  return taggedPerSource().public;
 }
 
 const ledger = readFileSync(path.join(PKG_ROOT, "STABILITY.md"), "utf8");
@@ -188,6 +204,30 @@ describe("ui STABILITY.md ledger", () => {
       documentedNotTagged,
       `Listed @public in STABILITY.md but not tagged @public in index.ts: ` +
         `${documentedNotTagged.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("gives every barrel export exactly one release tag", () => {
+    const tagged = taggedPerSource();
+    const shipped = [...barrelNames()];
+
+    // An untagged export carries no guarantee either way, so a consumer cannot
+    // tell whether it is safe to depend on; a doubly tagged one claims both.
+    const unclassified = shipped.filter(
+      name => !tagged.public.has(name) && !tagged.experimental.has(name)
+    );
+    const doubled = shipped.filter(
+      name => tagged.public.has(name) && tagged.experimental.has(name)
+    );
+
+    expect(
+      unclassified,
+      `Exported from index.ts with no @public/@experimental tag: ` +
+        `${unclassified.join(", ")}`
+    ).toEqual([]);
+    expect(
+      doubled,
+      `Tagged both @public and @experimental: ${doubled.join(", ")}`
     ).toEqual([]);
   });
 

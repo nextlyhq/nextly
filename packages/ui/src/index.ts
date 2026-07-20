@@ -43,7 +43,6 @@ export type { FormLabelWithTooltipProps } from "./components/form-label-with-too
 /** Release tags are per clause below. */
 // Components — Display
 /** @public */
-/** @public */
 export { Badge } from "./components/badge";
 
 /** @experimental */
@@ -355,7 +354,6 @@ export { Spinner, spinnerVariants } from "./components/spinner";
 /** @experimental */
 export type { SpinnerProps } from "./components/spinner";
 
-/** `toast` is @public; the `Toaster` component is @experimental. */
 // Components — Toaster
 /** @public */
 export { toast } from "./components/toaster";
