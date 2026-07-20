@@ -53,3 +53,6 @@ yarn-debug.log*
 
 # coverage
 /coverage
+
+# schema-builder output (this harness defines its schema code-first)
+ui-schema.json

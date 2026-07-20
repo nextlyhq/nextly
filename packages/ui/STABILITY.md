@@ -61,7 +61,7 @@ that swap fails the snapshot too.
 | Dropdown menu | `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuSeparator` | page-builder               |
 | Tooltip       | `Tooltip`, `TooltipTrigger`, `TooltipContent`                                                                                         | form-builder, page-builder |
 | Notifications | `toast`                                                                                                                               | admin, page-builder        |
-| Design tokens | `theme.css`, `styles.css`, and the `--nx-*` custom properties they define                                                             | admin, all plugins         |
+| Design tokens | `theme.css`, `styles.css`, `styles.scoped.css`, and the `--nx-*` custom properties they define                                        | admin, all plugins         |
 
 | Prop types | `ButtonProps`, `InputProps`, `FormLabelWithTooltipProps` | form-builder, page-builder |
 

@@ -719,9 +719,6 @@ importers:
       '@eslint/js':
         specifier: ^9.34.0
         version: 9.39.1
-      '@nextlyhq/ui':
-        specifier: workspace:*
-        version: link:../ui
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
@@ -1418,6 +1415,9 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
     devDependencies:
+      '@nextlyhq/admin-css':
+        specifier: workspace:*
+        version: link:../admin-css
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config

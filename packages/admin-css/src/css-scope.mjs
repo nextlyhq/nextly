@@ -1,5 +1,13 @@
+/** The admin's root class — the historical and default scope. */
+const DEFAULT_SCOPE = ".nextly-admin";
+
 /**
- * Scoping the admin's CSS to `.nextly-admin`.
+ * Scoping a compiled stylesheet under a single root class.
+ *
+ * Defaults to the admin's `.nextly-admin`. The scope is a parameter because the
+ * same problem exists wherever this design system is embedded in a page it does
+ * not own: Tailwind's preflight resets `html`/`body`/`*`, so an unscoped sheet
+ * restyles the host document.
  *
  * The admin is a whole Tailwind app — tokens, utilities, preflight reset —
  * mounted inside the host's document. Any rule that escapes the wrapper
@@ -36,9 +44,10 @@ export function splitTopLevel(selector) {
 }
 
 /**
- * Scope a single selector within `.nextly-admin`.
+ * Scope a single selector within `scope` (a class selector such as
+ * `.nextly-admin`).
  */
-export function scopeSelector(selector) {
+export function scopeSelector(selector, scope = DEFAULT_SCOPE) {
   selector = selector.trim();
   if (!selector) return selector;
 
@@ -56,11 +65,11 @@ export function scopeSelector(selector) {
   // inside parens yields one part and must not re-recurse.
   const parts = splitTopLevel(selector);
   if (parts.length > 1) {
-    return parts.map(s => scopeSelector(s.trim())).join(", ");
+    return parts.map(s => scopeSelector(s.trim(), scope)).join(", ");
   }
 
   // Already scoped.
-  if (selector.includes(".nextly-admin")) return selector;
+  if (selector.includes(scope)) return selector;
 
   // Document-root selectors collapse onto the admin root, so the theme and the
   // preflight reset apply inside the admin and never reach the host.
@@ -70,13 +79,13 @@ export function scopeSelector(selector) {
     selector === ":host" ||
     selector === "body"
   ) {
-    return ".nextly-admin";
+    return scope;
   }
 
-  // The dark class sits on the admin root itself, not on a descendant.
-  if (selector === ".dark") return ".nextly-admin.dark";
+  // The dark class sits on the scope root itself, not on a descendant.
+  if (selector === ".dark") return `${scope}.dark`;
 
-  return `.nextly-admin ${selector}`;
+  return `${scope} ${selector}`;
 }
 
 /** How far a line opens or closes the brace depth. */
@@ -91,7 +100,7 @@ function countBraces(line) {
  * holds for Tailwind's output but not for arbitrary hand-authored CSS.
  * {@link findUnscopedRules} is what catches the difference.
  */
-export function scopeCss(css) {
+export function scopeCss(css, scope = DEFAULT_SCOPE) {
   const lines = css.split("\n");
   const result = [];
   let inKeyframes = false;
@@ -144,12 +153,12 @@ export function scopeCss(css) {
         result.push(line);
         continue;
       }
-      if (selector.includes(".nextly-admin")) {
+      if (selector.includes(scope)) {
         result.push(line);
         continue;
       }
 
-      result.push(`${scopeSelector(selector)}{${rest}`);
+      result.push(`${scopeSelector(selector, scope)}{${rest}`);
     } else {
       result.push(line);
     }
@@ -164,7 +173,7 @@ export function scopeCss(css) {
  * Walks brace depth so nested at-rules (@layer/@media/@supports) are checked,
  * while at-rules whose bodies are not selectors are skipped.
  */
-export function findUnscopedRules(css) {
+export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
   const offenders = [];
   const skipAtRule = /^@(keyframes|font-face|property|counter-style|page)/i;
   // Comments would otherwise be swallowed into the following rule's prelude
@@ -201,7 +210,7 @@ export function findUnscopedRules(css) {
         // scopes it, letting `.leak` restyle the host page.
         for (const part of splitTopLevel(prelude)) {
           const trimmed = part.trim();
-          if (trimmed && !trimmed.includes(".nextly-admin")) {
+          if (trimmed && !trimmed.includes(scope)) {
             offenders.push(trimmed.slice(0, 100));
           }
         }

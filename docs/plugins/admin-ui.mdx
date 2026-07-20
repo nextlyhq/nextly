@@ -108,7 +108,14 @@ light and dark automatically.
 
 **3. Ship your own CSS (`admin.styles`).** For anything beyond the safelist, compile a
 scoped, token-driven stylesheet with the `nextly-build-admin-css` CLI (from
-`@nextlyhq/admin-css`, add it as a devDependency) and declare it in your manifest:
+`@nextlyhq/admin-css`, add it as a devDependency) and declare it in your manifest.
+
+Your CSS is compiled in **your** package, not by the host. That is deliberate: the admin
+sheet is built when Nextly is released, so it can never scan a plugin that is installed
+later, and pointing Tailwind at an installed package with `@source` is not a reliable
+substitute — it does not accept package references, and it resolves inconsistently under
+pnpm, which is what this repository and many plugin projects use. Compiling ahead of time
+means your styles do not depend on the host's build at all.
 
 ```css
 /* src/admin.css — author against the shared token preset */

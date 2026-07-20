@@ -89,6 +89,28 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 > published with `"use client"`, and neither of these contains a React runtime,
 > so a server component or a Tailwind config can import them safely.
 
+## Stylesheets
+
+| Import                           | Use when                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `@nextlyhq/ui/styles.css`        | The app is yours end to end. Styles the whole document, Tailwind preflight included.                                                  |
+| `@nextlyhq/ui/styles.scoped.css` | Dropping a few components into an existing app. Every rule is confined to `.nextly-ui`, so the rest of the page keeps its own styles. |
+| `@nextlyhq/ui/theme.css`         | You compile Tailwind yourself and want the token contract only.                                                                       |
+
+The scoped sheet needs a wrapper element, and dark mode goes on the same element:
+
+```tsx
+import "@nextlyhq/ui/styles.scoped.css";
+
+<div className="nextly-ui">
+  <Button>Save</Button>
+</div>;
+```
+
+It keeps preflight rather than dropping it — these components are designed against a
+normalised baseline — but confines it to the wrapper, so your headings, lists and form
+controls outside it are untouched.
+
 ## Compatibility
 
 | Tool           | Version                                                                |

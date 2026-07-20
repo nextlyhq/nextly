@@ -163,3 +163,41 @@ describe("findUnscopedRules", () => {
     ).toEqual([]);
   });
 });
+
+describe("a custom scope", () => {
+  // The same sheet is emitted for embedding outside the admin, where the root
+  // class differs; preflight and the token block must follow the scope given.
+  it("collapses document-root selectors onto the given scope", () => {
+    expect(scopeSelector(":root", ".nextly-ui")).toBe(".nextly-ui");
+    expect(scopeSelector("html", ".nextly-ui")).toBe(".nextly-ui");
+    expect(scopeSelector("body", ".nextly-ui")).toBe(".nextly-ui");
+  });
+
+  it("puts the dark class on the scope root, not a descendant", () => {
+    expect(scopeSelector(".dark", ".nextly-ui")).toBe(".nextly-ui.dark");
+  });
+
+  it("scopes each part of a grouped preflight selector", () => {
+    expect(scopeSelector("*, ::after, ::before", ".nextly-ui")).toBe(
+      ".nextly-ui *, .nextly-ui ::after, .nextly-ui ::before"
+    );
+  });
+
+  it("leaves selectors already carrying the scope alone", () => {
+    expect(scopeSelector(".nextly-ui .card", ".nextly-ui")).toBe(
+      ".nextly-ui .card"
+    );
+  });
+
+  it("scopes a whole sheet and reports nothing unscoped", () => {
+    const out = scopeCss(":root{--nx-a:1}\n.card{color:red}", ".nextly-ui");
+    expect(out).toContain(".nextly-ui{--nx-a:1}");
+    expect(out).toContain(".nextly-ui .card{color:red}");
+    expect(findUnscopedRules(out, ".nextly-ui")).toEqual([]);
+  });
+
+  it("still reports a leak when a rule escapes the given scope", () => {
+    expect(findUnscopedRules(".nextly-ui .a, .leak{color:red}", ".nextly-ui"))
+      .toHaveLength(1);
+  });
+});

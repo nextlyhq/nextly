@@ -196,7 +196,7 @@ const nextConfig: NextConfig = {
       "mysql2/promise": "./src/stubs/mysql2-stub.js",
       mysql2: "./src/stubs/mysql2-stub.js",
       // CSS files come from dist (the build-css.mjs pipeline applies
-      // the .adminapp scoping post-process and runs a watch loop so
+      // the .nextly-admin scoping post-process and runs a watch loop so
       // the dist file stays fresh during dev). With @nextlyhq/admin
       // aliased to src above, Turbopack stops consulting admin's
       // package.json exports for subpaths — so the CSS alias is
