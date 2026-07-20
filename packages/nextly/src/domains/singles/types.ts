@@ -77,6 +77,14 @@ export interface GetSingleOptions {
   overrideAccess?: boolean;
 
   /**
+   * Set by a route whose middleware already authenticated AND authorized the
+   * caller. Skips only the redundant RBAC re-check, which resolves permissions
+   * from the caller's stored roles and would otherwise reject an API key whose
+   * scoped permissions differ from its creator's. Stored access rules still run.
+   */
+  routeAuthorized?: boolean;
+
+  /**
    * Draft/Published filter override. Only effective when single.status === true.
    * - 'published' (default for public/untrusted callers): only return the
    *   document when its status is 'published'; otherwise return 404 (so a

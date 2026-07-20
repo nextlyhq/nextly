@@ -350,6 +350,7 @@ export class SingleQueryService extends BaseService {
         operation: "read",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
         logger: this.logger,
       });

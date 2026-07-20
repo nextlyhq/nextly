@@ -484,6 +484,13 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * Set by a route that already authenticated and authorized the caller.
+     * Skips the redundant RBAC re-check (which resolves the caller's stored
+     * roles and would reject a scoped API key) while leaving owner-only and
+     * other document-level rules in force.
+     */
+    routeAuthorized?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }

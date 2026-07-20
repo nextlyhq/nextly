@@ -105,20 +105,25 @@ export const GET = withErrorHandler(
     await requireVersionReadAccess(request, scopeKind, slug, id);
 
     const versions = getService("versionsService");
-    const rows = await versions.list(
+    // Fetch one more than asked for: its presence is what proves another page
+    // exists. Inferring `hasNext` from a full page instead would claim a next
+    // page whenever the history length is an exact multiple of the page size,
+    // sending the client to an empty page.
+    const window = await versions.list(
       { scopeKind, scopeSlug: slug, entryId: id },
-      { limit, ...(cursor !== undefined ? { cursor } : {}) }
+      { limit: limit + 1, ...(cursor !== undefined ? { cursor } : {}) }
     );
+    const hasNext = window.length > limit;
+    const rows = hasNext ? window.slice(0, limit) : window;
 
     // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
-    // so the meta describes the returned window. A full page implies another
-    // page may follow; a short page proves it does not.
+    // so the meta describes the returned window.
     return respondList(rows, {
       total: rows.length,
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: rows.length === limit,
+      hasNext,
       hasPrev: cursor !== undefined,
     });
   }

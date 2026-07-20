@@ -15,6 +15,7 @@
  * @module api/versions-access
  */
 
+import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
@@ -22,6 +23,7 @@ import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
+import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -79,8 +81,13 @@ export async function requireVersionReadAccess(
 
 /**
  * Whether the caller can read the live document, using the same service the
- * normal read path uses so owner-only rules, status filtering, and RBAC all
- * apply identically.
+ * normal read path uses so owner-only rules and stored access rules apply
+ * identically.
+ *
+ * A denial (403) and a missing document (404) both mean "no history for you".
+ * Any other failure is a real server-side fault — a component/relationship load
+ * error, a throwing afterRead hook — and is re-thrown so the route reports it
+ * as a 5xx instead of disguising an outage as missing content.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -89,12 +96,7 @@ async function canReadLiveDocument(
   user: UserContext
 ): Promise<boolean> {
   if (scopeKind === "single") {
-    const singles = getService("singleEntryService");
-    const result = await singles.get(slug, {
-      user,
-      overrideAccess: false,
-    });
-    return result.success === true;
+    return canReadLiveSingle(slug, entryId, user);
   }
 
   const collections = getService("collectionsHandler");
@@ -103,8 +105,67 @@ async function canReadLiveDocument(
     entryId,
     user,
     overrideAccess: false,
+    // The route already authenticated and authorized the caller, so skip only
+    // the redundant RBAC re-check (which would reject a scoped API key by
+    // resolving its creator's stored roles). Document-level rules still run.
+    routeAuthorized: true,
+    // Match the authenticated read path: without this, a status-enabled
+    // collection filters to published only, and a draft would report no
+    // history — exactly when an author needs it most.
+    status: "all",
   });
-  return result.success === true;
+  return interpretReadResult(result.success, result.statusCode);
+}
+
+/**
+ * Single variant. Reads the backing row directly first, because
+ * `SingleEntryService.get` MATERIALIZES a missing Single (creating the default
+ * document, and for a versioned Single capturing an initial version). A version
+ * request is a read, so it must never write; skipping straight to 404 when no
+ * row exists is also correct, since an unmaterialized Single has no history.
+ *
+ * The row's id is then compared with the requested `entryId`: version rows
+ * outlive the document they came from, so a Single recreated under a new id
+ * must not expose the previous document's snapshots.
+ */
+async function canReadLiveSingle(
+  slug: string,
+  entryId: string,
+  user: UserContext
+): Promise<boolean> {
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return false;
+
+  const adapter = getService("adapter");
+  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
+  // Not materialized yet, or the live document is a different one than the
+  // requested history belongs to.
+  if (!row || row.id !== entryId) return false;
+
+  const singles = getService("singleEntryService");
+  const result = await singles.get(slug, {
+    user,
+    overrideAccess: false,
+    routeAuthorized: true,
+    status: "all",
+  });
+  return interpretReadResult(result.success, result.statusCode);
+}
+
+/**
+ * Collapse a live-read result into "may the caller see this document".
+ * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ */
+function interpretReadResult(success: boolean, statusCode: number): boolean {
+  if (success) return true;
+  if (statusCode === 403 || statusCode === 404) return false;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "version-live-read-failed",
+      statusCode,
+    },
+  });
 }
 
 /**
@@ -125,11 +186,48 @@ export async function redactSnapshotForUser(
   if (typeof snapshot !== "object" || snapshot === null) return;
   if (scopeKind !== "collection" && scopeKind !== "single") return;
 
+  const entry = snapshot as Record<string, unknown>;
+
+  // Strip anything the CURRENT schema marks as a password, mirroring the normal
+  // read path. Capture already strips password values, but a field converted to
+  // `password` after a snapshot was written — or history imported from before
+  // that rule existed — would otherwise hand back a value the live read hides.
+  const fields = await resolveFieldsForRedaction(scopeKind, slug);
+  if (fields.length > 0) {
+    stripPasswordFieldValues(entry, fields);
+  }
+
   await applyFieldReadAccess({
     kind: scopeKind,
     slug,
-    entry: snapshot as Record<string, unknown>,
+    entry,
     user,
     overrideAccess: false,
   });
+}
+
+/**
+ * Current field configs for an entity, used to decide what to strip. A lookup
+ * failure yields an empty list: redaction then falls back to field-level access
+ * alone rather than failing the request.
+ */
+async function resolveFieldsForRedaction(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  try {
+    if (scopeKind === "single") {
+      const registry = getService("singleRegistryService");
+      const record = await registry.getSingleBySlug(slug);
+      return record?.fields ?? [];
+    }
+    const collections = getService("collectionService");
+    // Metadata lookup only; the context carries no user because the access
+    // decision was already made above and this is just a field-shape read.
+    const collection = await collections.getCollection(slug, {});
+    return ((collection as { fields?: unknown[] } | null)?.fields ??
+      []) as FieldConfig[];
+  } catch {
+    return [];
+  }
 }

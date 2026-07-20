@@ -1741,6 +1741,14 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * Set by a route whose middleware already authenticated AND authorized the
+     * caller (mirrors listEntries). It skips only the redundant RBAC re-check,
+     * which would otherwise resolve permissions from the caller's stored roles
+     * and so reject an API key whose scoped permissions differ from its
+     * creator's. Owner-only and other document-level rules still apply.
+     */
+    routeAuthorized?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1752,7 +1760,8 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         params.entryId,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        params.routeAuthorized
       );
       if (accessDenied) {
         return accessDenied;
