@@ -196,9 +196,12 @@ function pruneContainerValue(
   const out: Record<string, unknown> = {};
 
   for (const [key, child] of Object.entries(value)) {
-    // Components carry a type discriminator that is not a schema field but is
-    // needed to write the value back.
-    if (key === "_componentType") {
+    // Row metadata rather than schema fields, and both are needed to write the
+    // value back: the type discriminator selects the component, and the id lets
+    // the save path update the existing row. Dropping the id would make a
+    // restore delete and reinsert instances, taking their per-locale companion
+    // rows and any other row-scoped state with them.
+    if (key === "_componentType" || key === "id") {
       out[key] = child;
       continue;
     }

@@ -297,7 +297,11 @@ export async function restoreVersion(
       // The route authorized the caller for this document; the update still
       // runs its own document-level rules.
       routeAuthorized: true,
-      ...(version.locale ? { locale: version.locale } : {}),
+      // Forwarded only while the entity still stores values per locale. A
+      // document since un-localized needs no write locale, and an old
+      // version's locale may no longer be configured at all — which the update
+      // path would reject outright.
+      ...(localized && version.locale ? { locale: version.locale } : {}),
       sourceVersionNo: args.versionNo,
     });
     assertWriteSucceeded(result, args);
@@ -310,7 +314,8 @@ export async function restoreVersion(
         user: args.user,
         overrideAccess: false,
         routeAuthorized: true,
-        ...(version.locale ? { locale: version.locale } : {}),
+        // See the Single branch: only while the entity is still localized.
+        ...(localized && version.locale ? { locale: version.locale } : {}),
         ...(args.actor ? { actor: args.actor } : {}),
         sourceVersionNo: args.versionNo,
       },

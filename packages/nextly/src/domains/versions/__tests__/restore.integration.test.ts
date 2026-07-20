@@ -111,6 +111,59 @@ describe("restoreVersion (integration)", () => {
     expect(newest?.sourceVersionNo).toBe(1);
   });
 
+  it("keeps the replaced version even under a tight retention cap", async () => {
+    // The confirm dialog tells the editor a restore can be undone. The
+    // retention pass runs with the restore's own capture, and at a tight cap it
+    // would otherwise remove exactly the version holding the replaced content —
+    // taking the undo away the moment it was promised.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          versions: { enabled: true, maxPerDoc: 1 },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const versions = current.getService<VersionsService>("versionsService");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "First" }
+    );
+    const entryId = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      { collectionName: "posts", entryId, overrideAccess: true },
+      { title: "Second" }
+    );
+
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: "posts",
+      entryId,
+    };
+    // The cap has already trimmed history to the head, so that head is the only
+    // version there is to restore.
+    const head = (await versions.list(ref))[0];
+    expect(head?.versionNo).toBeDefined();
+
+    await restoreVersion({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId,
+      versionNo: head!.versionNo!,
+      user: superAdmin,
+    });
+
+    const history = await versions.list(ref);
+
+    // The replaced content survives its own restore's retention pass.
+    expect(history.some(v => v.versionNo === head!.versionNo)).toBe(true);
+  });
+
   it("leaves history intact when a restore is repeated", async () => {
     current = await bootPosts();
     const handler =

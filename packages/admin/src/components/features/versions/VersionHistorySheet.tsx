@@ -47,6 +47,12 @@ export interface VersionHistorySheetProps {
    * trigger a write that would fail.
    */
   canRestore?: boolean;
+  /**
+   * Status of the LIVE document, which is what a restore is about to change.
+   * The selected version's own status describes the past and says nothing
+   * about whether this change is publicly visible.
+   */
+  liveStatus?: string | null;
 }
 
 function ListSkeleton() {
@@ -71,6 +77,7 @@ export function VersionHistorySheet({
   scope,
   fields,
   canRestore = false,
+  liveStatus = null,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
@@ -205,11 +212,19 @@ export function VersionHistorySheet({
               </Button>
               {/* Offered only from the preview: restoring is easier to get
                   right having seen what the version actually holds. */}
+              {/* Available only once the snapshot is on screen: restoring is
+                  offered from the preview so the choice is made having seen
+                  what the version holds, which a skeleton or an error is not. */}
               {canRestore ? (
                 <Button
                   size="sm"
                   onClick={() => setConfirmingRestore(true)}
-                  disabled={restore.isPending}
+                  disabled={
+                    restore.isPending ||
+                    detail.isLoading ||
+                    Boolean(detail.error) ||
+                    detail.data === undefined
+                  }
                 >
                   Restore this version
                 </Button>
@@ -234,7 +249,7 @@ export function VersionHistorySheet({
           open={confirmingRestore}
           onOpenChange={setConfirmingRestore}
           versionNo={selected}
-          isPublished={detail.data?.status === "published"}
+          isPublished={liveStatus === "published"}
           isRestoring={restore.isPending}
           onConfirm={() => restore.mutate(selected)}
         />

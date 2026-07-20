@@ -221,6 +221,28 @@ describe("restoreVersion", () => {
     expect(componentSpy).toHaveBeenCalledWith("leaf");
   });
 
+  it("does not pass a stale locale to an entity that is no longer localized", async () => {
+    // The old version's locale may not even be configured any more, and the
+    // update path rejects an unknown one outright.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "de",
+      snapshot: { title: "Hallo" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: false,
+      versions: { enabled: true },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() }),
+      expect.anything()
+    );
+  });
+
   it("refuses to restore when versioning has been turned off", async () => {
     // The write goes through the ordinary update, which captures a version only
     // while versioning is on. Restoring anyway would overwrite live content

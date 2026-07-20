@@ -520,6 +520,9 @@ export function EntrySystemHeader({
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
           canRestore={canUpdateDocument}
+          // The live document's status, which is what a restore changes — the
+          // selected version's own status describes the past.
+          liveStatus={effectiveStatus}
         />
       ) : null}
     </div>

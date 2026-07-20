@@ -266,8 +266,8 @@ describe("VersionHistorySheet", () => {
   });
 
   it("tells the editor when a restore was refused", async () => {
-    // Three separate reviewers flagged the silent failure: the spinner simply
-    // stops, which reads as the click not having registered.
+    // Without a message the spinner simply stops, which reads as the click not
+    // having registered rather than as a refusal.
     let onErrorHandler: ((e: Error) => void) | undefined;
     restoreMock.mockImplementation((opts: { onError?: (e: Error) => void }) => {
       onErrorHandler = opts.onError;
@@ -295,6 +295,78 @@ describe("VersionHistorySheet", () => {
     onErrorHandler?.(new Error("nope"));
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+  });
+
+  it("does not offer restore until the version is on screen", async () => {
+    // Restore is offered from the preview so the choice follows seeing what the
+    // version holds; a skeleton or an error is not that.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ isLoading: true }));
+
+    const { unmount } = render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    expect(
+      screen.getByRole("button", { name: /Restore this version/ })
+    ).toBeDisabled();
+    unmount();
+
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    expect(
+      screen.getByRole("button", { name: /Restore this version/ })
+    ).toBeEnabled();
+  });
+
+  it("warns from the live document's status, not the version's", async () => {
+    // The selected version's status describes the past; whether this change is
+    // publicly visible depends on the document as it stands now.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: {}, status: "draft" } })
+    );
+
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+        liveStatus="published"
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Restore this version/ })
+    );
+
+    expect(screen.getByText(/the document is published/)).toBeInTheDocument();
   });
 
   it("does not query while closed", () => {

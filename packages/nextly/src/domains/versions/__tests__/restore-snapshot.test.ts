@@ -285,6 +285,33 @@ describe("buildRestorePayload — layered schemas", () => {
     expect(droppedFields).toEqual(["auth"]);
   });
 
+  it("keeps a component instance id so the row is updated, not replaced", () => {
+    // The save path uses the id to update the existing row; without it a
+    // restore deletes and reinserts instances, taking their per-locale
+    // companion rows and other row-scoped state with them.
+    const withComponent = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
+    ]);
+
+    const { payload } = buildRestorePayload(
+      {
+        blocks: [
+          { id: "row-1", _componentType: "banner", heading: "Hi", gone: 1 },
+        ],
+      },
+      withComponent,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ id: "row-1", _componentType: "banner", heading: "Hi" }],
+    });
+  });
+
   it("keeps a component's type discriminator when pruning it", () => {
     const withComponent = [
       { name: "hero", type: "component", component: "banner" },

@@ -31,7 +31,16 @@ export interface PrunableVersion {
  */
 export function selectVersionsToPrune(
   rows: PrunableVersion[],
-  maxPerDoc: number | false
+  maxPerDoc: number | false,
+  /**
+   * A version number that must survive this pass regardless of the cap.
+   *
+   * A restore records the content it replaced as a version and then tells the
+   * editor the change can be undone. At a small cap the very next retention
+   * pass would remove exactly that version, so the undo would be gone the
+   * moment it was promised.
+   */
+  protectVersionNo?: number | null
 ): string[] {
   if (maxPerDoc === false) return [];
   if (rows.length <= maxPerDoc) return [];
@@ -42,6 +51,10 @@ export function selectVersionsToPrune(
   // Most recent published version: the snapshot matching what readers see.
   const latestPublished = rows.find(r => r.status === "published");
   if (latestPublished) protectedIds.add(latestPublished.id);
+  if (typeof protectVersionNo === "number") {
+    const protectedRow = rows.find(r => r.versionNo === protectVersionNo);
+    if (protectedRow) protectedIds.add(protectedRow.id);
+  }
 
   return rows
     .slice(Math.max(maxPerDoc, 0))
