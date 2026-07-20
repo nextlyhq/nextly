@@ -123,18 +123,52 @@ async function resolveComponentFields(
   if (slugs.size === 0) return resolved;
 
   const registry = getService("componentRegistryService");
-  await Promise.all(
-    [...slugs].map(async slug => {
-      try {
-        const record = await registry.getComponentBySlug(slug);
-        if (record?.fields) {
-          resolved.set(slug, record.fields);
+
+  // A component may embed another, so resolving only the entity's own layer
+  // would leave the deeper ones opaque — and an opaque subtree is one the
+  // filter can neither inspect for credentials nor prune. Resolve until no
+  // new slug is discovered; the `resolved` map doubles as the visited set, so
+  // a cycle terminates.
+  let pending = [...slugs];
+  while (pending.length > 0) {
+    const batch = pending.filter(slug => !resolved.has(slug));
+    if (batch.length === 0) break;
+
+    await Promise.all(
+      batch.map(async slug => {
+        try {
+          const record = await registry.getComponentBySlug(slug);
+          resolved.set(slug, record?.fields ?? []);
+        } catch {
+          // Recorded as empty so the slug is not retried; an unresolved
+          // subtree is treated as unknown and dropped, which is the safe
+          // direction. See the note above.
+          resolved.set(slug, []);
         }
-      } catch {
-        // Left unresolved on purpose; see the note above.
-      }
-    })
-  );
+      })
+    );
+
+    const discovered = new Set<string>();
+    for (const slug of batch) {
+      const collected = new Set<string>();
+      const gather = (list: FieldConfig[]): void => {
+        for (const field of list) {
+          const one = (field as { component?: unknown }).component;
+          const many = (field as { components?: unknown }).components;
+          if (typeof one === "string") collected.add(one);
+          if (Array.isArray(many)) {
+            for (const s of many) if (typeof s === "string") collected.add(s);
+          }
+          const nested = (field as { fields?: unknown }).fields;
+          if (Array.isArray(nested)) gather(nested as FieldConfig[]);
+        }
+      };
+      gather(resolved.get(slug) ?? []);
+      for (const s of collected) if (!resolved.has(s)) discovered.add(s);
+    }
+
+    pending = [...discovered];
+  }
 
   return resolved;
 }

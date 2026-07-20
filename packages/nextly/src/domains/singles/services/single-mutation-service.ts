@@ -573,6 +573,16 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
+                        // Read as the write locale with no fallback, so an
+                        // embedded localized component records this language's
+                        // text rather than another's standing in for it — the
+                        // document is labelled as THIS locale.
+                        ...(writeLocale !== undefined
+                          ? {
+                              locale: writeLocale,
+                              fallbackLocale: false as const,
+                            }
+                          : {}),
                       });
                     for (const f of componentFields) {
                       if (populated[f.name] !== undefined) {
@@ -597,6 +607,12 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
+              // A component subtree read as the write locale is locale-specific
+              // state too, so a component-only translation edit is not mistaken
+              // for a shared-field write and left unrestorable.
+              const capturedLocalizedComponents =
+                writeLocale !== undefined && Object.keys(components).length > 0;
+
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "single",
@@ -620,7 +636,8 @@ export class SingleMutationService extends BaseService {
                 // language from state that was never its own.
                 locale:
                   Object.keys(companionData).length > 0 ||
-                  companionStatus !== undefined
+                  companionStatus !== undefined ||
+                  capturedLocalizedComponents
                     ? (writeLocale ?? null)
                     : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,

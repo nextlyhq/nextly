@@ -184,6 +184,33 @@ describe("buildRestorePayload — layered schemas", () => {
     expect(droppedFields).toEqual([]);
   });
 
+  it("keeps children of a presentational group nested inside another", () => {
+    // Layout groups nest, so flattening one level would leave a grandchild's
+    // key looking like a field the schema no longer has.
+    const nestedGroups = [
+      {
+        name: "",
+        type: "group",
+        fields: [
+          {
+            name: "",
+            type: "group",
+            fields: [{ name: "city", type: "text" }],
+          },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { city: "Lisbon" },
+      nestedGroups,
+      ctx
+    );
+
+    expect(payload).toEqual({ city: "Lisbon" });
+    expect(droppedFields).toEqual([]);
+  });
+
   it("drops a system column the entity does not have", () => {
     // A plugin collection has `slug` only when it declares it; naming a column
     // the table lacks fails the whole restore.

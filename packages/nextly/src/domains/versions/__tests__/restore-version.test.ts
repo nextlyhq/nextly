@@ -11,12 +11,14 @@ const {
   updateSingleSpy,
   collectionSpy,
   singleRegistrySpy,
+  componentSpy,
 } = vi.hoisted(() => ({
   getVersionSpy: vi.fn(),
   updateEntrySpy: vi.fn(),
   updateSingleSpy: vi.fn(),
   collectionSpy: vi.fn(),
   singleRegistrySpy: vi.fn(),
+  componentSpy: vi.fn(),
 }));
 
 vi.mock("../../../di", () => ({
@@ -30,6 +32,8 @@ vi.mock("../../../di", () => ({
         return { update: updateSingleSpy };
       case "collectionService":
         return { getCollection: collectionSpy };
+      case "componentRegistryService":
+        return { getComponentBySlug: componentSpy };
       default:
         return { getSingleBySlug: singleRegistrySpy };
     }
@@ -69,6 +73,7 @@ describe("restoreVersion", () => {
       localized: false,
       versions: { enabled: true },
     });
+    componentSpy.mockResolvedValue({ fields: [] });
   });
 
   it("writes the snapshot through the normal update path", async () => {
@@ -178,6 +183,42 @@ describe("restoreVersion", () => {
       { title: "Old title" },
       expect.objectContaining({ sourceVersionNo: 3 })
     );
+  });
+
+  it("resolves component schemas that are nested inside other components", async () => {
+    // A component may embed another; leaving the deeper one opaque means the
+    // filter can neither inspect it for credentials nor prune stale keys.
+    const componentFields = [
+      { name: "outer", type: "component", component: "wrapper" },
+    ];
+    collectionSpy.mockResolvedValue({
+      fields: componentFields,
+      localized: false,
+      versions: { enabled: true },
+    });
+    componentSpy.mockImplementation((slug: string) =>
+      Promise.resolve(
+        slug === "wrapper"
+          ? {
+              fields: [{ name: "inner", type: "component", component: "leaf" }],
+            }
+          : { fields: [{ name: "secret", type: "password" }] }
+      )
+    );
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { outer: { inner: {} } },
+    });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+
+    // Both layers were walked: the password only becomes visible through the
+    // second one.
+    expect(componentSpy).toHaveBeenCalledWith("wrapper");
+    expect(componentSpy).toHaveBeenCalledWith("leaf");
   });
 
   it("refuses to restore when versioning has been turned off", async () => {

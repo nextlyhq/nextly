@@ -145,21 +145,20 @@ function containsPasswordField(
 function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
   const byName = new Map<string, FieldConfig>();
 
-  for (const field of fields) {
-    if (typeof field.name === "string" && field.name.length > 0) {
-      byName.set(field.name, field);
-      continue;
-    }
-
-    if (field.type === "group") {
-      for (const child of inlineChildren(field) ?? []) {
-        if (typeof child.name === "string" && child.name.length > 0) {
-          byName.set(child.name, child);
-        }
+  const walk = (list: FieldConfig[]): void => {
+    for (const field of list) {
+      if (typeof field.name === "string" && field.name.length > 0) {
+        byName.set(field.name, field);
+        continue;
       }
-    }
-  }
 
+      // Presentational groups nest, so flattening one level would leave a
+      // grandchild's key looking like a field the schema no longer has.
+      if (field.type === "group") walk(inlineChildren(field) ?? []);
+    }
+  };
+
+  walk(fields);
   return byName;
 }
 
