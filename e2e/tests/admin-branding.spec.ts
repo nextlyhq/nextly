@@ -40,7 +40,11 @@ test("a bg-primary surface paints the brand color instead of going transparent",
 }) => {
   await gotoAdmin(page, "/");
 
-  const branded = page.locator('.nextly-admin [class*="bg-primary"]').first();
+  // `~=` matches the whole class, not a substring: the admin uses far more
+  // `bg-primary/5` and `bg-primary-500` than plain `bg-primary`, and a
+  // translucent or shaded surface would not carry the brand color at full
+  // strength.
+  const branded = page.locator('.nextly-admin [class~="bg-primary"]').first();
   await expect(branded).toBeVisible({ timeout: 30_000 });
 
   const background = await branded.evaluate(
@@ -49,12 +53,18 @@ test("a bg-primary surface paints the brand color instead of going transparent",
 
   expect(background).not.toBe(TRANSPARENT);
 
+  const channels = background.match(/[\d.]+/g)?.map(Number) ?? [];
+  expect(channels.length).toBeGreaterThanOrEqual(3);
+
+  // Opaque, so this is a solid brand surface. An `rgba(...)` with alpha < 1
+  // keeps the same rgb channels, so the comparison below would pass on a
+  // 5%-opacity `bg-primary/5` element while proving nothing visible.
+  expect(channels[3] ?? 1).toBe(1);
+
   // And it is the configured brand color, not the default token.
   const [r, g, b] = [0, 2, 4].map(i =>
     parseInt(PRIMARY_HEX.slice(1 + i, 3 + i), 16)
   );
-  const channels = background.match(/[\d.]+/g)?.map(Number) ?? [];
-  expect(channels.length).toBeGreaterThanOrEqual(3);
   for (const [i, expected] of [r, g, b].entries()) {
     // Allow for color-space conversion rounding.
     expect(Math.abs(channels[i] - expected)).toBeLessThanOrEqual(3);
