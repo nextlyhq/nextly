@@ -1455,6 +1455,13 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
+      // Resolved BEFORE the transaction opens. Expansion reads component
+      // definitions from the registry on the pooled connection, and doing that
+      // inside the transaction would hold this write's connection while waiting
+      // for a second one. It depends only on static field config, so nothing is
+      // gained by deferring it.
+      const webhookFields = await this.webhookFieldTree(fields);
+
       const entry: Record<string, unknown> = {};
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
@@ -1605,7 +1612,7 @@ export class CollectionMutationService extends BaseService {
           },
           data: assembleDocument(documentParts),
           previous: null,
-          fields: await this.webhookFieldTree(fields),
+          fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
       });
@@ -2444,6 +2451,12 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
+      // Resolved BEFORE the transaction opens, for the reason given on the
+      // create path: expansion reads the component registry on the pooled
+      // connection. Hoisting it also keeps a conflict retry from re-running the
+      // same registry reads on every attempt.
+      const webhookFields = await this.webhookFieldTree(fields);
+
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
       // The content UPDATE is a deterministic SET, so re-applying it is safe.
@@ -2461,6 +2474,29 @@ export class CollectionMutationService extends BaseService {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
           };
+
+          // Take the row lock the UPDATE below needs anyway, before reading the
+          // prior state. Without it two concurrent updates to the same entry
+          // interleave: this transaction reads the old row, the other commits,
+          // then this UPDATE applies on top — so the post-write document carries
+          // the other writer's fields while `previous` predates them, and the
+          // diff attributes their change to this event. Acquiring the lock a few
+          // statements early costs little, since the UPDATE takes the same lock
+          // and holds it until commit either way.
+          //
+          // Postgres and MySQL only. SQLite has no row-level locking and needs
+          // none here: its transactions open with BEGIN IMMEDIATE, which already
+          // serializes writers.
+          if (this.dialect !== "sqlite") {
+            const quoteLocked = (id: string) =>
+              this.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+            await tx.execute(
+              `SELECT ${quoteLocked("id")} FROM ${quoteLocked(tableName)} ` +
+                `WHERE ${quoteLocked("id")} = ${this.dialect === "postgresql" ? "$1" : "?"} ` +
+                `FOR UPDATE`,
+              [params.entryId]
+            );
+          }
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -2788,7 +2824,7 @@ export class CollectionMutationService extends BaseService {
                 },
                 data: assembleDocument(documentParts),
                 previous: previousDocument,
-                fields: await this.webhookFieldTree(fields),
+                fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
             }

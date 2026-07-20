@@ -14,6 +14,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
@@ -81,7 +82,9 @@ async function migrate(t: TestNextly): Promise<void> {
     status: true,
   });
   if (!spec)
-    throw new Error("expected a companion spec for a localized collection");
+    throw NextlyError.internal({
+      logContext: { reason: "missing-companion-spec", collection: "pages" },
+    });
   if (await t.adapter.tableExists(spec.companionTable)) return;
   const adapter = t.adapter as unknown as {
     executeQuery: (sql: string) => Promise<unknown>;

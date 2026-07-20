@@ -105,13 +105,17 @@ export class ComponentRegistryService extends BaseRegistryService<
   }
 
   async getComponentBySlug(
-    slug: string
+    slug: string,
+    executor?: unknown
   ): Promise<DynamicComponentRecord | null> {
-    return this.getRecordBySlug(slug);
+    return this.getRecordBySlug(slug, executor);
   }
 
-  async getComponent(slug: string): Promise<DynamicComponentRecord> {
-    return this.getRecordOrThrow(slug);
+  async getComponent(
+    slug: string,
+    executor?: unknown
+  ): Promise<DynamicComponentRecord> {
+    return this.getRecordOrThrow(slug, executor);
   }
 
   async getAllComponents(

@@ -480,7 +480,10 @@ export class ComponentQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown> | null> {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      executor
+    );
     const componentFields = meta.fields;
     const rows = await this.getExistingInstances(
       meta.tableName,
@@ -523,7 +526,10 @@ export class ComponentQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown
   ): Promise<Record<string, unknown>[]> {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      executor
+    );
     const componentFields = meta.fields;
     const rows = await this.getExistingInstances(
       meta.tableName,
@@ -577,7 +583,7 @@ export class ComponentQueryService extends BaseService {
 
     for (const slug of allowedSlugs) {
       try {
-        const meta = await this.registryService.getComponent(slug);
+        const meta = await this.registryService.getComponent(slug, executor);
         const rows = await this.getExistingInstances(
           meta.tableName,
           parentId,
@@ -604,7 +610,7 @@ export class ComponentQueryService extends BaseService {
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
       // may span several component types, each with its own companion.
-      const meta = await this.registryService.getComponent(slug);
+      const meta = await this.registryService.getComponent(slug, executor);
       await this.overlayLocalizedComponent(
         meta,
         [data],

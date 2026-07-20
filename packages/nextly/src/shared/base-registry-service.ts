@@ -150,13 +150,20 @@ export abstract class BaseRegistryService<
   /**
    * Get a record by slug, returning null if not found.
    */
-  protected async getRecordBySlug(slug: string): Promise<TRecord | null> {
+  protected async getRecordBySlug(
+    slug: string,
+    executor?: unknown
+  ): Promise<TRecord | null> {
     try {
       const result = await this.adapter.selectOne<TRecord>(
         this.registryTableName,
         {
           where: this.whereEq("slug", slug),
-        }
+        },
+        // Supplied when the caller is inside a write transaction: without it the
+        // lookup takes a second pooled connection while that transaction still
+        // holds its own, which can stall against a small pool.
+        executor
       );
 
       return result ? this.deserializeRecord(result) : null;
@@ -176,8 +183,11 @@ export abstract class BaseRegistryService<
    * §13.8: public message is generic; identifying details (slug, resource
    * type) flow through `logContext`, not the wire.
    */
-  protected async getRecordOrThrow(slug: string): Promise<TRecord> {
-    const record = await this.getRecordBySlug(slug);
+  protected async getRecordOrThrow(
+    slug: string,
+    executor?: unknown
+  ): Promise<TRecord> {
+    const record = await this.getRecordBySlug(slug, executor);
 
     if (!record) {
       throw NextlyError.notFound({
