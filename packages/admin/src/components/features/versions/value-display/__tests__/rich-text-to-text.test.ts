@@ -73,6 +73,14 @@ describe("richTextToText", () => {
     expect(richTextToText(null)).toBe("");
   });
 
+  it("keeps text that appears before any block has opened", () => {
+    // A malformed document can carry a bare text node at root level. Writing
+    // to index -1 would set a named property on the array and drop it.
+    expect(richTextToText(doc([{ type: "text", text: "Stray" }]))).toBe(
+      "Stray"
+    );
+  });
+
   it("returns nothing for an empty document", () => {
     expect(richTextToText(doc([]))).toBe("");
   });

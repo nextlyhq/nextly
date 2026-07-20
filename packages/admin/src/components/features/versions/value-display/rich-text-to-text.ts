@@ -36,7 +36,7 @@ function asNode(value: unknown): LexicalNode | null {
 
 /** Whether a value looks like a Lexical document rather than arbitrary JSON. */
 export function isLexicalDocument(value: unknown): boolean {
-  const root = asNode(value)?.["root" as keyof LexicalNode];
+  const root = (asNode(value) as { root?: unknown } | null)?.root;
   const node = asNode(root);
   return node?.type === "root" && Array.isArray(node.children);
 }
@@ -46,6 +46,10 @@ function collect(node: LexicalNode | null, lines: string[]): void {
 
   if (typeof node.text === "string" && node.text.length > 0) {
     // Text nodes append to the block being built rather than starting one.
+    // A malformed document can carry text before any block has opened, so a
+    // block is opened here rather than writing to index -1, which would set a
+    // named property on the array and silently drop the content.
+    if (lines.length === 0) lines.push("");
     lines[lines.length - 1] = (lines[lines.length - 1] ?? "") + node.text;
   }
 
@@ -70,7 +74,7 @@ function collect(node: LexicalNode | null, lines: string[]): void {
 export function richTextToText(value: unknown): string {
   if (!isLexicalDocument(value)) return "";
 
-  const root = asNode(asNode(value)?.["root" as keyof LexicalNode]);
+  const root = asNode((asNode(value) as { root?: unknown } | null)?.root);
   const lines: string[] = [];
   collect(root, lines);
 

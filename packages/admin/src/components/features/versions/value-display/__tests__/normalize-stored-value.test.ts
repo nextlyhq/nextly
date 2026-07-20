@@ -115,6 +115,20 @@ describe("normalizeStoredValue", () => {
     });
   });
 
+  describe("boolean alias", () => {
+    it.each([
+      [1, true],
+      ["1", true],
+      [true, true],
+      [0, false],
+    ])("normalizes the boolean alias, reading %p as %p", (stored, expected) => {
+      // `boolean` is not in the config union but reaches display code as a
+      // runtime alias for `checkbox`. Without normalizing it, a SQLite 1 would
+      // fail the renderer's `=== true` check and display "No" for a true value.
+      expect(normalizeStoredValue(field("boolean"), stored)).toBe(expected);
+    });
+  });
+
   it("leaves a plain text value untouched", () => {
     expect(normalizeStoredValue(field("text"), "hello")).toBe("hello");
   });

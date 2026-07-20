@@ -64,11 +64,15 @@ export function normalizeStoredValue(
   const value =
     isJsonBacked(field) && typeof raw === "string" ? parseJson(raw) : raw;
 
-  switch (field.type) {
-    case "checkbox":
-      // Every encoding the three supported dialects produce for a boolean.
-      return value === true || value === "true" || value === 1 || value === "1";
+  // `boolean` is not in the config field-type union but reaches display code as
+  // a runtime alias for `checkbox`, the same way the cell registry accepts it.
+  // It is matched here because the switch below is typed to the union.
+  if (field.type === "checkbox" || (field.type as string) === "boolean") {
+    // Every encoding the three supported dialects produce for a boolean.
+    return value === true || value === "true" || value === 1 || value === "1";
+  }
 
+  switch (field.type) {
     case "chips": {
       // A chips value is always a list. A single stored string is a legacy
       // single-entry value, not a list of its characters.
