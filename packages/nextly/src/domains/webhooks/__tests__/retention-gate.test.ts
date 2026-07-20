@@ -130,8 +130,13 @@ describe("MetaRetentionGate", () => {
     const gate = new MetaRetentionGate(f.adapter);
     const dueBefore = new Date(T0.getTime() - HOUR);
 
-    const first = await gate.claim(RETENTION_GATE_KEY, dueBefore, T0);
-    const second = await gate.claim(RETENTION_GATE_KEY, dueBefore, T0);
+    // Started together rather than in sequence: sequencing them would only
+    // retest that a freshly stamped marker blocks the next claim, not the
+    // delete-to-restamp contention the atomic claim exists for.
+    const [first, second] = await Promise.all([
+      gate.claim(RETENTION_GATE_KEY, dueBefore, T0),
+      gate.claim(RETENTION_GATE_KEY, dueBefore, T0),
+    ]);
 
     expect([first, second]).toEqual([true, false]);
   });

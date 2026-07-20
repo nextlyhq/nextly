@@ -51,6 +51,17 @@ describe("resolveWebhookRetentionConfig", () => {
     expect(policy?.deliveriesMaxAgeMs).toBe(5_000);
   });
 
+  it("honours an explicit keep-forever for deliveries", () => {
+    // `false` is a request, not a bound to be normalised away. Rewriting it to
+    // the event window would prune attempt logs the user asked to keep.
+    const policy = resolveWebhookRetentionConfig({
+      eventsMaxAgeMs: 1_000,
+      auditEventsMaxAgeMs: 5_000,
+      deliveriesMaxAgeMs: false,
+    });
+    expect(policy?.deliveriesMaxAgeMs).toBe(false);
+  });
+
   it("leaves the delivery window alone when events are kept forever", () => {
     const policy = resolveWebhookRetentionConfig({
       eventsMaxAgeMs: false,

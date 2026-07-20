@@ -89,6 +89,33 @@ import { createDatabaseError, isDatabaseError } from "./types";
  *
  * @public
  */
+/**
+ * Rows affected by a write, normalised across the driver shapes Drizzle returns.
+ *
+ * mysql2 resolves to `[ResultSetHeader, FieldPacket[]]`, so treating any array
+ * as a row list reports the tuple length — a constant 2 whether the statement
+ * matched nothing, one row, or many. Callers that branch on the count (a
+ * conditional claim, a retention loop) silently get the wrong answer on MySQL,
+ * so the header is read first. node-postgres reports `rowCount` and
+ * better-sqlite3 reports `changes`; a plain array is a RETURNING row list, whose
+ * length is the count.
+ */
+function affectedRowCount(result: unknown): number {
+  if (Array.isArray(result)) {
+    const header = result[0] as { affectedRows?: unknown } | undefined;
+    if (header && typeof header.affectedRows === "number") {
+      return header.affectedRows;
+    }
+    return result.length;
+  }
+  const record = result as Record<string, unknown> | null | undefined;
+  const rowCount = record?.rowCount;
+  if (typeof rowCount === "number") return rowCount;
+  const changes = record?.changes;
+  if (typeof changes === "number") return changes;
+  return 0;
+}
+
 export abstract class DrizzleAdapter {
   // ============================================================
   // Abstract Methods (MUST be implemented by subclasses)
@@ -957,12 +984,7 @@ export abstract class DrizzleAdapter {
         }
 
         const result = await query;
-        // Drizzle returns different shapes per dialect
-        return Array.isArray(result)
-          ? result.length
-          : (((result as Record<string, unknown>)?.rowCount as number) ??
-              ((result as Record<string, unknown>)?.changes as number) ??
-              0);
+        return affectedRowCount(result);
       } catch (error) {
         throw this.handleQueryError(error, "delete", table);
       }

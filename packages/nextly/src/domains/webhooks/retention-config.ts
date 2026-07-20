@@ -170,13 +170,16 @@ export function resolveWebhookRetentionConfig(
     input.deliveriesMaxAgeMs,
     DEFAULT_DELIVERIES_MAX_AGE_MS
   );
+  // `false` is an explicit "keep forever" and is honoured as given. The cascade
+  // still bounds it in practice — a delivery cannot outlive its event — but the
+  // prune treats a null cutoff as "any delivery pins its event", so nothing is
+  // deleted ahead of its window. Rewriting it to the event window here would
+  // silently prune attempt logs the user asked to keep.
   const ceiling = longestEventWindow(eventsMaxAgeMs, auditEventsMaxAgeMs);
   const deliveriesMaxAgeMs =
-    ceiling === false
+    requested === false || ceiling === false
       ? requested
-      : requested === false
-        ? ceiling
-        : Math.min(requested, ceiling);
+      : Math.min(requested, ceiling);
 
   return {
     eventsMaxAgeMs,
