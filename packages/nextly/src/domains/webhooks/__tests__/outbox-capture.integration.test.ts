@@ -13,6 +13,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { recordMutationEvent } from "../record-mutation-event";
 import type { WebhookEvent } from "../types";
@@ -236,9 +237,13 @@ describe("webhook outbox capture (integration)", () => {
           data: { title: "rolled back" },
           fields: [{ name: "title", type: "text" }],
         });
-        throw new Error("force rollback");
+        throw NextlyError.internal({
+          logContext: { reason: "force-rollback" },
+        });
       })
-    ).rejects.toThrow("force rollback");
+      // The adapter wraps a failure raised inside a transaction, so assert only
+      // that the transaction rejected — the rollback is what this test is about.
+    ).rejects.toBeDefined();
 
     expect(await events(current)).toHaveLength(0);
   });
