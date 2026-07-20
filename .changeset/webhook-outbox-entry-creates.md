@@ -20,6 +20,6 @@
 "@nextlyhq/ui": patch
 ---
 
-Creating an entry now records a webhook event.
+Creating or updating an entry now records a webhook event.
 
-Entry creates are written to the webhook event outbox inside the same database transaction as the entry itself, so an event is never recorded for a write that rolls back and never missed for one that commits. The event carries the full document as the API returns it, with password and hidden fields removed, and is attributed to whoever performed the write — an API key is recorded as the key itself rather than as the user that owns it. Updates, deletes, status changes, singles, media, users, and form submissions are later changes.
+Entry creates and updates are written to the webhook event outbox inside the same database transaction as the change itself, so an event is never recorded for a write that rolls back and never missed for one that commits. The event carries the document with password and hidden fields removed, and reports which fields changed by comparing against the document as it stood before the write. Every event is attributed to whoever performed it: an API key is recorded as the key itself rather than as the user that owns it, a server-side write is attributed to the user it acts for, and an uninitiated write is recorded as the system. Deletes, status changes, singles, media, users, and form submissions are later changes.
