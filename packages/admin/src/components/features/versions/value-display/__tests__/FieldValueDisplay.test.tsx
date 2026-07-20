@@ -390,6 +390,11 @@ describe("FieldValueDisplay", () => {
   });
 
   it("shows a stored JSON null rather than reporting it unset", () => {
+    // A json field may hold the primitive null, which normalizes to the same
+    // value as an absent field. A serialized column keeps them apart — the
+    // stored primitive arrives as the characters "null" — so that case shows
+    // the value. A dialect returning it already parsed cannot be told from an
+    // absent value here, and needs the read path to settle the shape.
     render(<FieldValueDisplay field={field("json")} value="null" />);
 
     expect(screen.queryByText("Not set")).not.toBeInTheDocument();
