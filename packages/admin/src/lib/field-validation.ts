@@ -344,16 +344,16 @@ function fieldToZodSchema(
   }
 
   if (!isRequired) {
-    // An untouched optional field arrives from the form as "" (empty string).
-    // `.optional()` only tolerates `undefined`, so "" would otherwise be run
-    // through the field's format/length/array rules (email, minLength, array)
-    // and wrongly block save. Accept "" alongside the field schema — without
-    // rewriting the value — so an empty optional field is valid while a typed
-    // value is still validated.
-    schema = z
-      .union([z.literal(""), schema])
-      .optional()
-      .nullable();
+    // An untouched optional scalar field arrives from the form as "" (empty
+    // string). `.optional()` only tolerates `undefined`, so "" would otherwise
+    // be run through the field's format/length rules (email, minLength) and
+    // wrongly block save. Accept "" alongside the schema for scalars only —
+    // without rewriting the value. Array fields (hasMany / chips / repeater)
+    // use [] as their empty value, which the base array schema already accepts,
+    // so they must not also accept a stray "".
+    const optionalBase =
+      schema instanceof z.ZodArray ? schema : z.union([z.literal(""), schema]);
+    schema = optionalBase.optional().nullable();
   } else if (schema instanceof z.ZodString) {
     // For required string fields, ensure they are not empty
     // unless a specific minLength is already set

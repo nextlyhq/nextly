@@ -73,7 +73,15 @@ export function MultiSelectInput<
       : []) as TFieldValues[Path<TFieldValues>],
   });
 
-  const selected: string[] = Array.isArray(value) ? value : [];
+  // Preserve a stored scalar (e.g. a field switched single -> multi in the
+  // Schema Builder, or a row written before the field became hasMany) as a
+  // one-item array instead of silently dropping it to [] and overwriting the
+  // value on the next save.
+  const selected: string[] = Array.isArray(value)
+    ? value
+    : value != null && value !== ""
+      ? [String(value)]
+      : [];
   const isInteractive = !disabled && !readOnly;
   const options = field.options ?? [];
   // Only offer options that aren't already selected so each value is unique.
@@ -108,8 +116,7 @@ export function MultiSelectInput<
                 <button
                   type="button"
                   onClick={() => removeValue(optionValue)}
-                  className="ml-0.5 rounded-none p-0.5 hover:bg-black/10 focus:outline-none"
-                  tabIndex={-1}
+                  className="ml-0.5 rounded-none p-0.5 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   aria-label={`Remove ${labelFor(optionValue)}`}
                 >
                   <X className="h-2.5 w-2.5" />
@@ -138,6 +145,12 @@ export function MultiSelectInput<
             ))}
           </SelectContent>
         </Select>
+      )}
+
+      {/* Read-only / disabled with no selection: show an explicit empty marker
+          instead of rendering a blank area. */}
+      {!isInteractive && selected.length === 0 && (
+        <span className="text-sm text-muted-foreground">—</span>
       )}
     </div>
   );

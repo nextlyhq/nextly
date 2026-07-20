@@ -237,7 +237,7 @@ describe("generateClientSchema — optional fields tolerate empty string", () =>
     expect(schema.safeParse({ nickname: "" }).success).toBe(true);
   });
 
-  it("optional hasMany select accepts an empty string", () => {
+  it("optional hasMany select accepts an empty array, not a stray string", () => {
     const schema = generateClientSchema([
       {
         type: "select",
@@ -247,7 +247,10 @@ describe("generateClientSchema — optional fields tolerate empty string", () =>
         options: [{ label: "Web", value: "web" }],
       } as unknown as FieldConfig,
     ]);
-    expect(schema.safeParse({ channels: "" }).success).toBe(true);
+    expect(schema.safeParse({ channels: [] }).success).toBe(true);
+    expect(schema.safeParse({ channels: undefined }).success).toBe(true);
+    // The empty sentinel for an array field is [], never "".
+    expect(schema.safeParse({ channels: "" }).success).toBe(false);
   });
 
   it("required email field still rejects an empty string", () => {
