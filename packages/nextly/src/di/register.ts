@@ -2041,6 +2041,7 @@ async function initializePlugins(
       | "userService"
       | "mediaService"
       | "emailService"
+      | "versionsService"
       | "db"
       | "logger"
       | "config",
@@ -2051,6 +2052,7 @@ async function initializePlugins(
     | UserService
     | UnifiedMediaService
     | EmailService
+    | VersionsService
     | DatabaseInstance
     | Logger
     | NextlyServiceConfig => {
@@ -2063,6 +2065,8 @@ async function initializePlugins(
         return container.get<UnifiedMediaService>("mediaService");
       case "emailService":
         return container.get<EmailService>("emailService");
+      case "versionsService":
+        return container.get<VersionsService>("versionsService");
       case "db":
         return adapterDrizzleDb;
       case "logger":
