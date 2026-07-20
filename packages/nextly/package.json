@@ -131,6 +131,14 @@
       "types": "./dist/api/singles.d.ts",
       "import": "./dist/api/singles.mjs"
     },
+    "./api/versions": {
+      "types": "./dist/api/versions.d.ts",
+      "import": "./dist/api/versions.mjs"
+    },
+    "./api/versions-detail": {
+      "types": "./dist/api/versions-detail.d.ts",
+      "import": "./dist/api/versions-detail.mjs"
+    },
     "./api/singles-detail": {
       "types": "./dist/api/singles-detail.d.ts",
       "import": "./dist/api/singles-detail.mjs"

@@ -57,6 +57,7 @@ import type {
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import type { VersionsService } from "../domains/versions/versions-service";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -286,6 +287,7 @@ export interface ServiceMap {
   activityLogService: ActivityLogService;
   dashboardService: DashboardService;
   metaService: MetaService;
+  versionsService: VersionsService;
 }
 
 // ============================================================
