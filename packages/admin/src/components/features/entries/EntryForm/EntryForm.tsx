@@ -18,6 +18,7 @@
 import { resolveLocalizedFieldNames } from "nextly/config";
 import { useMemo } from "react";
 
+import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
@@ -385,6 +386,8 @@ export function EntryForm({
                   isDirty={isDirty}
                   entry={entry}
                   collectionSlug={collection.name}
+                  historyFields={getCollectionFields(collection)}
+                  historyEnabled={historyEnabledFrom(collection)}
                   locale={locale}
                   onLocaleChange={onLocaleChange}
                   toolbarSlot={
