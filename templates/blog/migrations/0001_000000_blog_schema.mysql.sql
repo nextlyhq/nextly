@@ -13,7 +13,7 @@
 -- Posts collection
 CREATE TABLE IF NOT EXISTS `dc_posts` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL,
+  `title` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `content` json,
   `excerpt` text,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `categories` json,
   `tags` json,
   `published_at` timestamp NULL DEFAULT NULL,
-  `status` text DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
   `featured` tinyint(1) DEFAULT 0,
   `seo` json,
   `reading_time` integer,
@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
 -- Categories collection
 CREATE TABLE IF NOT EXISTS `dc_categories` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL,
-  `name` text NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `name` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `icon` text,
   `description` text,
@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
 -- Tags collection
 CREATE TABLE IF NOT EXISTS `dc_tags` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL,
-  `name` text NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `name` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `description` text,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
@@ -108,10 +108,10 @@ CREATE TABLE IF NOT EXISTS `dc_posts_tags` (
 -- Site Settings single
 CREATE TABLE IF NOT EXISTS `single_site_settings` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL DEFAULT 'Site Settings',
-  `slug` text NOT NULL DEFAULT 'site-settings',
-  `site_name` text NOT NULL DEFAULT 'My Blog',
-  `tagline` text DEFAULT 'Thoughts on web development',
+  `title` varchar(255) NOT NULL DEFAULT 'Site Settings',
+  `slug` varchar(255) NOT NULL DEFAULT 'site-settings',
+  `site_name` varchar(255) NOT NULL DEFAULT 'My Blog',
+  `tagline` varchar(500) DEFAULT 'Thoughts on web development',
   `site_description` text,
   `logo` text,
   `social` json,
@@ -123,8 +123,8 @@ CREATE TABLE IF NOT EXISTS `single_site_settings` (
 -- Navigation single
 CREATE TABLE IF NOT EXISTS `single_navigation` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL DEFAULT 'Navigation',
-  `slug` text NOT NULL DEFAULT 'navigation',
+  `title` varchar(255) NOT NULL DEFAULT 'Navigation',
+  `slug` varchar(255) NOT NULL DEFAULT 'navigation',
   `header_links` json,
   `footer_read_links` json,
   `show_theme_toggle` tinyint(1) DEFAULT 1,
@@ -137,19 +137,19 @@ CREATE TABLE IF NOT EXISTS `single_navigation` (
 -- Homepage single
 CREATE TABLE IF NOT EXISTS `single_homepage` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` text NOT NULL DEFAULT 'Homepage',
-  `slug` text NOT NULL DEFAULT 'homepage',
-  `hero_title` text NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
-  `hero_subtitle` text DEFAULT 'Essays and notes from our engineering team.',
+  `title` varchar(255) NOT NULL DEFAULT 'Homepage',
+  `slug` varchar(255) NOT NULL DEFAULT 'homepage',
+  `hero_title` varchar(500) NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
+  `hero_subtitle` varchar(500) DEFAULT 'Essays and notes from our engineering team.',
   `show_featured_post` tinyint(1) DEFAULT 1,
-  `featured_section_title` text DEFAULT 'Featured',
+  `featured_section_title` varchar(100) DEFAULT 'Featured',
   `show_latest_posts` tinyint(1) DEFAULT 1,
-  `latest_section_title` text DEFAULT 'Latest',
+  `latest_section_title` varchar(100) DEFAULT 'Latest',
   `latest_posts_count` integer DEFAULT 3,
   `show_category_strip` tinyint(1) DEFAULT 1,
   `show_newsletter_cta` tinyint(1) DEFAULT 1,
-  `newsletter_heading` text DEFAULT 'Get new posts in your inbox',
-  `newsletter_subheading` text DEFAULT 'No spam. Unsubscribe anytime.',
+  `newsletter_heading` varchar(255) DEFAULT 'Get new posts in your inbox',
+  `newsletter_subheading` varchar(255) DEFAULT 'No spam. Unsubscribe anytime.',
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
@@ -164,19 +164,19 @@ CREATE INDEX IF NOT EXISTS `idx_posts_featured` ON `dc_posts`(`featured`) WHERE 
 CREATE INDEX IF NOT EXISTS `idx_posts_author` ON `dc_posts`(`author`(255));
 
 -- Categories indexes
-CREATE INDEX IF NOT EXISTS `idx_categories_slug` ON `dc_categories`(`slug`(255));
+CREATE INDEX IF NOT EXISTS `idx_categories_slug` ON `dc_categories`(`slug`);
 
 -- Tags indexes
-CREATE INDEX IF NOT EXISTS `idx_tags_slug` ON `dc_tags`(`slug`(255));
+CREATE INDEX IF NOT EXISTS `idx_tags_slug` ON `dc_tags`(`slug`);
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS `idx_posts_categories_category` ON `dc_posts_categories`(`category_id`);
 CREATE INDEX IF NOT EXISTS `idx_posts_tags_tag` ON `dc_posts_tags`(`tag_id`);
 
 -- Singles indexes (slug columns)
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_site_settings_slug` ON `single_site_settings`(`slug`(255));
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_navigation_slug` ON `single_navigation`(`slug`(255));
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_homepage_slug` ON `single_homepage`(`slug`(255));
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_site_settings_slug` ON `single_site_settings`(`slug`);
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_navigation_slug` ON `single_navigation`(`slug`);
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_homepage_slug` ON `single_homepage`(`slug`);
 
 -- ============ FOREIGN KEY RELATIONSHIPS ============
 
