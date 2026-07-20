@@ -3,9 +3,8 @@
  * `PortalProvider`, because a portalled overlay defaults to `document.body` —
  * outside the wrapper, where the scoped rules and tokens do not reach.
  *
- * That list was hand-written and already drifted from the components that
- * actually portal, which is silent: the omitted ones simply render unstyled for
- * anyone following the docs. Derive it from the source instead.
+ * The list is derived from the source rather than trusted as prose: an omission
+ * is invisible, since the overlay still renders, just unstyled.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

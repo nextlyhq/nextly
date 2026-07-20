@@ -295,6 +295,21 @@ describe("a custom scope", () => {
     expect(out).not.toContain(":where(.group)");
   });
 
+  // Named variants (`group-hover/item:`) reference `.group\/item`. The leak
+  // check cannot see these — the rule's own compound is scoped, so the ancestor
+  // reference is the only part that reaches outside the wrapper.
+  it("confines named group and peer markers", () => {
+    const css =
+      ".nextly-ui .group-hover\\/item\\:underline:is(:where(.group\\/item):hover *){color:red}" +
+      ".nextly-ui .peer-checked\\/field\\:font-bold:is(:where(.peer\\/field):checked ~ *){color:blue}";
+    const out = confineVariantClasses(css, ".nextly-ui");
+
+    expect(out).toContain(":where(.nextly-ui .group\\/item)");
+    expect(out).toContain(":where(.nextly-ui .peer\\/field)");
+    expect(out).not.toContain(":where(.group\\/item)");
+    expect(out).not.toContain(":where(.peer\\/field)");
+  });
+
   it("namespaces keyframe names and the references to them", () => {
     const css = [
       "@keyframes spin{to{transform:rotate(360deg)}}",

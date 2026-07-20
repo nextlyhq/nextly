@@ -281,8 +281,14 @@ export function confineVariantClasses(css, scope = DEFAULT_SCOPE) {
       )
       // A lone `.dark` ancestor reference, same reasoning.
       .replace(/:where\(\s*\.dark\s*\)/g, `:where(${scope}.dark)`)
-      // `group` / `peer` markers must be ones inside the wrapper.
-      .replace(/:where\(\s*\.(group|peer)\s*\)/g, `:where(${scope} .$1)`)
+      // `group` / `peer` markers must be ones inside the wrapper. Named
+      // variants (`group-hover/item:`) emit `:where(.group\/item)`, and the
+      // leak check cannot catch those: the rule's own compound is scoped, so
+      // only this ancestor reference reaches outside.
+      .replace(
+        /:where\(\s*\.(group|peer)((?:\\\/[\w-]+)?)\s*\)/g,
+        `:where(${scope} .$1$2)`
+      )
   );
 }
 
