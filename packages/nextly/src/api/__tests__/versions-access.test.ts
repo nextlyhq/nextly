@@ -48,7 +48,10 @@ vi.mock("../../services/lib/permissions", () => ({
   resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
 }));
 
-import { requireVersionReadAccess } from "../versions-access";
+import {
+  assertVersionDocumentReadable,
+  requireVersionReadAccess,
+} from "../versions-access";
 import { GET as listVersions } from "../versions";
 
 describe("requireVersionReadAccess", () => {
@@ -244,5 +247,47 @@ describe("version list pagination meta", () => {
     // The extra row is a probe, never part of the page.
     expect(body.items).toHaveLength(2);
     expect(body.meta.hasNext).toBe(true);
+  });
+});
+
+describe("assertVersionDocumentReadable", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves when the caller may read the live document", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+
+    await expect(
+      assertVersionDocumentReadable("collection", "posts", "e1", {
+        id: "user-1",
+      })
+    ).resolves.toBeUndefined();
+
+    // Same document rules as the standalone route: drafts visible, RBAC not
+    // re-checked, because the caller was already authorized upstream.
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "all", routeAuthorized: true })
+    );
+  });
+
+  it("rejects with not-found when the document is not readable", async () => {
+    getEntrySpy.mockResolvedValue({ success: false, statusCode: 403 });
+
+    await expect(
+      assertVersionDocumentReadable("collection", "posts", "e1", {
+        id: "user-1",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("does not authenticate — the dispatcher already did", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+
+    await assertVersionDocumentReadable("collection", "posts", "e1", {
+      id: "user-1",
+    });
+
+    expect(requireRouteCollectionAccessSpy).not.toHaveBeenCalled();
   });
 });
