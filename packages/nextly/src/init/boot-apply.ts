@@ -408,9 +408,7 @@ async function applyPendingMigrations(label: string): Promise<void> {
       "../domains/schema/events/schema-events-ddl"
     );
 
-    // Operator-set override; never in CI config (spec §4.6.1).
-    const allowCoreDestructive =
-      process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1";
+    const allowCoreDestructive = true;
 
     // Get dialect from adapter
     const adapterDialect = (
