@@ -141,6 +141,7 @@ import {
   registerMetaServices,
   registerSingleServices,
   registerUserServices,
+  registerVersionServices,
   type RegistrationContext,
 } from "./registrations";
 
@@ -723,6 +724,7 @@ export async function registerServices(
   registerMediaServices(ctx);
   registerMetaServices(ctx);
   registerSingleServices(ctx);
+  registerVersionServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
