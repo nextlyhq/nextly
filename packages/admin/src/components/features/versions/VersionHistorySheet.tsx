@@ -21,10 +21,16 @@ import {
   SheetHeader,
   SheetTitle,
   Skeleton,
+  toast,
 } from "@admin/components/ui";
-import { useVersion, useVersions } from "@admin/hooks/queries/useVersions";
+import {
+  useRestoreVersion,
+  useVersion,
+  useVersions,
+} from "@admin/hooks/queries/useVersions";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
 
@@ -34,6 +40,12 @@ export interface VersionHistorySheetProps {
   scope: VersionScope;
   /** Current schema fields, used to render a snapshot. */
   fields: FieldConfig[];
+  /**
+   * Whether this caller may write the document. Restore uses the ordinary edit
+   * permission, so someone who can only read history is offered no way to
+   * trigger a write that would fail.
+   */
+  canRestore?: boolean;
 }
 
 function ListSkeleton() {
@@ -57,17 +69,42 @@ export function VersionHistorySheet({
   onOpenChange,
   scope,
   fields,
+  canRestore = false,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
+  const [confirmingRestore, setConfirmingRestore] = useState(false);
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
   useEffect(() => {
-    if (!open) setSelected(null);
+    if (!open) {
+      setSelected(null);
+      setConfirmingRestore(false);
+    }
   }, [open]);
 
   const list = useVersions({ scope, enabled: open });
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
+
+  const restore = useRestoreVersion({
+    scope,
+    onSuccess: result => {
+      setConfirmingRestore(false);
+      onOpenChange(false);
+      // A restore can succeed while leaving parts behind, when the schema no
+      // longer has a field the version held. Saying so beats a clean success
+      // message that overstates what came back.
+      if (result.droppedFields.length > 0) {
+        toast.success(
+          `Restored version ${result.restoredFrom}. ` +
+            `${result.droppedFields.length} field(s) no longer in this schema were skipped: ` +
+            result.droppedFields.join(", ")
+        );
+        return;
+      }
+      toast.success(`Restored version ${result.restoredFrom}.`);
+    },
+  });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
@@ -150,13 +187,26 @@ export function VersionHistorySheet({
 
         <div className="p-4 border-t border-border flex items-center gap-2">
           {selected !== null ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSelected(null)}
-            >
-              Back to history
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelected(null)}
+              >
+                Back to history
+              </Button>
+              {/* Offered only from the preview: restoring is easier to get
+                  right having seen what the version actually holds. */}
+              {canRestore ? (
+                <Button
+                  size="sm"
+                  onClick={() => setConfirmingRestore(true)}
+                  disabled={restore.isPending}
+                >
+                  Restore this version
+                </Button>
+              ) : null}
+            </>
           ) : null}
           <Button
             variant="ghost"
@@ -168,6 +218,19 @@ export function VersionHistorySheet({
           </Button>
         </div>
       </SheetContent>
+
+      {/* Rendered inside the sheet but outside its content, so its own portal
+          is independent of the panel's. */}
+      {selected !== null ? (
+        <RestoreConfirmDialog
+          open={confirmingRestore}
+          onOpenChange={setConfirmingRestore}
+          versionNo={selected}
+          isPublished={detail.data?.status === "published"}
+          isRestoring={restore.isPending}
+          onConfirm={() => restore.mutate(selected)}
+        />
+      ) : null}
     </Sheet>
   );
 }

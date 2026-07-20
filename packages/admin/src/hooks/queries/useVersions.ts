@@ -11,10 +11,17 @@
  * @see https://tanstack.com/query/v5/docs/react/reference/useInfiniteQuery
  */
 
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
+import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
+  type RestoreVersionResponse,
   type VersionDetail,
   type VersionListResponse,
   type VersionScope,
@@ -135,5 +142,41 @@ export function useVersion({
     },
     enabled: enabled && versionNo !== null && isAddressable(scope),
     staleTime: 60_000,
+  });
+}
+
+// ============================================================
+// Mutation Hooks
+// ============================================================
+
+export interface UseRestoreVersionOptions {
+  scope: VersionScope;
+  onSuccess?: (result: RestoreVersionResponse) => void;
+}
+
+/**
+ * Put the document back to an earlier version.
+ *
+ * Restoring writes the live document and records a new version, so both the
+ * document and its history are stale afterwards. The entry caches are
+ * invalidated alongside the version caches, or the editor would keep showing
+ * the pre-restore content it already had.
+ */
+export function useRestoreVersion({
+  scope,
+  onSuccess,
+}: UseRestoreVersionOptions) {
+  const queryClient = useQueryClient();
+
+  return useMutation<RestoreVersionResponse, Error, number>({
+    mutationFn: versionNo => versionApi.restore(scope, versionNo),
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: entryKeys.all });
+      if (scope.kind === "single") {
+        void queryClient.invalidateQueries({ queryKey: ["singles"] });
+      }
+      onSuccess?.(result);
+    },
   });
 }

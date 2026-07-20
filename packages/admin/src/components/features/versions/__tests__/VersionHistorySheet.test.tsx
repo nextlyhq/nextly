@@ -9,14 +9,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-const { useVersionsMock, useVersionMock } = vi.hoisted(() => ({
-  useVersionsMock: vi.fn(),
-  useVersionMock: vi.fn(),
-}));
+const { useVersionsMock, useVersionMock, restoreMock, mutateMock } = vi.hoisted(
+  () => ({
+    useVersionsMock: vi.fn(),
+    useVersionMock: vi.fn(),
+    restoreMock: vi.fn(),
+    mutateMock: vi.fn(),
+  })
+);
 
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
   useVersion: (...a: unknown[]) => useVersionMock(...a),
+  useRestoreVersion: (...a: unknown[]) => restoreMock(...a),
 }));
 
 import { VersionHistorySheet } from "../VersionHistorySheet";
@@ -76,6 +81,7 @@ describe("VersionHistorySheet", () => {
     vi.clearAllMocks();
     useVersionsMock.mockReturnValue(listState());
     useVersionMock.mockReturnValue(detailState());
+    restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
   });
 
   it("lists the versions it received", () => {
@@ -177,6 +183,71 @@ describe("VersionHistorySheet", () => {
     expect(
       screen.getByRole("button", { name: /Version 3/ })
     ).toBeInTheDocument();
+  });
+
+  it("offers restore only to a caller who may write the document", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    const { unmount } = render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    expect(
+      screen.queryByRole("button", { name: /Restore this version/ })
+    ).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    expect(
+      screen.getByRole("button", { name: /Restore this version/ })
+    ).toBeInTheDocument();
+  });
+
+  it("confirms before restoring rather than writing on the first click", async () => {
+    // Restore writes the live document, so a single misclick must not do it.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Restore this version/ })
+    );
+
+    expect(mutateMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Restore version 3\?/)).toBeInTheDocument();
   });
 
   it("does not query while closed", () => {
