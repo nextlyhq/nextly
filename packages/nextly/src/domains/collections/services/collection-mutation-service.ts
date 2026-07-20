@@ -1609,6 +1609,10 @@ export class CollectionMutationService extends BaseService {
             kind: "entry",
             collection: params.collectionName,
             id: entry.id as string,
+            // The resolved write locale, so a receiver can tell which
+            // translation this document represents. Absent unless the
+            // collection actually stores per-locale values.
+            ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
           },
           data: assembleDocument(documentParts),
           previous: null,
@@ -2484,19 +2488,9 @@ export class CollectionMutationService extends BaseService {
           // statements early costs little, since the UPDATE takes the same lock
           // and holds it until commit either way.
           //
-          // Postgres and MySQL only. SQLite has no row-level locking and needs
-          // none here: its transactions open with BEGIN IMMEDIATE, which already
-          // serializes writers.
-          if (this.dialect !== "sqlite") {
-            const quoteLocked = (id: string) =>
-              this.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
-            await tx.execute(
-              `SELECT ${quoteLocked("id")} FROM ${quoteLocked(tableName)} ` +
-                `WHERE ${quoteLocked("id")} = ${this.dialect === "postgresql" ? "$1" : "?"} ` +
-                `FOR UPDATE`,
-              [params.entryId]
-            );
-          }
+          // The adapter owns the dialect specifics and no-ops where row locking
+          // does not exist.
+          await tx.lockRow(tableName, params.entryId);
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -2821,6 +2815,10 @@ export class CollectionMutationService extends BaseService {
                   kind: "entry",
                   collection: params.collectionName,
                   id: params.entryId,
+                  // The resolved write locale — see the create path.
+                  ...(localizedUpdate
+                    ? { locale: localizedUpdate.writeLocale }
+                    : {}),
                 },
                 data: assembleDocument(documentParts),
                 previous: previousDocument,
