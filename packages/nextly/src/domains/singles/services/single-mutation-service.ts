@@ -611,6 +611,11 @@ export class SingleMutationService extends BaseService {
                   (parentRow as { status?: unknown }).status,
                 parts: { parentRow, components },
                 createdBy: options.user?.id ?? null,
+                // The locale the snapshot above was assembled from. A localized
+                // document's snapshot holds one locale's values, so a version
+                // that does not name it cannot be restored without guessing.
+                locale: writeLocale ?? options.locale ?? null,
+                sourceVersionNo: options.sourceVersionNo ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
             }

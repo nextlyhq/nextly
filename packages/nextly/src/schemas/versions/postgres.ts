@@ -42,7 +42,10 @@ export const nextlyVersionsPg = pgTable(
 
     snapshot: jsonb("snapshot").notNull(),
     label: text("label"),
-    // Reserved for localization; NULL in v1 (a snapshot holds all locales).
+    // The locale this snapshot holds. A localized document's snapshot records
+    // exactly ONE locale's values, so a restore needs this to know which
+    // language to write back into. NULL for an unlocalized document, and on
+    // rows captured before this was recorded.
     locale: text("locale"),
     // Restore lineage: the version_no a restore-forward copied from.
     sourceVersionNo: integer("source_version_no"),

@@ -1631,6 +1631,9 @@ export class CollectionMutationService extends BaseService {
                 : (entry as { status?: unknown }).status,
             parts: documentParts,
             createdBy: params.user?.id ?? null,
+            // The locale this document was created in, for the same reason the
+            // update path records it.
+            locale: localizedWrite?.writeLocale ?? params.locale ?? null,
             maxPerDoc: versionsConfig.maxPerDoc,
           });
         }
@@ -1972,6 +1975,10 @@ export class CollectionMutationService extends BaseService {
                   manyToMany: snapshotM2M,
                 },
                 createdBy: params.user?.id ?? null,
+                // Publishing spans every locale, so there is no single write
+                // locale. The snapshot is the main row, which is where the
+                // default locale's values live, so it is labelled as that one.
+                locale: this.localization?.defaultLocale ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
@@ -2058,6 +2065,12 @@ export class CollectionMutationService extends BaseService {
       // to what this user may read (this is not a trusted-server read).
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /**
+       * Set when this write restores an earlier version, recording which one on
+       * the version it captures. Lineage cannot be inferred afterwards: a
+       * restore is an ordinary write that happens to reproduce an earlier state.
+       */
+      sourceVersionNo?: number;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -2868,6 +2881,11 @@ export class CollectionMutationService extends BaseService {
                     (currentParent as { status?: unknown }).status,
                   parts: documentParts,
                   createdBy: params.user?.id ?? null,
+                  // The locale the snapshot above was assembled from. Without
+                  // it a later restore cannot tell which language this version
+                  // holds, and would write it into whichever locale is default.
+                  locale: localizedUpdate?.writeLocale ?? params.locale ?? null,
+                  sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,
                 });
               }
