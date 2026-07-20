@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "reading_time" integer,
   "word_count" integer,
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- Categories collection
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
   "icon" text,
   "description" text,
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- Tags collection
@@ -51,7 +53,8 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "slug" text NOT NULL UNIQUE,
   "description" text,
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- ============ USER EXTENSION TABLE ============
@@ -68,7 +71,8 @@ CREATE TABLE IF NOT EXISTS "user_ext" (
   "avatar_url" text,
   "slug" text,
   "created_at" timestamp with time zone NOT NULL DEFAULT NOW(),
-  "updated_at" timestamp with time zone NOT NULL DEFAULT NOW()
+  "updated_at" timestamp with time zone NOT NULL DEFAULT NOW(),
+  "created_by" text
 );
 
 -- Unique: one extension row per user
@@ -123,7 +127,8 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
   "logo" text,
   "social" jsonb,
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- Navigation single
@@ -136,7 +141,8 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
   "show_theme_toggle" boolean DEFAULT true,
   "show_search_icon" boolean DEFAULT true,
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- Homepage single
@@ -156,7 +162,8 @@ CREATE TABLE IF NOT EXISTS "single_homepage" (
   "newsletter_heading" text DEFAULT 'Get new posts in your inbox',
   "newsletter_subheading" text DEFAULT 'No spam. Unsubscribe anytime.',
   "created_at" timestamp with time zone DEFAULT now(),
-  "updated_at" timestamp with time zone DEFAULT now()
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
 );
 
 -- ============ INDEXES ============

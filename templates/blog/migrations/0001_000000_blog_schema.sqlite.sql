@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "reading_time" INTEGER,
   "word_count" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- Categories collection
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
   "icon" TEXT,
   "description" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- Tags collection
@@ -51,7 +53,8 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "slug" TEXT NOT NULL UNIQUE,
   "description" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- ============ USER EXTENSION TABLE ============
@@ -68,7 +71,8 @@ CREATE TABLE IF NOT EXISTS "user_ext" (
   "avatar_url" TEXT,
   "slug" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- Unique: one extension row per user
@@ -116,7 +120,8 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
   "logo" TEXT,
   "social" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- Navigation single
@@ -129,7 +134,8 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
   "show_theme_toggle" INTEGER DEFAULT 1,
   "show_search_icon" INTEGER DEFAULT 1,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- Homepage single
@@ -149,7 +155,8 @@ CREATE TABLE IF NOT EXISTS "single_homepage" (
   "newsletter_heading" TEXT DEFAULT 'Get new posts in your inbox',
   "newsletter_subheading" TEXT DEFAULT 'No spam. Unsubscribe anytime.',
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT
 );
 
 -- ============ INDEXES ============

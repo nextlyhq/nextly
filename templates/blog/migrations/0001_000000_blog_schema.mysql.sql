@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `word_count` integer,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text,
   UNIQUE KEY `uq_posts_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
   `description` text,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text,
   UNIQUE KEY `uq_categories_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `description` text,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text,
   UNIQUE KEY `uq_tags_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -72,6 +75,7 @@ CREATE TABLE IF NOT EXISTS `user_ext` (
   `slug` text,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text,
   UNIQUE KEY `uq_user_ext_user_id` (`user_id`),
   UNIQUE KEY `uq_user_ext_slug` (`slug`),
   CONSTRAINT `fk_user_ext_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
@@ -112,7 +116,8 @@ CREATE TABLE IF NOT EXISTS `single_site_settings` (
   `logo` text,
   `social` json,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Navigation single
@@ -125,7 +130,8 @@ CREATE TABLE IF NOT EXISTS `single_navigation` (
   `show_theme_toggle` tinyint(1) DEFAULT 1,
   `show_search_icon` tinyint(1) DEFAULT 1,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Homepage single
@@ -145,7 +151,8 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
   `newsletter_heading` text DEFAULT 'Get new posts in your inbox',
   `newsletter_subheading` text DEFAULT 'No spam. Unsubscribe anytime.',
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============ INDEXES ============
