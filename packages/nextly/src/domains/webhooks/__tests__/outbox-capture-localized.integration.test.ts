@@ -15,6 +15,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import type { WebhookEvent } from "../types";
 
 let current: TestNextly | undefined;
@@ -61,18 +63,30 @@ async function boot(): Promise<TestNextly> {
 }
 
 /**
- * Create the companion table (with per-locale `_status`). The localized column
- * is deliberately left on the main table: a fully-migrated collection hits a
- * separate, pre-existing `updateEntry` limitation that is unrelated to what
- * these tests cover.
+ * Create the companion table (with per-locale `_status`) through the SAME
+ * production DDL path a migration uses — derive the spec from the collection,
+ * then the create-only companion statement — so the fixture cannot drift from
+ * the real localized schema.
  */
 async function migrate(t: TestNextly): Promise<void> {
+  const spec = deriveCompanionSpec({
+    slug: "pages",
+    fields: [
+      { name: "title", type: "text", localized: false },
+      { name: "heading", type: "text", localized: true },
+    ],
+    dialect: t.adapter.dialect,
+    defaultLocale: "en",
+    collectionLocalized: true,
+    status: true,
+  });
+  if (!spec)
+    throw new Error("expected a companion spec for a localized collection");
+  if (await t.adapter.tableExists(spec.companionTable)) return;
   const adapter = t.adapter as unknown as {
     executeQuery: (sql: string) => Promise<unknown>;
   };
-  await adapter.executeQuery(
-    'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "heading" text, PRIMARY KEY ("_parent","_locale"))'
-  );
+  await adapter.executeQuery(buildCompanionCreateOnlySql(spec));
 }
 
 function handlerOf(t: TestNextly): CollectionsHandler {
@@ -138,6 +152,24 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(envelope.previous?.heading).toBe("before");
     expect(envelope.data.heading).toBe("after");
     expect(envelope.changedFields).toContain("heading");
+  });
+
+  it("records the per-locale status a create committed, not the main-row default", async () => {
+    const t = await boot();
+    await migrate(t);
+
+    // Creating in a non-default locale with an explicit status moves it to the
+    // companion and strips it from the main insert, which leaves the main row
+    // carrying the column default.
+    await handlerOf(t).createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "T", heading: "H", status: "published" }
+    );
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const created = rows.find(r => r.type === "entry.created");
+    expect(created).toBeDefined();
+    expect(envelopeOf(created!).data.status).toBe("published");
   });
 
   it("reports the per-locale status the write committed, not the stale main-row status", async () => {

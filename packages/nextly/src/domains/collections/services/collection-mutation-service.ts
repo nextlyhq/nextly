@@ -1538,11 +1538,19 @@ export class CollectionMutationService extends BaseService {
         // translatable values (split out of the main insert), parse JSON-backed
         // fields, and strip password hashes + the owner column (created_by) so
         // neither ever enters durable history or an outbound payload.
+        const createCompanionStatus = localizedWrite?.companionData?._status;
         const snapshotParent = convertTimestampsToCamelCase(
           this.deserializeJsonFieldsForSnapshot(
             {
               ...(rawEntry as Record<string, unknown>),
               ...(localizedWrite?.localizedFieldValues ?? {}),
+              // Creating in a non-default locale with an explicit status moves
+              // that status to the companion row and strips it from the main
+              // insert, so the raw row carries the column default. Overlay the
+              // committed value, or a publish is recorded as a draft create.
+              ...(typeof createCompanionStatus === "string"
+                ? { status: createCompanionStatus }
+                : {}),
             },
             fields
           )
@@ -2658,7 +2666,13 @@ export class CollectionMutationService extends BaseService {
           // are completed from current state so a scalar-only edit does not drop
           // existing relations. Status prefers the new value, else the prior one.
           {
-            const freshRows = await this.db
+            // Read on the transaction handle. Every update reaches this block
+            // now that the assembly serves the outbox as well as versioning, and
+            // a pooled read here would take a second connection while this
+            // transaction still holds its own — enough to stall against a small
+            // pool — besides being unable to see this transaction's own UPDATE.
+            const freshRows = await tx
+              .getDrizzle<typeof this.db>()
               .select()
               .from(schema)
               .where(eq(schema.id, params.entryId))
