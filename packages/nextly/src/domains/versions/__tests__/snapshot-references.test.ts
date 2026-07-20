@@ -9,13 +9,15 @@ import type { FieldConfig } from "../../../collections/fields/types";
 
 const getEntrySpy = vi.fn();
 const findMediaSpy = vi.fn();
+const checkAccessSpy = vi.fn();
 
 vi.mock("../../../di", () => ({
-  getService: vi.fn((name: string) =>
-    name === "mediaService"
-      ? { findById: findMediaSpy }
-      : { getEntry: getEntrySpy }
-  ),
+  getService: vi.fn((name: string) => {
+    if (name === "mediaService") return { findById: findMediaSpy };
+    if (name === "rbacAccessControlService")
+      return { checkAccess: checkAccessSpy };
+    return { getEntry: getEntrySpy };
+  }),
 }));
 
 import { hydrateSnapshotReferences } from "../snapshot-references";
@@ -39,6 +41,7 @@ describe("hydrateSnapshotReferences", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getEntrySpy.mockResolvedValue(ok({ id: "a1", name: "Ada" }));
+    checkAccessSpy.mockResolvedValue(true);
   });
 
   it("resolves a relationship id to an id and label pair", async () => {
@@ -154,6 +157,66 @@ describe("hydrateSnapshotReferences", () => {
       url: "/u/hero.jpg",
       thumbnailUrl: "/u/hero-t.jpg",
       mimeType: "image/jpeg",
+    });
+  });
+
+  it("resolves a polymorphic value against the collection it names", async () => {
+    // The field declares several targets; only the stored value knows which
+    // one this reference belongs to. Resolving against the first declared
+    // collection would miss every reference to any of the others.
+    const poly = [
+      {
+        name: "subject",
+        type: "relationship",
+        relationTo: ["posts", "pages"],
+      } as FieldConfig,
+    ];
+    getEntrySpy.mockResolvedValue(ok({ id: "p1", title: "A Page" }));
+
+    await hydrateSnapshotReferences(
+      { subject: { relationTo: "pages", value: "p1" } },
+      user,
+      poly
+    );
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: "pages", entryId: "p1" })
+    );
+  });
+
+  it("falls back to the declared target when a value is not polymorphic", async () => {
+    const poly = [
+      {
+        name: "subject",
+        type: "relationship",
+        relationTo: ["posts", "pages"],
+      } as FieldConfig,
+    ];
+
+    await hydrateSnapshotReferences({ subject: "x1" }, user, poly);
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: "posts", entryId: "x1" })
+    );
+  });
+
+  it("does not resolve an upload for a caller who cannot read media", async () => {
+    // The media service ignores its context argument and performs no check of
+    // its own, so resolving unguarded would hand a filename and URL to someone
+    // with no access to the library.
+    checkAccessSpy.mockResolvedValue(false);
+    const uploads = [{ name: "hero", type: "upload" } as FieldConfig];
+    const snapshot: Record<string, unknown> = { hero: "m1" };
+
+    await hydrateSnapshotReferences(snapshot, user, uploads);
+
+    expect(findMediaSpy).not.toHaveBeenCalled();
+    expect(snapshot.hero).toEqual({
+      id: "m1",
+      filename: null,
+      url: null,
+      thumbnailUrl: null,
+      mimeType: null,
     });
   });
 

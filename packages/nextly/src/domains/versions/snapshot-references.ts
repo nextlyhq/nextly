@@ -44,8 +44,13 @@ interface ResolvedUpload {
  * Candidate label columns, in the order the framework already prefers them
  * elsewhere. A relationship target has no declared display column, so the first
  * populated one wins.
+ *
+ * `email` is deliberately not a candidate. A collection of contacts or
+ * subscribers may carry no title or name, and falling back to an address would
+ * route a personal identifier into version history — the same disclosure the
+ * author projection already refuses to make.
  */
-const LABEL_FIELDS = ["title", "name", "label", "email", "slug"] as const;
+const LABEL_FIELDS = ["title", "name", "label", "slug"] as const;
 
 type ReferenceKind = "relationship" | "upload";
 
@@ -87,14 +92,43 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Ids carried by a relationship or upload value, in any of its stored forms. */
-function idsFromValue(value: unknown): string[] {
-  if (typeof value === "string" && value.length > 0) return [value];
-  if (Array.isArray(value)) return value.flatMap(idsFromValue);
+/** One stored reference: its id, plus the collection it names when polymorphic. */
+interface StoredRef {
+  id: string;
+  /** Present only for a polymorphic value, which names its own target. */
+  relationTo?: string;
+}
+
+/**
+ * References carried by a relationship or upload value, in any of its stored
+ * forms.
+ *
+ * A polymorphic value stores `{ relationTo, value }` and is the only form that
+ * knows its own target collection. That target must travel with the id: the
+ * field declares several possible collections, and resolving against the first
+ * one would miss every reference to any of the others.
+ */
+function refsFromValue(value: unknown): StoredRef[] {
+  if (typeof value === "string" && value.length > 0) return [{ id: value }];
+  if (Array.isArray(value)) return value.flatMap(refsFromValue);
   if (isPlainObject(value)) {
-    // Polymorphic `{ relationTo, value }` and already-populated `{ id }`.
-    const inner = "value" in value ? value.value : value.id;
-    return typeof inner === "string" && inner.length > 0 ? [inner] : [];
+    if ("relationTo" in value && "value" in value) {
+      const inner = value.value;
+      const id =
+        typeof inner === "string"
+          ? inner
+          : isPlainObject(inner) && typeof inner.id === "string"
+            ? inner.id
+            : null;
+      if (id === null) return [];
+      return typeof value.relationTo === "string"
+        ? [{ id, relationTo: value.relationTo }]
+        : [{ id }];
+    }
+    // Already-populated `{ id }`.
+    return typeof value.id === "string" && value.id.length > 0
+      ? [{ id: value.id }]
+      : [];
   }
   return [];
 }
@@ -187,8 +221,18 @@ async function resolveRelationship(
   }
 }
 
-/** Read one upload, projecting only what a history view renders. */
-async function resolveUpload(ref: Reference): Promise<ResolvedUpload> {
+/**
+ * Read one upload, projecting only what a history view renders.
+ *
+ * `MediaService.findById` ignores its context argument, so it performs no
+ * authorization of its own. The caller's permission to read media is therefore
+ * checked here: without it, resolving a stored id would hand back a filename
+ * and a URL to someone with no access to the library.
+ */
+async function resolveUpload(
+  ref: Reference,
+  user: UserContext
+): Promise<ResolvedUpload> {
   const unresolved: ResolvedUpload = {
     id: ref.id,
     filename: null,
@@ -198,6 +242,14 @@ async function resolveUpload(ref: Reference): Promise<ResolvedUpload> {
   };
 
   try {
+    const rbac = getService("rbacAccessControlService");
+    const allowed = await rbac.checkAccess({
+      userId: String(user.id),
+      operation: "read",
+      resource: "media",
+    });
+    if (!allowed) return unresolved;
+
     const media = getService("mediaService");
     const file = await media.findById(ref.id, {});
     return {
@@ -234,8 +286,14 @@ export async function hydrateSnapshotReferences(
     const collection = kind === "upload" ? "media" : targetOf(field);
     if (kind === "relationship" && !collection) return;
 
-    for (const id of idsFromValue(holder[name])) {
-      const ref: Reference = { kind, collection, id };
+    for (const stored of refsFromValue(holder[name])) {
+      // A polymorphic value names its own collection; only fall back to the
+      // field's declaration when it does not.
+      const target =
+        kind === "upload" ? "media" : (stored.relationTo ?? collection);
+      if (!target) continue;
+
+      const ref: Reference = { kind, collection: target, id: stored.id };
       const key = refKey(ref);
       if (!wanted.has(key) && wanted.size < MAX_REFERENCES) {
         wanted.set(key, ref);
@@ -252,7 +310,7 @@ export async function hydrateSnapshotReferences(
       resolved.set(
         refKey(ref),
         ref.kind === "upload"
-          ? await resolveUpload(ref)
+          ? await resolveUpload(ref, user)
           : await resolveRelationship(ref, user)
       );
     })
@@ -267,14 +325,22 @@ export async function hydrateSnapshotReferences(
     if (kind === "relationship" && !collection) return;
 
     const current = holder[name];
-    const ids = idsFromValue(current);
-    if (ids.length === 0) return;
+    const stored = refsFromValue(current);
+    if (stored.length === 0) return;
 
-    const lookup = (id: string): unknown =>
-      resolved.get(refKey({ kind, collection, id })) ?? id;
+    const lookup = (entry: StoredRef): unknown => {
+      const target =
+        kind === "upload" ? "media" : (entry.relationTo ?? collection);
+      return (
+        resolved.get(refKey({ kind, collection: target, id: entry.id })) ??
+        entry.id
+      );
+    };
 
     holder[name] = Array.isArray(current)
-      ? ids.map(lookup)
-      : lookup(ids[0] ?? "");
+      ? stored.map(lookup)
+      : stored[0]
+        ? lookup(stored[0])
+        : null;
   });
 }

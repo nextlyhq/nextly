@@ -225,7 +225,9 @@ export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
-  user: UserContext
+  user: UserContext,
+  /** Pre-resolved field list, when the caller has already looked it up. */
+  knownFields?: FieldConfig[]
 ): Promise<void> {
   if (typeof snapshot !== "object" || snapshot === null) return;
   if (scopeKind !== "collection" && scopeKind !== "single") return;
@@ -236,7 +238,8 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields = await resolveFieldsForRedaction(scopeKind, slug);
+  const fields =
+    knownFields ?? (await resolveFieldsForRedaction(scopeKind, slug));
   if (fields.length > 0) {
     stripPasswordFieldValues(entry, fields);
   }
@@ -266,13 +269,18 @@ export async function prepareSnapshotForUser(
   slug: string,
   user: UserContext
 ): Promise<void> {
-  await redactSnapshotForUser(snapshot, scopeKind, slug, user);
+  if (scopeKind !== "collection" && scopeKind !== "single") {
+    await redactSnapshotForUser(snapshot, scopeKind, slug, user);
+    return;
+  }
 
-  if (scopeKind !== "collection" && scopeKind !== "single") return;
-
+  // Resolved once and threaded through both passes: they need the same field
+  // list, and looking it up twice is a second registry round-trip per read.
   const fields = await resolveFieldsForRedaction(scopeKind, slug);
-  if (fields.length === 0) return;
 
+  await redactSnapshotForUser(snapshot, scopeKind, slug, user, fields);
+
+  if (fields.length === 0) return;
   await hydrateSnapshotReferences(snapshot, user, fields);
 }
 
