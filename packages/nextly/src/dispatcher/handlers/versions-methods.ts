@@ -30,6 +30,30 @@ const DEFAULT_LIMIT = 25;
 /** Hard ceiling, so one request cannot serialize an unbounded history. */
 const MAX_LIMIT = 100;
 
+/**
+ * Reject a pagination value that is not a positive integer.
+ *
+ * The dispatchers convert raw query strings with `Number(...)`, so `?limit=abc`
+ * arrives as `NaN` and `?limit=-2` arrives negative. Neither is caught by the
+ * clamp below: `Math.min(-2, MAX_LIMIT)` is still `-2`, and the repository then
+ * receives `limit + 1 === -1`, which SQLite treats as *unbounded* — silently
+ * defeating MAX_LIMIT. A `NaN` cursor would likewise produce a
+ * `versionNo < NaN` predicate that matches nothing.
+ */
+function assertPositiveInteger(value: number, path: string): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "INVALID_VALUE",
+          message: `${path} must be a positive integer.`,
+        },
+      ],
+    });
+  }
+}
+
 /** What every version method needs to identify and authorize a document. */
 export interface VersionMethodArgs {
   scopeKind: VersionScopeKind;
@@ -82,6 +106,11 @@ export function userFromParams(p: Params): UserContext {
 export async function listVersionsForDocument(
   args: VersionMethodArgs
 ): Promise<{ items: VersionMeta[]; meta: PaginationMeta }> {
+  // Validate before the gate so malformed pagination fails fast, and validate
+  // here rather than per dispatcher so every caller of this core is covered.
+  if (args.limit !== undefined) assertPositiveInteger(args.limit, "limit");
+  if (args.cursor !== undefined) assertPositiveInteger(args.cursor, "cursor");
+
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,

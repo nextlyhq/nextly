@@ -446,12 +446,19 @@ const SINGLE_DOCUMENT_METHODS = new Set([
 ]);
 
 /**
- * Read methods that still need resolved role slugs.
+ * Read methods that still need resolved role slugs, even though reads normally
+ * skip the lookup.
  *
- * Their responses run field-level `access.read`, which evaluates role-based
- * rules against the caller's roles. Reads normally skip the roles lookup, but
- * skipping it here would treat a permitted caller as having no roles and
- * silently strip fields they are allowed to see.
+ * All four run the version access gate, which reads the live document through
+ * `checkCollectionAccess`. That evaluates roles twice over: the super-admin
+ * bypass is keyed on the role set (`isSuperAdminContext`), and stored
+ * role-based access rules match against the roles forwarded in the request
+ * context. A caller arriving without roles would therefore be treated as a
+ * non-super-admin with no roles and wrongly denied — surfaced as a 404, since
+ * the gate does not disclose existence.
+ *
+ * The two `get*` methods additionally return a snapshot that is redacted by
+ * field-level `access.read`, which reads the same role set.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
   "listEntryVersions",

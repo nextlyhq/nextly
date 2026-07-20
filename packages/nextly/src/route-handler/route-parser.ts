@@ -765,6 +765,9 @@ function parseCollectionEntryVersionRoutes(
     subresource !== "entries" ||
     !subId ||
     additionalParams[0] !== "versions" ||
+    // Only `versions` or `versions/{versionNo}`; anything deeper is not a
+    // route this owns and must not be silently truncated to one that is.
+    additionalParams.length > 2 ||
     httpMethod !== "GET"
   ) {
     return null;
@@ -800,10 +803,17 @@ function parseSingleVersionRoutes(
   id: string | undefined,
   subresource: string | undefined,
   subId: string | undefined,
+  additionalParams: string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (!id || subresource !== "versions" || httpMethod !== "GET") {
+  if (
+    !id ||
+    subresource !== "versions" ||
+    // Only `versions` or `versions/{versionNo}`; a deeper path is not ours.
+    additionalParams.length > 0 ||
+    httpMethod !== "GET"
+  ) {
     return null;
   }
 
@@ -1866,6 +1876,7 @@ export function parseRestRoute(
       id,
       subresource,
       subId,
+      additionalParams,
       httpMethod,
       routeParams
     );

@@ -74,6 +74,48 @@ describe("listVersionsForDocument", () => {
     expect(result.meta.hasNext).toBe(true);
   });
 
+  it("rejects a negative limit rather than clamping it", async () => {
+    // Math.min(-2, MAX_LIMIT) is still -2, and the repository would receive
+    // limit + 1 === -1, which SQLite treats as unbounded — defeating MAX_LIMIT.
+    await expect(
+      listVersionsForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: "e1",
+        user,
+        limit: -2,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-numeric limit", async () => {
+    await expect(
+      listVersionsForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: "e1",
+        user,
+        limit: Number("abc"),
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("rejects a malformed cursor instead of querying versionNo < NaN", async () => {
+    await expect(
+      listVersionsForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: "e1",
+        user,
+        cursor: Number("abc"),
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
   it("clamps an oversized limit", async () => {
     listSpy.mockResolvedValue([]);
 

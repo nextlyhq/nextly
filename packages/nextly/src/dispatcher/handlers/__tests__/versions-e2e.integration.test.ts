@@ -1,6 +1,6 @@
 /**
- * The whole point of this PR: a version list is reachable through the same
- * catch-all API the admin calls, not only through the standalone route exports.
+ * Version history is reachable through the catch-all API the admin calls, not
+ * only through the standalone route exports.
  */
 import { afterEach, describe, expect, it } from "vitest";
 

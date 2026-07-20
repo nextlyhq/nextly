@@ -56,8 +56,27 @@ describe("version routes", () => {
     });
   });
 
+  it("rejects a path with segments beyond the version number", () => {
+    // A deeper path is not a route this owns; truncating it to a version read
+    // would answer a request that was never made.
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "3", "extra"],
+      "GET"
+    );
+
+    expect(parsed.method).not.toBe("getEntryVersion");
+  });
+
+  it("rejects a single version path with trailing segments", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "2", "extra"],
+      "GET"
+    );
+
+    expect(parsed.method).not.toBe("getSingleVersion");
+  });
+
   it("does not claim version routes for non-GET methods", () => {
-    // Restore arrives in a later stage; until then only reads exist.
     const parsed = parseRestRoute(
       ["collections", "posts", "entries", "e1", "versions"],
       "POST"
