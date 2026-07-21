@@ -237,6 +237,116 @@ function readAccessCallerFromParams(
 }
 
 /**
+ * Longest label a version may carry.
+ *
+ * No dialect caps the column — all three store `text` — so the bound has to be
+ * enforced here or not at all. A label renders inside a narrow history row, and
+ * 100 characters is generous for the naming people actually do ("before the
+ * redesign", "Q1 launch copy") while stopping a row becoming a paragraph.
+ */
+const MAX_LABEL_LENGTH = 100;
+
+/**
+ * Normalize a submitted label into what gets stored.
+ *
+ * Trims first, so "clear it" and "type three spaces" mean the same thing rather
+ * than leaving an invisible name behind. The client trims too, by this
+ * codebase's convention, but a REST API has callers that are not the client.
+ *
+ * `null` clears. Anything that is neither a string nor null is a malformed
+ * request rather than a clear, and is rejected instead of quietly wiping a name.
+ */
+function normalizeLabel(value: unknown, path: string): string | null {
+  if (value === null) return null;
+
+  if (typeof value !== "string") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "INVALID_VALUE",
+          message: `${path} must be a string, or null to clear it.`,
+        },
+      ],
+    });
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  if (trimmed.length > MAX_LABEL_LENGTH) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "TOO_LONG",
+          message: `${path} must be ${MAX_LABEL_LENGTH} characters or fewer.`,
+        },
+      ],
+    });
+  }
+
+  return trimmed;
+}
+
+/**
+ * Name a version, or clear its name.
+ *
+ * Gated exactly like a restore, and for the same reason: a label is written
+ * onto history, so the caller must be allowed to see that history as well as to
+ * change the document. The route marks this an update, which is what earns the
+ * write permission; these two gates are the read half.
+ */
+export async function setVersionLabelForDocument(
+  args: VersionMethodArgs & {
+    versionNo: number;
+    label: unknown;
+    params: Params;
+  }
+): Promise<VersionRow> {
+  assertPositiveInteger(args.versionNo, "versionNo");
+  const label = normalizeLabel(args.label, "label");
+
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-label-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user
+  );
+
+  const versions = getService("versionsService");
+  const row = await versions.setLabel(
+    {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    },
+    args.versionNo,
+    label
+  );
+
+  // The snapshot is not part of a label response: the caller asked to rename a
+  // version, not to read its content, and returning it here would bypass the
+  // redaction the version-detail endpoint applies.
+  const { snapshot: _snapshot, ...meta } = row;
+  return meta as VersionRow;
+}
+
+/**
  * Put a document back to an earlier version.
  *
  * Two gates, because a restore both reads history and writes the document.

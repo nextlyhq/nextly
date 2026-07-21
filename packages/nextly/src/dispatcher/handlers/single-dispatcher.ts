@@ -96,6 +96,7 @@ import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   getVersionForDocument,
   restoreVersionForDocument,
+  setVersionLabelForDocument,
   listVersionsForDocument,
   userFromParams,
 } from "./versions-methods";
@@ -359,6 +360,25 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  setSingleVersionLabel: {
+    execute: async (_svc, p, body) => {
+      const slug = String(p.slug ?? "");
+      // The live id comes from the server, never the request: a Single has one
+      // document and a client-supplied id would be a way to reach another.
+      const entryId = await requireLiveSingleId(slug);
+      const row = await setVersionLabelForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+        // See the collection handler: absent leaves it, null clears it.
+        label: (body as { label?: unknown } | undefined)?.label ?? null,
+        params: p,
+      });
+      return respondMutation("Version renamed.", row);
     },
   },
 };
