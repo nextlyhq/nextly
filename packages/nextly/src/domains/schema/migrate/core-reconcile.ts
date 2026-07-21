@@ -84,12 +84,7 @@ export async function reconcileCore(
 
   const desired = getCoreSchema(dialect);
   const live = await introspect(db, dialect, [...CORE_TABLE_NAMES]);
-  const rawOps = diffSnapshots(live, desired);
-  // Ask the data before judging: requiring a column that holds no NULL cannot
-  // fail on an existing row, so it is not destructive. Without this every
-  // SQLite primary key reads as a pending NOT NULL addition and the whole
-  // reconcile is refused on an untouched database.
-  const ops = await resolveSafeNullabilityOps(db, rawOps);
+  const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
     logger?.info?.("Core schema up to date.");
@@ -99,7 +94,17 @@ export async function reconcileCore(
   const mode: ClassifierMode = deps.mode ?? "production-strict";
   // Always compute the destructive reasons via production-strict so both the
   // strict-refuse path and the non-strict confirmation path share one source.
-  const strict = classifyForMode(ops, dialect, "production-strict");
+  // Ask the data before judging DESTRUCTIVENESS only: requiring a column that
+  // holds no NULL cannot fail on an existing row. Without this every SQLite
+  // primary key reads as a pending NOT NULL addition and the whole reconcile
+  // is refused on an untouched database. `ops` stays whole for the apply — a
+  // safe op still has to be performed, or the constraint is never enforced.
+  const opsForClassification = await resolveSafeNullabilityOps(db, ops);
+  const strict = classifyForMode(
+    opsForClassification,
+    dialect,
+    "production-strict"
+  );
   const destructiveReasons = strict.verdict === "refuse" ? strict.reasons : [];
 
   if (destructiveReasons.length > 0) {

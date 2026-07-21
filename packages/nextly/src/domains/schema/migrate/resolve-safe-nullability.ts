@@ -65,12 +65,17 @@ async function columnHoldsNull(
 }
 
 /**
- * Drop the `change_column_nullable` ops that cannot lose data.
+ * The ops a destructive classification should consider.
  *
- * The returned ops are what the classifier sees. An op removed here is one the
- * database has confirmed is safe: the column holds no NULL, so requiring it
- * cannot fail on an existing row. Every other op passes through untouched, so
- * a column that does hold NULLs is still refused, with its real reason.
+ * Used ONLY for classification. The caller keeps the full op list for the
+ * zero-diff check and the apply, because an op removed here is safe to
+ * perform, not unnecessary: dropping it from the apply would leave the
+ * constraint unenforced while reporting success.
+ *
+ * An op is removed only when the database confirms it cannot lose data: the
+ * column holds no NULL, so requiring it cannot fail on an existing row. Every
+ * other op passes through, so a column that does hold NULLs is still refused
+ * with its real reason.
  */
 export async function resolveSafeNullabilityOps(
   db: unknown,
@@ -80,12 +85,13 @@ export async function resolveSafeNullabilityOps(
   const resolved: Operation[] = [];
 
   for (const op of ops) {
-    if (op.type !== "change_column_nullable") {
+    // Only the NOT NULL direction can fail on existing rows. Relaxing a
+    // column to nullable never can, and probing it would remove the op on the
+    // usual no-NULLs answer, so the relaxation would be classified away.
+    if (op.type !== "change_column_nullable" || op.toNullable) {
       resolved.push(op);
       continue;
     }
-    // Only the NOT NULL direction can fail on existing rows; relaxing a column
-    // to nullable never does, and is not classified destructive anyway.
     if (await columnHoldsNull(queryable, op.tableName, op.columnName)) {
       resolved.push(op);
     }
