@@ -371,6 +371,89 @@ export function computeJournalScope(
   return { kind: "global" };
 }
 
+// Table names owned by code-first config or a plugin (locked in the registry).
+//
+// Pure helper. Test seam: exported.
+export function lockedTableNames(desired: DesiredSchema): Set<string> {
+  const names = new Set<string>();
+  for (const entity of [
+    ...Object.values(desired.collections),
+    ...Object.values(desired.singles),
+    ...Object.values(desired.components),
+  ]) {
+    if (entity.locked && entity.tableName) names.add(entity.tableName);
+  }
+  return names;
+}
+
+// The table an operation targets, or null when it targets none. A rename is
+// judged by its source name — that is the table that already exists and whose
+// ownership therefore decides whether the rename is allowed.
+//
+// Pure helper. Test seam: exported.
+export function operationTargetTable(op: Operation): string | null {
+  switch (op.type) {
+    case "add_table":
+      return op.table.name;
+    case "drop_table":
+      return op.tableName;
+    case "rename_table":
+      return op.fromName;
+    case "add_column":
+    case "drop_column":
+    case "rename_column":
+    case "change_column_type":
+    case "change_column_nullable":
+    case "change_column_default":
+    case "add_index":
+    case "drop_index":
+      return op.tableName;
+    default: {
+      // Exhaustiveness check: a new Operation kind must be classified here.
+      const _exhaustive: never = op;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
+
+// A Schema Builder (UI) save must only change the entity being edited. Any
+// operation targeting a table owned by code-first config or a plugin is
+// dropped: those tables belong to `nextly.config.ts` and its migrations, and
+// reconciling their drift is db:sync's job. Without this, saving one UI
+// collection could silently ALTER (or drop) an unrelated code-first table that
+// merely disagreed with the live database.
+//
+// Pure helper. Test seam: exported.
+export function excludeLockedTableOps(
+  ops: Operation[],
+  desired: DesiredSchema
+): { kept: Operation[]; skipped: Operation[] } {
+  const locked = lockedTableNames(desired);
+  if (locked.size === 0) return { kept: ops, skipped: [] };
+
+  const kept: Operation[] = [];
+  const skipped: Operation[] = [];
+  for (const op of ops) {
+    const table = operationTargetTable(op);
+    if (table !== null && locked.has(table)) skipped.push(op);
+    else kept.push(op);
+  }
+  return { kept, skipped };
+}
+
+function logSkippedLockedOps(skipped: Operation[]): void {
+  // eslint-disable-next-line turbo/no-undeclared-env-vars
+  if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
+  const tables = [
+    ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
+  ];
+  console.debug(
+    `[nextly] schema apply: skipped ${skipped.length} op(s) on code-first ` +
+      `table(s) not owned by this UI save: ${tables.join(", ")}`
+  );
+}
+
 // F10 PR 3: bridge the two near-identical scope shapes (the journal-
 // interface scope persisted into the DB column vs the notifications-
 // module scope passed to channels). Keeping them as distinct types
@@ -614,12 +697,22 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const resolvedOps =
+      const allResolvedOps =
         this.testHooks._resolvedOpsOverride ??
         applyResolutionsToOperations(
           operations,
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
+
+      // A UI save owns only the entity being edited. Drop any operation that
+      // targets a code-first/plugin-owned table so the Schema Builder can never
+      // alter schema the user did not edit. Code-first applies (db:sync) are
+      // the authority for those tables and keep the full operation set.
+      const { kept: resolvedOps, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allResolvedOps, desired)
+          : { kept: allResolvedOps, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride

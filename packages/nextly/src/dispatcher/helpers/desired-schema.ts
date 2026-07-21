@@ -46,6 +46,9 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // translatable columns from the main table (they live in the
           // companion `_locales` table) instead of re-adding them.
           localized: (c as { localized?: boolean }).localized === true,
+          // Carry ownership so a UI save can be prevented from emitting DDL
+          // against a code-first/plugin-owned table.
+          locked: (c as { locked?: boolean }).locked === true,
         };
       }
     } catch {
@@ -67,6 +70,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // i18n: carry localized so the diff omits translatable columns from the
           // single's main table (they live in single_<slug>_locales).
           localized: (s as { localized?: boolean }).localized === true,
+          locked: (s as { locked?: boolean }).locked === true,
         };
       }
     } catch {
@@ -87,6 +91,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // i18n: carry localized so the diff omits translatable columns from the
           // component's main table (they live in comp_<slug>_locales).
           localized: (c as { localized?: boolean }).localized === true,
+          locked: (c as { locked?: boolean }).locked === true,
         };
       }
     } catch {

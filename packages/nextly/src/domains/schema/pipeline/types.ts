@@ -37,6 +37,13 @@ export interface DesiredCollection {
    * the localized columns to the main table.
    */
   localized?: boolean;
+  /**
+   * Whether this entity is owned by code-first config or a plugin (locked in
+   * the registry). A UI/builder save must never emit DDL against a locked
+   * table — those tables are owned by `nextly.config.ts` and its migrations,
+   * so drift is reconciled by db:sync, not by the Schema Builder.
+   */
+  locked?: boolean;
 }
 
 export interface DesiredSingle {
@@ -49,6 +56,13 @@ export interface DesiredSingle {
   /** Same semantics as DesiredCollection.localized — translatable fields live in
    *  the companion `single_<slug>_locales` table and are omitted from main. */
   localized?: boolean;
+  /**
+   * Whether this entity is owned by code-first config or a plugin (locked in
+   * the registry). A UI/builder save must never emit DDL against a locked
+   * table — those tables are owned by `nextly.config.ts` and its migrations,
+   * so drift is reconciled by db:sync, not by the Schema Builder.
+   */
+  locked?: boolean;
 }
 
 export interface DesiredComponent {
@@ -59,4 +73,11 @@ export interface DesiredComponent {
   /** Same semantics as DesiredCollection.localized — translatable fields live in
    *  the companion `comp_<slug>_locales` table and are omitted from main. */
   localized?: boolean;
+  /**
+   * Whether this entity is owned by code-first config or a plugin (locked in
+   * the registry). A UI/builder save must never emit DDL against a locked
+   * table — those tables are owned by `nextly.config.ts` and its migrations,
+   * so drift is reconciled by db:sync, not by the Schema Builder.
+   */
+  locked?: boolean;
 }
