@@ -8,6 +8,8 @@
 // The pipeline depends on the `Notifier` interface, not on this
 // concrete factory; tests can swap in a fake notifier via DI.
 
+import { describeError } from "../../errors";
+
 import type {
   MigrationNotificationEvent,
   NotificationChannel,
@@ -21,21 +23,6 @@ interface LoggerLike {
 export interface CreateNotifierOptions {
   channels: NotificationChannel[];
   logger?: LoggerLike;
-}
-
-function describeError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (err === undefined) return "undefined";
-  if (err === null) return "null";
-  if (typeof err === "number" || typeof err === "boolean") {
-    return String(err);
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return "[unstringifiable error]";
-  }
 }
 
 export function createNotifier(opts: CreateNotifierOptions): Notifier {

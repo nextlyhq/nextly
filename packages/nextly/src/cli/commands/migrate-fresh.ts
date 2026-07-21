@@ -41,6 +41,7 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import { describeError, immediateMessage } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -147,9 +148,7 @@ export async function runMigrateFresh(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -193,9 +192,7 @@ export async function runMigrateFresh(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -382,7 +379,7 @@ async function discoverTables(
  * Supabase) forbids that superuser-only GUC.
  */
 function isReplicationRolePermissionError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = describeError(err);
   return /permission denied to set parameter/i.test(msg);
 }
 
@@ -546,9 +543,7 @@ export function registerMigrateFreshCommand(program: Command): void {
       try {
         await runMigrateFresh(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });
@@ -590,8 +585,10 @@ async function reconcileMysqlSchema(
     // Reconciliation is a safety net for historical MySQL drift. Do not
     // block migrate:fresh --seed if drizzle-kit emits duplicate/constraint
     // alteration errors after migrations have already created the schema.
-    const message = error instanceof Error ? error.message : String(error);
-    if (isKnownMysqlReconcileDriftError(message)) {
+    // Classify on the immediate message; a wrapped failure whose cause chain
+    // mentions a known drift phrase is not itself known drift.
+    const message = describeError(error);
+    if (isKnownMysqlReconcileDriftError(immediateMessage(error))) {
       logger.debug(
         "[schema] Skipping known MySQL reconciliation drift (media FK already reconciled)"
       );
@@ -637,9 +634,7 @@ async function performSeeding(
       skipSuperAdmin: true,
     });
   } catch (error) {
-    logger.error(
-      `Seeding failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Seeding failed: ${describeError(error)}`);
     throw error;
   }
 

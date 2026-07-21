@@ -21,8 +21,10 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -175,7 +177,7 @@ export async function migrateDownCore(
         } catch (err) {
           await deps.recordFailed(
             p.filename,
-            err instanceof Error ? err.message : String(err)
+            truncateErrorMessage(describeError(err, { context: false }))
           );
           throw err;
         }
@@ -371,9 +373,7 @@ export function registerMigrateDownCommand(program: Command): void {
       try {
         await runMigrateDown(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

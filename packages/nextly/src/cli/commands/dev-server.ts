@@ -45,6 +45,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { describeError, immediateMessage } from "../../errors/index";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
@@ -122,8 +123,7 @@ export async function ensureCoreTables(
   } catch (pushError) {
     // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
     // Fall back to raw SQL for SQLite, or error for PG/MySQL.
-    const pushMsg =
-      pushError instanceof Error ? pushError.message : String(pushError);
+    const pushMsg = describeError(pushError);
     logger.debug(`pushSchema failed: ${pushMsg}`);
 
     if (dialect === "sqlite") {
@@ -133,9 +133,13 @@ export async function ensureCoreTables(
         try {
           await drizzleAdapter.executeQuery(statement);
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          if (!msg.includes("already exists")) {
-            logger.debug(`Table creation statement failed: ${msg}`);
+          // Branch on the immediate message only: a wrapped failure whose
+          // cause chain happens to mention "already exists" is not the benign
+          // duplicate-table case and must not be silenced.
+          if (!immediateMessage(error).includes("already exists")) {
+            logger.debug(
+              `Table creation statement failed: ${describeError(error)}`
+            );
           }
         }
       }
@@ -157,8 +161,7 @@ export async function ensureCoreTables(
         );
         await systemTableService.ensureSystemTables();
       } catch (sysError) {
-        const msg =
-          sysError instanceof Error ? sysError.message : String(sysError);
+        const msg = describeError(sysError);
         logger.debug(`System table creation: ${msg}`);
       }
 
@@ -391,7 +394,7 @@ export async function performAutoSync(
     // Catastrophic failures (DB connection lost, etc.) reach here. The
     // pipeline's typed errors come back as { success: false } — those are
     // handled below.
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = describeError(error);
     logger.error(`Auto-sync failed: ${msg}`);
     throw error;
   }
@@ -496,7 +499,7 @@ function registerSingleTableInResolver(
     // Deliberately swallow: subsequent queries in this boot may fail but
     // the next restart rebuilds the resolver from the registry rows.
     logger.debug(
-      `Could not register runtime schema for ${tableName}: ${err instanceof Error ? err.message : String(err)}`
+      `Could not register runtime schema for ${tableName}: ${describeError(err)}`
     );
   }
 }
@@ -650,7 +653,7 @@ export async function performSinglesAutoSync(
         }
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = describeError(error);
       try {
         await singleRegistry.updateMigrationStatus(slug, "failed");
       } catch {
@@ -919,7 +922,7 @@ export async function performComponentsAutoSync(
         }
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = describeError(error);
       try {
         await componentRegistry.updateMigrationStatus(slug, "failed");
       } catch {
