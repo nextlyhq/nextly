@@ -54,8 +54,8 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
-  rebuiltTableNames,
 } from "./filter-unsafe-statements";
+import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -77,7 +77,6 @@ import type {
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
-import { generateSQL } from "./sql-templates";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 
@@ -160,59 +159,6 @@ function applyMakeOptionalToDesired(
       ])
     ),
   };
-}
-
-/**
- * `CREATE INDEX` for every index the desired schema declares on a table this
- * apply rebuilt.
- *
- * Two things decide what a dynamic table looks like and only one of them
- * knows about indexes. The diff's desired side comes from
- * `buildDesiredTableFromFields`, which carries a full `IndexSpec[]`; the
- * Drizzle tables handed to drizzle-kit come from `generateRuntimeSchema`,
- * which declares none. drizzle-kit therefore believes every table should have
- * no secondary index, so the replacement table it builds during a rebuild has
- * none either, and the indexes go with the table it dropped. Nothing reports
- * it: the push succeeds, the rows are intact, and the queries just get slower.
- *
- * Re-asserting them is what closes the gap. Teaching the generator to declare
- * them instead would mean passing Drizzle's three-argument table overload a
- * loosely-typed column record it does not accept, which has no answer that
- * isn't `any`.
- *
- * Scoped to rebuilt tables, NOT to every table the apply touched. A table that
- * was altered in place still has its indexes, and re-creating one that exists
- * is not harmless: MySQL has no `CREATE INDEX IF NOT EXISTS`, so a duplicate
- * key name aborts the apply — after MySQL has already auto-committed the DDL
- * ahead of it.
- *
- * Pure so the statements can be asserted directly; the caller appends them to
- * the push batch, so they run after the table changes they index and share
- * that batch's failure handling. On PostgreSQL and MySQL the batch runs in a
- * transaction; SQLite deliberately runs without one (PRAGMA foreign_keys
- * cannot be toggled inside a transaction), so a restore that fails there
- * leaves the rebuilt table committed without the index that failed.
- */
-export function indexRestoreStatements(
-  desired: NextlySchemaSnapshot,
-  dialect: SupportedDialect,
-  statements: readonly string[]
-): string[] {
-  const rebuilt = rebuiltTableNames(statements);
-  if (rebuilt.size === 0) return [];
-
-  return desired.tables
-    .filter(table => rebuilt.has(table.name.toLowerCase()))
-    .flatMap(table =>
-      // `undefined` means "this snapshot never tracked indexes", which is not
-      // the same as "this table has none". Only an explicit list is actionable.
-      (table.indexes ?? []).map(index =>
-        generateSQL(
-          { type: "add_index", tableName: table.name, index },
-          dialect
-        )
-      )
-    );
 }
 
 export interface PipelineResult {

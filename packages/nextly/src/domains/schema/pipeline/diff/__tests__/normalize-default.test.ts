@@ -109,6 +109,10 @@ describe("normalizeDefault — string-literal unwrapping", () => {
       ["'-.5'", "-.5"],
       ["'+.5'", "+.5"],
       ["'gen_random_uuid()'", "gen_random_uuid()"],
+      // Parenthesised: SQLite requires the parens on an expression default,
+      // so the quoted word must not reduce into the expression it spells.
+      ["'(unixepoch())'", "(unixepoch())"],
+      ["'(unixepoch())'", "unixepoch()"],
       // Bare-callable keywords: no parentheses, so the call-shape half of the
       // guard does not see them and each has to be named.
       ["'LOCALTIME'", "LOCALTIME"],
@@ -133,6 +137,26 @@ describe("normalizeDefault — string-literal unwrapping", () => {
     // in the core schema.
     for (const word of ["pending", "ui", "draft", "template", "inside", "auto"])
       expect(normalizeDefault(`'${word}'`)).toBe(normalizeDefault(word));
+  });
+
+  it("collapses SQLite's wrapping parentheses to the form it reports back", () => {
+    // SQLite will not take a bare call as a default — it must be written
+    // `DEFAULT (unixepoch())` — and then PRAGMA table_info reports the column
+    // as `unixepoch()`, without them. One side of the diff always carries a
+    // pair the other never sees, so without this the column emits a default
+    // change on every reconcile.
+    expect(normalizeDefault("(unixepoch())")).toBe(
+      normalizeDefault("unixepoch()")
+    );
+    expect(normalizeDefault("((now()))")).toBe(normalizeDefault("now()"));
+  });
+
+  it("leaves parentheses that do not wrap the whole expression", () => {
+    // `(a) + (b)` opens and closes twice, so its first paren does not match
+    // its last. Stripping would produce `a) + (b` — a different default, and
+    // not valid SQL.
+    expect(normalizeDefault("(a) + (b)")).toBe("(a) + (b)");
+    expect(normalizeDefault("(a) || (b)")).toBe("(a) || (b)");
   });
 
   it("leaves unbalanced or unquoted expressions alone", () => {

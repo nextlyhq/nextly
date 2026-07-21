@@ -17,14 +17,26 @@
 import { getTableName, isTable } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import { getDialectTables } from "../../database";
+import * as mysqlBundle from "../_dialect-bundles/mysql";
+import * as postgresBundle from "../_dialect-bundles/postgres";
+import * as sqliteBundle from "../_dialect-bundles/sqlite";
 import { CORE_TABLE_NAMES } from "../index";
+
+// The bundles are imported directly rather than through `getDialectTables`,
+// whose module also re-exports the adapter factory. That barrel pulls adapter
+// build output into anything importing it, which a schema-shape assertion has
+// no need of and which makes the suite depend on a built tree.
+const BUNDLES = {
+  postgresql: postgresBundle,
+  mysql: mysqlBundle,
+  sqlite: sqliteBundle,
+} as const;
 
 const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
 
 /** Table names reachable from a dialect bundle, as the push would see them. */
-function bundleTableNames(dialect: string): Set<string> {
-  const tables = getDialectTables(dialect) as Record<string, unknown>;
+function bundleTableNames(dialect: keyof typeof BUNDLES): Set<string> {
+  const tables = BUNDLES[dialect] as Record<string, unknown>;
   const names = new Set<string>();
   for (const value of Object.values(tables)) {
     if (isTable(value)) names.add(getTableName(value));

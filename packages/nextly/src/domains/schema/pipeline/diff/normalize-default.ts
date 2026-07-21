@@ -81,7 +81,16 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
   // Step 2: unwrap a string literal to the value it denotes.
   normalised = unquoteStringLiteral(normalised);
 
-  // Step 3: lowercase a small set of known case-insensitive built-ins.
+  // Step 3: drop parentheses that wrap the whole expression. SQLite requires
+  // them when a default is an expression (`DEFAULT (unixepoch())`) and then
+  // reports the column back through PRAGMA without them, as `unixepoch()`.
+  // The desired side keeps whatever the schema wrote, so without this the two
+  // never agree and the column emits a default change on every reconcile.
+  // Runs after the unquote so a quoted `'(unixepoch())'` — which the unquote
+  // deliberately leaves alone — is not reduced into the expression it spells.
+  normalised = stripWrappingParens(normalised);
+
+  // Step 4: lowercase a small set of known case-insensitive built-ins.
   const lower = normalised.toLowerCase();
   if (NORMALIZE_LOWERCASE_FUNCTIONS.has(lower)) {
     normalised = lower;
@@ -129,10 +138,11 @@ const NILADIC_KEYWORDS = [
 ].join("|");
 
 const EXPRESSION_SHAPED = new RegExp(
-  // Anything that calls (`now()`, `gen_random_uuid()`), any number in any
+  // Anything parenthesised (`(unixepoch())`), anything that calls (`now()`,
+  // `gen_random_uuid()`), any number in any
   // form a dialect accepts (`1`, `-1`, `+1`, `.5`, `-.5`), or any keyword
   // above standing alone.
-  `^\\s*(?:[\\w.]+\\s*\\(|[-+]?\\.?\\d|(?:${NILADIC_KEYWORDS})\\s*$)`,
+  `^\\s*(?:\\(|[\\w.]+\\s*\\(|[-+]?\\.?\\d|(?:${NILADIC_KEYWORDS})\\s*$)`,
   "i"
 );
 
@@ -195,4 +205,43 @@ function isCompleteLiteral(value: string): boolean {
   // Boolean keyword.
   if (value === "true" || value === "false") return true;
   return false;
+}
+
+/**
+ * Remove parentheses that wrap the entire expression.
+ *
+ * SQLite will not accept a bare function call as a default — it has to be
+ * written `DEFAULT (unixepoch())` — and then reports the column back through
+ * `PRAGMA table_info` as `unixepoch()`, without them. One side of the diff
+ * therefore always carries a pair the other never sees.
+ *
+ * Only a pair that encloses everything is removed, and only when it genuinely
+ * closes at the end: `(a) + (b)` opens and closes twice, so its first `(` does
+ * not match its last `)` and the expression is left as written. Stripping
+ * there would produce `a) + (b`, which is not the same default and not even
+ * valid SQL.
+ */
+function stripWrappingParens(expr: string): string {
+  let current = expr.trim();
+  // A default could in principle arrive doubly wrapped; peel while the pair
+  // encloses the whole expression, and stop as soon as it does not.
+  while (current.startsWith("(") && current.endsWith(")")) {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] === "(") depth++;
+      else if (current[i] === ")") {
+        depth--;
+        // Back to zero before the last character means this `(` closed early,
+        // so the outer pair is not a wrapper.
+        if (depth === 0 && i < current.length - 1) {
+          closesAtEnd = false;
+          break;
+        }
+      }
+    }
+    if (!closesAtEnd || depth !== 0) return current;
+    current = current.slice(1, -1).trim();
+  }
+  return current;
 }

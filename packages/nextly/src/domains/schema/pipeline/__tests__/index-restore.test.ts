@@ -15,7 +15,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../diff/types";
-import { indexRestoreStatements } from "../pushschema-pipeline";
+import { indexRestoreStatements } from "../index-restore";
 
 const desired: NextlySchemaSnapshot = {
   tables: [
