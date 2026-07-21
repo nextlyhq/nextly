@@ -173,6 +173,21 @@ export class DynamicCollectionService extends BaseService {
       });
     }
 
+    // `group` is lower-cased later without a type check; `?.` guards null and
+    // undefined but not a number or object, which would throw an untyped
+    // TypeError from a caller-supplied value.
+    if (data.group !== undefined && typeof data.group !== "string") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "group",
+            code: "INVALID",
+            message: "Group must be a string.",
+          },
+        ],
+      });
+    }
+
     const normalizedName = data.name.toLowerCase();
     const tableName = `dc_${normalizedName}`;
 
@@ -374,6 +389,18 @@ export class DynamicCollectionService extends BaseService {
     migrationFileName: string | null;
     metadataUpdates: Record<string, unknown>;
   }> {
+    if (updates.group !== undefined && typeof updates.group !== "string") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "group",
+            code: "INVALID",
+            message: "Group must be a string.",
+          },
+        ],
+      });
+    }
+
     // Validate caller input before any I/O: the shape checks below cannot
     // depend on the registry, and rejecting a malformed body after a fetch
     // does pointless work for a request that was never going to apply.

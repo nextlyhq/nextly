@@ -121,3 +121,40 @@ describe("generateCollectionUpdate field validation", () => {
     expect((err as NextlyError).statusCode).toBe(400);
   });
 });
+
+describe("non-string scalar fields", () => {
+  it("rejects a numeric group on create rather than crashing on toLowerCase", async () => {
+    // `group?.toLowerCase()` guards null and undefined but not a number.
+    const err = await service()
+      .generateCollection({
+        name: "posts",
+        fields: [],
+        group: 123,
+      } as unknown as Input)
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).statusCode).toBe(400);
+    expect(err).not.toBeInstanceOf(TypeError);
+  });
+
+  it("rejects a numeric group on update", async () => {
+    const err = await service()
+      .generateCollectionUpdate("posts", { group: 123 } as never)
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).statusCode).toBe(400);
+  });
+
+  it("still accepts an absent group", async () => {
+    // Guarding on presence must not turn an omitted optional into an error.
+    const err = await service()
+      .generateCollectionUpdate("posts", { labels: undefined } as never)
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(err) && (err as NextlyError).statusCode === 400).toBe(
+      false
+    );
+  });
+});

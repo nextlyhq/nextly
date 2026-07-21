@@ -19,7 +19,7 @@ import { toDbError } from "../../../database/errors";
 // NextlyError API. Public messages follow §13.8 — generic, no identifiers,
 // no constraint hints — and identifying detail moves to logContext.
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
-import { NextlyError, describeError } from "../../../errors";
+import { NextlyError, describeError, immediateMessage } from "../../../errors";
 import type {
   DynamicCollectionInsert,
   DynamicCollectionRecord,
@@ -561,14 +561,19 @@ export class CollectionRegistryService extends BaseRegistryService<
         // with a debugger. Fall back to plain `error.message` for
         // non-NextlyError throws.
         const message = describeError(error);
+        // Classify on the thrown error's own message: a description
+        // concatenates the cause chain, so a genuine failure that merely
+        // wraps something saying "already exists" would enter duplicate
+        // recovery and mask the real error.
+        const immediate = immediateMessage(error).toLowerCase();
         // Prefer the structured NextlyError code over message string matching.
         // Falls back to legacy substring sniffing for any non-NextlyError that
         // bubbles up from deeper layers during the migration window.
         const isDuplicate =
           (NextlyError.is(error) && error.code === "DUPLICATE") ||
-          message.toLowerCase().includes("already exists") ||
-          message.toLowerCase().includes("duplicate") ||
-          message.toLowerCase().includes("unique constraint");
+          immediate.includes("already exists") ||
+          immediate.includes("duplicate") ||
+          immediate.includes("unique constraint");
         if (isDuplicate) {
           const refetched = await this.getCollectionBySlug(config.slug).catch(
             () => null

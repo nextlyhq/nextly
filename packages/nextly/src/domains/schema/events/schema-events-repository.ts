@@ -98,13 +98,18 @@ export interface MarkFailedInput {
 /**
  * Storage bound for the `error_message` column.
  *
- * Recorded descriptions can be long — a generated migration statement plus its
- * cause chain and context runs to thousands of characters. Writing that
- * unbounded risks the failure record itself failing, which would leave the
- * migration with no failed status at all: the worst outcome, since the
- * operator then sees neither the error nor the fact that one occurred.
+ * The column is `text` on every dialect, so this is not a schema limit. It is
+ * a guard against the one real ceiling: MySQL `TEXT` holds 65,535 bytes, and a
+ * write that exceeds it fails — which would leave the migration with no failed
+ * status at all, the worst outcome, since the operator then sees neither the
+ * error nor that one occurred.
+ *
+ * Sized well above any genuine message so the cause chain, which is the part
+ * worth reading and sits at the END of a description, is not cut off. A
+ * tighter cap would routinely discard the driver error while keeping the
+ * generic wrapper text in front of it.
  */
-export const ERROR_MESSAGE_MAX_LEN = 1000;
+export const ERROR_MESSAGE_MAX_LEN = 8000;
 
 /** Marks a truncated message; its length is reserved from the budget. */
 const TRUNCATION_SUFFIX = "...";
