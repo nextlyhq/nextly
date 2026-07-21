@@ -45,7 +45,6 @@ import {
   buildDesiredTableFromComponentFields,
 } from "./diff/build-from-fields";
 import { diffSnapshots } from "./diff/diff";
-import { buildIndexOwnerMap } from "./diff/index-util";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
 import {
@@ -870,13 +869,9 @@ export class PushSchemaPipeline {
         const managedTables = new Set(
           desiredTableNames.map(t => t.toLowerCase())
         );
-        // Owner lookup from the live snapshot: index names alone cannot
-        // identify their table, so without this every DROP INDEX on a
-        // Nextly-generated index resolves to no owner and is blocked.
         const safe = filterUnsafeStatements(
           emittedStatements,
-          desiredTableNames,
-          buildIndexOwnerMap(liveSnapshot)
+          desiredTableNames
         );
         const unexpectedDestructive = findUnexpectedDestructiveStatements(
           emittedStatements,
