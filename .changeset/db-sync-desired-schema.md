@@ -20,8 +20,6 @@
 "@nextlyhq/ui": patch
 ---
 
-`nextly db:sync` no longer proposes deleting collections you built in the Schema Builder.
+`nextly db:sync` no longer proposes deleting collections, singles, or components you built in the Schema Builder.
 
-Collections reach the database two ways: written in `nextly.config.ts`, or created through the Schema Builder, which stores them in the database only. `db:sync` worked out the intended schema from the config file alone, so Schema Builder collections were invisible to it. On SQLite and MySQL the comparison covers the whole database, so those collections were treated as leftovers and lined up to be dropped. The dev server already merged them back in; `db:sync` and the dev server now share one implementation of that rule, so they cannot disagree again. If the registry cannot be read, the sync continues with what the config describes and says plainly that Schema Builder collections may be flagged.
-
-Indexes are also no longer blocked from being dropped. The safety check worked out which table an index belonged to by reading its name, using a convention Nextly does not follow, so it never matched and every index change was refused with a warning. It now asks the database which table owns the index, which is also correct for index names you chose yourself.
+Content types reach the database two ways: written in `nextly.config.ts`, or created through the Schema Builder, which stores them in the database only. `db:sync` worked out the intended schema from the config file alone, so anything built in the Schema Builder was invisible to it. On SQLite and MySQL the comparison covers the whole database, so those tables were treated as leftovers and lined up to be dropped. The dev server already merged them back in; both now share one implementation of that rule, so they cannot disagree again. If the registry cannot be read, the sync continues with what the config describes and says plainly that Schema Builder content may be flagged.
