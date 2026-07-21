@@ -1251,6 +1251,26 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       if (oldField.hasMany !== newField.hasMany) return true;
     }
 
+    // A number field keeps `type: "number"` while `dbType`, `precision`,
+    // `scale` and `options.format` decide its physical column. Comparing only
+    // `type` would report "unmodified" for a switch from integer to decimal and
+    // leave the existing column at its old type forever.
+    if (isNumberField(oldField) && isNumberField(newField)) {
+      const oldKind = this.numberColumnKind(oldField);
+      const newKind = this.numberColumnKind(newField);
+      if (oldKind !== newKind) return true;
+      if (oldKind === "decimal") {
+        const oldDims = this.decimalDimensions(oldField);
+        const newDims = this.decimalDimensions(newField);
+        if (
+          oldDims.precision !== newDims.precision ||
+          oldDims.scale !== newDims.scale
+        ) {
+          return true;
+        }
+      }
+    }
+
     return false;
   }
 

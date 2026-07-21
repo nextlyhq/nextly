@@ -89,3 +89,40 @@ describe("ComponentSchemaService number column typing", () => {
     }
   });
 });
+
+// The alter path skips fields it considers unmodified. Since a number field's
+// physical column is chosen by dbType/precision/scale rather than `type`, those
+// have to participate in that comparison or a storage change silently leaves
+// the old column in place.
+describe("ComponentSchemaService number storage change detection", () => {
+  const alterSql = (before: FieldConfig, after: FieldConfig): string =>
+    new ComponentSchemaService("postgresql").generateAlterTableMigration(
+      "comp_widget",
+      [before],
+      [after]
+    );
+
+  it("alters the column when a number field switches to an exact decimal", () => {
+    const sql = alterSql(
+      numberField(),
+      numberField({ dbType: "decimal", precision: 10, scale: 2 })
+    );
+    expect(sql).toContain("NUMERIC(10, 2)");
+  });
+
+  it("alters the column when a decimal's precision or scale changes", () => {
+    const sql = alterSql(
+      numberField({ dbType: "decimal", precision: 10, scale: 2 }),
+      numberField({ dbType: "decimal", precision: 12, scale: 4 })
+    );
+    expect(sql).toContain("NUMERIC(12, 4)");
+  });
+
+  it("emits nothing when the storage settings are unchanged", () => {
+    const sql = alterSql(
+      numberField({ dbType: "decimal", precision: 10, scale: 2 }),
+      numberField({ dbType: "decimal", precision: 10, scale: 2 })
+    );
+    expect(sql).not.toContain("ALTER COLUMN");
+  });
+});

@@ -33,4 +33,5 @@ Fix entry-saving and migration table-naming issues.
 - A Schema Builder save now writes the SQL it applied into the dynamic migrations folder — for collections, singles and components alike, including renames, drops, and the companion-table DDL for a localized collection — so a change made visually can be reproduced on a fresh database instead of existing only in the live one.
 - `nextly migrate:check` no longer fails with `MISSING_SNAPSHOT` after a Schema Builder edit. Migrations written by the builder record already-applied SQL and are not snapshot-paired, so they are skipped like localization migrations.
 - Float number fields in a component now use the same PostgreSQL column type (`double precision`) as the runtime and generated schema, instead of `real`, which left the table permanently out of sync with the desired schema.
+- Changing a component number field's storage (`dbType`, `precision` or `scale`) now alters the column instead of being treated as no change and leaving the old type in place.
 - A component declaring a custom `dbName` is no longer queued for a redundant table sync on every startup.
