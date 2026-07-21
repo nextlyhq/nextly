@@ -20,6 +20,7 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -30,6 +31,7 @@ import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanu
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { mergeRegisteredCollectionsSafely } from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
@@ -314,8 +316,23 @@ export async function performAutoSync(
     }
   }
 
+  // The loop above sees only `nextly.config.ts`. Collections created in the
+  // Schema Builder exist solely in the registry, and on SQLite/MySQL the diff
+  // introspects the whole database, so leaving them out proposes dropping
+  // every one of them. Same helper the HMR path uses.
+  const registry = new CollectionRegistryService(drizzleAdapter, {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  });
+
   const desired: DesiredSchema = {
-    collections: desiredCollections,
+    collections: await mergeRegisteredCollectionsSafely(
+      desiredCollections,
+      () => registry.getAllCollections(),
+      logger
+    ),
     singles: desiredSingles,
     components: {},
   };
