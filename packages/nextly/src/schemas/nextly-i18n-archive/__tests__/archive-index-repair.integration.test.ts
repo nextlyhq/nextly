@@ -57,20 +57,14 @@ describeMysql("mysql archive index repair", () => {
   it("recreates a lookup index the table is missing", async () => {
     const db = connection!;
 
-    // The state in question: the table exists, the index does not. Reached in
-    // practice by an ensure that died between the old table and index
-    // statements, or by the index being dropped.
-    await db.query(
-      `CREATE TABLE \`${TABLE}\` (
-        \`id\` BIGINT AUTO_INCREMENT PRIMARY KEY,
-        \`collection\` VARCHAR(191) NOT NULL,
-        \`entry_id\` VARCHAR(191) NOT NULL,
-        \`locale\` VARCHAR(20) NOT NULL,
-        \`field\` VARCHAR(191) NOT NULL,
-        \`value\` LONGTEXT,
-        \`archived_at\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-      )`
-    );
+    // Built from the production DDL and then stripped of its index, rather
+    // than hand-written here: a copied CREATE TABLE drifts from the helper it
+    // is meant to exercise, and this test would go on passing against a shape
+    // production no longer creates.
+    for (const statement of getI18nArchiveDdl("mysql")) {
+      await db.query(statement);
+    }
+    await db.query(`ALTER TABLE \`${TABLE}\` DROP INDEX \`${INDEX}\``);
     expect(await indexExists()).toBe(false);
 
     // Exactly what the dispatchers run when a localization disable needs the

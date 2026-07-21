@@ -222,26 +222,36 @@ function isCompleteLiteral(value: string): boolean {
  * valid SQL.
  */
 function stripWrappingParens(expr: string): string {
-  let current = expr.trim();
-  // A default could in principle arrive doubly wrapped; peel while the pair
-  // encloses the whole expression, and stop as soon as it does not.
-  while (current.startsWith("(") && current.endsWith(")")) {
+  let current = expr;
+  let peeled = false;
+
+  for (;;) {
+    // Whitespace beside a parenthesis is insignificant, but whitespace inside
+    // a string default is not: `' pending '` and `'pending'` are different
+    // values. So the trim is scoped to the paren test, and the untouched
+    // input is what comes back when there is nothing to peel.
+    const candidate = current.trim();
+    if (!candidate.startsWith("(") || !candidate.endsWith(")")) break;
+
     let depth = 0;
     let closesAtEnd = true;
-    for (let i = 0; i < current.length; i++) {
-      if (current[i] === "(") depth++;
-      else if (current[i] === ")") {
+    for (let i = 0; i < candidate.length; i++) {
+      if (candidate[i] === "(") depth++;
+      else if (candidate[i] === ")") {
         depth--;
         // Back to zero before the last character means this `(` closed early,
         // so the outer pair is not a wrapper.
-        if (depth === 0 && i < current.length - 1) {
+        if (depth === 0 && i < candidate.length - 1) {
           closesAtEnd = false;
           break;
         }
       }
     }
-    if (!closesAtEnd || depth !== 0) return current;
-    current = current.slice(1, -1).trim();
+    if (!closesAtEnd || depth !== 0) break;
+
+    current = candidate.slice(1, -1);
+    peeled = true;
   }
-  return current;
+
+  return peeled ? current.trim() : expr;
 }

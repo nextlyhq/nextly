@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { getColumnDescriptor } from "../../../services/field-column-descriptor";
-import { buildDesiredTableFromFields } from "../build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "../build-from-fields";
 import type { ColumnSpec } from "../types";
 
 // Characterization test guarding the ui-schema widening: every field type now
@@ -486,5 +489,52 @@ describe("buildDesiredTableFromFields with status enabled", () => {
       { hasStatus: false }
     );
     expect(findColumn(tableFalse.columns, "status")).toBeUndefined();
+  });
+});
+
+describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
+  // ComponentSchemaService creates idx_<table>_<column> for an indexed field
+  // and uq_<table>_<column> for a unique one. The snapshot has to carry them
+  // too: it is what the index restore replays after a SQLite rebuild, and a
+  // unique index missing from it is a constraint that silently disappears.
+  const fields = [
+    { name: "title", type: "text" },
+    { name: "sku", type: "text", unique: true },
+    { name: "lookupKey", type: "text", index: true },
+  ] as unknown as Parameters<typeof buildDesiredTableFromComponentFields>[1];
+
+  it("records a unique field's index", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      fields,
+      "sqlite"
+    );
+    expect(table.indexes).toContainEqual({
+      name: "uq_comp_hero_sku",
+      columns: ["sku"],
+      unique: true,
+    });
+  });
+
+  it("records an indexed field's index", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      fields,
+      "sqlite"
+    );
+    expect(table.indexes).toContainEqual({
+      name: "idx_comp_hero_lookup_key",
+      columns: ["lookup_key"],
+      unique: false,
+    });
+  });
+
+  it("still records the parent index", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      fields,
+      "sqlite"
+    );
+    expect(table.indexes?.map(i => i.name)).toContain("idx_comp_hero_parent");
   });
 });

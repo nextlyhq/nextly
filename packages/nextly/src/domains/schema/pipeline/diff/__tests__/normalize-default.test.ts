@@ -159,6 +159,20 @@ describe("normalizeDefault — string-literal unwrapping", () => {
     expect(normalizeDefault("(a) || (b)")).toBe("(a) || (b)");
   });
 
+  it("keeps whitespace that is part of a string default", () => {
+    // A default of " pending " is not the default "pending". Trimming while
+    // stripping parentheses collapsed the two, so a change between them would
+    // have emitted no op and left the old default in the database.
+    expect(normalizeDefault("' pending '")).toBe(" pending ");
+    expect(normalizeDefault("' pending '")).not.toBe(
+      normalizeDefault("pending")
+    );
+    // Whitespace beside a parenthesis is still insignificant.
+    expect(normalizeDefault("( unixepoch() )")).toBe(
+      normalizeDefault("unixepoch()")
+    );
+  });
+
   it("leaves unbalanced or unquoted expressions alone", () => {
     expect(normalizeDefault("'unterminated")).toBe("'unterminated");
     expect(normalizeDefault("gen_random_uuid()")).toBe("gen_random_uuid()");
