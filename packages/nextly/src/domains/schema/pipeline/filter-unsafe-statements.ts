@@ -119,7 +119,8 @@ function inferOwnerTableFromObjectName(
  */
 export function filterUnsafeStatements(
   statements: string[],
-  desiredTableNames: string[]
+  desiredTableNames: string[],
+  indexOwners?: ReadonlyMap<string, string>
 ): string[] {
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
 
@@ -166,13 +167,21 @@ export function filterUnsafeStatements(
     }
 
     // ── DROP SEQUENCE / DROP INDEX ───────────────────────────────────
-    // Block when the inferred owner table is not in desiredSet
-    // (longest-prefix match — see inferOwnerTableFromObjectName).
+    // Prefer the owner the live database reported; fall back to inferring it
+    // from the name. The name walk only understands Postgres's
+    // `<table>_<col>_idx` suffix convention, so it cannot resolve Nextly's own
+    // `idx_<table>_<col>` names, nor any index a user named themselves.
+    // Sequences have no snapshot equivalent and always take the fallback.
     for (const { kind, re } of ORPHAN_DROP_PATTERNS) {
       const m = stmt.match(re);
       if (!m) continue;
       const objectName = m[1] ?? "";
-      if (inferOwnerTableFromObjectName(objectName, desiredSet) !== null) {
+      const knownOwner = indexOwners?.get(objectName.toLowerCase());
+      if (knownOwner !== undefined) {
+        if (desiredSet.has(knownOwner.toLowerCase())) return true;
+      } else if (
+        inferOwnerTableFromObjectName(objectName, desiredSet) !== null
+      ) {
         return true;
       }
       console.warn(
