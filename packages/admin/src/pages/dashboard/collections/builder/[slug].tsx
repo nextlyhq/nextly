@@ -312,21 +312,34 @@ export default function CollectionBuilderEditPage({
           // kept the old values. Persist them here, without `fields` so no
           // second migration is generated for a schema already applied.
           if (settings) {
-            updateCollection({
-              collectionName: slug,
-              updates: {
-                labels: {
-                  singular: settings.singularName,
-                  plural: settings.pluralName,
+            updateCollection(
+              {
+                collectionName: slug,
+                updates: {
+                  labels: {
+                    singular: settings.singularName,
+                    plural: settings.pluralName,
+                  },
+                  description: settings.description,
+                  icon: settings.icon,
+                  status: settings.status === true,
+                  localized: settings.i18n === true,
+                  versions: settings.versions === true,
                 },
-                description: settings.description,
-                icon: settings.icon,
-                status: settings.status === true,
-                localized: settings.i18n === true,
-                versions: settings.versions === true,
               },
-            });
-            setOriginalSettings(settings);
+              {
+                // The baseline moves only once the write lands. Clearing it
+                // first would show a clean form over a registry that still
+                // holds the old settings, with no way to retry.
+                onSuccess: () => setOriginalSettings(settings),
+                onError: err => {
+                  const m = (err as { message?: string })?.message;
+                  toast.error(
+                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+                  );
+                },
+              }
+            );
           }
 
           // D-series: database mode also writes the committable ui-schema.json

@@ -247,17 +247,30 @@ export default function SingleBuilderEditPage({
           // kept the old values. Persist them here, without `fields` so no
           // second migration is generated for a schema already applied.
           if (settings) {
-            updateSingle({
-              slug,
-              updates: {
-                label: settings.singularName,
-                description: settings.description,
-                status: settings.status === true,
-                localized: settings.i18n === true,
-                versions: settings.versions === true,
+            updateSingle(
+              {
+                slug,
+                updates: {
+                  label: settings.singularName,
+                  description: settings.description,
+                  status: settings.status === true,
+                  localized: settings.i18n === true,
+                  versions: settings.versions === true,
+                },
               },
-            });
-            setOriginalSettings(settings);
+              {
+                // The baseline moves only once the write lands. Clearing it
+                // first would show a clean form over a registry that still
+                // holds the old settings, with no way to retry.
+                onSuccess: () => setOriginalSettings(settings),
+                onError: err => {
+                  const m = (err as { message?: string })?.message;
+                  toast.error(
+                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+                  );
+                },
+              }
+            );
           }
 
           // D-series: database mode also writes the committable ui-schema.json
