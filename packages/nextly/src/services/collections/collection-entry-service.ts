@@ -242,6 +242,22 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * Whether this user may update the entry, without performing the update.
+   *
+   * For callers that write something other than the document and still owe it
+   * the document's own update rules. See the mutation service for why this
+   * shares `updateEntry`'s evaluation rather than restating it.
+   */
+  async canUpdateEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    routeAuthorized?: boolean;
+  }): Promise<boolean> {
+    return this.mutationService.canUpdateEntry(params);
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
