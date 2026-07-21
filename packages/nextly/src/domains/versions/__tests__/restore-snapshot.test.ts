@@ -1280,24 +1280,36 @@ describe("buildRestorePayload — the type marker does not reach the write", () 
     expect(payload).toEqual({ meta: { hero: { heading: "Hi" } } });
   });
 
-  it("still uses it to reject a group's component that was retargeted", () => {
+  it("withholds the whole container when a nested component is refused", () => {
     // Dropping the marker from the payload must not stop it selecting the
-    // schema this value is pruned against.
+    // schema this value is pruned against. And the container has to be held
+    // back entirely: it is written as one JSON value, so submitting `meta`
+    // without `hero` would delete the live nested component rather than report
+    // that it could not be applied.
     const insideGroup = [
       {
         name: "meta",
         type: "group",
-        fields: [{ name: "hero", type: "component", component: "banner" }],
+        fields: [
+          { name: "summary", type: "text" },
+          { name: "hero", type: "component", component: "banner" },
+        ],
       },
     ] as FieldConfig[];
 
-    const { payload } = buildRestorePayload(
-      { meta: { hero: { _componentType: "gallery", heading: "Old" } } },
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        meta: {
+          summary: "Still here",
+          hero: { _componentType: "gallery", heading: "Old" },
+        },
+      },
       insideGroup,
       { ...ctx, componentSchemas }
     );
 
-    expect(payload.meta).toEqual({});
+    expect(payload.meta).toBeUndefined();
+    expect(droppedFields).toContain("meta");
   });
 
   it("keeps it on a dynamic zone's rows, which the save path reads back", () => {
@@ -1313,6 +1325,51 @@ describe("buildRestorePayload — the type marker does not reach the write", () 
 
     expect(payload).toEqual({
       blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }],
+    });
+  });
+});
+
+describe("buildRestorePayload — a component that declares no fields", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+  // A component may legitimately declare nothing, which leaves the walk with no
+  // children to recurse into.
+  const componentSchemas = componentSchemasOf({ empty: [] as FieldConfig[] });
+
+  it("still strips the marker from one nested in a group", () => {
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "inner", type: "component", component: "empty" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { meta: { inner: { _componentType: "empty" } } },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ meta: { inner: {} } });
+  });
+
+  it("keeps it on an empty dynamic zone's rows", () => {
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "blocks", type: "component", components: ["empty"] }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { meta: { blocks: [{ _componentType: "empty", id: "b1" }] } },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      meta: { blocks: [{ _componentType: "empty", id: "b1" }] },
     });
   });
 });

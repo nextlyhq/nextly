@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -454,9 +455,13 @@ describe("resolveComponentFieldMap", () => {
           { name: "hero", type: "component", component: "gone" },
         ] as FieldConfig[],
         async () => {
-          throw new Error("connection lost");
+          // What the registry lookup actually raises: it wraps driver errors
+          // through `NextlyError.fromDatabaseError` rather than throwing raw.
+          throw NextlyError.internal({
+            logContext: { reason: "connection lost" },
+          });
         }
       )
-    ).rejects.toThrow("connection lost");
+    ).rejects.toThrow(NextlyError);
   });
 });
