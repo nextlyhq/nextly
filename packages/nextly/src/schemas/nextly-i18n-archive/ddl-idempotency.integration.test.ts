@@ -8,8 +8,8 @@
  * first time.
  *
  * `CREATE TABLE IF NOT EXISTS` covers the table on every dialect. The index is the risk:
- * MySQL has no `IF NOT EXISTS` for `CREATE INDEX`, so a separate index statement there
- * raises ER_DUP_KEYNAME on the second run. Applying twice is the whole test.
+ * MySQL has no `IF NOT EXISTS` for `CREATE INDEX`, so any separate index statement there
+ * raises ER_DUP_KEYNAME once the index exists. Applying twice is the whole test.
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";

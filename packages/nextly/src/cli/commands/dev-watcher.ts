@@ -58,10 +58,9 @@ export function createDebouncedSync(
       logger.newline();
       logger.header("Config Changed - Re-syncing");
 
-      // Sync collections, singles and components — unconditionally, so the orphan scan
-      // still runs when the config declares none of that type. Deleting the last entry of
-      // a kind is precisely what orphans its table, so skipping on a zero count hid the
-      // warning in the only case where it was guaranteed to fire.
+      // Unconditional, so the orphan scan still runs when the config declares none of a
+      // type: deleting the last entry of a kind is precisely what orphans its table, making
+      // a zero count the case where the scan matters most.
       await syncCollections(configToSync, adapter, options, context);
       await syncSingles(configToSync, adapter, options, context);
       await syncComponents(configToSync, adapter, options, context);

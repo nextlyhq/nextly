@@ -271,10 +271,9 @@ export async function runDbSync(
 
     // Step 4-5.5: Sync collections, singles and components.
     //
-    // These run even when the config declares none of that entity type, because that is
-    // exactly when orphans exist: removing the LAST collection/single/component from the
-    // config is what strands its table. Gating on a non-zero count skipped the orphan
-    // scan in the one case where it always has something to report.
+    // These run even when the config declares none of that entity type: removing the LAST
+    // collection/single/component is what strands its table, so a zero count is exactly when
+    // the orphan scan has something to report.
     await syncCollections(configResult, adapter, options, context);
     await syncSingles(configResult, adapter, options, context);
     await syncComponents(configResult, adapter, options, context);

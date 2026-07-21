@@ -39,9 +39,8 @@ export interface PruneResult {
   /** Slugs actually dropped (empty unless `force`). */
   dropped: string[];
   /**
-   * Companion `_locales` tables whose main table no longer exists. These are left over
-   * from deletes that predate companion teardown, so they can never be reached through a
-   * registry entry — only a catalog sweep finds them.
+   * Companion `_locales` tables whose main table no longer exists. No registry entry points
+   * at them, so only a catalog sweep can find them.
    */
   orphanedCompanions: string[];
   /** Companion tables actually dropped (empty unless `force`). */
@@ -61,15 +60,9 @@ interface RunPruneArgs {
   force: boolean;
 }
 
-/**
- * Strips the managed prefix and `_locales` suffix to recover the entity slug a companion
- * belongs to (`dc_pages_locales` -> `pages`), which is how `nextly_i18n_archive` scopes
- * its rows.
- */
-function companionSlug(companionTable: string): string {
-  return companionTable
-    .replace(/_locales$/, "")
-    .replace(/^(dc_|single_|comp_)/, "");
+/** The main table a companion belongs to (`dc_pages_locales` -> `dc_pages`). */
+function companionMainTable(companionTable: string): string {
+  return companionTable.replace(/_locales$/, "");
 }
 
 /**
@@ -83,9 +76,9 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   );
   const slugs = orphans.map(o => o.slug);
 
-  // Catalog sweep for companions whose main table is already gone. Deletes that predate
-  // companion teardown left these behind with no registry row pointing at them, so they are
-  // invisible to `findOrphanedCollections` and only a table listing surfaces them.
+  // Catalog sweep for companions whose main table is already gone. With no registry row
+  // pointing at them they are invisible to `findOrphanedCollections`; only a table listing
+  // surfaces them.
   const allTables = await args.adapter.listTables();
   const liveTables = new Set(allTables);
   const orphanedCompanions = allTables
@@ -127,14 +120,17 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     dropped.push(orphan.slug);
   }
 
-  // Sweep the pre-existing orphans. Their main table is already gone, so there is no FK to
-  // order around; the archive purge uses the slug the companion name encodes.
+  // Sweep the companions whose main table is already gone. There is no FK left to order
+  // around, and no registry row to name the entity — a slug cannot be derived from the
+  // table name because entities may declare a custom `tableName`, so `dc_articles` can
+  // belong to slug `blog`. Passing `null` drops the table and leaves the shared archive
+  // untouched rather than purging rows that may belong to a different entity.
   const droppedCompanions: string[] = [];
   for (const companion of orphanedCompanions) {
     await teardownEntityI18n({
       adapter: args.adapter,
-      slug: companionSlug(companion),
-      tableName: companion.replace(/_locales$/, ""),
+      slug: null,
+      tableName: companionMainTable(companion),
     });
     droppedCompanions.push(companion);
   }

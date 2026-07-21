@@ -8,8 +8,8 @@
  * with NO foreign key. Nothing therefore cascades: dropping the parent table leaves every
  * embedded instance behind, pointing at a table that no longer exists.
  *
- * Per-ENTRY deletes already clean up via `deleteComponentData`. This is the ENTITY-level
- * counterpart, which had no equivalent.
+ * `deleteComponentData` covers a single entry; this is the ENTITY-level counterpart, used
+ * when the whole collection/single/component goes away.
  *
  * Three things make this more than a single DELETE:
  *   - Components nest. A component instance can itself be the parent of another instance
@@ -79,6 +79,34 @@ interface Frontier {
   ids: string[] | null;
 }
 
+/**
+ * Whether the ORM has a schema registered for `table`, so `select`/`delete` can address it.
+ *
+ * A `comp_` table can exist in the catalog with no registered schema — left over from a
+ * component deleted in an earlier process, or created before a boot that never re-registered
+ * it. Those must be skipped rather than abort the delete. Every OTHER failure (connection
+ * loss, permissions, lock timeout) is rethrown: treating it as "no schema, nothing to clean"
+ * would report a successful delete while the rows survive.
+ */
+async function isResolvable(
+  adapter: TeardownComponentDataAdapter,
+  table: string
+): Promise<boolean> {
+  try {
+    // A no-op probe: matches nothing, so it costs a plan and no rows, and fails only on
+    // schema resolution or a genuine database error.
+    await adapter.select(table, {
+      where: { and: [{ column: "id", op: "IS NULL" }] },
+    });
+    return true;
+  } catch (error) {
+    // The adapter reports an unregistered table by message; there is no distinct code for
+    // it. Anything else is a real failure and belongs to the caller.
+    if (/not found in schema registry/i.test(String(error))) return false;
+    throw error;
+  }
+}
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -120,6 +148,15 @@ export async function teardownEntityComponentData(
     const nextFrontier: Frontier[] = [];
 
     for (const componentTable of componentTables) {
+      // Resolvability is a property of the table, not of any one query, so establish it
+      // once per table. Checking here also means an unresolvable table is skipped for
+      // every parent rather than re-attempted on each iteration.
+      if (skippedTables.has(componentTable)) continue;
+      if (!(await isResolvable(adapter, componentTable))) {
+        skippedTables.add(componentTable);
+        continue;
+      }
+
       for (const parent of frontier) {
         // Match on parent id as well as parent table for nested levels — without it the
         // sweep would take instances belonging to other entities using the same component.
@@ -139,19 +176,12 @@ export async function teardownEntityComponentData(
           };
 
           // Read the ids first: they are needed to reach nested instances and companion
-          // rows, and the DELETE cannot return them portably across dialects.
-          // A table the ORM cannot resolve (present in the catalog but never registered,
-          // e.g. left over from an earlier deleted component) is recorded and skipped —
-          // failing here would make one stale table block every entity delete.
-          let rows: Array<{ id: string }>;
-          try {
-            rows = await adapter.select<{ id: string }>(componentTable, {
-              where,
-            });
-          } catch {
-            skippedTables.add(componentTable);
-            break;
-          }
+          // rows, and the DELETE cannot return them portably across dialects. Errors here
+          // propagate — the table resolves, so a failure is a real database problem and
+          // must not be mistaken for "nothing to clean up".
+          const rows = await adapter.select<{ id: string }>(componentTable, {
+            where,
+          });
           if (rows.length === 0) continue;
 
           const instanceIds = rows

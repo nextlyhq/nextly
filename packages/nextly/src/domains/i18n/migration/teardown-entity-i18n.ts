@@ -4,9 +4,8 @@
  * Companion `_locales` tables are deliberately invisible to the schema pipeline: they match
  * the managed prefix but are excluded via `isCompanionTable`, and `filter-unsafe-statements`
  * discards their DROP silently, because the localization migration layer owns their
- * lifecycle. That ownership was only ever wired for the enable/disable transition, so an
- * entity DELETE dropped the main table and orphaned the companion. This helper is the
- * missing half — the delete-path counterpart to `buildLocalizationDownStatements`.
+ * lifecycle. This helper is that layer's delete-path entry point, alongside
+ * `buildLocalizationDownStatements` for the enable/disable transition.
  *
  * Two artifacts, two different disposal rules:
  *   - `<main>_locales` is per-entity, so it is DROPPED. It must go BEFORE the main table:
@@ -45,8 +44,16 @@ export interface TeardownI18nAdapter {
 
 export interface TeardownEntityI18nArgs {
   adapter: TeardownI18nAdapter;
-  /** Entity slug exactly as the disable migration records it in `archive.collection`. */
-  slug: string;
+  /**
+   * Entity slug exactly as the disable migration records it in `archive.collection`.
+   *
+   * `null` when the caller cannot establish the slug — a catalog sweep finds companion
+   * tables whose registry row is already gone, and a slug cannot be recovered from the
+   * table name because entities may declare a custom `tableName`. The companion is still
+   * dropped; the archive purge is skipped, since guessing here would delete another
+   * entity's translations and leave this one's behind.
+   */
+  slug: string | null;
   /**
    * Physical MAIN table of the entity being deleted, e.g. `dc_pages`, `comp_seo`,
    * `single_home`. The companion name is derived as `<tableName>_locales`, matching
@@ -91,9 +98,11 @@ export async function teardownEntityI18n(
   }
 
   // The archive table is created lazily on the first localization disable, so its absence is
-  // the normal state for many databases and must not fail the delete.
+  // the normal state for many databases and must not fail the delete. A null slug means the
+  // caller could not identify the entity, and the archive is keyed by slug, so there is no
+  // safe row set to delete.
   let archiveRowsPurged = 0;
-  if (await adapter.tableExists(ARCHIVE_TABLE)) {
+  if (slug !== null && (await adapter.tableExists(ARCHIVE_TABLE))) {
     const db = adapter.getDrizzle();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
     // Scoped to this slug only — the archive is shared, so an unscoped delete would wipe

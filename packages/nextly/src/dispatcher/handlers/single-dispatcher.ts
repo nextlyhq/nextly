@@ -754,10 +754,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const dialect = adapter.dialect || "postgresql";
         const quotedTableName =
           dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
-        // Postgres needs CASCADE to drop dependent objects; without it the drop of an
-        // FK-referenced table raises, which previously went unnoticed because the error
-        // was swallowed and the registry row was deleted anyway, leaking both tables.
-        // Failures now propagate so the single stays intact and the delete can be retried.
+        // Postgres needs CASCADE to drop dependent objects: the companion's FK makes the
+        // main table an FK target, and a non-cascading drop of one raises. Failures
+        // propagate so a single that cannot be fully removed stays intact and retryable
+        // rather than losing its registry row while its tables survive.
         const dropSql =
           dialect === "postgresql"
             ? `DROP TABLE IF EXISTS ${quotedTableName} CASCADE`

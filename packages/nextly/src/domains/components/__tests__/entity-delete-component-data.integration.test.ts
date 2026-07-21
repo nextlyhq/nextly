@@ -5,7 +5,7 @@
  * them. They are rows in `comp_<slug>` associated back by three plain string columns
  * (`_parent_id`, `_parent_table`, `_parent_field`) with NO foreign key, so dropping the
  * parent table cascades nothing and every instance is left pointing at a table that is
- * gone. Per-entry deletes already clean up; entity-level deletes did not.
+ * gone, so the sweep has to find and remove them explicitly.
  *
  * The cases that make this non-trivial are all asserted here:
  *   - instances belonging to a DIFFERENT entity that shares the same component survive,

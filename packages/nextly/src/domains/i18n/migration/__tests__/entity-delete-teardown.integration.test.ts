@@ -2,15 +2,14 @@
  * Deleting an entity must leave no localization artifacts behind.
  *
  * Companion `_locales` tables are excluded from the schema pipeline and owned by the
- * localization migration layer, but that ownership was only wired for the enable/disable
- * transition — never for an entity DELETE. The result was an orphaned `<main>_locales` table
- * (and, for singles, a leaked main table too) plus stale `nextly_i18n_archive` rows.
+ * localization migration layer, so an entity delete must remove them explicitly. The same
+ * applies to the entity's rows in the shared `nextly_i18n_archive`.
  *
  * Two layers are proved here against a real in-memory SQLite database:
  *   1. `teardownEntityI18n` itself — drops the companion, purges only the deleted entity's
  *      archive rows, and stays a no-op when either artifact is absent.
- *   2. `ComponentRegistryService.deleteComponent` — the end-to-end regression: the real
- *      delete path must invoke that teardown, not just drop the main table.
+ *   2. `ComponentRegistryService.deleteComponent` — the real delete path must invoke that
+ *      teardown, not only drop the main table.
  *
  * System tables come from the production DDL helpers (`getI18nArchiveDdl`, drizzle-kit over
  * the real table definition), never hand-copied CREATE TABLE (see
@@ -238,7 +237,7 @@ describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
 
     const tables = await tableNames();
     expect(tables).not.toContain("comp_seo");
-    // The regression: the companion used to survive the delete as an orphan.
+    // The companion is excluded from the schema pipeline, so only the teardown removes it.
     expect(tables).not.toContain("comp_seo_locales");
     // An unrelated component is untouched.
     expect(tables).toContain("comp_hero");

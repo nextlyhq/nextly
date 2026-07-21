@@ -25,7 +25,7 @@ Three kinds of leftovers were possible. Localized entities keep translations in 
 
 Singles were worse still. Their data table was dropped without `CASCADE`, so on PostgreSQL and MySQL the companion's foreign key made the drop fail. The error was logged and swallowed, and the registry row was deleted anyway, leaving both tables stranded with nothing pointing at them. The drop now cascades and its failures propagate, so a delete that cannot finish leaves the single intact and retryable rather than half-removed.
 
-`nextly prune` gained a sweep for companion tables whose main table is already gone, to clear orphans left by earlier deletes. As with the rest of prune, they are listed by default and only dropped with `--force`.
+`nextly prune` gained a sweep for companion tables whose main table is already gone, to clear orphans left by earlier deletes. As with the rest of prune, they are listed by default and only dropped with `--force`. These tables have no registry entry naming their entity, and a slug cannot be recovered from the table name because entities may declare a custom `tableName`, so the sweep drops the table and leaves the shared translation archive untouched rather than purging rows on a guess.
 
 On MySQL, disabling localization now works more than once. The archive table's setup DDL is re-applied before every disable, but its `CREATE INDEX` had no existence guard — MySQL has no `IF NOT EXISTS` for indexes — so every attempt after the first failed with `Duplicate key name`. The index is now declared inline in the `CREATE TABLE IF NOT EXISTS`, making the whole statement a no-op once the table exists. Existing databases are unaffected: their index is kept and the table is left untouched.
 

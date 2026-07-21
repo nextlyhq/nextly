@@ -1,10 +1,9 @@
 /**
  * Dialect-shape unit tests for the entity-delete i18n teardown.
  *
- * The integration suite proves the behavior on real SQLite; these cover the per-dialect SQL
- * that SQLite cannot exercise — specifically that Postgres emits CASCADE. Without it, dropping
- * a table that a companion's FK references raises, which is exactly the failure that used to
- * leak a single's main table.
+ * The integration suite covers behavior on real databases; these cover the per-dialect SQL
+ * text, specifically that Postgres emits CASCADE. Without it, dropping a table that a
+ * companion's FK references raises, so the main table would survive its own delete.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -87,5 +86,24 @@ describe("teardownEntityI18n dialect SQL", () => {
     });
 
     expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 3 });
+  });
+
+  it("drops the companion but leaves the archive alone when the slug is unknown", async () => {
+    // The archive is keyed by slug, and a slug cannot be recovered from a table name
+    // because entities may declare a custom `tableName` — `dc_articles` can belong to slug
+    // `blog`. Purging on a guess would delete another entity's translations.
+    const adapter = makeAdapter("postgresql", () => true);
+
+    const result = await teardownEntityI18n({
+      adapter,
+      slug: null,
+      tableName: "dc_articles",
+    });
+
+    expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 0 });
+    expect(adapter.getDrizzle).not.toHaveBeenCalled();
+    expect(adapter.executeQuery).toHaveBeenCalledWith(
+      'DROP TABLE IF EXISTS "dc_articles_locales" CASCADE'
+    );
   });
 });
