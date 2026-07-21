@@ -29,6 +29,7 @@ import {
 import { SYSTEM_PERMISSIONS } from "./permission-seed-service";
 import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 import { RESERVED_SLUGS } from "../../../shared/sql-reserved";
+import { RESERVED_COLLECTION_NAMES } from "../../dynamic-collections/services/dynamic-collection-validation-service";
 
 let current: TestNextly | undefined;
 
@@ -87,6 +88,15 @@ describe("system permission slugs", () => {
     expect((RESERVED_SLUGS as readonly string[]).includes("webhooks")).toBe(
       true
     );
+  });
+
+  it("reserves the webhooks name on the Builder path too", () => {
+    // Builder-created collections never reach the code-first validator, so
+    // RESERVED_SLUGS alone would leave the collision reachable through the
+    // Schema Builder.
+    expect(
+      (RESERVED_COLLECTION_NAMES as readonly string[]).includes("webhooks")
+    ).toBe(true);
   });
 
   it("seeds the api-keys update permission under the slug callers ask for", async () => {
