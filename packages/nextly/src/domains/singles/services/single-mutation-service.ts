@@ -293,9 +293,15 @@ export class SingleMutationService extends BaseService {
           : undefined;
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
-      // still be localized and were saved with the requested locale, so that is
-      // what a snapshot of them represents.
-      const snapshotLocale = writeLocale ?? options.locale;
+      // still be localized. Those were written at the requested locale, or at
+      // the configured default when none was named — the component write and
+      // read both resolve `undefined` that way, so the default is recorded
+      // explicitly rather than left null and unplaceable.
+      const snapshotLocale =
+        writeLocale ??
+        (this.localization
+          ? resolveRequestedLocale(this.localization, options.locale)
+          : undefined);
       const localizedFieldNames = new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       );

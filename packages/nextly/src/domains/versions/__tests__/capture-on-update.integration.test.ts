@@ -316,6 +316,54 @@ describe("version capture on update (integration)", () => {
     expect(rows.at(-1)?.locale).toBe("de");
   });
 
+  it("records the default locale when a component write names none", async () => {
+    // The component write and read both resolve an absent locale to the
+    // configured default, so the snapshot holds default-language content.
+    // Recording null would leave restore unable to place it, and an ordinary
+    // create followed by an ordinary edit would produce unrestorable versions.
+    current = await createTestNextly({
+      localization: {
+        defaultLocale: "en",
+        locales: [{ code: "en" }, { code: "de" }],
+      },
+      components: [
+        defineComponent({
+          slug: "hero",
+          localized: true,
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            component({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Page", hero: { heading: "Welcome" } }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      { collectionName: "pages", entryId: id, overrideAccess: true },
+      { hero: { heading: "Welcome back" } }
+    );
+
+    const rows = await versions(current, "pages");
+    // Both the create and the update snapshot say which language they hold.
+    expect(rows[0].locale).toBe("en");
+    expect(rows.at(-1)?.locale).toBe("en");
+  });
+
   it("records no version when the schema does not opt in", async () => {
     current = await createTestNextly({
       collections: [

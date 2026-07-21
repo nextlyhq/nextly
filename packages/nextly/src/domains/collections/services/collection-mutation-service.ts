@@ -413,6 +413,23 @@ export class CollectionMutationService extends BaseService {
    * migrated main table no longer has them). Returns `null` when the collection isn't localized
    * or the companion table doesn't exist yet (dev/unmigrated → localized cols stay on main).
    */
+  /**
+   * The locale a component subtree in a snapshot belongs to.
+   *
+   * Component tables are per-locale whether or not their parent is, and a write
+   * that names no locale still reaches them at the configured default — the
+   * component read and write both resolve `undefined` that way. Recording null
+   * would leave that snapshot unplaceable, so the default is made explicit
+   * here. Without localization configured there are no per-locale rows and
+   * nothing to record.
+   */
+  private componentSnapshotLocale(
+    requested: string | undefined
+  ): string | null {
+    if (!this.localization) return null;
+    return resolveRequestedLocale(this.localization, requested);
+  }
+
   private async splitLocalizedWriteData(
     collectionName: string,
     entryData: Record<string, unknown>,
@@ -1641,7 +1658,7 @@ export class CollectionMutationService extends BaseService {
             locale:
               localizedWrite?.writeLocale ??
               (Object.keys(snapshotComponents ?? {}).length > 0
-                ? (params.locale ?? null)
+                ? this.componentSnapshotLocale(params.locale)
                 : null),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
@@ -2920,7 +2937,8 @@ export class CollectionMutationService extends BaseService {
                   // it null here would make component translations captured on
                   // update unrestorable.
                   locale: capturedLocaleState
-                    ? (localizedUpdate?.writeLocale ?? params.locale ?? null)
+                    ? (localizedUpdate?.writeLocale ??
+                      this.componentSnapshotLocale(params.locale))
                     : null,
                   sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,
