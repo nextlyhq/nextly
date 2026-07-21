@@ -12,7 +12,10 @@ import { expect, test } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 
-// Mirrors apps/playground/nextly.config.ts.
+// Mirrors apps/playground/nextly.config.ts, which only configures these
+// colors when NEXTLY_E2E_BRANDING=1. playwright.config.ts sets it for the
+// suite's own server; against a server started without it the admin is
+// monochrome by design and these assertions fail on the default token.
 const PRIMARY_HEX = "#6366f1";
 const EXPECTED_PRIMARY = "hsl(238.7 83.5% 66.7%)";
 
