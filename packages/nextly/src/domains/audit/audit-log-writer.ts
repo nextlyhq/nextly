@@ -27,6 +27,8 @@
 
 import { randomUUID } from "crypto";
 
+import { getColumns } from "drizzle-orm";
+
 import { getDialectTables } from "../../database/index";
 import { getNextlyLogger } from "../../observability/logger";
 
@@ -71,6 +73,32 @@ export const NULL_AUDIT_LOG_WRITER: AuditLogWriter = {
  * the adapter lazily on each write — handlers can be constructed before
  * the DI container finishes initialising.
  */
+/**
+ * Encode `metadata` for whichever column type this dialect uses.
+ *
+ * The column is `jsonb` on PostgreSQL and `json` on MySQL, where the driver
+ * serialises an object itself and handing it a pre-encoded string would store
+ * a JSON string rather than an object. On SQLite it is plain `text`, which
+ * cannot bind an object at all — the insert fails, and because the writer
+ * swallows its own failures the loss is silent.
+ *
+ * Decided from the column rather than a dialect string so the two stay in step
+ * if either schema changes.
+ */
+function encodeMetadata(
+  table: unknown,
+  metadata: Record<string, unknown> | undefined
+): unknown {
+  if (metadata === undefined) return null;
+  const column = (
+    getColumns(table as Parameters<typeof getColumns>[0]) as Record<
+      string,
+      { dataType?: string } | undefined
+    >
+  ).metadata;
+  return column?.dataType === "string" ? JSON.stringify(metadata) : metadata;
+}
+
 export function buildAuditLogWriter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
@@ -94,7 +122,7 @@ export function buildAuditLogWriter(
           targetUserId: event.targetUserId ?? null,
           ipAddress: event.ipAddress ?? null,
           userAgent: event.userAgent ?? null,
-          metadata: event.metadata ?? null,
+          metadata: encodeMetadata(table, event.metadata),
           createdAt: new Date(),
         });
       } catch (err) {
