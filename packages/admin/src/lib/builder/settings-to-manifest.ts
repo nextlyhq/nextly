@@ -30,6 +30,9 @@ export function collectionEntityFromSettings(
       status: settings.status === true,
       // i18n: the collection-level Internationalization toggle.
       localized: settings.i18n === true,
+      // Version history, mirrored into ui-schema.json so the committed
+      // manifest matches what the registry was just told.
+      versions: settings.versions === true,
     },
     fields,
   });
@@ -47,6 +50,8 @@ export function singleEntityFromSettings(
       status: settings.status === true,
       // i18n: the single-level Internationalization toggle (mirrors collectionEntityFromSettings).
       localized: settings.i18n === true,
+      // Version history (mirrors collectionEntityFromSettings).
+      versions: settings.versions === true,
     },
     fields,
   });

@@ -59,6 +59,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -840,6 +841,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization toggle; honoured when defined, undefined leaves the
             // existing value untouched. Persists to dynamic_singles.localized.
             localized?: boolean;
+            // Version history toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -866,6 +870,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // managed on the companion (moving existing rows between the two is the `nextly migrate`
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
+      // Version history toggle. The registry column holds the resolved config
+      // every runtime reader tests, so the boolean is normalized before it is
+      // stored; off writes null. `status` is deliberately not passed to the
+      // resolver: it aliases to a versioned config for back-compat, which would
+      // stop the toggle from turning versioning off on a Draft/Published single.
+      if (b.versions !== undefined) {
+        updateData.versions = resolveVersionsConfig(b.versions);
+      }
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;

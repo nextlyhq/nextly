@@ -17,6 +17,7 @@ import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec"
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { resolveVersionsConfig } from "../../versions/resolve-config";
 
 import {
   DynamicCollectionRegistryService,
@@ -95,6 +96,8 @@ export interface UpdateCollectionInput {
   status?: boolean;
   /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
   localized?: boolean;
+  /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
+  versions?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -383,6 +386,14 @@ export class DynamicCollectionService extends BaseService {
     // it). Mirrors `status` — only written when the caller explicitly sent it.
     if (updates.localized !== undefined)
       metadataUpdates.localized = updates.localized;
+    // Version history toggle. The column holds the resolved config every
+    // runtime reader tests, so the boolean is normalized before it is stored;
+    // off writes null. `status` is deliberately not passed to the resolver —
+    // it aliases to a versioned config for back-compat, which would stop the
+    // toggle from ever turning versioning off on a Draft/Published entity.
+    if (updates.versions !== undefined) {
+      metadataUpdates.versions = resolveVersionsConfig(updates.versions);
+    }
 
     let migrationSQL: string | null = null;
     let migrationFileName: string | null = null;

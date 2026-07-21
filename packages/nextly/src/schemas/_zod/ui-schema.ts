@@ -350,6 +350,14 @@ function entity(kind?: "collection" | "single" | "component") {
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),
+      /**
+       * Whether every save is recorded as a restorable version. Boolean rather
+       * than the code-first `boolean | VersionsConfig`: the Schema Builder
+       * offers on/off, and the options the object form carries are not enforced
+       * yet. Unknown keys are stripped here, so without this the Builder's
+       * write would vanish on the next parse.
+       */
+      versions: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {

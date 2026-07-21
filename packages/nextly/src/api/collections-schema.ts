@@ -21,6 +21,7 @@ import { z } from "zod";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
@@ -80,6 +81,9 @@ const createCollectionSchema = z.object({
   // i18n opt-in. Default false keeps non-localized behavior. Enabling adds the
   // companion `_locales` table on the next migrate (migration-gated).
   localized: z.boolean().optional(),
+  // Version history opt-in. Default off: capture adds a row to nextly_versions
+  // on every save, which no existing caller has asked for.
+  versions: z.boolean().optional(),
   admin: z
     .object({
       group: z.string().optional(),
@@ -271,6 +275,9 @@ export const POST = withErrorHandler(async (request: Request) => {
     // i18n: forward the localization opt-in so the registry stores it (companion
     // table is provisioned on the next migrate).
     localized: validated.localized === true,
+    // Version history opt-in, normalized to the resolved config the column
+    // holds and every runtime reader tests.
+    versions: resolveVersionsConfig(validated.versions),
     schemaHash,
     hooks: validated.hooks,
   });

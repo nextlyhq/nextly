@@ -37,7 +37,7 @@ import {
 import { toast } from "@admin/components/ui";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
-import type { ApiSingle } from "@admin/types/entities";
+import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -245,9 +245,9 @@ export function useCreateSingle() {
   return useMutation<
     { message: string; data: ApiSingle },
     Error,
-    Partial<ApiSingle>
+    UpdateSinglePayload
   >({
-    mutationFn: async (singleData: Partial<ApiSingle>) => {
+    mutationFn: async (singleData: UpdateSinglePayload) => {
       return await singleApi.create(singleData);
     },
     onSuccess: () => {
@@ -287,7 +287,7 @@ export function useUpdateSingle() {
   return useMutation<
     { message: string },
     Error,
-    { slug: string; updates: Partial<ApiSingle> }
+    { slug: string; updates: UpdateSinglePayload }
   >({
     mutationFn: async ({ slug, updates }) => {
       return await singleApi.update(slug, updates);

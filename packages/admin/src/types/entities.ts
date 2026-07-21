@@ -298,6 +298,14 @@ export interface ApiSingle {
    */
   localized?: boolean;
 
+  /**
+   * Resolved version-history config, or null/absent when the Single is
+   * unversioned. The server normalizes the Schema Builder's on/off into this
+   * shape, so reads carry the object while writes send a boolean — see
+   * `UpdateSinglePayload`.
+   */
+  versions?: { enabled?: boolean } | null;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 
@@ -307,6 +315,17 @@ export interface ApiSingle {
   /** Number of fields in the Single */
   fieldCount?: number;
 }
+
+/**
+ * What a Single schema update may send.
+ *
+ * Most keys mirror the read shape, but `versions` does not: the Schema Builder
+ * offers on/off and the server resolves that into the config `ApiSingle`
+ * carries back.
+ */
+export type UpdateSinglePayload = Omit<Partial<ApiSingle>, "versions"> & {
+  versions?: boolean;
+};
 
 // ==================== COMPONENT TYPES ====================
 
