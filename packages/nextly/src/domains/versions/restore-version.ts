@@ -214,6 +214,31 @@ function usableLocale(versionLocale: string | null): string | null {
 }
 
 /**
+ * Remove from `payload` every key an access probe changed, reporting each.
+ *
+ * The read and write rules are evaluated separately but answered the same way:
+ * a key the probe dropped, or a container it altered, is one this caller may
+ * not carry. Holding a changed container back whole is deliberate — submitting
+ * it half-stripped would overwrite the live value with a partial one, which is
+ * worse than not restoring the field.
+ *
+ * Shared so the two probes cannot drift apart, which is the failure this file
+ * has already seen more than once.
+ */
+function dropFieldsTheProbeRejected(
+  payload: Record<string, unknown>,
+  probe: Record<string, unknown>,
+  droppedFields: string[]
+): void {
+  for (const key of Object.keys(payload)) {
+    if (!(key in probe) || !deepEquals(payload[key], probe[key])) {
+      delete payload[key];
+      droppedFields.push(key);
+    }
+  }
+}
+
+/**
  * Structural equality for payload values.
  *
  * Used to tell whether field-level rules changed a container while probing.
@@ -365,12 +390,7 @@ export async function restoreVersion(
       user: args.user,
       overrideAccess: false,
     });
-    for (const key of Object.keys(payload)) {
-      if (!(key in readProbe) || !deepEquals(payload[key], readProbe[key])) {
-        delete payload[key];
-        droppedFields.push(key);
-      }
-    }
+    dropFieldsTheProbeRejected(payload, readProbe, droppedFields);
   } catch {
     // A failure here must not block a restore the update path would allow; the
     // write rules below remain the authority on what may be applied.
@@ -398,23 +418,7 @@ export async function restoreVersion(
       overrideAccess: false,
       id: args.entryId,
     });
-    for (const key of Object.keys(payload)) {
-      if (!(key in accessProbe)) {
-        delete payload[key];
-        droppedFields.push(key);
-        continue;
-      }
-
-      // A denied field nested inside a container leaves the key in place and
-      // the container changed, so an equality check is what catches it. The
-      // whole container is then held back: submitting it half-stripped would
-      // overwrite the live value with a partial one, which is worse than not
-      // restoring the field at all.
-      if (!deepEquals(payload[key], accessProbe[key])) {
-        delete payload[key];
-        droppedFields.push(key);
-      }
-    }
+    dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);
   } catch {
     // A failure here must not block a restore the update path would allow; the
     // update evaluates the same rules again and remains the authority.
