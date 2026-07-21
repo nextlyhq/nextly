@@ -84,9 +84,13 @@ describe("teardownEntityComponentData failure handling", () => {
         // comp_hero yields one instance, forming the next frontier.
         return [{ id: "h1" }];
       }),
-      // Zero rows under dc_posts, two under the comp_hero frontier.
+      // Zero rows under dc_posts. Two under comp_hero, but ONLY when the probe also
+      // constrains to the h1 instance — so dropping the nested `_parent_id` clause makes
+      // this return zero and the test fail, rather than passing on the table name alone.
       executeQuery: vi.fn(async (_sql: string, params?: unknown[]) =>
-        params?.[0] === "comp_hero" ? [{ n: 2 }] : [{ n: 0 }]
+        params?.[0] === "comp_hero" && params.includes("h1")
+          ? [{ n: 2 }]
+          : [{ n: 0 }]
       ),
     };
 
@@ -100,6 +104,7 @@ describe("teardownEntityComponentData failure handling", () => {
       logContext: expect.objectContaining({
         componentTable: "comp_ghost",
         parentTable: "comp_hero",
+        rows: 2,
       }),
     });
   });
