@@ -43,6 +43,12 @@ export function drizzleTableToTableSpec(table: Table): TableSpec {
     type: normalizeDrizzleType(col),
     nullable: !col.notNull,
     default: extractDefault(col),
+    // Recorded so the diff can exempt primary keys from the nullability
+    // comparison. Drizzle sets `primary` on the column for `.primaryKey()`
+    // in every dialect; a composite key declared through the table's extra
+    // config leaves it false, which is correct here — this exemption is
+    // about the single-column form the dialects render inconsistently.
+    ...(col.primary === true ? { primaryKey: true } : {}),
   }));
 
   return { name, columns };
@@ -111,12 +117,48 @@ function extractDefault(col: { default?: unknown }): string | undefined {
   ) {
     return String(value);
   }
-  // SQL-expression defaults arrive as objects (or, rarely, functions/symbols);
-  // these have no meaningful primitive coercion (`String({})` →
-  // "[object Object]"), so serialize them deterministically instead.
+  // A Drizzle `sql` default renders to the text the database will store, so
+  // the desired side can be compared with what introspection reads back. A
+  // column declared `.default(sql`(unixepoch())`)` is reported by SQLite as
+  // `(unixepoch())`; serialising the object instead produced a JSON blob that
+  // could never equal it, so the column emitted a default change on every
+  // diff and the reconcile never converged.
+  const rendered = renderSqlChunks(value);
+  if (rendered !== undefined) return rendered;
+
+  // Anything else (functions, symbols, parameterised SQL) has no meaningful
+  // primitive coercion, so serialize deterministically. That will not match
+  // the live side, which costs a spurious op — the direction this pipeline
+  // chooses over silently treating two different defaults as equal.
   try {
     return JSON.stringify(value);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The SQL text of a Drizzle `sql` template, when it is entirely static.
+ *
+ * Drizzle holds a template as `queryChunks`; a chunk carrying a `value` array
+ * of strings is literal SQL. Every chunk being literal means the whole
+ * template is the text it spells, which is what the database stores and what
+ * introspection reads back.
+ *
+ * Returns `undefined` for a template with a bound parameter. Those cannot be
+ * rendered to the stored text without knowing how the dialect inlines them,
+ * and guessing would compare two different defaults equal.
+ */
+function renderSqlChunks(value: object): string | undefined {
+  const chunks = (value as { queryChunks?: unknown }).queryChunks;
+  if (!Array.isArray(chunks) || chunks.length === 0) return undefined;
+
+  const parts: string[] = [];
+  for (const chunk of chunks) {
+    const chunkValue = (chunk as { value?: unknown }).value;
+    if (!Array.isArray(chunkValue)) return undefined;
+    if (!chunkValue.every(part => typeof part === "string")) return undefined;
+    parts.push(chunkValue.join(""));
+  }
+  return parts.join("");
 }

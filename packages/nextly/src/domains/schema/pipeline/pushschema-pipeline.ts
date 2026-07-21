@@ -47,12 +47,15 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+// Index restore uses the all-dialect templates, not ddl-emitter/: that module
+// is the PostgreSQL fast path and throws for the dialect this exists for.
 import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
 } from "./filter-unsafe-statements";
+import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -904,8 +907,19 @@ export class PushSchemaPipeline {
           }
         }
 
+        // Appended to the same batch so they run after the table changes they
+        // index. On PG and MySQL that batch is transactional; SQLite runs
+        // without a transaction by design, so a failing restore there is
+        // reported but the rebuild it followed has already landed.
+        const restore = indexRestoreStatements(
+          desiredSnapshot,
+          dialect,
+          safe,
+          resolvedOps
+        );
+
         try {
-          await this.deps.executor.executeStatements(tx, safe);
+          await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -913,6 +927,11 @@ export class PushSchemaPipeline {
           );
         }
 
+        // `safe.length`, not the executed length: this number is the
+        // journal's `statements_executed`, read against `statements_planned`
+        // from the diff. The restore statements were never planned, so
+        // counting them would report a mismatch on every apply that had to
+        // put an index back.
         return safe.length;
       };
 

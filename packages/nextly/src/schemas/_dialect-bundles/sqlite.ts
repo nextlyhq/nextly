@@ -51,6 +51,11 @@ export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events
 // resolve `nextly_versions` (a managed core table) for runtime CRUD.
 export { nextlyVersionsSqlite as nextlyVersions } from "../versions/sqlite";
 
+// Localization archive; in the bundle so freshPushSchema creates it. Being in
+// getCoreSchema alone only makes it diffable: the apply pushes this map, so a
+// table missing here is proposed on every reconcile and created by none.
+export { nextlyI18nArchive } from "../nextly-i18n-archive/sqlite";
+
 // Webhook + event system tables. Must be in this flat bundle (not just
 // getCoreSchema) so freshPushSchema creates them on a fresh database.
 export {

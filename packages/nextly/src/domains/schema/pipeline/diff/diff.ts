@@ -175,7 +175,18 @@ function diffColumns(
           toType: curC.type,
         });
       }
-      if (prevC.nullable !== curC.nullable) {
+      // A primary key's nullability is not an independent attribute: it
+      // follows from being the primary key, and the dialects disagree only on
+      // whether they bother to write it down. SQLite records `id text PRIMARY
+      // KEY` with no NOT NULL and reports it back as nullable, while the
+      // desired side calls it required — a difference no ALTER can resolve,
+      // because SQLite has no statement that adds NOT NULL to an existing
+      // column. Comparing it produces an op that is emitted on every run,
+      // never converges, and keeps handing the reconcile work to do; the
+      // table rebuilds that follow are what silently drop indexes.
+      const isPrimaryKey =
+        curC.primaryKey === true || prevC.primaryKey === true;
+      if (!isPrimaryKey && prevC.nullable !== curC.nullable) {
         nullableChanges.push({
           type: "change_column_nullable",
           tableName,
