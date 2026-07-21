@@ -187,8 +187,11 @@ function applyMakeOptionalToDesired(
  * ahead of it.
  *
  * Pure so the statements can be asserted directly; the caller appends them to
- * the push batch, which keeps them in the same transaction and after the
- * table changes they index.
+ * the push batch, so they run after the table changes they index and share
+ * that batch's failure handling. On PostgreSQL and MySQL the batch runs in a
+ * transaction; SQLite deliberately runs without one (PRAGMA foreign_keys
+ * cannot be toggled inside a transaction), so a restore that fails there
+ * leaves the rebuilt table committed without the index that failed.
  */
 export function indexRestoreStatements(
   desired: NextlySchemaSnapshot,
@@ -958,9 +961,10 @@ export class PushSchemaPipeline {
           }
         }
 
-        // Appended to the same batch, after the table changes they index and
-        // inside the same transaction, so a table can never commit without
-        // the indexes the desired schema declares for it.
+        // Appended to the same batch so they run after the table changes they
+        // index. On PG and MySQL that batch is transactional; SQLite runs
+        // without a transaction by design, so a failing restore there is
+        // reported but the rebuild it followed has already landed.
         const restore = indexRestoreStatements(desiredSnapshot, dialect, safe);
 
         try {
