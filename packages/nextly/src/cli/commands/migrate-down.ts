@@ -177,7 +177,7 @@ export async function migrateDownCore(
         } catch (err) {
           await deps.recordFailed(
             p.filename,
-            truncateErrorMessage(describeError(err))
+            truncateErrorMessage(describeError(err, { context: false }))
           );
           throw err;
         }

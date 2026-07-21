@@ -93,6 +93,24 @@ describe("describeError", () => {
     expect(immediateMessage(wrapped)).not.toContain("already exists");
   });
 
+  it("omits logContext when the description will be persisted", () => {
+    // A terminal line is read once; a stored row outlives the incident and is
+    // served back by the schema-journal endpoint, so the arbitrary identifiers
+    // a log context carries do not belong in it. Code, message and cause do.
+    const err = NextlyError.internal({
+      cause: new Error("no such column: localized"),
+      logContext: { table: "dc_secret_project", dialect: "sqlite" },
+    });
+
+    const stored = describeError(err, { context: false });
+
+    expect(stored).toContain("INTERNAL_ERROR");
+    expect(stored).toContain("no such column: localized");
+    expect(stored).not.toContain("dc_secret_project");
+    // Default stays unchanged for terminal output.
+    expect(describeError(err)).toContain("dc_secret_project");
+  });
+
   it("does not stringify an object cause as [object Object]", () => {
     const err = NextlyError.internal({});
     Object.defineProperty(err, "cause", { value: { detail: "x" } });

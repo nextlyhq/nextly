@@ -500,9 +500,14 @@ export async function runFileMigrations(args: {
         });
       } catch (err) {
         await repo.markFailed(id, {
-          // Bounded: an unbounded description could fail this very write and
+          // Bounded, and without logContext: this row is persisted and is
+          // served back by the schema-journal endpoint, so it keeps the code,
+          // message and cause chain but not the arbitrary identifiers a log
+          // context can carry. An unbounded write could also fail here and
           // leave the migration with no recorded failure at all.
-          errorMessage: truncateErrorMessage(describeError(err)),
+          errorMessage: truncateErrorMessage(
+            describeError(err, { context: false })
+          ),
         });
         throw err;
       }

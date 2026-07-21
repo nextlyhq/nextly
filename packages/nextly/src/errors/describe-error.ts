@@ -96,6 +96,20 @@ export function immediateMessage(error: unknown): string {
   return stringifyUnknown(error);
 }
 
+/** Options for {@link describeError}. */
+export interface DescribeErrorOptions {
+  /**
+   * Append `logContext`. Default true.
+   *
+   * Set false when the result is PERSISTED rather than printed. A terminal
+   * line is read once and discarded; a stored row outlives the incident and
+   * may be served back over an API, so the arbitrary identifiers and values a
+   * log context can carry are worth leaving out of it. The code, message and
+   * cause chain carry the diagnostic value and are kept either way.
+   */
+  context?: boolean;
+}
+
 /**
  * Build a developer-readable description of any thrown value.
  *
@@ -103,7 +117,10 @@ export function immediateMessage(error: unknown): string {
  * For a plain `Error` it is the message plus any cause chain. For anything else
  * it is a best-effort stringification.
  */
-export function describeError(error: unknown): string {
+export function describeError(
+  error: unknown,
+  options: DescribeErrorOptions = {}
+): string {
   if (NextlyError.is(error)) {
     const parts: string[] = [`[${String(error.code)}] ${error.publicMessage}`];
     // logMessage is the operator-facing headline the factories set (e.g.
@@ -114,7 +131,7 @@ export function describeError(error: unknown): string {
     }
     const seen = new Set<string>([error.publicMessage]);
     collectCauses(error.cause, parts, 0, seen);
-    const ctx = error.logContext;
+    const ctx = options.context === false ? undefined : error.logContext;
     if (ctx && Object.keys(ctx).length > 0) {
       try {
         parts.push(`context: ${JSON.stringify(ctx)}`);
