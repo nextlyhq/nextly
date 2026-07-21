@@ -72,7 +72,7 @@ describe("webhook endpoint management (real SQLite)", () => {
       "INSERT INTO users (id, email, created_at, updated_at) VALUES ('user_1', 'dev@example.com', 0, 0)"
     );
 
-    const schemaRegistry = new SchemaRegistry();
+    const schemaRegistry = new SchemaRegistry("sqlite");
     schemaRegistry.registerStaticSchemas({ users, nextlyWebhooks });
     adapter.setTableResolver(schemaRegistry);
   });

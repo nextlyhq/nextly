@@ -26,16 +26,50 @@ import { WEBHOOK_EVENT_TYPES } from "../../domains/webhooks/types";
  * Bound to the same constant the fan-out matches against, so a type that
  * cannot be delivered cannot be subscribed to either — a silently-never-firing
  * subscription is worse than a rejected one.
+ *
+ * Passed directly rather than widened to `[string, ...string[]]`: the literal
+ * members survive inference, so a parsed request body carries
+ * `WebhookEventType[]` and reaches the service without a cast at the boundary.
  */
-export const WebhookEventTypeSchema = z.enum(
-  WEBHOOK_EVENT_TYPES as unknown as [string, ...string[]]
-);
+export const WebhookEventTypeSchema = z.enum(WEBHOOK_EVENT_TYPES);
 
 /** Header names a caller may not set, because delivery owns them. */
 const RESERVED_HEADER_PREFIXES = ["webhook-", "content-type", "user-agent"];
 
+/**
+ * A field name must be an RFC 9110 token, and a value must be printable ASCII
+ * with no CR, LF or NUL.
+ *
+ * These are rejected at registration rather than left to the transport because
+ * of where the transport rejects them: Node refuses an invalid name or a value
+ * containing CR/LF when the request is built, and the delivery path cannot tell
+ * that apart from a network fault, so it records a transient failure and
+ * retries. A header that can never be sent would then be retried on every event
+ * until the endpoint exhausted its attempts. A value carrying CR/LF is also the
+ * classic header-injection shape, and storing one is not something to allow on
+ * the assumption that a downstream library will catch it.
+ */
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
+
 const HeadersSchema = z
-  .record(z.string(), z.string())
+  .record(
+    z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(
+        HEADER_NAME,
+        "Header names may only contain letters, digits and !#$%&'*+-.^_`|~"
+      ),
+    z
+      .string()
+      .max(4096)
+      .regex(
+        HEADER_VALUE,
+        "Header values cannot contain line breaks or control characters."
+      )
+  )
   .refine(
     headers =>
       Object.keys(headers).every(

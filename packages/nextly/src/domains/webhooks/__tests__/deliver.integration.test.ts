@@ -80,7 +80,7 @@ describe("webhook delivery engine (real SQLite)", () => {
     await adapter.connect();
     for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
 
-    const schemaRegistry = new SchemaRegistry();
+    const schemaRegistry = new SchemaRegistry("sqlite");
     schemaRegistry.registerStaticSchemas(tables);
     adapter.setTableResolver(schemaRegistry);
   });
@@ -105,13 +105,14 @@ describe("webhook delivery engine (real SQLite)", () => {
       secrets?: string[];
       headers?: Record<string, string> | null;
       eventTypes?: WebhookEventType[];
+      enabled?: boolean;
     } = {}
   ): Promise<void> {
     await adapter.insert("nextly_webhooks", {
       id,
       name: id,
       url: `https://example.com/${id}`,
-      enabled: true,
+      enabled: opts.enabled ?? true,
       event_types: opts.eventTypes ?? ["entry.updated"],
       filter: null,
       headers: opts.headers ?? null,
@@ -324,6 +325,31 @@ describe("webhook delivery engine (real SQLite)", () => {
     const row = await getDelivery("dlv_1");
     expect(row.status).toBe("failed");
     expect(row.lastError).toContain("no signing secret");
+  });
+
+  it("stops delivering to an endpoint that was disabled after the row was queued", async () => {
+    // Disabling only removes an endpoint from fan-out, so a row queued before
+    // it happened — or a retry scheduled by an earlier failure — would still be
+    // due. Without a check at send time, disabling would keep POSTing until the
+    // row succeeded or exhausted its attempts.
+    await seedWebhook("wh_a", { enabled: false });
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1", {
+      status: "retrying",
+      attemptCount: 1,
+    });
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, failed: 1 });
+    expect(calls).toHaveLength(0);
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("failed");
+    expect(row.lastError).toContain("webhook disabled");
+    // Terminal, not held: re-enabling must not later release a burst of events
+    // the receiver has stopped expecting.
+    expect(row.nextAttemptAt).toBeNull();
   });
 
   it("records an unexpected mid-attempt throw as a transient failure without escaping the batch", async () => {
