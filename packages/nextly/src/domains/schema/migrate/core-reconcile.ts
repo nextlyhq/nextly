@@ -28,6 +28,8 @@ import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { freshPushSchema, type FreshPushDialect } from "../pipeline/fresh-push";
 
+import { resolveSafeNullabilityOps } from "./resolve-safe-nullability";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 interface LoggerLike {
@@ -82,7 +84,12 @@ export async function reconcileCore(
 
   const desired = getCoreSchema(dialect);
   const live = await introspect(db, dialect, [...CORE_TABLE_NAMES]);
-  const ops = diffSnapshots(live, desired);
+  const rawOps = diffSnapshots(live, desired);
+  // Ask the data before judging: requiring a column that holds no NULL cannot
+  // fail on an existing row, so it is not destructive. Without this every
+  // SQLite primary key reads as a pending NOT NULL addition and the whole
+  // reconcile is refused on an untouched database.
+  const ops = await resolveSafeNullabilityOps(db, rawOps);
 
   if (ops.length === 0) {
     logger?.info?.("Core schema up to date.");

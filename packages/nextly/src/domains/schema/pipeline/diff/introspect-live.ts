@@ -273,15 +273,12 @@ export async function introspectLiveSnapshot(
           // ever running. Lowercasing here is safe because SQLite
           // type names are case-insensitive at the engine level.
           type: r.type.toLowerCase(),
-          // SQLite stores notnull as 0/1 integer. A PRIMARY KEY column is
-          // reported nullable unless it was declared NOT NULL, because only
-          // INTEGER PRIMARY KEY (the rowid alias) is implicitly NOT NULL in
-          // SQLite. The desired side has no such quirk: Drizzle's
-          // `.primaryKey()` means NOT NULL. Reporting the storage answer here
-          // makes every primary key look like a pending NOT NULL addition,
-          // which the classifier calls destructive and which therefore refuses
-          // the entire core reconcile — on a database nobody has changed.
-          nullable: r.notnull === 0 && r.pk === 0,
+          // SQLite stores notnull as 0/1 integer. Reported as stored: a
+          // TEXT PRIMARY KEY really is nullable here (only INTEGER PRIMARY KEY
+          // is implicitly NOT NULL), and the snapshot must describe the
+          // database. Whether requiring such a column is safe is decided from
+          // the data, in resolve-safe-nullability.ts.
+          nullable: r.notnull === 0,
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
