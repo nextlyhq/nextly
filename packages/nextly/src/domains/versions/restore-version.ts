@@ -19,6 +19,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
 import type { UserContext } from "../singles/types";
 
 import { buildRestorePayload, canRestoreLocale } from "./restore-snapshot";
@@ -66,12 +67,15 @@ async function describeEntity(
   scopeKind: VersionScopeKind,
   slug: string
 ): Promise<EntityDescription> {
+  // Read from the registry rather than the metadata service: the latter
+  // injects synthetic `title`/`slug` field definitions for the entry form, so
+  // its field list would report columns a plugin collection's table does not
+  // actually have.
   const record =
     scopeKind === "single"
       ? await getService("singleRegistryService").getSingleBySlug(slug)
-      : ((await getService("collectionService").getCollection(
-          slug,
-          {}
+      : ((await getService("collectionRegistryService").getCollectionBySlug(
+          slug
         )) as unknown);
 
   const shape = record as {
@@ -270,6 +274,33 @@ export async function restoreVersion(
       componentFields,
     }
   );
+
+  // Field-level write rules strip denied keys inside the update path, silently
+  // and after it has already reported success. Evaluating the same rules here
+  // — against a copy, so nothing is mutated — turns that into something the
+  // caller can be told about instead of a restore that reports success for
+  // content it never applied.
+  const accessProbe: Record<string, unknown> = { ...payload };
+  try {
+    await applyFieldWriteAccess({
+      kind: args.scopeKind === "single" ? "single" : "collection",
+      slug: args.slug,
+      data: accessProbe,
+      operation: "update",
+      user: args.user,
+      overrideAccess: false,
+      id: args.entryId,
+    });
+    for (const key of Object.keys(payload)) {
+      if (!(key in accessProbe)) {
+        delete payload[key];
+        droppedFields.push(key);
+      }
+    }
+  } catch {
+    // A failure here must not block a restore the update path would allow; the
+    // update evaluates the same rules again and remains the authority.
+  }
 
   if (Object.keys(payload).length === 0) {
     throw NextlyError.validation({

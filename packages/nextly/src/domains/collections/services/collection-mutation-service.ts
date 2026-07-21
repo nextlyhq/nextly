@@ -1633,7 +1633,16 @@ export class CollectionMutationService extends BaseService {
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
-            locale: localizedWrite?.writeLocale ?? null,
+            // Set when locale-specific state was actually captured. A
+            // collection whose translatable content lives only in embedded
+            // components routes nothing through `localizedWrite`, yet the
+            // components above were read as this locale — so without counting
+            // them the version would be unlabelled and unrestorable.
+            locale:
+              localizedWrite?.writeLocale ??
+              (Object.keys(snapshotComponents ?? {}).length > 0
+                ? (params.locale ?? null)
+                : null),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
         }
@@ -2872,7 +2881,11 @@ export class CollectionMutationService extends BaseService {
                 Object.keys(priorLocalizedValues).length > 0 ||
                 Object.keys(localizedUpdate?.localizedFieldValues ?? {})
                   .length > 0 ||
-                typeof effectiveLocaleStatus === "string";
+                typeof effectiveLocaleStatus === "string" ||
+                // Components were read as the write locale just above, so a
+                // translation edit touching only embedded component content is
+                // locale-specific too — the singles path counts it the same way.
+                Object.keys(snapshotComponents ?? {}).length > 0;
 
               if (versionsConfig?.enabled) {
                 await captureInTx(tx, this.versionCapture, {

@@ -312,6 +312,56 @@ describe("buildRestorePayload — layered schemas", () => {
     });
   });
 
+  it("drops a component instance whose type is no longer allowed", () => {
+    // The save path skips an instance of a type the field no longer permits and
+    // then deletes the live instances that were not incoming — so resubmitting
+    // one would clear the field rather than leave it alone.
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
+    ]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        blocks: [
+          { _componentType: "banner", heading: "Kept" },
+          { _componentType: "retired", heading: "Gone" },
+        ],
+      },
+      zone,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ _componentType: "banner", heading: "Kept" }],
+    });
+    expect(droppedFields).toEqual(["blocks[1] (retired)"]);
+  });
+
+  it("drops the whole field when no instance is still allowed", () => {
+    // Submitting an empty set would read as "remove everything", which is a
+    // different and more destructive claim than "this part could not come back".
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
+    ]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "retired", heading: "Gone" }] },
+      zone,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
   it("keeps a component's type discriminator when pruning it", () => {
     const withComponent = [
       { name: "hero", type: "component", component: "banner" },

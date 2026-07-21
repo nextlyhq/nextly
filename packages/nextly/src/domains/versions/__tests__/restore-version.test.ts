@@ -21,6 +21,12 @@ const {
   componentSpy: vi.fn(),
 }));
 
+// Field-level write rules are evaluated by the update path too; stubbed here so
+// these tests exercise restore's own decisions rather than access configuration.
+vi.mock("../../../shared/lib/field-level-registry", () => ({
+  applyFieldWriteAccess: vi.fn(),
+}));
+
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
     switch (name) {
@@ -30,8 +36,8 @@ vi.mock("../../../di", () => ({
         return { updateEntry: updateEntrySpy };
       case "singleEntryService":
         return { update: updateSingleSpy };
-      case "collectionService":
-        return { getCollection: collectionSpy };
+      case "collectionRegistryService":
+        return { getCollectionBySlug: collectionSpy };
       case "componentRegistryService":
         return { getComponentBySlug: componentSpy };
       default:
@@ -40,6 +46,7 @@ vi.mock("../../../di", () => ({
   }),
 }));
 
+import { applyFieldWriteAccess } from "../../../shared/lib/field-level-registry";
 import { restoreVersion } from "../restore-version";
 
 const user = { id: "u1" };
@@ -241,6 +248,37 @@ describe("restoreVersion", () => {
       expect.not.objectContaining({ locale: expect.anything() }),
       expect.anything()
     );
+  });
+
+  it("reports fields the caller may not write", async () => {
+    // Field-level write rules strip denied keys inside the update path, after
+    // it has already reported success — so without this a restore would claim
+    // to have applied content it never did.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old", secretNote: "denied" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "secretNote", type: "text" },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+    vi.mocked(applyFieldWriteAccess).mockImplementation(
+      async ({ data }: { data: Record<string, unknown> }) => {
+        delete data.secretNote;
+      }
+    );
+
+    const result = await restoreVersion(base);
+
+    expect(result.droppedFields).toContain("secretNote");
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      title: "Old",
+    });
   });
 
   it("refuses to restore when versioning has been turned off", async () => {

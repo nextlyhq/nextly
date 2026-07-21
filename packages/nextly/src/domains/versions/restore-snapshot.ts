@@ -90,6 +90,12 @@ function componentSlugs(field: FieldConfig): string[] {
   return slugs;
 }
 
+/** Component slugs a field currently permits, or null when it permits any. */
+function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
+  const slugs = componentSlugs(field);
+  return slugs.length > 0 ? new Set(slugs) : null;
+}
+
 /** A field's children, wherever the schema keeps them. */
 function childrenOf(
   field: FieldConfig,
@@ -229,6 +235,44 @@ function pruneContainerValue(
 }
 
 /**
+ * Split a component value into the instances the schema still permits and the
+ * ones it does not.
+ *
+ * Returns `kept: null` when nothing survives, so the caller drops the field
+ * entirely rather than submitting an empty set — which the save path would read
+ * as "remove everything".
+ */
+function partitionAllowedInstances(
+  value: unknown,
+  allowed: Set<string> | null,
+  path: string
+): { kept: unknown; rejected: string[] } {
+  if (allowed === null) return { kept: value, rejected: [] };
+
+  const typeOf = (row: unknown): string | undefined =>
+    typeof row === "object" && row !== null
+      ? (row as { _componentType?: string })._componentType
+      : undefined;
+
+  if (Array.isArray(value)) {
+    const rejected: string[] = [];
+    const kept = value.filter((row, i) => {
+      const type = typeOf(row);
+      if (type === undefined || allowed.has(type)) return true;
+      rejected.push(`${path}[${i}] (${type})`);
+      return false;
+    });
+    return kept.length > 0 ? { kept, rejected } : { kept: null, rejected };
+  }
+
+  const type = typeOf(value);
+  if (type !== undefined && !allowed.has(type)) {
+    return { kept: null, rejected: [`${path} (${type})`] };
+  }
+  return { kept: value, rejected: [] };
+}
+
+/**
  * Build the update payload for restoring `snapshot`.
  *
  * Unknown keys are removed here because nothing downstream does it. Validation
@@ -291,8 +335,23 @@ export function buildRestorePayload(
     const children = childrenOf(field, componentFields);
     if (children.length > 0) {
       const removed: string[] = [];
+
+      // A dynamic zone's allowed component list can change. The save path skips
+      // an instance whose type is no longer allowed and then deletes the live
+      // instances that were not in the incoming set — so resubmitting a
+      // snapshot of only-removed types would clear the field rather than
+      // leaving it alone.
+      const allowed = allowedComponentSlugs(field);
+      const { kept, rejected } = partitionAllowedInstances(value, allowed, key);
+      droppedFields.push(...rejected);
+
+      if (kept === null) {
+        droppedFields.push(key);
+        continue;
+      }
+
       payload[key] = pruneContainerValue(
-        value,
+        kept,
         children,
         componentFields,
         removed,
