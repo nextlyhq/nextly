@@ -10,6 +10,7 @@ import type { Metadata } from "next";
 
 import { CategoryCardGrid } from "@/components/CategoryCardGrid";
 import { ListingHeader } from "@/components/ListingHeader";
+import { EmptyState } from "@/components/EmptyState";
 import { getAllCategoriesWithCounts, getSiteSettings } from "@/lib/queries";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -41,7 +42,11 @@ export default async function CategoriesIndexPage() {
         title="Categories"
         description="Posts grouped by topic. Each category has a dedicated feed and archive page."
       />
-      <CategoryCardGrid categories={sorted} />
+      {sorted.length > 0 ? (
+        <CategoryCardGrid categories={sorted} />
+      ) : (
+        <EmptyState type="posts" entityName="categories" />
+      )}
     </div>
   );
 }
