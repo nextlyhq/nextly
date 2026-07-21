@@ -58,23 +58,13 @@ export function createDebouncedSync(
       logger.newline();
       logger.header("Config Changed - Re-syncing");
 
-      // Sync collections if any (or detect orphans)
-      if (
-        configToSync.config.collections.length > 0 ||
-        options.removeOrphaned
-      ) {
-        await syncCollections(configToSync, adapter, options, context);
-      }
-
-      // Sync singles if any (or detect orphans)
-      if (configToSync.config.singles.length > 0 || options.removeOrphaned) {
-        await syncSingles(configToSync, adapter, options, context);
-      }
-
-      // Sync components if any (or detect orphans)
-      if (configToSync.config.components.length > 0 || options.removeOrphaned) {
-        await syncComponents(configToSync, adapter, options, context);
-      }
+      // Sync collections, singles and components — unconditionally, so the orphan scan
+      // still runs when the config declares none of that type. Deleting the last entry of
+      // a kind is precisely what orphans its table, so skipping on a zero count hid the
+      // warning in the only case where it was guaranteed to fire.
+      await syncCollections(configToSync, adapter, options, context);
+      await syncSingles(configToSync, adapter, options, context);
+      await syncComponents(configToSync, adapter, options, context);
 
       // Sync user_ext table (always — handles both code and UI fields)
       await syncUserFields(configToSync, adapter, options, context);

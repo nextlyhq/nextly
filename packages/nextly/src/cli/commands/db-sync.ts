@@ -269,22 +269,19 @@ export async function runDbSync(
     // schema definitions, guaranteeing they match 100%.
     await ensureCoreTables(adapter, options, context);
 
-    // Step 4: Sync collections (only if there are collections to sync)
-    if (collectionCount > 0 || options.removeOrphaned) {
-      await syncCollections(configResult, adapter, options, context);
-    } else {
+    // Step 4-5.5: Sync collections, singles and components.
+    //
+    // These run even when the config declares none of that entity type, because that is
+    // exactly when orphans exist: removing the LAST collection/single/component from the
+    // config is what strands its table. Gating on a non-zero count skipped the orphan
+    // scan in the one case where it always has something to report.
+    await syncCollections(configResult, adapter, options, context);
+    await syncSingles(configResult, adapter, options, context);
+    await syncComponents(configResult, adapter, options, context);
+
+    if (collectionCount === 0) {
       logger.warn("No collections defined in config");
       logger.info("Add collections to your nextly.config.ts to get started.");
-    }
-
-    // Step 5: Sync singles (only if there are singles to sync)
-    if (singleCount > 0 || options.removeOrphaned) {
-      await syncSingles(configResult, adapter, options, context);
-    }
-
-    // Step 5.5: Sync components (only if there are components to sync)
-    if (componentCount > 0 || options.removeOrphaned) {
-      await syncComponents(configResult, adapter, options, context);
     }
 
     // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
