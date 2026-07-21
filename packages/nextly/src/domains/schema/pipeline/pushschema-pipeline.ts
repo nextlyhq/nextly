@@ -162,6 +162,13 @@ export interface PipelineResult {
   success: boolean;
   statementsExecuted: number;
   renamesApplied: number;
+  /**
+   * The DDL actually executed, in order. Surfaced so a UI save can persist a
+   * replayable migration file alongside the live apply — without it the only
+   * record of a Schema Builder field change lives in the registry row, and a
+   * fresh database could never reproduce it. Set on success only.
+   */
+  executedStatements?: string[];
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
   // F10 PR 6: per-change-kind diff counts. Set on success only;
@@ -791,6 +798,10 @@ export class PushSchemaPipeline {
 
       const isSqlite = dialect === "sqlite";
 
+      // Captured from inside runApply so the caller can persist the exact DDL
+      // that ran as a replayable migration file.
+      let executedStatements: string[] = [];
+
       const runApply = async (tx: unknown): Promise<number> => {
         // Phase C: pre-resolution executor runs renames + drops.
         const preResExecutor =
@@ -1006,6 +1017,7 @@ export class PushSchemaPipeline {
           );
         }
 
+        executedStatements = safe;
         return safe.length;
       };
 
@@ -1064,6 +1076,7 @@ export class PushSchemaPipeline {
       return {
         success: true,
         statementsExecuted,
+        executedStatements,
         renamesApplied: dispatchResult.confirmedRenames.length,
         // F10 PR 6: surface the diff counts so the dispatcher can
         // render an admin toast like "1 field added, 1 renamed".

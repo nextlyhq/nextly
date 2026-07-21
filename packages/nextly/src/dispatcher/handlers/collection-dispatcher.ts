@@ -93,6 +93,7 @@ import {
   stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
+import { writeBuilderMigration } from "../helpers/write-builder-migration";
 import type { MethodHandler, Params } from "../types";
 
 // Shared guard that centralizes required + stale schema-version validation for
@@ -628,6 +629,17 @@ const COLLECTIONS_METHODS: Record<
       const result = await apply(desired, "ui", {
         promptChannel: "auto",
       });
+
+      if (result.success) {
+        // Persist the DDL that just ran so the change is reproducible on a
+        // fresh database. Without it the only record of a Schema Builder field
+        // edit is the registry row, and replaying the migration folder would
+        // recreate the collection without its fields.
+        await writeBuilderMigration(
+          p.collectionName,
+          result.executedStatements
+        );
+      }
 
       if (!result.success) {
         // The stale-version case is already rejected up front by
