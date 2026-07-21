@@ -150,3 +150,39 @@ describe("VersionLabelDialog", () => {
     expect(screen.getByRole("textbox")).toHaveValue("second");
   });
 });
+
+describe("VersionLabelDialog — a rename landing underneath", () => {
+  it("does not turn an untouched field into a submittable change", async () => {
+    // A refetch can report someone else's rename while this dialog is open.
+    // Comparing against the live prop would enable Save on a value this user
+    // never typed, and submitting it would overwrite the newer name.
+    const { rerender } = render(
+      <VersionLabelDialog {...base} currentLabel="mine" onSubmit={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+
+    rerender(
+      <VersionLabelDialog
+        {...base}
+        currentLabel="someone else's"
+        onSubmit={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+  });
+
+  it("still judges an edit against the name it was opened with", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <VersionLabelDialog {...base} currentLabel="mine" onSubmit={onSubmit} />
+    );
+
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "my new name");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith("my new name");
+  });
+});

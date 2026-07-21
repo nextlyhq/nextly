@@ -390,3 +390,51 @@ describe("VersionHistorySheet", () => {
     );
   });
 });
+
+describe("VersionHistorySheet — renaming", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState());
+    restoreMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    setLabelMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+  });
+
+  it("does not offer renaming to a caller who may not write the document", () => {
+    // Renaming writes to history and needs the same permission restoring does.
+    // Offering it otherwise opens a dialog whose save the route rejects.
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore={false}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /name version/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers renaming to a caller who may", () => {
+    render(
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        fields={fields}
+        canRestore
+      />
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: /name version/i }).length
+    ).toBeGreaterThan(0);
+  });
+});

@@ -93,6 +93,10 @@ export function VersionHistorySheet({
     if (!open) {
       setSelected(null);
       setConfirmingRestore(false);
+      // The rename dialog is mounted outside the panel, so closing the panel
+      // does not close it. Left set, it would stay on screen over a dismissed
+      // panel, or reappear the moment the panel was reopened.
+      setRenaming(null);
     }
   }, [open]);
 
@@ -209,7 +213,10 @@ export function VersionHistorySheet({
                   version={version}
                   active={selected === version.versionNo}
                   onSelect={setSelected}
-                  onRename={setRenaming}
+                  // Renaming writes to the document's history, which needs the
+                  // same permission restoring does. Offering it to a read-only
+                  // caller would open a dialog whose save the route rejects.
+                  onRename={canRestore ? setRenaming : undefined}
                 />
               ))}
 

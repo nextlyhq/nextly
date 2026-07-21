@@ -256,6 +256,42 @@ const MAX_LABEL_LENGTH = 100;
  * `null` clears. Anything that is neither a string nor null is a malformed
  * request rather than a clear, and is rejected instead of quietly wiping a name.
  */
+/**
+ * What the request asks for: whether a label was named at all, and what it
+ * normalizes to.
+ *
+ * PATCH is a partial update, so an omitted key means "leave this alone" and
+ * only an explicit null clears. Collapsing the two would make `PATCH {}` erase
+ * a name nobody asked to remove.
+ */
+function readLabelFromBody(body: unknown): {
+  provided: boolean;
+  label: string | null;
+} {
+  const provided = typeof body === "object" && body !== null && "label" in body;
+
+  return {
+    provided,
+    label: provided ? normalizeLabel(body.label, "label") : null,
+  };
+}
+
+/**
+ * Reject a malformed label request before anything is looked up.
+ *
+ * Exported for the Singles handler, which resolves the live document id before
+ * it can call the core — a lookup that would otherwise make the same bad
+ * request answer 404 for an unmaterialized Single and 400 for a materialized
+ * one. The core validates again; this only moves the rejection earlier.
+ */
+export function assertLabelRequestValid(
+  versionNo: number,
+  body: unknown
+): void {
+  assertPositiveInteger(versionNo, "versionNo");
+  readLabelFromBody(body);
+}
+
 function normalizeLabel(value: unknown, path: string): string | null {
   if (value === null) return null;
 
@@ -311,16 +347,7 @@ export async function setVersionLabelForDocument(
   }
 ): Promise<VersionRow> {
   assertPositiveInteger(args.versionNo, "versionNo");
-
-  // PATCH is a partial update: an omitted key means "leave this alone", and
-  // only an explicit null clears. Collapsing the two would make `PATCH {}`
-  // erase a name nobody asked to remove.
-  const provided =
-    typeof args.body === "object" && args.body !== null && "label" in args.body;
-
-  const label = provided
-    ? normalizeLabel((args.body as { label: unknown }).label, "label")
-    : null;
+  const { provided, label } = readLabelFromBody(args.body);
 
   const caller = readAccessCallerFromParams(args.params, args.user);
 

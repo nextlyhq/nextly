@@ -60,12 +60,18 @@ export function VersionLabelDialog({
   // version rather than by an effect, so there is no stale draft to carry over.
   const [value, setValue] = React.useState(() => currentLabel ?? "");
 
+  // The baseline is frozen alongside the draft. Comparing against the LIVE
+  // prop would let a refetch reporting someone else's rename turn an untouched
+  // field into a submittable change — enabling Save on a value this user never
+  // typed, and overwriting the newer name with the one they opened.
+  const [baseline] = React.useState(() => currentLabel);
+
   const trimmed = value.trim();
-  const hadLabel = currentLabel !== null && currentLabel !== "";
+  const hadLabel = baseline !== null && baseline !== "";
   // Submitting an empty field clears the name. That is only a change when there
   // was one to clear, which is also what stops an empty form saving nothing.
   const isClearing = trimmed.length === 0;
-  const unchanged = trimmed === (currentLabel ?? "");
+  const unchanged = trimmed === (baseline ?? "");
   const tooLong = trimmed.length > MAX_LABEL_LENGTH;
 
   const handleSubmit = (e: React.FormEvent) => {

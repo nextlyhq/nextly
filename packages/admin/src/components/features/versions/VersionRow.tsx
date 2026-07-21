@@ -61,7 +61,15 @@ export function VersionRow({
         type="button"
         disabled={!selectable}
         onClick={() => selectable && onSelect(version.versionNo as number)}
-        aria-label={`${title}, ${version.status}, by ${author}`}
+        // The ordinal is in the accessible name even when a name replaces it
+        // visually: two versions may share a name, and a screen-reader user
+        // would otherwise have no way to tell them apart that a sighted user
+        // does.
+        aria-label={
+          named
+            ? `${title}, ${ordinal}, ${version.status}, by ${author}`
+            : `${title}, ${version.status}, by ${author}`
+        }
         aria-current={active ? "true" : undefined}
         className={cn(
           "flex-1 min-w-0 text-left px-4 py-3",

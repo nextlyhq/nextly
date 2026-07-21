@@ -120,6 +120,21 @@ describe("VersionRow — names", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the version number in the accessible name too", () => {
+    // Two versions may share a name. The number is what tells them apart, and
+    // it is visible on the row — a screen-reader user needs it as well.
+    render(
+      <VersionRow
+        version={version({ label: "before redesign" })}
+        onSelect={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /before redesign, Version 3,/ })
+    ).toBeInTheDocument();
+  });
+
   it("offers renaming only when the caller can rename", () => {
     const { rerender } = render(
       <VersionRow version={version()} onSelect={vi.fn()} />
