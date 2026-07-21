@@ -19,15 +19,15 @@ describe("normalizeDefault — PG redundant ::<type> cast stripping", () => {
     // The single most common case: pgVarchar(...).default('draft') round-trips
     // through PG as 'draft'::character varying. The diff must treat the two
     // forms as equal.
-    expect(normalizeDefault("'draft'::character varying")).toBe("'draft'");
+    expect(normalizeDefault("'draft'::character varying")).toBe("draft");
   });
 
   it("strips ::text from string literals", () => {
-    expect(normalizeDefault("'draft'::text")).toBe("'draft'");
+    expect(normalizeDefault("'draft'::text")).toBe("draft");
   });
 
   it("strips ::bpchar (PG's underlying char type)", () => {
-    expect(normalizeDefault("'X'::bpchar")).toBe("'X'");
+    expect(normalizeDefault("'X'::bpchar")).toBe("X");
   });
 
   it("strips ::integer from numeric literals", () => {
@@ -50,13 +50,47 @@ describe("normalizeDefault — PG redundant ::<type> cast stripping", () => {
   it("does NOT strip ::type that appears INSIDE a string literal", () => {
     // The cast suffix must be at the end of the expression. A ::-looking
     // substring inside the quoted literal must not be touched.
-    expect(normalizeDefault("'a::text inside'")).toBe("'a::text inside'");
+    expect(normalizeDefault("'a::text inside'")).toBe("a::text inside");
   });
 
   it("preserves expressions with no cast suffix", () => {
-    expect(normalizeDefault("'draft'")).toBe("'draft'");
+    expect(normalizeDefault("'draft'")).toBe("draft");
     expect(normalizeDefault("42")).toBe("42");
     expect(normalizeDefault("now()")).toBe("now()");
+  });
+});
+
+describe("normalizeDefault — string-literal unwrapping", () => {
+  // The two sides of the diff quote a string default differently: the live
+  // side reads the DDL (`'pending'`), the desired side reads the Drizzle
+  // column, whose default is the JavaScript string (`pending`). Comparing
+  // them unquoted is what makes them equal — otherwise every string-defaulted
+  // column produces a change_column_default op on every diff, on every
+  // dialect, and on SQLite the rebuild that follows drops the table's
+  // indexes.
+  it("reduces both sides of the same default to one form", () => {
+    expect(normalizeDefault("'pending'")).toBe(normalizeDefault("pending"));
+    expect(normalizeDefault("'ui'")).toBe(normalizeDefault("ui"));
+    // PG reaches the same place from its cast form.
+    expect(normalizeDefault("'draft'::text")).toBe(normalizeDefault("draft"));
+  });
+
+  it("unwraps an empty string literal", () => {
+    expect(normalizeDefault("''")).toBe("");
+  });
+
+  it("leaves a literal containing a quote alone", () => {
+    // PG and SQLite both escape by doubling, so an interior quote means the
+    // contents cannot be recovered by removing the outer pair. Guessing here
+    // would compare two different values equal, which is the one failure this
+    // module must not have — so the expression is left exactly as found.
+    expect(normalizeDefault("'it''s'")).toBe("'it''s'");
+  });
+
+  it("leaves unbalanced or unquoted expressions alone", () => {
+    expect(normalizeDefault("'unterminated")).toBe("'unterminated");
+    expect(normalizeDefault("gen_random_uuid()")).toBe("gen_random_uuid()");
+    expect(normalizeDefault("'")).toBe("'");
   });
 });
 

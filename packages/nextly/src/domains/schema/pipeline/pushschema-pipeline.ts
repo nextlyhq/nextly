@@ -47,6 +47,8 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+// Index restore uses the all-dialect templates, not ddl-emitter/: that module
+// is the PostgreSQL fast path and throws for the dialect this exists for.
 import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
@@ -74,6 +76,7 @@ import type {
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
+import { generateSQL } from "./sql-templates";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 
@@ -156,6 +159,52 @@ function applyMakeOptionalToDesired(
       ])
     ),
   };
+}
+
+/**
+ * `CREATE INDEX` for every index the desired schema declares.
+ *
+ * Two things decide what a dynamic table looks like and only one of them
+ * knows about indexes. The diff's desired side comes from
+ * `buildDesiredTableFromFields`, which carries a full `IndexSpec[]`; the
+ * Drizzle tables handed to drizzle-kit come from `generateRuntimeSchema`,
+ * which declares none. drizzle-kit therefore believes every table should have
+ * no secondary index, and on SQLite — where a schema change is applied by
+ * building a new table and copying the rows across — the indexes go with the
+ * table it dropped. Nothing reports it: the push succeeds, the rows are
+ * intact, and the queries just get slower.
+ *
+ * Re-asserting them is what closes the gap. Teaching the generator to declare
+ * them instead would mean passing Drizzle's three-argument table overload a
+ * loosely-typed column record it does not accept, which has no answer that
+ * isn't `any`.
+ *
+ * Pure so the statements can be asserted directly; the caller appends them to
+ * the push batch, which keeps them in the same transaction and after the
+ * table changes they index.
+ */
+function indexRestoreStatements(
+  desired: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  affectedTableNames: ReadonlySet<string>
+): string[] {
+  return (
+    desired.tables
+      // Only tables this apply touched. An untouched table was not rebuilt, so
+      // its indexes are still there, and re-asserting them would put a
+      // `CREATE INDEX` for the whole schema into every apply.
+      .filter(table => affectedTableNames.has(table.name))
+      .flatMap(table =>
+        // `undefined` means "this snapshot never tracked indexes", which is not
+        // the same as "this table has none". Only an explicit list is actionable.
+        (table.indexes ?? []).map(index =>
+          generateSQL(
+            { type: "add_index", tableName: table.name, index },
+            dialect
+          )
+        )
+      )
+  );
 }
 
 export interface PipelineResult {
@@ -904,8 +953,17 @@ export class PushSchemaPipeline {
           }
         }
 
+        // Appended to the same batch, after the table changes they index and
+        // inside the same transaction, so a table can never commit without
+        // the indexes the desired schema declares for it.
+        const restore = indexRestoreStatements(
+          desiredSnapshot,
+          dialect,
+          affectedTableNames
+        );
+
         try {
-          await this.deps.executor.executeStatements(tx, safe);
+          await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -913,6 +971,11 @@ export class PushSchemaPipeline {
           );
         }
 
+        // `safe.length`, not the executed length: this number is the
+        // journal's `statements_executed`, read against `statements_planned`
+        // from the diff. The restore statements were never planned, so
+        // counting them would report a mismatch on every apply that had to
+        // put an index back.
         return safe.length;
       };
 

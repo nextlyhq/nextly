@@ -43,6 +43,12 @@ export function drizzleTableToTableSpec(table: Table): TableSpec {
     type: normalizeDrizzleType(col),
     nullable: !col.notNull,
     default: extractDefault(col),
+    // Recorded so the diff can exempt primary keys from the nullability
+    // comparison. Drizzle sets `primary` on the column for `.primaryKey()`
+    // in every dialect; a composite key declared through the table's extra
+    // config leaves it false, which is correct here — this exemption is
+    // about the single-column form the dialects render inconsistently.
+    ...(col.primary === true ? { primaryKey: true } : {}),
   }));
 
   return { name, columns };

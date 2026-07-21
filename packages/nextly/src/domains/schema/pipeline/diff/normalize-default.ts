@@ -78,13 +78,43 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
   // closing string-literal quote or a bare literal (number / boolean).
   let normalised = stripRedundantCast(expr);
 
-  // Step 2: lowercase a small set of known case-insensitive built-ins.
+  // Step 2: unwrap a string literal to the value it denotes.
+  normalised = unquoteStringLiteral(normalised);
+
+  // Step 3: lowercase a small set of known case-insensitive built-ins.
   const lower = normalised.toLowerCase();
   if (NORMALIZE_LOWERCASE_FUNCTIONS.has(lower)) {
     normalised = lower;
   }
 
   return normalised;
+}
+
+/**
+ * Reduce a quoted string literal to its contents.
+ *
+ * The two sides of the diff read a string default from different places and
+ * so quote it differently: the live side reads the DDL, where a string is
+ * written `'pending'`, while the desired side reads the Drizzle column, whose
+ * `default` holds the JavaScript string `pending`. Nothing before this made
+ * them comparable, so every string-defaulted column produced a
+ * `change_column_default` op on every diff — on all three dialects, not only
+ * the one where it was first noticed.
+ *
+ * Left un-normalised the op is not merely noise: it keeps the reconcile from
+ * seeing a clean database, and on SQLite the rebuild that follows takes the
+ * table's indexes with it.
+ *
+ * Only a fully-quoted literal is unwrapped. Anything with an interior quote
+ * is left alone rather than guessed at: PG escapes by doubling, SQLite the
+ * same, and a wrong unwrap here would compare two different values equal,
+ * which is the one failure this module must not have.
+ */
+function unquoteStringLiteral(expr: string): string {
+  if (expr.length < 2) return expr;
+  if (!expr.startsWith("'") || !expr.endsWith("'")) return expr;
+  const inner = expr.slice(1, -1);
+  return inner.includes("'") ? expr : inner;
 }
 
 function stripRedundantCast(expr: string): string {
