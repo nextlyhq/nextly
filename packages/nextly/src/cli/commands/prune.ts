@@ -19,6 +19,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -115,9 +116,7 @@ export async function runPruneCommand(
       databaseUrl: dbValidation.databaseUrl,
     });
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -173,9 +172,7 @@ export function registerPruneCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

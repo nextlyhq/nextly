@@ -9,7 +9,7 @@ import type { BuilderConfig } from "@admin/components/features/schema-builder/bu
 export const COLLECTION_BUILDER_CONFIG: BuilderConfig = {
   kind: "collection",
   basicsFields: ["singularName", "pluralName", "slug", "description", "icon"],
-  advancedFields: ["status", "i18n", "showSystemFields"],
+  advancedFields: ["status", "i18n", "versions", "showSystemFields"],
   toolbar: { previewSchemaChange: true },
   picker: {},
 };

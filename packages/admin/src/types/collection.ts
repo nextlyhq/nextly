@@ -332,6 +332,8 @@ export interface CreateCollectionPayload {
   status?: boolean;
   /** i18n: whether the collection has translatable (per-locale) fields. Default false. */
   localized?: boolean;
+  /** Whether every save is recorded as a restorable version. Default false. */
+  versions?: boolean;
   /** Whether to auto-generate createdAt/updatedAt. Default true. */
   timestamps?: boolean;
   fields: FieldDefinition[];
@@ -352,6 +354,8 @@ export interface UpdateCollectionPayload {
    *  table; toggling off drops it (destructive change, gated by the
    *  schema-change preview). */
   status?: boolean;
+  /** Toggle version history. Every save is recorded as a restorable version. */
+  versions?: boolean;
   /** i18n: toggle translatable fields. Toggling on adds the companion `_locales`
    *  table (migration-gated, via the schema-change preview). */
   localized?: boolean;

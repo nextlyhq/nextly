@@ -12,7 +12,7 @@
 
 import type { ListResponse, TableParams } from "@nextlyhq/ui";
 
-import type { ApiSingle } from "@admin/types/entities";
+import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
@@ -118,7 +118,7 @@ export const singleApi = {
    * Create a new Single.
    */
   create: async (
-    payload: Partial<ApiSingle>
+    payload: UpdateSinglePayload
   ): Promise<{ message: string; data: ApiSingle }> => {
     const result = await protectedApi.post<MutationResponse<ApiSingle>>(
       "/singles",
@@ -137,7 +137,7 @@ export const singleApi = {
    */
   update: async (
     slug: string,
-    payload: Partial<ApiSingle>
+    payload: UpdateSinglePayload
   ): Promise<{ message: string }> => {
     const result = await protectedApi.patch<MutationResponse<ApiSingle>>(
       `/singles/${slug}/schema`,

@@ -45,6 +45,7 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { mergeRegisteredCollectionsSafely } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
@@ -136,6 +137,7 @@ interface CollectionRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      localized?: boolean;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -696,38 +698,26 @@ export async function reloadNextlyConfig(opts?: {
   }
 
   // Preserve registered collections that aren't in the code config (e.g.
-  // UI-created ones). HMR only knows nextly.config.ts, but SQLite/MySQL ignore
-  // tablesFilter and introspect the whole DB, so a managed table missing from
-  // the desired schema is flagged as an orphan DROP/rename. Mirror the UI-save
-  // path (buildFullDesiredSchema); code-config entries take precedence.
-  try {
-    const collectionRegistry = (await resolve(
-      "collectionRegistryService"
-    )) as CollectionRegistrySurface;
-    if (typeof collectionRegistry?.getAllCollections === "function") {
-      const dbCollections = await collectionRegistry.getAllCollections();
-      for (const c of dbCollections) {
-        if (!c?.slug || !c?.tableName) continue;
-        if (desiredCollections[c.slug]) continue; // code config wins
-        desiredCollections[c.slug] = {
-          slug: c.slug,
-          tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredCollection["fields"],
-          status: c.status === true,
-          // i18n: carry localized for DB-registered (UI-created) collections too,
-          // so their main table omits translatable cols and a companion registers.
-          localized: (c as { localized?: boolean }).localized === true,
-        };
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger?.warn(
-      `[Nextly HMR] Could not load existing collections to preserve them ` +
-        `during code-first apply: ${msg}. UI-created collections may be ` +
-        `flagged for drop this cycle.`
-    );
-  }
+  // Schema-Builder ones). HMR only knows nextly.config.ts; the shared helper
+  // owns both the merge and the policy for an unreadable registry, so this
+  // path and `db:sync` cannot drift apart again.
+  Object.assign(
+    desiredCollections,
+    await mergeRegisteredCollectionsSafely(
+      desiredCollections,
+      async () => {
+        const collectionRegistry = (await resolve(
+          "collectionRegistryService"
+        )) as CollectionRegistrySurface;
+        return typeof collectionRegistry?.getAllCollections === "function"
+          ? await collectionRegistry.getAllCollections()
+          : [];
+      },
+      logger
+        ? { warn: (m: string) => logger.warn(`[Nextly HMR] ${m}`) }
+        : undefined
+    )
+  );
 
   // Same preservation for singles created via the UI (registry-only).
   try {

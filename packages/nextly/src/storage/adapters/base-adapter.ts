@@ -144,7 +144,7 @@ export abstract class BaseStorageAdapter implements IStorageAdapter {
    * @example
    * ```typescript
    * this.generateKey('photo.jpg')
-   * // 'uploads/2026/01/abc-123-...-photo.jpg'
+   * // '2026/01/abc-123-...-photo.jpg'
    *
    * this.generateKey('doc.pdf', 'documents')
    * // 'documents/2026/01/abc-123-...-doc.pdf'
@@ -157,9 +157,7 @@ export abstract class BaseStorageAdapter implements IStorageAdapter {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
 
-    const prefix = folder
-      ? `${folder}/${year}/${month}`
-      : `uploads/${year}/${month}`;
+    const prefix = folder ? `${folder}/${year}/${month}` : `${year}/${month}`;
 
     return `${prefix}/${uuid}-${sanitized}`;
   }

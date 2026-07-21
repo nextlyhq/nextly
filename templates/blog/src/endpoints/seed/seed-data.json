@@ -33,24 +33,28 @@
   ],
   "categories": [
     {
+      "title": "Engineering",
       "name": "Engineering",
       "slug": "engineering",
       "icon": "engineering",
       "description": "Deep-dives into systems, APIs, and the trade-offs behind the products we ship."
     },
     {
+      "title": "Tutorials",
       "name": "Tutorials",
       "slug": "tutorials",
       "icon": "tutorials",
       "description": "Step-by-step guides and how-to articles."
     },
     {
+      "title": "Opinion",
       "name": "Opinion",
       "slug": "opinion",
       "icon": "opinion",
       "description": "Essays and thoughts on the web ecosystem, tooling, and teams."
     },
     {
+      "title": "Product",
       "name": "Product",
       "slug": "product",
       "icon": "product",
@@ -59,41 +63,49 @@
   ],
   "tags": [
     {
+      "title": "Next.js",
       "name": "Next.js",
       "slug": "nextjs",
       "description": "Posts about the Next.js framework."
     },
     {
+      "title": "React",
       "name": "React",
       "slug": "react",
       "description": "React patterns, components, and architecture."
     },
     {
+      "title": "TypeScript",
       "name": "TypeScript",
       "slug": "typescript",
       "description": "TypeScript usage, tips, and gotchas."
     },
     {
+      "title": "Performance",
       "name": "Performance",
       "slug": "performance",
       "description": "Web performance techniques and deep-dives."
     },
     {
+      "title": "PostgreSQL",
       "name": "PostgreSQL",
       "slug": "postgres",
       "description": "Postgres techniques, indexing, and scaling."
     },
     {
+      "title": "Testing",
       "name": "Testing",
       "slug": "testing",
       "description": "Testing strategies, tools, and philosophy."
     },
     {
+      "title": "CSS",
       "name": "CSS",
       "slug": "css",
       "description": "Modern CSS patterns and layout techniques."
     },
     {
+      "title": "SEO",
       "name": "SEO",
       "slug": "seo",
       "description": "Search engine optimization for modern web apps."

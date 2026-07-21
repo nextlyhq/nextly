@@ -8,6 +8,7 @@
 
 import type { Metadata } from "next";
 
+import { EmptyState } from "@/components/EmptyState";
 import { ListingHeader } from "@/components/ListingHeader";
 import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
@@ -49,7 +50,11 @@ export default async function BlogPage({
         ]}
       />
 
-      <PostGrid posts={items} />
+      {items.length > 0 ? (
+        <PostGrid posts={items} />
+      ) : (
+        <EmptyState type="posts" />
+      )}
 
       <div className="mt-12">
         <Pagination

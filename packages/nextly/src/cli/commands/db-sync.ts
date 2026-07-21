@@ -62,6 +62,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { describeError } from "../../errors/index";
 import {
   createContext,
   type CommandContext,
@@ -210,9 +211,7 @@ export async function runDbSync(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -258,9 +257,7 @@ export async function runDbSync(
     (adapter as unknown as DrizzleAdapter).setTableResolver(earlyRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -417,9 +414,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runPromote(cmdOptions.promote, context);
             return;
           } catch (error) {
-            context.logger.error(
-              error instanceof Error ? error.message : String(error)
-            );
+            context.logger.error(describeError(error));
             process.exit(1);
           }
         }
@@ -430,9 +425,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runDemote(cmdOptions.demote, context);
             return;
           } catch (error) {
-            context.logger.error(
-              error instanceof Error ? error.message : String(error)
-            );
+            context.logger.error(describeError(error));
             process.exit(1);
           }
         }
@@ -448,9 +441,7 @@ export function registerDbSyncCommand(program: Command): void {
         try {
           await runDbSync(resolvedOptions, context);
         } catch (error) {
-          context.logger.error(
-            error instanceof Error ? error.message : String(error)
-          );
+          context.logger.error(describeError(error));
           process.exit(1);
         }
       }

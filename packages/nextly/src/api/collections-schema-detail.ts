@@ -25,6 +25,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -203,6 +204,15 @@ export const PATCH = withErrorHandler(
     // (migration-gated, via the schema-change preview).
     if (body.localized !== undefined) {
       updateData.localized = body.localized === true;
+    }
+
+    // Version history toggle, normalized to the resolved config the column
+    // holds; off writes null. `status` is deliberately not passed to the
+    // resolver — it aliases to a versioned config for back-compat, which would
+    // stop the toggle from turning versioning off on a Draft/Published
+    // collection.
+    if (body.versions !== undefined) {
+      updateData.versions = resolveBuilderVersions(body.versions === true);
     }
 
     // Admin fields: support both nested admin object and flat top-level

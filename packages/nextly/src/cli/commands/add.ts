@@ -23,6 +23,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 
+import { describeError } from "../../errors/index";
 import {
   createContext,
   type CommandContext,
@@ -169,9 +170,7 @@ export function registerAddCommand(program: Command): void {
         try {
           await runAdd(pkg, resolved, context);
         } catch (error) {
-          context.logger.error(
-            error instanceof Error ? error.message : String(error)
-          );
+          context.logger.error(describeError(error));
           process.exit(1);
         }
       }

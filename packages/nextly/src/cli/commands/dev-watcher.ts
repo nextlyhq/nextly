@@ -8,6 +8,7 @@
  * @module cli/commands/dev-watcher
  */
 
+import { describeError } from "../../errors/index";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -81,9 +82,7 @@ export function createDebouncedSync(
       // Seed permissions for new/updated collections and singles
       await performPermissionSeeding(adapter, options, context);
     } catch (error) {
-      logger.error(
-        `Re-sync failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      logger.error(`Re-sync failed: ${describeError(error)}`);
     } finally {
       isSyncing = false;
 

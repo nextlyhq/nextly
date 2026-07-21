@@ -63,6 +63,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         // companion has no columns yet — it is provisioned when the first translatable field is
         // added on the builder page (updateSingleSchema/applySchemaChanges reconcile).
         ...(values.i18n === true ? { localized: true } : {}),
+        // Version history opt-in at create; the server resolves the boolean.
+        ...(values.versions === true ? { versions: true } : {}),
         // Empty user-fields list — system columns are auto-injected by
         // the server; user adds custom fields on the next page.
         fields: [],
@@ -82,6 +84,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                     status: values.status === true,
                     // i18n: mirror the Internationalization flag into ui-schema.json.
                     localized: values.i18n === true,
+                    // and version history.
+                    versions: values.versions === true,
                   },
                   fields: [],
                 })

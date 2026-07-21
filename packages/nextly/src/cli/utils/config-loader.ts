@@ -36,7 +36,7 @@ import {
 } from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
-import { NextlyError } from "../../errors/index";
+import { NextlyError, describeError } from "../../errors/index";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -353,7 +353,7 @@ async function loadConfigInternal(
                 configPath,
                 reason: "plugin-setup-transformer-failed",
                 pluginName: plugin.name,
-                cause: error instanceof Error ? error.message : String(error),
+                cause: describeError(error),
               },
               cause: error instanceof Error ? error : undefined,
             });
@@ -444,7 +444,7 @@ async function loadConfigInternal(
       logContext: {
         configPath,
         reason: "load-error",
-        cause: error instanceof Error ? error.message : String(error),
+        cause: describeError(error),
       },
       cause: error instanceof Error ? error : undefined,
     });

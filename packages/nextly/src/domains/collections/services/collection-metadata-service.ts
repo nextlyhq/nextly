@@ -9,7 +9,7 @@ import { toDbError } from "../../../database/errors";
 // out-of-scope callers (CollectionService orchestrator, dynamic-collections)
 // still consume the result tuple; only the internal error mapping changed.
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
-import { NextlyError } from "../../../errors";
+import { NextlyError, isProgrammerError } from "../../../errors";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -54,6 +54,18 @@ function errorToMetadataResult(
   // dialect explicitly (no `this`); without normalising via toDbError(dialect)
   // first, real unique/fk violations would collapse to INTERNAL_ERROR and the
   // caller's fallback statusCode would always win.
+  // A defect in our own code (a bad property access, a missing binding) is not
+  // a caller mistake, so it must not inherit the caller's 4xx fallback. Left
+  // unchecked, a TypeError reaches the wire as "Validation failed" and sends
+  // the caller hunting through their payload for a bug that is ours.
+  if (isProgrammerError(error)) {
+    return {
+      success: false,
+      statusCode: 500,
+      message: fallback.defaultMessage,
+      data: null,
+    };
+  }
   const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
   // If the input was a true DbError, fromDatabaseError returns a non-internal
   // code. For anything else we honour the caller's fallback so e.g.
@@ -306,6 +318,8 @@ export class CollectionMetadataService extends BaseService {
     status?: boolean;
     /** i18n: whether the collection is localized (translatable fields + companion table). */
     localized?: boolean;
+    /** Whether every save is recorded as a restorable version. */
+    versions?: boolean;
     fields: FieldDefinition[];
     hooks?: Record<string, unknown>[];
     createdBy?: string;
@@ -646,6 +660,8 @@ export class CollectionMetadataService extends BaseService {
       status?: boolean;
       /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
       localized?: boolean;
+      /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
+      versions?: boolean;
       fields?: FieldDefinition[];
       hooks?: Record<string, unknown>[];
     }

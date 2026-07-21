@@ -24,6 +24,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -187,6 +188,12 @@ export const PATCH = withErrorHandler(
         ...(existing.admin || {}),
         ...adminOverrides,
       };
+    }
+
+    // Version history toggle, normalized to the resolved config the registry
+    // column holds; off writes null. Mirrors the collection detail route.
+    if (body.versions !== undefined) {
+      updateData.versions = resolveBuilderVersions(body.versions === true);
     }
 
     if (body.accessRules !== undefined) {

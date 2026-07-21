@@ -23,6 +23,7 @@ import type { Command } from "commander";
 import { resolveEntityTable } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
@@ -162,9 +163,7 @@ export function registerI18nRestoreCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

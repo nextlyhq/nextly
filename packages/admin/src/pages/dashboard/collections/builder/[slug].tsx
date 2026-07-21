@@ -62,6 +62,7 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
@@ -201,6 +202,11 @@ export default function CollectionBuilderEditPage({
       // i18n: reflect the saved localization flag so the Internationalization
       // toggle shows the true state and the dirty-check is accurate.
       i18n: (collection as { localized?: boolean }).localized === true,
+      // The registry stores the resolved config, so presence of an enabled one
+      // is what the switch reflects.
+      versions:
+        (collection as { versions?: { enabled?: boolean } | null }).versions
+          ?.enabled === true,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
@@ -239,18 +245,10 @@ export default function CollectionBuilderEditPage({
   // change never reached the API. Track the original settings snapshot
   // and shallow-compare on each render so the toolbar enables Save the
   // moment any settings field diverges from load-time.
-  const settingsDirty = useMemo(() => {
-    if (!originalSettings || !settings) return false;
-    return (
-      originalSettings.singularName !== settings.singularName ||
-      originalSettings.pluralName !== settings.pluralName ||
-      originalSettings.slug !== settings.slug ||
-      originalSettings.description !== settings.description ||
-      originalSettings.icon !== settings.icon ||
-      originalSettings.status !== settings.status ||
-      originalSettings.i18n !== settings.i18n
-    );
-  }, [originalSettings, settings]);
+  const settingsDirty = useMemo(
+    () => settingsAreDirty(originalSettings, settings),
+    [originalSettings, settings]
+  );
 
   // Aggregate count drives the toolbar badge. We add a single point for
   // settings dirtiness so the user gets a non-zero count and the Save
@@ -308,9 +306,41 @@ export default function CollectionBuilderEditPage({
           setPreviewData(null);
           // Refresh the dirty baseline so the unsaved badge clears.
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
-          // Re-pin the settings snapshot too so a settings + fields save
-          // doesn't leave the badge lit afterward.
-          if (settings) setOriginalSettings(settings);
+
+          // The schema apply carries fields only, so a save that changed the
+          // settings as well would clear the dirty badge while the registry
+          // kept the old values. Persist them here, without `fields` so no
+          // second migration is generated for a schema already applied.
+          if (settings) {
+            updateCollection(
+              {
+                collectionName: slug,
+                updates: {
+                  labels: {
+                    singular: settings.singularName,
+                    plural: settings.pluralName,
+                  },
+                  description: settings.description,
+                  icon: settings.icon,
+                  status: settings.status === true,
+                  localized: settings.i18n === true,
+                  versions: settings.versions === true,
+                },
+              },
+              {
+                // The baseline moves only once the write lands. Clearing it
+                // first would show a clean form over a registry that still
+                // holds the old settings, with no way to retry.
+                onSuccess: () => setOriginalSettings(settings),
+                onError: err => {
+                  const m = (err as { message?: string })?.message;
+                  toast.error(
+                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+                  );
+                },
+              }
+            );
+          }
 
           // D-series: database mode also writes the committable ui-schema.json
           // so the entity has a migration record (matches code-first). A
@@ -345,7 +375,14 @@ export default function CollectionBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, settings, builder.fields]
+    [
+      slug,
+      startRestart,
+      stopRestart,
+      settings,
+      builder.fields,
+      updateCollection,
+    ]
   );
 
   // Save settings/labels/hooks (no schema changes path).
@@ -370,6 +407,9 @@ export default function CollectionBuilderEditPage({
             // i18n: the collection-level Internationalization toggle. Toggling on
             // (migration-gated) provisions the companion `_locales` table.
             localized: settings.i18n === true,
+            // Version history: the server normalizes this into the resolved
+            // config the registry column holds.
+            versions: settings.versions === true,
             // Why: useAsTitle + timestamps were removed from the modal in
             // PR B (system title is always the display; timestamps always
             // emitted). Backend defaults take over -- code-first config can

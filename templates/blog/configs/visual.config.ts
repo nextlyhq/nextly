@@ -12,6 +12,11 @@ export default defineConfig({
   collections: [],
   singles: [],
 
+  // Database migrations directory (SQL-based templates store migrations at root)
+  db: {
+    migrationsDir: "./migrations",
+  },
+
   // TypeScript type generation
   typescript: {
     outputFile: "./src/types/generated/nextly-types.ts",
