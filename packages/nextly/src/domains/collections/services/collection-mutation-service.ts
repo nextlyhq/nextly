@@ -637,16 +637,21 @@ export class CollectionMutationService extends BaseService {
       components: Record<string, unknown>;
       manyToMany: Record<string, string[]>;
     },
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    tx: { getDrizzle<T = unknown>(): T }
   ) {
     const schema = fields as unknown as FieldConfig[];
 
     // A component embedded in another component is tagged too, which needs the
     // inner component's own schema. The data service already exposes that
     // lookup; resolving the whole set once keeps the walk itself synchronous.
+    //
+    // Read on the transaction's own connection. The registry lookup would
+    // otherwise take a second pooled connection while this write transaction
+    // still holds one, which stalls against a small pool.
     const componentFields = this.componentDataService
       ? await resolveComponentFieldMap(schema, slug =>
-          this.componentDataService!.getComponentFields(slug)
+          this.componentDataService!.getComponentFields(slug, tx.getDrizzle())
         )
       : new Map<string, FieldConfig[]>();
     const resolve = (slug: string) => componentFields.get(slug);
@@ -1693,7 +1698,7 @@ export class CollectionMutationService extends BaseService {
                 : (entry as { status?: unknown }).status,
             // Tagged for the snapshot alone: `documentParts` is also what the
             // outbox event below carries, and that payload is read shape.
-            parts: await this.snapshotPartsFor(documentParts, fields),
+            parts: await this.snapshotPartsFor(documentParts, fields, tx),
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
@@ -2050,7 +2055,8 @@ export class CollectionMutationService extends BaseService {
                     components: snapshotComponents,
                     manyToMany: snapshotM2M,
                   },
-                  fields
+                  fields,
+                  tx
                 ),
                 createdBy: params.user?.id ?? null,
                 // Left unlabelled deliberately. Publishing spans every locale,
@@ -2973,7 +2979,7 @@ export class CollectionMutationService extends BaseService {
                     effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
                   // See the create path: tagged for the snapshot only.
-                  parts: await this.snapshotPartsFor(documentParts, fields),
+                  parts: await this.snapshotPartsFor(documentParts, fields, tx),
                   createdBy: params.user?.id ?? null,
                   // Labelled with a locale only when locale-specific state was
                   // actually captured. A migrated localized collection routes

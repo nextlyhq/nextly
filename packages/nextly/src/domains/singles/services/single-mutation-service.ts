@@ -632,9 +632,16 @@ export class SingleMutationService extends BaseService {
               // for a shared-field write and left unrestorable.
               // Component schemas the snapshot's tagging needs, resolved once
               // so the walk itself stays synchronous.
+              //
+              // Read on the transaction's own connection: the registry lookup
+              // would otherwise take a second pooled connection while this
+              // write transaction still holds one, stalling a small pool.
               const snapshotComponentSchemas = this.componentDataService
                 ? await resolveComponentFieldMap(fieldConfigs, slug =>
-                    this.componentDataService!.getComponentFields(slug)
+                    this.componentDataService!.getComponentFields(
+                      slug,
+                      tx.getDrizzle()
+                    )
                   )
                 : new Map<string, (typeof fieldConfigs)[number][]>();
               const snapshotComponentResolver = (slug: string) =>
