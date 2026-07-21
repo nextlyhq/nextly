@@ -67,6 +67,7 @@ import {
   deleteWebhook,
   revealWebhookSecret,
 } from "./api/webhooks";
+import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
@@ -778,7 +779,21 @@ async function handleServiceRequest(
   // passes through the authorization block below first, and initialising ahead
   // of it would let an unauthenticated request connect the database and run
   // startup work before being turned away with a 401.
-  if (service !== undefined && DIRECT_DISPATCH_SERVICES.has(service)) {
+  //
+  // Deferred again until the request at least presents a credential. Both
+  // credential sources are read without touching the container
+  // (`readAccessTokenCookie` is a cookie parse, `authorization` a header read),
+  // and a request carrying neither is refused by the handler's own auth without
+  // ever resolving a service — so booting for it would hand unauthenticated
+  // traffic a cold start it could not otherwise cause. A credential that turns
+  // out to be invalid still boots, which only costs the warm-up a valid request
+  // would have caused anyway.
+  if (
+    service !== undefined &&
+    DIRECT_DISPATCH_SERVICES.has(service) &&
+    (req.headers.get("authorization") !== null ||
+      readAccessTokenCookie(req) !== null)
+  ) {
     await ensureServicesInitialized();
   }
 

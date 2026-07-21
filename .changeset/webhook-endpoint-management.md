@@ -38,4 +38,6 @@ Deleting an endpoint also discards its delivery history, because the delivery ta
 
 Static headers are checked when they are saved. A header name that is not a valid HTTP token, or a value containing a line break, can never be sent: the delivery path could not tell that apart from a network fault, so it treated it as temporary and retried an endpoint that could never succeed.
 
+`webhooks` is now a reserved collection slug. Permission identity is action plus resource, so a collection with that slug would have shared the exact permission rows the endpoint routes check, and a role granted the collection's `read-webhooks` could have read endpoint configuration while `update-webhooks` revealed signing secrets. An installation that already has a collection with this slug needs to rename it.
+
 Deliveries still need a trigger. Nothing runs the drain yet, so a registered endpoint will not receive anything until that lands.

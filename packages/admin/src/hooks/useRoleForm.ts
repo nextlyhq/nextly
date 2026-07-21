@@ -34,7 +34,7 @@ interface LoadingState {
 /** The one role nothing may be built on; see the base-role filter below. */
 const SUPER_ADMIN_SLUG = "super-admin";
 
-const SYSTEM_RESOURCE_SLUGS = new Set([
+export const SYSTEM_RESOURCE_SLUGS = new Set([
   "users",
   "roles",
   "permissions",
@@ -43,6 +43,7 @@ const SYSTEM_RESOURCE_SLUGS = new Set([
   "email-providers",
   "email-templates",
   "api-keys",
+  "webhooks",
 ]);
 
 // Helper function to fetch and process inherited permissions (robust per-id fetch)

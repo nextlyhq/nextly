@@ -28,6 +28,7 @@ import {
 
 import { SYSTEM_PERMISSIONS } from "./permission-seed-service";
 import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
+import { RESERVED_SLUGS } from "../../../shared/sql-reserved";
 
 let current: TestNextly | undefined;
 
@@ -76,6 +77,16 @@ describe("system permission slugs", () => {
     );
 
     expect(Array.from(new Set(undeclared))).toEqual([]);
+  });
+
+  it("reserves the webhooks slug so a collection cannot share its permissions", () => {
+    // Permission identity is action + resource. A collection slugged `webhooks`
+    // would produce the same `read-webhooks` / `update-webhooks` rows these
+    // system permissions use, so a content role granted them could read
+    // endpoint configuration and reveal signing secrets.
+    expect((RESERVED_SLUGS as readonly string[]).includes("webhooks")).toBe(
+      true
+    );
   });
 
   it("seeds the api-keys update permission under the slug callers ask for", async () => {
