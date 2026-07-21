@@ -3,6 +3,7 @@
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
 "@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin-css": patch
 "@nextlyhq/admin": patch
 "create-nextly-app": patch
 "@nextlyhq/eslint-config": patch
