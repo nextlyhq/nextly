@@ -85,23 +85,49 @@ describe("index restore", () => {
 
   it("matches the rename however the dialect writes it", () => {
     const shapes = [
-      ["ALTER TABLE `__new_dc_posts` RENAME TO `dc_posts`"],
-      ["ALTER TABLE __new_dc_posts RENAME TO dc_posts"],
+      [
+        "CREATE TABLE `__new_dc_posts` (`id` text)",
+        "ALTER TABLE `__new_dc_posts` RENAME TO `dc_posts`",
+      ],
+      [
+        "CREATE TABLE __new_dc_posts (id text)",
+        "ALTER TABLE __new_dc_posts RENAME TO dc_posts",
+      ],
       // Schema-qualified, which drizzle-kit emits and the destructive scanner
       // already accepts. Missing it would leave the rebuilt table without its
       // indexes in exactly the case this exists to cover.
-      ['ALTER TABLE "main"."__new_dc_posts" RENAME TO "dc_posts"'],
-      ["ALTER TABLE main.__new_dc_posts RENAME TO dc_posts"],
+      [
+        'CREATE TABLE "main"."__new_dc_posts" ("id" text)',
+        'ALTER TABLE "main"."__new_dc_posts" RENAME TO "dc_posts"',
+      ],
+      [
+        "CREATE TABLE main.__new_dc_posts (id text)",
+        "ALTER TABLE main.__new_dc_posts RENAME TO dc_posts",
+      ],
     ];
     for (const shape of shapes) {
       expect(indexRestoreStatements(desired, "sqlite", shape)).toHaveLength(2);
     }
   });
 
+  it("ignores a rename with no matching create", () => {
+    // `DROP TABLE x; ALTER TABLE __new_x RENAME TO x` builds nothing and
+    // copies nothing, so the rows are gone. Reading it as a rebuild would
+    // both restore indexes onto a table that lost its data and, in the
+    // destructive guard that shares this detection, excuse the drop.
+    const out = indexRestoreStatements(desired, "sqlite", [
+      'DROP TABLE "dc_posts"',
+      'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
   it("ignores a rename that does not restore the original name", () => {
     // `__new_x` renaming to something else is not a rebuild of `x`, so it must
     // not trigger a restore against a table that was never replaced.
     const out = indexRestoreStatements(desired, "sqlite", [
+      'CREATE TABLE "__new_dc_posts" ("id" text)',
       'ALTER TABLE "__new_dc_posts" RENAME TO "dc_archive"',
     ]);
 

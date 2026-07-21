@@ -206,6 +206,20 @@ export function filterUnsafeStatements(
  * one would make the two answer differently about the same batch.
  */
 export function rebuiltTableNames(statements: readonly string[]): Set<string> {
+  // The replacement table has to have been built in this same batch. A rename
+  // on its own proves only that something took the table's name: for
+  // `DROP TABLE posts; ALTER TABLE __new_posts RENAME TO posts` there is no
+  // create and no copy, so the rows are gone and the drop is a real one that
+  // the destructive guard must still refuse. Pairing the rename with its
+  // create is what makes this the rebuild it claims to be.
+  const created = new Set<string>();
+  for (const s of statements) {
+    const m = s.match(
+      /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (m) created.add((m[1] ?? "").toLowerCase());
+  }
+
   const targets = new Set<string>();
   for (const s of statements) {
     const m = s.match(
@@ -213,9 +227,10 @@ export function rebuiltTableNames(statements: readonly string[]): Set<string> {
       // "main"."__new_x", main.__new_x.
       /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
     );
-    if (m && (m[1] ?? "").toLowerCase() === (m[2] ?? "").toLowerCase()) {
-      targets.add((m[1] ?? "").toLowerCase());
-    }
+    if (!m) continue;
+    const from = (m[1] ?? "").toLowerCase();
+    const to = (m[2] ?? "").toLowerCase();
+    if (from === to && created.has(from)) targets.add(from);
   }
   return targets;
 }
