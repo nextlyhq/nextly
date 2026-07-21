@@ -11,6 +11,8 @@
 // Applies to all three UI-authorable kinds — collections, singles and
 // components — so the migration story is the same whichever one is edited.
 
+import { BUILDER_MIGRATION_MARKER } from "../../domains/schema/migration-markers";
+
 import { getCollectionsHandlerFromDI } from "./di";
 
 /** The UI-authorable entity kinds, used for the migration's header comment. */
@@ -34,6 +36,7 @@ export async function writeBuilderMigration(
   const safeSlug = slug.toLowerCase().replace(/[^a-z0-9]+/g, "_");
   const sql = [
     `-- Update dynamic ${kind}: ${slug}`,
+    `${BUILDER_MIGRATION_MARKER} (${kind})`,
     statements.join("\n--> statement-breakpoint\n"),
   ].join("\n");
 

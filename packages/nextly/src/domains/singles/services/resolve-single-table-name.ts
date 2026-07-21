@@ -26,6 +26,15 @@ export interface SingleNameInput {
   dbName?: string;
 }
 
+/**
+ * Lowercase, collapse non-alphanumeric runs to a single underscore, and strip
+ * the edges.
+ *
+ * Exported because component table names use the identical normalization (see
+ * `resolveComponentTableName`). Keeping one implementation means the singles
+ * and components rules cannot drift apart, which is exactly how the CLI started
+ * generating names the runtime never creates.
+ */
 export function normalizeIdentifier(input: string): string {
   return input
     .toLowerCase()

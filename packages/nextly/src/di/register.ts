@@ -1621,11 +1621,20 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.updated,
   ];
 
+  // Shared resolver so the existence probe below, the DDL path further down and
+  // the migration CLI all produce identical component table names.
+  const { resolveComponentTableName } = await import(
+    "../domains/schema/utils/resolve-table-name"
+  );
+
   for (const slug of componentSyncResult.unchanged) {
-    const tableName = `comp_${slug
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")}`;
+    // A component may declare a custom `dbName`, in which case its table is not
+    // named `comp_<slug>` at all. Probing the unresolved name would never find
+    // it and would queue a redundant sync on every boot.
+    const tableName = resolveComponentTableName(
+      slug,
+      transformedConfig.components.find(c => c.slug === slug)?.dbName
+    );
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -1651,11 +1660,6 @@ async function syncCodeFirstComponents(
     );
     const dialect = adapter.getCapabilities().dialect;
     const compSchemaService = new CompSchemaService(dialect);
-    // Shared resolver so this DDL path and the migration CLI produce identical
-    // component table names.
-    const { resolveComponentTableName } = await import(
-      "../domains/schema/utils/resolve-table-name"
-    );
 
     for (const slug of componentsNeedingTableSync) {
       const compConfig = transformedConfig.components.find(

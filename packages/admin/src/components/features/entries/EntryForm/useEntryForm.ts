@@ -166,21 +166,45 @@ export type EntryFormIntent =
  * - undefined intent: pass `rawData` through unchanged. Used by the
  *   single-Save button when drafts aren't enabled on the collection.
  */
+/**
+ * Send a blank optional field as `null` rather than an empty string.
+ *
+ * An untouched optional field reaches submit as `""`, which validation accepts.
+ * Persisting that literal would make "empty" mean two different things
+ * depending on how the row was written — `""` from the admin, `NULL` from the
+ * API or a migration — so `WHERE col IS NULL` would quietly miss rows. It also
+ * breaks optional unique fields outright: `""` is a real value to a unique
+ * index, so the second entry left blank collides with the first.
+ *
+ * Only `""` is rewritten. `0`, `false` and `[]` are genuine values and pass
+ * through untouched, as does a required field, which cannot be blank and still
+ * reach this point.
+ */
+function blankToNull(data: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      value === "" ? null : value,
+    ])
+  );
+}
+
 export function mapIntentToPayload(
   rawData: Record<string, unknown>,
   intent?: EntryFormIntent
 ): Record<string, unknown> {
+  const data = blankToNull(rawData);
   switch (intent) {
     case "save-draft":
-      return { ...rawData, status: "draft" };
+      return { ...data, status: "draft" };
     case "publish":
-      return { ...rawData, status: "published" };
+      return { ...data, status: "published" };
     case "save-changes":
-      return { ...rawData, status: "published" };
+      return { ...data, status: "published" };
     case "unpublish":
       return { status: "draft" };
     default:
-      return rawData;
+      return data;
   }
 }
 
@@ -320,16 +344,28 @@ function getDefaultValues(
 
       case "select":
       case "radio": {
+        // A select's defaultValue may be declared as a single value or, for
+        // hasMany, as an array (`defaultValue: ["technology", "design"]`).
+        // Widening the type here matters: treating an array default as a scalar
+        // would wrap it again and hand the field [["technology", "design"]],
+        // which renders as one nonsense badge and fails array validation.
         const selectField = field as {
-          defaultValue?: string;
+          defaultValue?: string | string[];
           hasMany?: boolean;
         };
+        const { defaultValue } = selectField;
         if (selectField.hasMany) {
-          defaults[fieldName] = selectField.defaultValue
-            ? [selectField.defaultValue]
-            : [];
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? defaultValue
+            : defaultValue
+              ? [defaultValue]
+              : [];
         } else {
-          defaults[fieldName] = selectField.defaultValue ?? null;
+          // A single-value select given an array default takes its first entry
+          // rather than stringifying the whole array into the control.
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? (defaultValue[0] ?? null)
+            : (defaultValue ?? null);
         }
         break;
       }

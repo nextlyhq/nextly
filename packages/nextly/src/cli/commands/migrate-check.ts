@@ -58,6 +58,7 @@ import {
   SnapshotFileError,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { BUILDER_MIGRATION_MARKER } from "../../domains/schema/migration-markers";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type {
   NextlySchemaSnapshot,
@@ -246,7 +247,15 @@ export async function runChecks(args: {
     // Localization/companion migrations are snapshot-less by design (they carry
     // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
     // rather than flagging them MISSING_SNAPSHOT.
-    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
+    // Schema Builder migrations are snapshot-less for the same reason: they
+    // record the DDL the apply pipeline already executed rather than a diff
+    // against a snapshot, so pairing checks would fail every UI edit.
+    if (
+      sqlContent.includes(LOCALIZATION_MIGRATION_MARKER) ||
+      sqlContent.includes(BUILDER_MIGRATION_MARKER)
+    ) {
+      continue;
+    }
     let result;
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);

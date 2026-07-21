@@ -48,6 +48,7 @@ import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
 import {
+  excludeLockedTableStatements,
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
@@ -241,7 +242,6 @@ class DdlExecutionError extends Error {
 // withCapturedStdout. The non-additive enumeration on the fallback path
 // makes "why didn't the fast path trigger?" trivially answerable in support.
 function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
   if (process.env.DEBUG_SCHEMA !== "1") return;
   if (useFastPath) {
     console.debug(
@@ -453,7 +453,6 @@ export function excludeLockedTableOps(
 }
 
 function logSkippedLockedOps(skipped: Operation[]): void {
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
@@ -461,6 +460,15 @@ function logSkippedLockedOps(skipped: Operation[]): void {
   console.debug(
     `[nextly] schema apply: skipped ${skipped.length} op(s) on code-first ` +
       `table(s) not owned by this UI save: ${tables.join(", ")}`
+  );
+}
+
+function logSkippedLockedStatements(skipped: string[]): void {
+  if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
+  console.debug(
+    `[nextly] schema apply: dropped ${skipped.length} emitted statement(s) ` +
+      `targeting code-first table(s) not owned by this UI save: ` +
+      skipped.join("; ")
   );
 }
 
@@ -921,7 +929,6 @@ export class PushSchemaPipeline {
                   dialect === "mysql" ? db : tx,
                   desiredTableNames
                 ),
-              // eslint-disable-next-line turbo/no-undeclared-env-vars
               process.env.DEBUG_SCHEMA === "1"
                 ? { debug: (msg: string) => console.debug(msg) }
                 : undefined
@@ -976,10 +983,21 @@ export class PushSchemaPipeline {
         const managedTables = new Set(
           desiredTableNames.map(t => t.toLowerCase())
         );
-        const safe = filterUnsafeStatements(
+        const unlocked = filterUnsafeStatements(
           emittedStatements,
           desiredTableNames
         );
+        // Op-level lock filtering covers what this pipeline decided to do, but
+        // drizzle-kit re-derives drift from the full desired schema, so on the
+        // kit path it can still emit DDL for a locked table. Scope reduction
+        // only narrows that on PostgreSQL — SQLite and MySQL ignore
+        // tablesFilter entirely — so the guarantee is enforced here, on the
+        // statements themselves, where it holds for every dialect.
+        const { kept: safe, skipped: skippedLockedStatements } =
+          source === "ui"
+            ? excludeLockedTableStatements(unlocked, lockedTableNames(desired))
+            : { kept: unlocked, skipped: [] as string[] };
+        logSkippedLockedStatements(skippedLockedStatements);
         const unexpectedDestructive = findUnexpectedDestructiveStatements(
           emittedStatements,
           allowedRebuildTables,

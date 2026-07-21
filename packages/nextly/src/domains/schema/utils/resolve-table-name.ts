@@ -5,25 +5,27 @@
 // dev-server.ts, and init.ts all produce identical names.
 //
 // Note: each entity kind normalizes differently at runtime — collections
-// replace only dashes here, while singles and components run the stronger
-// `normalizeIdentifier`. The migration CLI must route each kind through its
-// matching resolver (see resolveSingleTableName / resolveComponentTableName)
-// rather than a single generic rule, or generated names diverge from the DB.
+// replace dashes in the slug only, while singles and components run the
+// stronger `normalizeIdentifier`, and components alone keep a custom `dbName`
+// unprefixed. The migration CLI must route each kind through its matching
+// resolver (see resolveSingleTableName / resolveComponentTableName) rather than
+// a single generic rule, or generated names diverge from the live database.
 
 import { normalizeIdentifier } from "../../singles/services/resolve-single-table-name";
 
-// Rule:
-//   - If `dbName` is provided AND already starts with `dc_`, use it
-//     verbatim. (User explicitly opted into a custom physical name.)
-//   - Otherwise, base = (dbName ?? slug), normalize dashes -> underscores,
-//     and prefix with `dc_`.
+// Rule (mirrors the runtime collection sync in di/register.ts exactly):
+//   - base = dbName, or the slug with dashes replaced by underscores.
+//     A custom `dbName` is taken as written — dashes included — because the
+//     runtime does not rewrite it either, and a resolver that "tidied" it
+//     would make the CLI target `dc_my_table` while the app uses `dc_my-table`.
+//   - If base already starts with `dc_`, use it verbatim (the user opted into
+//     a custom physical name); otherwise prefix it.
 export function resolveCollectionTableName(
   slug: string,
   dbName?: string
 ): string {
-  if (dbName && dbName.startsWith("dc_")) return dbName;
-  const base = dbName ?? slug;
-  return `dc_${base.replace(/-/g, "_")}`;
+  const base = dbName ?? slug.replace(/-/g, "_");
+  return base.startsWith("dc_") ? base : `dc_${base}`;
 }
 
 // Mirrors the runtime component table sync (di/register.ts): a custom `dbName`

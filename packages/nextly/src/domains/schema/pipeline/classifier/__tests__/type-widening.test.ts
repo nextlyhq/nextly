@@ -109,6 +109,12 @@ describe("isWideningChange — SQLite", () => {
   it("integer -> text is NOT widening", () => {
     expect(isWideningChange("integer", "text", "sqlite")).toBe(false);
   });
+  // SQLite stores by type AFFINITY, not declared type: every numeric-family
+  // declaration (integer/real/numeric/decimal and their aliases) shares NUMERIC
+  // or INTEGER affinity, so moving between them rewrites no data and cannot
+  // fail. Warning about it produced a false "data loss" prompt on an edit that
+  // is in fact lossless. Cross-family moves still warn — see the cases above and
+  // below, which is what keeps this from degrading into "SQLite never warns".
   it("treats a change between numeric declared types as non-destructive", () => {
     expect(isWideningChange("real", "integer", "sqlite")).toBe(true);
     expect(isWideningChange("integer", "real", "sqlite")).toBe(true);

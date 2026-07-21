@@ -57,4 +57,24 @@ describe("mapIntentToPayload", () => {
     mapIntentToPayload(input, "publish");
     expect(input).toEqual(RAW);
   });
+
+  // A blank optional field submits as "". Storing that literal would make an
+  // optional unique column reject the second blank entry, and would split
+  // "empty" into two representations the API and migrations never produce.
+  it("sends a blank optional field as null rather than an empty string", () => {
+    expect(
+      mapIntentToPayload({ title: "Hi", subtitle: "" }, undefined)
+    ).toEqual({ title: "Hi", subtitle: null });
+  });
+
+  // Falsy values that are not "" are real user input and must survive intact.
+  it("leaves 0, false and [] alone", () => {
+    const input = { count: 0, featured: false, tags: [], note: "" };
+    expect(mapIntentToPayload(input, undefined)).toEqual({
+      count: 0,
+      featured: false,
+      tags: [],
+      note: null,
+    });
+  });
 });

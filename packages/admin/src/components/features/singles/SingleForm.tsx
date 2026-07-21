@@ -201,11 +201,32 @@ function getDefaultValues(
       case "textarea":
       case "email":
       case "password":
-      case "select":
-      case "radio":
         defaults[fieldName] =
           (field as { defaultValue?: string }).defaultValue ?? "";
         break;
+      case "select":
+      case "radio": {
+        // A hasMany select holds an array, so it must seed [] rather than the
+        // scalar "" used by the other cases — an empty string would render as
+        // no selection and then fail the field's array validation on save.
+        const selectField = field as {
+          defaultValue?: string | string[];
+          hasMany?: boolean;
+        };
+        const { defaultValue } = selectField;
+        if (selectField.hasMany) {
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? defaultValue
+            : defaultValue
+              ? [defaultValue]
+              : [];
+        } else {
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? (defaultValue[0] ?? "")
+            : (defaultValue ?? "");
+        }
+        break;
+      }
       case "richText":
         // Why: richText was previously lumped with text/textarea and
         // defaulted to "" — but its value is a Lexical JSON state, not

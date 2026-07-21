@@ -5,6 +5,18 @@ import {
   resolveComponentTableName,
 } from "./resolve-table-name";
 
+// These resolvers exist so `migrate:create`/`migrate:check` name tables exactly
+// as the running app does. The two kinds deliberately disagree, because their
+// runtime counterparts do:
+//
+//   - Collections dash-replace the SLUG only and always carry a `dc_` prefix.
+//     A custom `dbName` is used as written, so the CLI cannot "tidy" a dashed
+//     one into a name the app never creates.
+//   - Components run the stronger `normalizeIdentifier` on the slug, but honor
+//     a custom `dbName` verbatim and unprefixed.
+//
+// Each expectation below therefore pins a runtime behaviour, not a preference;
+// changing one means the generated migration targets the wrong table.
 describe("resolveCollectionTableName", () => {
   it("prefixes a dbName that lacks the dc_ prefix (plugin collections)", () => {
     expect(resolveCollectionTableName("forms", "forms")).toBe("dc_forms");
@@ -19,6 +31,13 @@ describe("resolveCollectionTableName", () => {
 
   it("falls back to the dashed slug when no dbName is given", () => {
     expect(resolveCollectionTableName("my-things")).toBe("dc_my_things");
+  });
+
+  // The runtime prefixes a custom dbName without rewriting it, so a dashed one
+  // must survive intact — normalizing it here would point generated migrations
+  // at a table the app never creates.
+  it("keeps a custom dbName as written, dashes included", () => {
+    expect(resolveCollectionTableName("posts", "my-table")).toBe("dc_my-table");
   });
 });
 

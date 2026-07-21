@@ -90,7 +90,11 @@ const SQL_COLUMN_TYPES: Record<
     varchar: (length: number) => `VARCHAR(${length})`,
     boolean: "BOOLEAN",
     integer: "INTEGER",
-    real: "REAL",
+    // float8, matching the `doublePrecision` column the runtime and the
+    // generated Drizzle schema build for this field. Emitting REAL (float4)
+    // here instead would create a table that never converges: every later diff
+    // would see live float4 against desired float8 and try to alter it again.
+    real: "DOUBLE PRECISION",
     decimal: (precision: number, scale: number) =>
       `NUMERIC(${precision}, ${scale})`,
     timestamp: "TIMESTAMP",
