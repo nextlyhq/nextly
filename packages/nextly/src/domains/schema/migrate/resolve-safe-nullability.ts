@@ -28,9 +28,20 @@ interface Queryable {
   all?: (query: unknown) => Promise<unknown>;
 }
 
-/** Rows returned by the probe, across the shapes the drivers use. */
+/**
+ * Rows returned by the probe, across the shapes the drivers use.
+ *
+ * mysql2 resolves a query to `[rows, fieldPackets]`, so a probe that matched
+ * nothing arrives as `[[], fields]` — an array of length 2. Reading the outer
+ * length would call that "holds NULL" and refuse every safe migration on
+ * MySQL, which is the opposite of what the probe exists to do. Unwrap the
+ * tuple before treating an array as the row list.
+ */
 function hasAnyRow(result: unknown): boolean {
-  if (Array.isArray(result)) return result.length > 0;
+  if (Array.isArray(result)) {
+    const rows = Array.isArray(result[0]) ? result[0] : result;
+    return rows.length > 0;
+  }
   if (result && typeof result === "object") {
     const rows = (result as { rows?: unknown }).rows;
     if (Array.isArray(rows)) return rows.length > 0;

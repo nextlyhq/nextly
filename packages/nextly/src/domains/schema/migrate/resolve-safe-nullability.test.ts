@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import type { Operation } from "../pipeline/diff/types";
 
 import { resolveSafeNullabilityOps } from "./resolve-safe-nullability";
@@ -56,6 +57,21 @@ describe("resolveSafeNullabilityOps", () => {
     expect(db.execute).not.toHaveBeenCalled();
   });
 
+  it("reads mysql2 tuple results, not the tuple length", async () => {
+    // mysql2 resolves to [rows, fieldPackets], so a probe matching nothing
+    // arrives as [[], fields]. Counting the outer array would call that
+    // "holds NULL" and refuse every safe migration on MySQL.
+    const noMatch = { execute: vi.fn(async () => [[], ["fieldPacket"]]) };
+    expect(await resolveSafeNullabilityOps(noMatch, [requireOp("id")])).toEqual(
+      []
+    );
+
+    const oneMatch = { execute: vi.fn(async () => [[{ one: 1 }], ["f"]]) };
+    expect(
+      await resolveSafeNullabilityOps(oneMatch, [requireOp("id")])
+    ).toHaveLength(1);
+  });
+
   it("passes every other op through untouched", async () => {
     const db = { execute: vi.fn(async () => ({ rows: [] })) };
     const other = {
@@ -70,7 +86,7 @@ describe("resolveSafeNullabilityOps", () => {
     // data-losing change slips through.
     const db = {
       execute: vi.fn(async () => {
-        throw new Error("no such table");
+        throw NextlyError.internal({ logMessage: "no such table" });
       }),
     };
     expect(await resolveSafeNullabilityOps(db, [requireOp("id")])).toHaveLength(
