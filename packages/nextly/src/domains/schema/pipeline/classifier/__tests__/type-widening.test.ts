@@ -109,4 +109,13 @@ describe("isWideningChange — SQLite", () => {
   it("integer -> text is NOT widening", () => {
     expect(isWideningChange("integer", "text", "sqlite")).toBe(false);
   });
+  it("treats a change between numeric declared types as non-destructive", () => {
+    expect(isWideningChange("real", "integer", "sqlite")).toBe(true);
+    expect(isWideningChange("integer", "real", "sqlite")).toBe(true);
+    expect(isWideningChange("integer", "numeric", "sqlite")).toBe(true);
+    expect(isWideningChange("numeric(10, 2)", "integer", "sqlite")).toBe(true);
+  });
+  it("blob -> real is NOT widening (cross storage class)", () => {
+    expect(isWideningChange("blob", "real", "sqlite")).toBe(false);
+  });
 });
