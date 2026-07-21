@@ -14,7 +14,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
-import { describeError } from "../../errors/index";
+import { describeError, immediateMessage } from "../../errors/index";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
@@ -474,15 +474,20 @@ export async function syncUserFields(
       logger.warn("user_ext table creation SQL executed but table not found");
     }
   } catch (error) {
-    const errorMsg = describeError(error);
-    // Table already exists is expected with CREATE TABLE IF NOT EXISTS
-    if (errorMsg.includes("already exists") || errorMsg.includes("duplicate")) {
+    // Table already exists is expected with CREATE TABLE IF NOT EXISTS.
+    // Match the immediate message only, so a wrapped failure carrying those
+    // words deeper in its cause chain is still reported rather than skipped.
+    const immediate = immediateMessage(error);
+    if (
+      immediate.includes("already exists") ||
+      immediate.includes("duplicate")
+    ) {
       const tableExists = await drizzleAdapter.tableExists("user_ext");
       if (tableExists) {
         logger.success("user_ext table already exists");
       }
     } else {
-      logger.warn(`user_ext sync error: ${errorMsg}`);
+      logger.warn(`user_ext sync error: ${describeError(error)}`);
     }
   }
 }
@@ -597,17 +602,19 @@ export async function performPermissionSeeding(
       }
     }
   } catch (error) {
-    const errorMsg = describeError(error);
-    // Handle fresh DB scenarios gracefully (tables may not exist yet)
+    // Handle fresh DB scenarios gracefully (tables may not exist yet). The
+    // immediate message decides: a real seeding failure that merely wraps a
+    // "does not exist" cause must still be reported, not skipped silently.
+    const immediate = immediateMessage(error);
     if (
-      errorMsg.includes("no such table") ||
-      errorMsg.includes("does not exist") ||
-      errorMsg.includes("relation") ||
-      errorMsg.includes("doesn't exist")
+      immediate.includes("no such table") ||
+      immediate.includes("does not exist") ||
+      immediate.includes("relation") ||
+      immediate.includes("doesn't exist")
     ) {
       logger.debug("Skipping permission seeding (tables may not exist yet)");
     } else {
-      logger.warn(`Permission seeding failed: ${errorMsg}`);
+      logger.warn(`Permission seeding failed: ${describeError(error)}`);
     }
   }
 }

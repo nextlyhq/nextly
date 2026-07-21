@@ -240,7 +240,7 @@ export async function runMigrateCreate(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(describeError(error));
+    logger.error(`Failed to load UI schema: ${describeError(error)}`);
     process.exit(1);
   }
 

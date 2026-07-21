@@ -21,6 +21,7 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
@@ -174,7 +175,10 @@ export async function migrateDownCore(
         try {
           await deps.execDown(p.downSql);
         } catch (err) {
-          await deps.recordFailed(p.filename, describeError(err));
+          await deps.recordFailed(
+            p.filename,
+            truncateErrorMessage(describeError(err))
+          );
           throw err;
         }
         await deps.recordRolledBack(p.filename);

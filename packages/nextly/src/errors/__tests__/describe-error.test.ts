@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { describeError } from "../describe-error";
+import { describeError, immediateMessage } from "../describe-error";
 import { NextlyError } from "../nextly-error";
 
 describe("describeError", () => {
@@ -79,6 +79,18 @@ describe("describeError", () => {
     expect(() => describeError(circular)).not.toThrow();
     // Falls back to the type tag rather than an unhelpful empty string.
     expect(describeError(circular)).toContain("Object");
+  });
+
+  it("is not safe as a branching predicate, which is why immediateMessage exists", () => {
+    // Callers ask "is this the benign 'already exists' case?" by substring
+    // match. A description concatenates the whole chain, so an unrelated
+    // failure that merely WRAPS such a message would match and be swallowed.
+    const wrapped = new Error("permission denied opening database", {
+      cause: new Error('table "x" already exists'),
+    });
+
+    expect(describeError(wrapped)).toContain("already exists");
+    expect(immediateMessage(wrapped)).not.toContain("already exists");
   });
 
   it("does not stringify an object cause as [object Object]", () => {

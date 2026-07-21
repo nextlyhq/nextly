@@ -79,6 +79,24 @@ function collectCauses(
 }
 
 /**
+ * The thrown value's own message, with no cause chain appended.
+ *
+ * Use this, never `describeError`, when the result feeds a decision. Code that
+ * asks "is this the benign 'already exists' case?" by substring match must see
+ * only the immediate failure: `describeError` concatenates the whole chain, so
+ * an unrelated error that merely *wraps* something containing the phrase would
+ * match and be swallowed. Descriptions are for reading; this is for branching.
+ *
+ * Substring-matching a driver message is itself a weak test. It is preserved
+ * here because replacing it is a separate change, but new code should prefer a
+ * structured signal such as `DbError.kind`.
+ */
+export function immediateMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return stringifyUnknown(error);
+}
+
+/**
  * Build a developer-readable description of any thrown value.
  *
  * For a `NextlyError` this is `[CODE] public message | cause: … | context: {…}`.

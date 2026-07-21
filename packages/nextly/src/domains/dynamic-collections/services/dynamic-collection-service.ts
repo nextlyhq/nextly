@@ -7,6 +7,7 @@ import { createHash, randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
@@ -130,6 +131,30 @@ export class DynamicCollectionService extends BaseService {
   async generateCollection(
     data: CreateCollectionInput
   ): Promise<CollectionArtifacts> {
+    // The REST dispatcher forwards the request body unvalidated, so `data` is
+    // caller-controlled and the fields below may be absent. Check them before
+    // dereferencing: without this a body missing `name` throws a TypeError
+    // from `.toLowerCase()`, which is indistinguishable from a defect in our
+    // own code and cannot be reported as the client error it is.
+    if (typeof data?.name !== "string" || data.name.trim() === "") {
+      throw NextlyError.validation({
+        errors: [
+          { path: "name", code: "REQUIRED", message: "Name is required." },
+        ],
+      });
+    }
+    if (!Array.isArray(data.fields)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "REQUIRED",
+            message: "Fields must be an array.",
+          },
+        ],
+      });
+    }
+
     const normalizedName = data.name.toLowerCase();
     const tableName = `dc_${normalizedName}`;
 

@@ -95,6 +95,24 @@ export interface MarkFailedInput {
   errorJson?: unknown;
 }
 
+/**
+ * Storage bound for the `error_message` column.
+ *
+ * Recorded descriptions can be long — a generated migration statement plus its
+ * cause chain and context runs to thousands of characters. Writing that
+ * unbounded risks the failure record itself failing, which would leave the
+ * migration with no failed status at all: the worst outcome, since the
+ * operator then sees neither the error nor the fact that one occurred.
+ */
+export const ERROR_MESSAGE_MAX_LEN = 1000;
+
+/** Clamp a message to the `error_message` column bound, marking any cut. */
+export function truncateErrorMessage(message: string): string {
+  return message.length > ERROR_MESSAGE_MAX_LEN
+    ? `${message.slice(0, ERROR_MESSAGE_MAX_LEN)}...`
+    : message;
+}
+
 export class SchemaEventsRepository {
   private readonly db: AnyDb;
   private readonly table: ReturnType<

@@ -45,7 +45,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
-import { describeError } from "../../errors/index";
+import { describeError, immediateMessage } from "../../errors/index";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
@@ -133,9 +133,13 @@ export async function ensureCoreTables(
         try {
           await drizzleAdapter.executeQuery(statement);
         } catch (error) {
-          const msg = describeError(error);
-          if (!msg.includes("already exists")) {
-            logger.debug(`Table creation statement failed: ${msg}`);
+          // Branch on the immediate message only: a wrapped failure whose
+          // cause chain happens to mention "already exists" is not the benign
+          // duplicate-table case and must not be silenced.
+          if (!immediateMessage(error).includes("already exists")) {
+            logger.debug(
+              `Table creation statement failed: ${describeError(error)}`
+            );
           }
         }
       }

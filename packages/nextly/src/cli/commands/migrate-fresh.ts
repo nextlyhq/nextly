@@ -41,7 +41,7 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
-import { describeError } from "../../errors/index";
+import { describeError, immediateMessage } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -585,8 +585,10 @@ async function reconcileMysqlSchema(
     // Reconciliation is a safety net for historical MySQL drift. Do not
     // block migrate:fresh --seed if drizzle-kit emits duplicate/constraint
     // alteration errors after migrations have already created the schema.
+    // Classify on the immediate message; a wrapped failure whose cause chain
+    // mentions a known drift phrase is not itself known drift.
     const message = describeError(error);
-    if (isKnownMysqlReconcileDriftError(message)) {
+    if (isKnownMysqlReconcileDriftError(immediateMessage(error))) {
       logger.debug(
         "[schema] Skipping known MySQL reconciliation drift (media FK already reconciled)"
       );

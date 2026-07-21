@@ -38,7 +38,10 @@ import type { Command } from "commander";
 
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  truncateErrorMessage,
+} from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import {
@@ -497,7 +500,9 @@ export async function runFileMigrations(args: {
         });
       } catch (err) {
         await repo.markFailed(id, {
-          errorMessage: describeError(err),
+          // Bounded: an unbounded description could fail this very write and
+          // leave the migration with no recorded failure at all.
+          errorMessage: truncateErrorMessage(describeError(err)),
         });
         throw err;
       }

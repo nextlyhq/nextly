@@ -16,7 +16,10 @@ import type {
   SchemaEventSource,
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
-import { SchemaEventsRepository } from "../events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  truncateErrorMessage,
+} from "../events/schema-events-repository";
 import type {
   MigrationJournal,
   MigrationJournalScope,
@@ -45,8 +48,6 @@ export interface DrizzleMigrationJournalDeps {
 // recordEnd skips the update when it sees this prefix.
 const FAILED_INSERT_PREFIX = "journal-failed-";
 
-const ERROR_MESSAGE_MAX_LEN = 1000;
-
 // Safe stringification for the recorded error column. Avoids
 // "[object Object]" output (lint rule no-base-to-string flags raw String()).
 function stringifyError(err: unknown): string {
@@ -73,7 +74,9 @@ function mapSourceToEvent(source: "ui" | "code"): {
 }
 
 // The events table has no "fresh-push" scope; fold it into "global".
-function mapScopeKind(kind: MigrationJournalScope["kind"]): SchemaEventScopeKind {
+function mapScopeKind(
+  kind: MigrationJournalScope["kind"]
+): SchemaEventScopeKind {
   return kind === "fresh-push" ? "global" : kind;
 }
 
@@ -144,11 +147,7 @@ export class DrizzleMigrationJournal implements MigrationJournal {
           durationMs,
         });
       } else {
-        const raw = stringifyError(args.error);
-        const errorMessage =
-          raw.length > ERROR_MESSAGE_MAX_LEN
-            ? `${raw.slice(0, ERROR_MESSAGE_MAX_LEN)}...`
-            : raw;
+        const errorMessage = truncateErrorMessage(stringifyError(args.error));
         await this.repo.markFailed(journalId, {
           errorMessage,
           errorJson:
