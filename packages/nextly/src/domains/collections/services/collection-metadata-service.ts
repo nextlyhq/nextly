@@ -318,6 +318,8 @@ export class CollectionMetadataService extends BaseService {
     status?: boolean;
     /** i18n: whether the collection is localized (translatable fields + companion table). */
     localized?: boolean;
+    /** Whether every save is recorded as a restorable version. */
+    versions?: boolean;
     fields: FieldDefinition[];
     hooks?: Record<string, unknown>[];
     createdBy?: string;
@@ -658,6 +660,8 @@ export class CollectionMetadataService extends BaseService {
       status?: boolean;
       /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
       localized?: boolean;
+      /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
+      versions?: boolean;
       fields?: FieldDefinition[];
       hooks?: Record<string, unknown>[];
     }

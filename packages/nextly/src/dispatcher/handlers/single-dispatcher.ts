@@ -59,6 +59,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -438,6 +439,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization opt-in; persists to dynamic_singles.localized and
             // provisions the companion single_<slug>_locales table.
             localized?: boolean;
+            // Version history opt-in; persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -574,6 +577,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         status: b.status === true,
         // i18n: persist the Internationalization flag so the single reads/writes per language.
         localized: isLocalized,
+        // Persist version history from the create payload; without it a Single
+        // created with the switch on is written unversioned and the switch
+        // reads as off the moment the editor loads.
+        versions: resolveBuilderVersions(b.versions),
         schemaHash,
         migrationStatus,
       });
@@ -840,6 +847,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization toggle; honoured when defined, undefined leaves the
             // existing value untouched. Persists to dynamic_singles.localized.
             localized?: boolean;
+            // Version history toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -866,6 +876,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // managed on the companion (moving existing rows between the two is the `nextly migrate`
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
+      // Version history toggle. The registry column holds the resolved config
+      // every runtime reader tests, so the boolean is normalized before it is
+      // stored; off writes null. `status` is deliberately not passed to the
+      // resolver: it aliases to a versioned config for back-compat, which would
+      // stop the toggle from turning versioning off on a Draft/Published single.
+      if (b.versions !== undefined) {
+        updateData.versions = resolveBuilderVersions(b.versions);
+      }
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;

@@ -49,6 +49,7 @@ export type BuilderSettingsValues = {
   category?: string;
   status?: boolean;
   i18n?: boolean;
+  versions?: boolean;
 };
 
 type Props = {

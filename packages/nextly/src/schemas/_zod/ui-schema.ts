@@ -350,6 +350,14 @@ function entity(kind?: "collection" | "single" | "component") {
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),
+      /**
+       * Whether every save is recorded as a restorable version. Boolean rather
+       * than the code-first `boolean | VersionsConfig`: the Schema Builder
+       * offers on/off, and the options the object form carries are not enforced
+       * yet. Unknown keys are stripped here, so without this the Builder's
+       * write would vanish on the next parse.
+       */
+      versions: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
@@ -379,6 +387,17 @@ function entity(kind?: "collection" | "single" | "component") {
           });
         }
         seen.add(f.name);
+      }
+      // Components have no entries of their own — they are embedded in a
+      // collection or single, whose versioning covers them. Accepting the key
+      // here would persist a setting nothing reads and the Builder never
+      // offers.
+      if (kind === "component" && e.versions !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'versions' is not supported on components",
+          path: ["versions"],
+        });
       }
       // `status` reserved as a field name only when the lifecycle column is on.
       if (e.status === true && e.fields.some(f => f.name === "status")) {

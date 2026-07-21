@@ -80,6 +80,8 @@ export interface BuilderSettingsInput {
   status?: boolean;
   /** i18n: collection has translatable fields (companion `_locales` table). */
   localized?: boolean;
+  /** Whether every save is recorded as a restorable version. */
+  versions?: boolean;
   useAsTitle?: string;
   defaultColumns?: string[];
   group?: string;
@@ -135,6 +137,8 @@ export interface ManifestEntity {
   status?: boolean;
   /** i18n: collection has translatable fields. */
   localized?: boolean;
+  /** Whether every save is recorded as a restorable version. */
+  versions?: boolean;
   fields: ManifestField[];
 }
 
@@ -198,7 +202,8 @@ export function applyCommonSettings(
   entity: ManifestEntity,
   settings: BuilderSettingsInput
 ): void {
-  const { useAsTitle, defaultColumns, group, status, localized } = settings;
+  const { useAsTitle, defaultColumns, group, status, localized, versions } =
+    settings;
   const admin: NonNullable<ManifestEntity["admin"]> = {};
   if (useAsTitle) admin.useAsTitle = useAsTitle;
   if (defaultColumns && defaultColumns.length > 0) {
@@ -208,6 +213,7 @@ export function applyCommonSettings(
   if (Object.keys(admin).length > 0) entity.admin = admin;
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
+  if (versions !== undefined) entity.versions = versions;
 }
 
 export function collectionToManifestEntity(
