@@ -38,10 +38,7 @@ interface IndexRow {
  * DEFINED array (possibly empty) — introspection never leaves it undefined, so
  * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
  */
-function attachIndexes(
-  snapshot: NextlySchemaSnapshot,
-  rows: IndexRow[]
-): void {
+function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
   const byTable = new Map<
     string,
     Map<string, { unique: boolean; columns: string[] }>
@@ -241,9 +238,9 @@ export async function introspectLiveSnapshot(
     if (rows.length === 0) continue;
     // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
     // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
-    const idxList = (await dbAny.all(
+    const idxList = await dbAny.all(
       sql`PRAGMA index_list(${sql.identifier(table)})`
-    ));
+    );
     const indexes: IndexSpec[] = [];
     for (const ix of idxList) {
       if (ix.origin === "pk") continue;
@@ -276,8 +273,15 @@ export async function introspectLiveSnapshot(
           // ever running. Lowercasing here is safe because SQLite
           // type names are case-insensitive at the engine level.
           type: r.type.toLowerCase(),
-          // SQLite stores notnull as 0/1 integer.
-          nullable: r.notnull === 0,
+          // SQLite stores notnull as 0/1 integer. A PRIMARY KEY column is
+          // reported nullable unless it was declared NOT NULL, because only
+          // INTEGER PRIMARY KEY (the rowid alias) is implicitly NOT NULL in
+          // SQLite. The desired side has no such quirk: Drizzle's
+          // `.primaryKey()` means NOT NULL. Reporting the storage answer here
+          // makes every primary key look like a pending NOT NULL addition,
+          // which the classifier calls destructive and which therefore refuses
+          // the entire core reconcile — on a database nobody has changed.
+          nullable: r.notnull === 0 && r.pk === 0,
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
