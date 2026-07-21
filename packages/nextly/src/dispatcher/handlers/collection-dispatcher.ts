@@ -94,7 +94,6 @@ import {
   stripOwnerColumnsFromWhere,
   toNumber,
 } from "../helpers/validation";
-import { writeBuilderMigration } from "../helpers/write-builder-migration";
 import type { MethodHandler, Params } from "../types";
 
 // Shared guard that centralizes required + stale schema-version validation for
@@ -681,96 +680,68 @@ const COLLECTIONS_METHODS: Record<
         throw new Error(result.error.message);
       }
 
-      // Every statement that actually ran, in execution order. The companion
-      // reconciliation below appends to this before it is persisted, so a
-      // localized collection replays as the main-table change AND its companion
-      // DDL — recording only the former would rebuild the collection on a fresh
-      // database with nowhere to store per-language values.
-      const executedStatements: string[] = [
-        ...(result.executedStatements ?? []),
-      ];
-
-      try {
-        // i18n: the push pipeline deliberately EXCLUDES companion `_locales`
-        // tables from its diff (managed-tables `isCompanionTable`) — they are
-        // owned by the localization layer, not drizzle-kit. So we reconcile the
-        // companion out-of-band here for any localization change: enabling seeds
-        // the companion default locale from the existing main columns then drops
-        // them, disabling restores + archives them, and a field change ADD/DROPs
-        // localized columns. Without this, a localized collection edited in the
-        // builder has its translatable columns omitted from main (correct) but
-        // NOWHERE to store per-language values. These statements are appended to
-        // executedStatements so they land in the persisted migration alongside
-        // the main-table DDL.
-        if (wasLocalized || isLocalized) {
-          try {
-            const oldFields = (collection.fields ??
-              []) as unknown as FieldDefinition[];
-            const newFields = fields as unknown as FieldDefinition[];
-            const defaultLocale =
-              getConfigFromDI()?.localization?.defaultLocale ?? "en";
-            const companionExists = await adapter.tableExists(
-              `${tableName}_locales`
-            );
-            const companionHasStatus =
-              companionExists && wasLocalized && isLocalized
-                ? await companionHasStatusColumn(
-                    adapter,
-                    `${tableName}_locales`
-                  )
-                : undefined;
-            const plan = buildCompanionTransitionStatements({
-              slug: p.collectionName,
-              tableName,
-              dialect,
-              defaultLocale,
-              status: collection.status === true,
-              wasLocalized,
-              isLocalized,
-              oldFields,
-              newFields,
-              companionExists,
-              companionHasStatus,
-            });
-            // A disable archives non-default translations, so ensure the archive
-            // table exists first. Run each statement individually (executeQuery is
-            // single-statement on some drivers, e.g. sqlite).
-            if (plan.needsArchive) {
-              for (const stmt of getI18nArchiveDdl(dialect)) {
-                await adapter.executeQuery(stmt);
-                executedStatements.push(stmt);
-              }
-            }
-            for (const stmt of plan.statements) {
+      // i18n: the push pipeline deliberately EXCLUDES companion `_locales`
+      // tables from its diff (managed-tables `isCompanionTable`) — they are
+      // owned by the localization layer, not drizzle-kit. So we reconcile the
+      // companion out-of-band here for any localization change: enabling seeds
+      // the companion default locale from the existing main columns then drops
+      // them, disabling restores + archives them, and a field change ADD/DROPs
+      // localized columns. Without this, a localized collection edited in the
+      // builder has its translatable columns omitted from main (correct) but
+      // NOWHERE to store per-language values. Runs in-process (no migration file).
+      if (wasLocalized || isLocalized) {
+        try {
+          const oldFields = (collection.fields ??
+            []) as unknown as FieldDefinition[];
+          const newFields = fields as unknown as FieldDefinition[];
+          const defaultLocale =
+            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const companionExists = await adapter.tableExists(
+            `${tableName}_locales`
+          );
+          const companionHasStatus =
+            companionExists && wasLocalized && isLocalized
+              ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
+              : undefined;
+          const plan = buildCompanionTransitionStatements({
+            slug: p.collectionName,
+            tableName,
+            dialect,
+            defaultLocale,
+            status: collection.status === true,
+            wasLocalized,
+            isLocalized,
+            oldFields,
+            newFields,
+            companionExists,
+            companionHasStatus,
+          });
+          // A disable archives non-default translations, so ensure the archive
+          // table exists first. Run each statement individually (executeQuery is
+          // single-statement on some drivers, e.g. sqlite).
+          if (plan.needsArchive) {
+            for (const stmt of getI18nArchiveDdl(dialect)) {
               await adapter.executeQuery(stmt);
-              executedStatements.push(stmt);
             }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // Fatal to correctness (translatable values have nowhere to live), but
-            // the main-table apply already committed — surface loudly rather than
-            // silently leaving the collection half-migrated.
-            throw NextlyError.internal({
-              cause: err instanceof Error ? err : undefined,
-              logContext: {
-                op: "companionReconcile",
-                collection: p.collectionName,
-                detail: msg,
-                note: "main table updated but localized companion out of sync; re-apply to retry",
-              },
-            });
           }
+          for (const stmt of plan.statements) {
+            await adapter.executeQuery(stmt);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Fatal to correctness (translatable values have nowhere to live), but
+          // the main-table apply already committed — surface loudly rather than
+          // silently leaving the collection half-migrated.
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "companionReconcile",
+              collection: p.collectionName,
+              detail: msg,
+              note: "main table updated but localized companion out of sync; re-apply to retry",
+            },
+          });
         }
-      } finally {
-        // Persist in a finally so the file records exactly what reached the
-        // database. If the companion step above failed, the main-table DDL has
-        // still committed and must be captured — dropping it here would leave
-        // that change recorded nowhere at all.
-        await writeBuilderMigration(
-          "collection",
-          p.collectionName,
-          executedStatements
-        );
       }
 
       // pipeline.apply mutates the live DB (renamed/added/dropped

@@ -34,11 +34,6 @@ export type ApplyResult =
       statementsExecuted: number;
       renamesApplied: number;
       durationMs: number;
-      /**
-       * The DDL actually executed, so a UI save can persist a replayable
-       * migration file. Undefined when the pipeline doesn't report it.
-       */
-      executedStatements?: string[];
       // F10 PR 6: optional because some pipeline implementations
       // (test stubs, future fresh-push paths) may not compute a
       // diff-based summary. Undefined → admin falls back to a
@@ -63,8 +58,6 @@ export interface PipelineCallResult {
   success: boolean;
   statementsExecuted: number;
   renamesApplied: number;
-  /** The DDL actually executed; forwarded to the caller for persistence. */
-  executedStatements?: string[];
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
   // F10 PR 6: the pipeline already computes this for journal +
@@ -194,7 +187,6 @@ export function createApplyDesiredSchema(
       newSchemaVersions,
       statementsExecuted: pipelineResult.statementsExecuted,
       renamesApplied: pipelineResult.renamesApplied,
-      executedStatements: pipelineResult.executedStatements,
       durationMs: Date.now() - start,
       // F10 PR 6: forward the diff-derived counts so the dispatcher
       // can build a contextual toast. Undefined when the underlying

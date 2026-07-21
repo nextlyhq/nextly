@@ -60,14 +60,6 @@ export class CollectionsHandler {
   private readonly fileManager: CollectionFileManager;
   private readonly logger: Logger;
 
-  /**
-   * The migration writer, so a Schema Builder save can persist the DDL it
-   * executed next to the create-migration it already writes here.
-   */
-  getFileManager(): CollectionFileManager {
-    return this.fileManager;
-  }
-
   constructor(
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
