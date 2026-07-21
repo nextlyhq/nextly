@@ -115,26 +115,46 @@ async function isResolvable(
 }
 
 /**
- * Fails when an unaddressable component table still holds rows for `parentTable`.
+ * Fails when an unaddressable component table holds rows owned by `parent`.
+ *
+ * Checked against ONE frontier entry, so it must be called for every level of the walk:
+ * an unaddressable table can hold nested instances whose `_parent_table` is another
+ * component table rather than the entity's own, and those are only visible once that
+ * level's instance ids are known.
  *
  * Counted with a parameterised statement rather than the query builder because the ORM
  * cannot address this table — that is the condition being handled. Reads only; the rows
  * are never deleted this way.
  */
-async function assertNoRowsForParent(
+async function assertNoRowsForFrontier(
   adapter: TeardownComponentDataAdapter,
   componentTable: string,
-  parentTable: string
+  parent: Frontier
 ): Promise<void> {
+  // `ids: null` means every row under this parent table belongs to the entity; otherwise
+  // only the instances deleted at the previous level own the rows below them.
+  if (parent.ids !== null && parent.ids.length === 0) return;
+
+  const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
-  const parentColumn = q("_parent_table", adapter.dialect);
-  const placeholder = adapter.dialect === "postgresql" ? "$1" : "?";
+  const parentTableColumn = q("_parent_table", adapter.dialect);
+  const parentIdColumn = q("_parent_id", adapter.dialect);
+
+  const params: unknown[] = [parent.table];
+  let where = `${parentTableColumn} = ${pg ? "$1" : "?"}`;
+  if (parent.ids !== null) {
+    const placeholders = parent.ids
+      .map((_, i) => (pg ? `$${i + 2}` : "?"))
+      .join(", ");
+    where += ` AND ${parentIdColumn} IN (${placeholders})`;
+    params.push(...parent.ids);
+  }
 
   let rows: Array<Record<string, unknown>>;
   try {
     rows = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${parentColumn} = ${placeholder}`,
-      [parentTable]
+      `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${where}`,
+      params
     );
   } catch (error) {
     // No `_parent_table` column means the table does not hold component instances at all,
@@ -151,7 +171,7 @@ async function assertNoRowsForParent(
     logContext: {
       reason: "component-table-unresolvable-with-rows",
       componentTable,
-      parentTable,
+      parentTable: parent.table,
       rows: count,
     },
   });
@@ -189,6 +209,9 @@ export async function teardownEntityComponentData(
 
   const tablesTouched = new Set<string>();
   const skippedTables = new Set<string>();
+  // Resolvability is a property of the table, so it is established once; whether such a
+  // table is SAFE to skip depends on the frontier and is re-checked at every level.
+  const unresolvable = new Set<string>();
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
@@ -198,15 +221,19 @@ export async function teardownEntityComponentData(
     const nextFrontier: Frontier[] = [];
 
     for (const componentTable of componentTables) {
-      // Resolvability is a property of the table, not of any one query, so establish it
-      // once per table. Checking here also means an unresolvable table is skipped for
-      // every parent rather than re-attempted on each iteration.
-      if (skippedTables.has(componentTable)) continue;
-      if (!(await isResolvable(adapter, componentTable))) {
-        // Skipping is only safe when the table holds nothing for this entity. If it does,
-        // the caller would drop the parent table and strand those rows while reporting a
-        // successful delete, so the delete fails instead and names the table.
-        await assertNoRowsForParent(adapter, componentTable, parentTable);
+      if (
+        unresolvable.has(componentTable) ||
+        !(await isResolvable(adapter, componentTable))
+      ) {
+        unresolvable.add(componentTable);
+        // Skipping is only safe when the table holds nothing owned by THIS level. An
+        // unaddressable table can hold nested instances parented to another component
+        // table, which only become visible once that level's ids are known — so every
+        // level is checked, not just the entity's own table. Any rows found fail the
+        // delete, since the caller would otherwise drop the parent and strand them.
+        for (const parent of frontier) {
+          await assertNoRowsForFrontier(adapter, componentTable, parent);
+        }
         skippedTables.add(componentTable);
         continue;
       }

@@ -54,12 +54,54 @@ describe("teardownEntityComponentData failure handling", () => {
     // and report success — the outcome this sweep exists to prevent.
     const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 4);
 
+    // The rejection must identify the offending table, so an operator can act on it and a
+    // regression that probes the wrong table cannot pass.
     await expect(
       teardownEntityComponentData({
         adapter: adapter as never,
         parentTable: "dc_posts",
       })
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      logContext: expect.objectContaining({
+        componentTable: "comp_ghost",
+        parentTable: "dc_posts",
+        rows: 4,
+      }),
+    });
+  });
+
+  it("checks an unaddressable table against nested levels, not only the entity table", async () => {
+    // The table holds no rows parented to dc_posts, but does hold rows parented to the
+    // registered comp_hero instances deleted at the level below. Checking only the entity
+    // table would skip it and strand those rows.
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi.fn().mockResolvedValue(["comp_hero", "comp_ghost"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn().mockResolvedValue(1),
+      select: vi.fn(async (table: string) => {
+        if (table === "comp_ghost") throw new Error(UNREGISTERED);
+        // comp_hero yields one instance, forming the next frontier.
+        return [{ id: "h1" }];
+      }),
+      // Zero rows under dc_posts, two under the comp_hero frontier.
+      executeQuery: vi.fn(async (_sql: string, params?: unknown[]) =>
+        params?.[0] === "comp_hero" ? [{ n: 2 }] : [{ n: 0 }]
+      ),
+    };
+
+    await expect(
+      teardownEntityComponentData({
+        adapter: adapter as never,
+        parentTable: "dc_posts",
+        maxDepth: 3,
+      })
+    ).rejects.toMatchObject({
+      logContext: expect.objectContaining({
+        componentTable: "comp_ghost",
+        parentTable: "comp_hero",
+      }),
+    });
   });
 
   it("rethrows a genuine database failure instead of reporting a clean sweep", async () => {
