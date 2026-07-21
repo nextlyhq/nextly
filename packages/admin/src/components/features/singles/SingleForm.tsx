@@ -37,6 +37,7 @@ import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
 import {
   mapIntentToPayload,
+  passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
@@ -367,6 +368,13 @@ export function SingleForm({
     }
   }, [schema.fields]);
 
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(schema.fields),
+    [schema.fields]
+  );
+
   // Generate default values from document data, then pin the single's identity
   // (title/slug) to its config so the read-only display and the submitted
   // payload always reflect the definition rather than any stale stored value.
@@ -438,7 +446,7 @@ export function SingleForm({
         // contract (see useEntryForm.mapIntentToPayload). Unpublish
         // strips other dirty fields so a confirm-modal misclick can't
         // ship unrelated changes to the public site.
-        const data = mapIntentToPayload(rawData, intent);
+        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
         try {
           await onSubmit(data);
@@ -448,7 +456,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit]
+    [form, onSubmit, blankPasswordFields]
   );
 
   const handleCancel = useCallback(() => {

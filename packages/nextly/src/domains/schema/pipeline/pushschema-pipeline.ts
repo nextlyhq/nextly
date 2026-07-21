@@ -966,6 +966,12 @@ export class PushSchemaPipeline {
         //     emission the filter handles separately — keeps the
         //     destructive-on-managed guard independent of the filter. `safe`
         //     is still what actually executes.
+        //   - On a UI save, locked tables are removed from the managed set
+        //     rather than the scan being moved after the lock filter. Keeping
+        //     the scan on the raw output preserves the independence above; the
+        //     narrowing is sound because a locked table's statements are
+        //     dropped unconditionally and can never execute, so this apply is
+        //     not the thing that would be destroying them.
         // Rebuild blocks are only trusted for tables where OUR diff
         // approved a rebuild-justifying change — a rebuild on any other
         // table is the kit encoding a column drop we never approved
@@ -980,8 +986,17 @@ export class PushSchemaPipeline {
             )
             .map(op => op.tableName.toLowerCase())
         );
+        // Tables this apply is answerable for. On a UI save the locked ones are
+        // excluded: their statements are dropped below and never execute, so
+        // holding the apply to account for destructive DDL on them would let
+        // pre-existing drift in a code-first table block saving an unrelated
+        // builder-owned entity. Everything still executed stays in scope.
+        const lockedForThisApply =
+          source === "ui" ? lockedTableNames(desired) : new Set<string>();
         const managedTables = new Set(
-          desiredTableNames.map(t => t.toLowerCase())
+          desiredTableNames
+            .map(t => t.toLowerCase())
+            .filter(t => !lockedForThisApply.has(t))
         );
         const unlocked = filterUnsafeStatements(
           emittedStatements,
@@ -994,9 +1009,7 @@ export class PushSchemaPipeline {
         // tablesFilter entirely — so the guarantee is enforced here, on the
         // statements themselves, where it holds for every dialect.
         const { kept: safe, skipped: skippedLockedStatements } =
-          source === "ui"
-            ? excludeLockedTableStatements(unlocked, lockedTableNames(desired))
-            : { kept: unlocked, skipped: [] as string[] };
+          excludeLockedTableStatements(unlocked, lockedForThisApply);
         logSkippedLockedStatements(skippedLockedStatements);
         const unexpectedDestructive = findUnexpectedDestructiveStatements(
           emittedStatements,

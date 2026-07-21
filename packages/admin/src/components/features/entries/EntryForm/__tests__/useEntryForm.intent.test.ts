@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { mapIntentToPayload } from "../useEntryForm";
+import { mapIntentToPayload, passwordFieldNames } from "../useEntryForm";
 
 const RAW = { title: "Hello", body: "Body content", customField: 42 };
 
@@ -67,6 +67,30 @@ describe("mapIntentToPayload", () => {
     ).toEqual({ title: "Hi", subtitle: null });
   });
 
+  // A password input is seeded with "" to mean "keep the stored hash", which the
+  // server drops before writing. Sending null instead reads as an intentional
+  // clear: it wipes an optional password's hash on any unrelated save, and
+  // fails required-field validation on a required one.
+  it("keeps a blank password as an empty string, not null", () => {
+    expect(
+      mapIntentToPayload(
+        { title: "Hi", secret: "", subtitle: "" },
+        undefined,
+        new Set(["secret"])
+      )
+    ).toEqual({ title: "Hi", secret: "", subtitle: null });
+  });
+
+  it("still normalizes a typed password field's siblings", () => {
+    expect(
+      mapIntentToPayload(
+        { secret: "hunter2", subtitle: "" },
+        "publish",
+        new Set(["secret"])
+      )
+    ).toEqual({ secret: "hunter2", subtitle: null, status: "published" });
+  });
+
   // Falsy values that are not "" are real user input and must survive intact.
   it("leaves 0, false and [] alone", () => {
     const input = { count: 0, featured: false, tags: [], note: "" };
@@ -76,5 +100,30 @@ describe("mapIntentToPayload", () => {
       tags: [],
       note: null,
     });
+  });
+});
+
+// The password exemption is only useful if the caller can find the field names.
+// Only the top level is collected: mapIntentToPayload rewrites nothing inside a
+// group or repeater, so a nested password is never at risk.
+describe("passwordFieldNames", () => {
+  it("collects top-level password fields and ignores other types", () => {
+    const fields = [
+      { name: "title", type: "text" },
+      { name: "secret", type: "password" },
+      { name: "confirm", type: "password" },
+    ] as unknown as Parameters<typeof passwordFieldNames>[0];
+    expect(passwordFieldNames(fields)).toEqual(new Set(["secret", "confirm"]));
+  });
+
+  it("does not descend into containers", () => {
+    const fields = [
+      {
+        name: "creds",
+        type: "group",
+        fields: [{ name: "pw", type: "password" }],
+      },
+    ] as unknown as Parameters<typeof passwordFieldNames>[0];
+    expect(passwordFieldNames(fields)).toEqual(new Set());
   });
 });
