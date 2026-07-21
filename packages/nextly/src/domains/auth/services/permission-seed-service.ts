@@ -232,6 +232,37 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "api-keys",
     description: "Permission to delete API keys",
   },
+  // Webhook endpoints. Four flat entries with no `manage-*` umbrella, matching
+  // api-keys: `update-webhooks` serves that role. Slugs must stay exactly
+  // `${action}-${resource}` — a seed test asserts it for every entry.
+  {
+    name: "Update Webhooks",
+    slug: "update-webhooks",
+    action: "update",
+    resource: "webhooks",
+    description: "Permission to update webhook endpoints",
+  },
+  {
+    name: "Create Webhooks",
+    slug: "create-webhooks",
+    action: "create",
+    resource: "webhooks",
+    description: "Permission to register webhook endpoints",
+  },
+  {
+    name: "Read Webhooks",
+    slug: "read-webhooks",
+    action: "read",
+    resource: "webhooks",
+    description: "Permission to view webhook endpoints",
+  },
+  {
+    name: "Delete Webhooks",
+    slug: "delete-webhooks",
+    action: "delete",
+    resource: "webhooks",
+    description: "Permission to delete webhook endpoints",
+  },
 ];
 
 /**

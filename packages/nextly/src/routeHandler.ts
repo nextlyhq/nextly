@@ -59,6 +59,14 @@ import { readOrGenerateRequestId } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
+import {
+  listWebhooks,
+  getWebhookById,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  revealWebhookSecret,
+} from "./api/webhooks";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
@@ -268,6 +276,39 @@ async function handleApiKeyRequest(
     default:
       return new Response(
         JSON.stringify({ error: "Unknown API key operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
+/**
+ * Route a parsed webhook operation to its handler.
+ *
+ * Mirrors the API-key dispatch: the handlers own their own auth and body
+ * parsing, so this only maps the method name.
+ */
+async function handleWebhookRequest(
+  req: Request,
+  method: string,
+  routeParams: Record<string, string> | undefined
+): Promise<Response> {
+  const id = routeParams?.webhookId ?? "";
+  switch (method) {
+    case "listWebhooks":
+      return listWebhooks(req);
+    case "getWebhookById":
+      return getWebhookById(req, id);
+    case "createWebhook":
+      return createWebhook(req);
+    case "updateWebhook":
+      return updateWebhook(req, id);
+    case "deleteWebhook":
+      return deleteWebhook(req, id);
+    case "revealWebhookSecret":
+      return revealWebhookSecret(req, id);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown webhook operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
@@ -715,6 +756,14 @@ async function handleServiceRequest(
   // req.text() is called below) ensures the body stream is still available.
   if (service === "apiKeys") {
     return handleApiKeyRequest(req, method, routeParams);
+  }
+
+  // ==================== WEBHOOKS DIRECT DISPATCH ====================
+  // Same reasoning as API keys: the handlers own their auth + body parsing, so
+  // this must stay above the req.text() below or the body stream is consumed
+  // before they can read it.
+  if (service === "webhooks") {
+    return handleWebhookRequest(req, method, routeParams);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
