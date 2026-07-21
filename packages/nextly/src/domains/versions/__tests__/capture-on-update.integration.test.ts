@@ -13,6 +13,7 @@ import {
   defineCollection,
   defineComponent,
   defineSingle,
+  group,
   json,
   text,
 } from "../../../config";
@@ -409,6 +410,45 @@ describe("version capture on update (integration)", () => {
       expect(snapshot.hero?.heading).toBe("Welcome");
       expect(snapshot.hero?._componentType).toBe("hero");
     }
+  });
+
+  it("records the component type for a Single's nested component", async () => {
+    // The value rides in the group's JSON on the row rather than in the
+    // components map, so the collection path's fix had to be applied here too
+    // — the two capture paths are separate code.
+    current = await createTestNextly({
+      components: [
+        defineComponent({ slug: "hero", fields: [text({ name: "heading" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "settings",
+          versions: true,
+          fields: [
+            group({
+              name: "meta",
+              fields: [component({ name: "hero", component: "hero" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.update(
+      "settings",
+      { meta: { hero: { heading: "Welcome" } } },
+      { overrideAccess: true }
+    );
+
+    const rows = await versions(current, "settings");
+    const snapshot = rows.at(-1)?.snapshot as {
+      meta?: { hero?: { _componentType?: string; heading?: string } };
+    };
+
+    expect(snapshot.meta?.hero?.heading).toBe("Welcome");
+    expect(snapshot.meta?.hero?._componentType).toBe("hero");
   });
 
   it("records no version when the schema does not opt in", async () => {

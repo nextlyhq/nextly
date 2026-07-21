@@ -19,7 +19,15 @@
 "@nextlyhq/ui": patch
 ---
 
-Restoring a version now enforces the same read permission as viewing history.
+Versions can be given a name, and restoring one now enforces the same read
+permission as viewing history.
+
+History identified every version by number, so finding the state you meant to
+go back to meant opening several. A version can now be named from the history
+panel — "before the redesign" — with the number kept beside it, since two
+versions may share a name. Clearing the name puts it back to the number.
+Renaming needs the same permissions as viewing history plus editing the
+document.
 
 Restore is a write, so it was authorized as one — which meant the permission
 that guards version history was never checked. Someone able to edit a document

@@ -18,6 +18,34 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 
+/**
+ * Fields addressable at this level, with presentational groups flattened.
+ *
+ * A group with no name exists to lay fields out: its children are stored at the
+ * level the group sits in, not under it. Skipping the group without descending
+ * would leave a component inside a layout group untagged, and that grouping is
+ * common enough to be the usual case rather than an edge one.
+ */
+function addressableFields(fields: FieldConfig[]): FieldConfig[] {
+  const flat: FieldConfig[] = [];
+
+  for (const field of fields) {
+    const named = typeof field.name === "string" && field.name.length > 0;
+    if (named) {
+      flat.push(field);
+      continue;
+    }
+
+    // Presentational groups nest, so one inside another still resolves.
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      flat.push(...addressableFields(children as FieldConfig[]));
+    }
+  }
+
+  return flat;
+}
+
 /** The component slug a field names, when it names exactly one. */
 function singleComponentSlug(field: FieldConfig): string | undefined {
   // Only the single-component shape. A dynamic zone declares `components` and
@@ -47,7 +75,7 @@ export function tagComponentTypes(
   fields: FieldConfig[]
 ): Record<string, unknown> {
   const slugByField = new Map<string, string>();
-  for (const field of fields) {
+  for (const field of addressableFields(fields)) {
     const slug = singleComponentSlug(field);
     if (slug !== undefined && typeof field.name === "string") {
       slugByField.set(field.name, slug);
@@ -92,7 +120,7 @@ export function tagNestedComponentTypes(
   const source = value as Record<string, unknown>;
   const out: Record<string, unknown> = { ...source };
 
-  for (const field of fields) {
+  for (const field of addressableFields(fields)) {
     if (typeof field.name !== "string") continue;
     if (!Object.prototype.hasOwnProperty.call(source, field.name)) continue;
 

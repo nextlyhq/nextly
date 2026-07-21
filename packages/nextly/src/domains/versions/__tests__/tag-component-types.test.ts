@@ -171,3 +171,65 @@ describe("tagNestedComponentTypes", () => {
     expect(tagNestedComponentTypes(row, insideGroup)).toEqual({ title: "x" });
   });
 });
+
+describe("tagging through presentational groups", () => {
+  // A group with no name lays fields out; its children are stored at the level
+  // the group sits in, not under it. Skipping it without descending leaves a
+  // component inside a layout group untagged, and that grouping is common.
+  const layout = [
+    {
+      name: "",
+      type: "group",
+      fields: [{ name: "hero", type: "component", component: "banner" }],
+    },
+  ] as FieldConfig[];
+
+  it("tags a component inside an unnamed group at the top level", () => {
+    const tagged = tagComponentTypes({ hero: { heading: "Hi" } }, layout);
+
+    expect(tagged.hero).toEqual({ heading: "Hi", _componentType: "banner" });
+  });
+
+  it("descends through nested unnamed groups", () => {
+    const nestedLayout = [
+      {
+        name: "",
+        type: "group",
+        fields: [
+          {
+            name: "",
+            type: "group",
+            fields: [{ name: "hero", type: "component", component: "banner" }],
+          },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const tagged = tagComponentTypes({ hero: { heading: "Hi" } }, nestedLayout);
+
+    expect(tagged.hero).toEqual({ heading: "Hi", _componentType: "banner" });
+  });
+
+  it("reaches one inside a named container through a layout group", () => {
+    const mixed = [
+      {
+        name: "",
+        type: "group",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [{ name: "hero", type: "component", component: "banner" }],
+          },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const tagged = tagNestedComponentTypes(
+      { meta: { hero: { heading: "Hi" } } },
+      mixed
+    ) as { meta: { hero: Record<string, unknown> } };
+
+    expect(tagged.meta.hero._componentType).toBe("banner");
+  });
+});
