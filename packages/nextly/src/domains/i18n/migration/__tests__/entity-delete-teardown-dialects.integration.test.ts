@@ -168,6 +168,9 @@ for (const entry of DIALECTS) {
       expect(result.companionDropped).toBe(true);
       expect(await adapter.tableExists(companion)).toBe(false);
       expect(await archiveCountForSlug()).toBe(0);
+      // The reported count must be real on every driver: each reports it in a different
+      // field, and mysql2 nests it inside a result tuple.
+      expect(result.archiveRowsPurged).toBe(1);
 
       // The shared archive must keep every other entity's restore trail.
       const others = await adapter.executeQuery<{ n: number | string }>(

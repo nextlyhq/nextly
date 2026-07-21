@@ -416,8 +416,12 @@ export class ComponentRegistryService extends BaseRegistryService<
         tableName: existing.tableName,
       });
 
-      // Drop the component's data table FIRST. If it fails, the registry entry
-      // stays intact so the error is surfaced with no partial-deletion state.
+      // Drop the data table after its dependents, since both hold references into it.
+      // A failure here leaves the component present but its nested instances, companion
+      // table and archived translations already removed — the teardowns above are not
+      // reversible. A transaction would not close that window portably: MySQL commits
+      // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
+      // safe (every step is existence-guarded) and is the intended recovery.
       await this.dropComponentTable(existing.tableName);
 
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.

@@ -27,19 +27,27 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
+import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
 
 /** The shared archive table, scoped per entity by its `collection` column. */
 const ARCHIVE_TABLE = "nextly_i18n_archive";
 
+/**
+ * The slice of Drizzle this helper drives: a single scoped DELETE. Declaring only what is
+ * used keeps the dialect-specific database type out of the port, so no `any` is needed.
+ */
+interface ArchiveDeleteCapableDb {
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
 /** Minimal adapter surface this helper needs — matches DrizzleAdapter. */
 export interface TeardownI18nAdapter {
   dialect: SupportedDialect;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   tableExists(tableName: string): Promise<boolean>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle's db type is dialect-specific
-  getDrizzle(): any;
+  getDrizzle<T = unknown>(): T;
 }
 
 export interface TeardownEntityI18nArgs {
@@ -103,23 +111,16 @@ export async function teardownEntityI18n(
   // safe row set to delete.
   let archiveRowsPurged = 0;
   if (slug !== null && (await adapter.tableExists(ARCHIVE_TABLE))) {
-    const db = adapter.getDrizzle();
+    const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
     // Scoped to this slug only — the archive is shared, so an unscoped delete would wipe
     // every other entity's recoverable translations.
     const result = await db
       .delete(nextlyI18nArchive)
       .where(eq(nextlyI18nArchive.collection, slug));
-    // Drivers disagree on the shape of a delete result; treat an unknown shape as 0 rather
-    // than reporting a misleading count.
-    archiveRowsPurged =
-      typeof result?.rowsAffected === "number"
-        ? result.rowsAffected
-        : typeof result?.changes === "number"
-          ? result.changes
-          : typeof result?.rowCount === "number"
-            ? result.rowCount
-            : 0;
+    // Each driver reports the count in a different place, and mysql2 nests it inside a
+    // result tuple, so the shared dialect-aware reader owns that knowledge.
+    archiveRowsPurged = affectedRowCount(result, adapter.dialect);
   }
 
   return { companionDropped, archiveRowsPurged };
