@@ -38,6 +38,21 @@ const IMMUTABLE_FIELDS = new Set([
   "created_by",
 ]);
 
+/**
+ * A component's own schema, as the payload filter needs to see it.
+ *
+ * The localization flag is the component's, not its parent's: a component keeps
+ * its values in tables of its own, so an unlocalized component embedded in a
+ * localized document stores one copy of each value regardless of the parent.
+ */
+export interface ComponentSchemaInfo {
+  fields: FieldConfig[];
+  localized: boolean;
+}
+
+/** Component schemas keyed by the slug a field references them under. */
+export type ComponentSchemas = Map<string, ComponentSchemaInfo>;
+
 /** What the current schema accepts, beyond its declared fields. */
 export interface RestoreSchemaContext {
   /**
@@ -54,11 +69,11 @@ export interface RestoreSchemaContext {
   /** Whether the entity has a `title` column, on the same terms as `slug`. */
   hasTitle: boolean;
   /**
-   * Child fields for each component slug the schema references. A component
-   * field names its schema rather than carrying it, so without these the walk
-   * cannot see inside one.
+   * The schema of each component slug this schema references. A component field
+   * names its schema rather than carrying it, so without these the walk cannot
+   * see inside one.
    */
-  componentFields?: Map<string, FieldConfig[]>;
+  componentSchemas?: ComponentSchemas;
   /**
    * Whether this is a localized document restoring a version that does not say
    * which locale it holds. Such a snapshot took its translatable values from
@@ -107,15 +122,15 @@ function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
 /** A field's children, wherever the schema keeps them. */
 function childrenOf(
   field: FieldConfig,
-  componentFields?: Map<string, FieldConfig[]>
+  componentSchemas?: ComponentSchemas
 ): FieldConfig[] {
   const inline = inlineChildren(field);
   if (inline) return inline;
 
   const resolved: FieldConfig[] = [];
   for (const slug of componentSlugs(field)) {
-    const fields = componentFields?.get(slug);
-    if (fields) resolved.push(...fields);
+    const component = componentSchemas?.get(slug);
+    if (component) resolved.push(...component.fields);
   }
   return resolved;
 }
@@ -130,7 +145,7 @@ function childrenOf(
  */
 function containsPasswordField(
   fields: FieldConfig[],
-  componentFields?: Map<string, FieldConfig[]>,
+  componentSchemas?: ComponentSchemas,
   seen: Set<string> = new Set()
 ): boolean {
   return fields.some(field => {
@@ -142,9 +157,9 @@ function containsPasswordField(
     if (slugs.length > 0 && slugs.every(slug => seen.has(slug))) return false;
     for (const slug of slugs) seen.add(slug);
 
-    const children = childrenOf(field, componentFields);
+    const children = childrenOf(field, componentSchemas);
     return children.length > 0
-      ? containsPasswordField(children, componentFields, seen)
+      ? containsPasswordField(children, componentSchemas, seen)
       : false;
   });
 }
@@ -154,12 +169,19 @@ function containsPasswordField(
  *
  * Classification follows the same rules the write path uses, so a field the
  * companion table owns is recognised here even when the schema leaves
- * `localized` unset and the per-type default decides it. A component's own
- * fields count: the component tables carry per-locale rows of their own.
+ * `localized` unset and the per-type default decides it.
+ *
+ * `ownerLocalized` is the switch of the schema that DECLARES these fields, not
+ * of the document being restored. Inline children share their parent's schema
+ * and so its switch, but a component's fields are governed by the component's
+ * own: an unlocalized component embedded in a localized document stores one
+ * copy of each value, and holding those back would refuse content that
+ * restores perfectly well.
  */
 function containsLocalizedField(
   fields: FieldConfig[],
-  componentFields?: Map<string, FieldConfig[]>,
+  ownerLocalized: boolean,
+  componentSchemas?: ComponentSchemas,
   seen: Set<string> = new Set()
 ): boolean {
   return fields.some(field => {
@@ -170,9 +192,21 @@ function containsLocalizedField(
         name: typeof field.name === "string" ? field.name : "",
         ...(typeof declared === "boolean" ? { localized: declared } : {}),
       },
-      true
+      ownerLocalized
     );
     if (localized) return true;
+
+    // Inline children are declared by the same schema, so they inherit its
+    // switch.
+    const inline = inlineChildren(field);
+    if (inline) {
+      return containsLocalizedField(
+        inline,
+        ownerLocalized,
+        componentSchemas,
+        seen
+      );
+    }
 
     // A component can reference itself through a descendant, so a slug already
     // walked is not followed again.
@@ -180,10 +214,17 @@ function containsLocalizedField(
     if (slugs.length > 0 && slugs.every(slug => seen.has(slug))) return false;
     for (const slug of slugs) seen.add(slug);
 
-    const children = childrenOf(field, componentFields);
-    return children.length > 0
-      ? containsLocalizedField(children, componentFields, seen)
-      : false;
+    return slugs.some(slug => {
+      const component = componentSchemas?.get(slug);
+      return component === undefined
+        ? false
+        : containsLocalizedField(
+            component.fields,
+            component.localized,
+            componentSchemas,
+            seen
+          );
+    });
   });
 }
 
@@ -226,18 +267,20 @@ function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
 function pruneContainerValue(
   value: unknown,
   fields: FieldConfig[],
-  componentFields: Map<string, FieldConfig[]> | undefined,
+  componentSchemas: ComponentSchemas | undefined,
   removed: string[],
-  path: string
+  path: string,
+  isComponentValue: boolean
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((row, i) =>
       pruneContainerValue(
         row,
         fields,
-        componentFields,
+        componentSchemas,
         removed,
-        `${path}[${i}]`
+        `${path}[${i}]`,
+        isComponentValue
       )
     );
   }
@@ -248,12 +291,16 @@ function pruneContainerValue(
   const out: Record<string, unknown> = {};
 
   for (const [key, child] of Object.entries(value)) {
-    // Row metadata rather than schema fields, and both are needed to write the
-    // value back: the type discriminator selects the component, and the id lets
-    // the save path update the existing row. Dropping the id would make a
+    // Row metadata rather than schema fields, and both are needed to write a
+    // component back: the type discriminator selects the component, and the id
+    // lets the save path update the existing row. Dropping the id would make a
     // restore delete and reinsert instances, taking their per-locale companion
     // rows and any other row-scoped state with them.
-    if (key === "_componentType" || key === "id") {
+    //
+    // Only for component instances. A group or repeater is ordinary JSON, where
+    // a stale key that happens to be called `id` is exactly the kind of unknown
+    // key this function exists to remove.
+    if (isComponentValue && (key === "_componentType" || key === "id")) {
       out[key] = child;
       continue;
     }
@@ -264,20 +311,45 @@ function pruneContainerValue(
       continue;
     }
 
-    const grandchildren = childrenOf(field, componentFields);
+    const grandchildren = childrenOf(field, componentSchemas);
     out[key] =
       grandchildren.length > 0
         ? pruneContainerValue(
             child,
             grandchildren,
-            componentFields,
+            componentSchemas,
             removed,
-            `${path}.${key}`
+            `${path}.${key}`,
+            // A nested component's instances carry the same row metadata; a
+            // nested group's values do not.
+            componentSlugs(field).length > 0
           )
         : child;
   }
 
   return out;
+}
+
+/**
+ * Whether a pruned component value kept no schema field at all.
+ *
+ * Row metadata survives pruning by design, so a value reduced to nothing but
+ * `id` and `_componentType` carried no field the current schema recognises.
+ * Empty instances are legal, so this only reports a value that HAD keys and
+ * lost all of them.
+ */
+function retainsNothing(pruned: unknown): boolean {
+  const metadataOnly = (row: unknown): boolean => {
+    if (typeof row !== "object" || row === null) return false;
+    const keys = Object.keys(row);
+    if (keys.length === 0) return false;
+    return keys.every(k => k === "id" || k === "_componentType");
+  };
+
+  if (Array.isArray(pruned)) {
+    return pruned.length > 0 && pruned.every(metadataOnly);
+  }
+  return metadataOnly(pruned);
 }
 
 /**
@@ -341,7 +413,7 @@ export function buildRestorePayload(
   }
 
   const known = topLevelFields(fields);
-  const { componentFields } = context;
+  const { componentSchemas } = context;
 
   /** System columns that exist only when the entity actually has them. */
   const systemColumns = new Map<string, boolean>([
@@ -383,17 +455,19 @@ export function buildRestorePayload(
     // Nothing that stores a password is resubmitted, at any depth: the
     // snapshot's copy has it stripped, and the update replaces a container
     // whole, which would wipe the stored credential.
-    if (containsPasswordField([field], componentFields)) {
+    if (containsPasswordField([field], componentSchemas)) {
       droppedFields.push(key);
       continue;
     }
 
     // Values stored per locale cannot be placed without knowing which locale
     // they belong to, so they are reported rather than written into whichever
-    // one the update happens to resolve. Shared fields are unaffected.
+    // one the update happens to resolve. Shared fields are unaffected. The
+    // document is localized whenever its locale is the unknown one, so the
+    // entity's own switch is on for this walk.
     if (
       context.localeUnknown &&
-      containsLocalizedField([field], componentFields)
+      containsLocalizedField([field], true, componentSchemas)
     ) {
       droppedFields.push(key);
       continue;
@@ -404,13 +478,14 @@ export function buildRestorePayload(
     // instances that were not in the incoming set — so resubmitting a snapshot
     // of only-removed types would clear the field rather than leaving it alone.
     const allowed = allowedComponentSlugs(field);
-    const children = childrenOf(field, componentFields);
+    const isComponentField = allowed !== null;
+    const children = childrenOf(field, componentSchemas);
 
     // A component field is partitioned even when its schema resolves to no
     // children: a component may legitimately declare none, and one that failed
     // to resolve is empty too. Gating the partition on children alone would let
     // those fields through unchecked.
-    if (allowed !== null || children.length > 0) {
+    if (isComponentField || children.length > 0) {
       const removed: string[] = [];
       const { kept, rejected } = partitionAllowedInstances(value, allowed, key);
       droppedFields.push(...rejected);
@@ -420,10 +495,33 @@ export function buildRestorePayload(
         continue;
       }
 
-      payload[key] =
-        children.length > 0
-          ? pruneContainerValue(kept, children, componentFields, removed, key)
-          : kept;
+      if (children.length === 0) {
+        payload[key] = kept;
+        droppedFields.push(...removed);
+        continue;
+      }
+
+      const pruned = pruneContainerValue(
+        kept,
+        children,
+        componentSchemas,
+        removed,
+        key,
+        isComponentField
+      );
+
+      // Only a dynamic zone stores `_componentType`; a single-component field
+      // is read back without one, so its instances cannot be checked against
+      // the allowed list above. If the field was retargeted at a different
+      // component since, every key of the old value is unknown to the new
+      // schema — which is what this detects, rather than pruning the old
+      // component's values into the new component's shape.
+      if (isComponentField && retainsNothing(pruned)) {
+        droppedFields.push(key);
+        continue;
+      }
+
+      payload[key] = pruned;
       droppedFields.push(...removed);
       continue;
     }

@@ -25,6 +25,7 @@ import type { UserContext } from "../singles/types";
 import {
   buildRestorePayload,
   restoreLocaleIsUnknown,
+  type ComponentSchemas,
 } from "./restore-snapshot";
 
 export interface RestoreVersionArgs {
@@ -107,9 +108,9 @@ async function describeEntity(
  * it — the safe direction, since resubmitting a subtree it cannot inspect could
  * overwrite a nested credential.
  */
-async function resolveComponentFields(
+async function resolveComponentSchemas(
   fields: FieldConfig[]
-): Promise<Map<string, FieldConfig[]>> {
+): Promise<ComponentSchemas> {
   const slugs = new Set<string>();
 
   const collect = (list: FieldConfig[]): void => {
@@ -126,7 +127,7 @@ async function resolveComponentFields(
   };
   collect(fields);
 
-  const resolved = new Map<string, FieldConfig[]>();
+  const resolved: ComponentSchemas = new Map();
   if (slugs.size === 0) return resolved;
 
   const registry = getService("componentRegistryService");
@@ -145,12 +146,19 @@ async function resolveComponentFields(
       batch.map(async slug => {
         try {
           const record = await registry.getComponentBySlug(slug);
-          resolved.set(slug, record?.fields ?? []);
+          // The component's OWN localization switch: its values live in its own
+          // tables, so an unlocalized component inside a localized document
+          // stores one copy of each value.
+          resolved.set(slug, {
+            fields: record?.fields ?? [],
+            localized:
+              (record as { localized?: unknown } | null)?.localized === true,
+          });
         } catch {
           // Recorded as empty so the slug is not retried; an unresolved
           // subtree is treated as unknown and dropped, which is the safe
           // direction. See the note above.
-          resolved.set(slug, []);
+          resolved.set(slug, { fields: [], localized: false });
         }
       })
     );
@@ -170,7 +178,7 @@ async function resolveComponentFields(
           if (Array.isArray(nested)) gather(nested as FieldConfig[]);
         }
       };
-      gather(resolved.get(slug) ?? []);
+      gather(resolved.get(slug)?.fields ?? []);
       for (const s of collected) if (!resolved.has(s)) discovered.add(s);
     }
 
@@ -178,6 +186,42 @@ async function resolveComponentFields(
   }
 
   return resolved;
+}
+
+/**
+ * Structural equality for payload values.
+ *
+ * Used to tell whether field-level rules changed a container while probing.
+ * Snapshot values are JSON, so key order is the only ambiguity and comparing
+ * sorted keys settles it.
+ */
+function deepEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  )
+    return false;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+      return false;
+    return a.every((item, i) => deepEquals(item, b[i]));
+  }
+
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  if (!aKeys.every((key, i) => key === bKeys[i])) return false;
+
+  return aKeys.every(key =>
+    deepEquals(
+      (a as Record<string, unknown>)[key],
+      (b as Record<string, unknown>)[key]
+    )
+  );
 }
 
 /**
@@ -246,7 +290,7 @@ export async function restoreVersion(
   // the empty-payload refusal below.
   const localeUnknown = restoreLocaleIsUnknown(localized, version.locale);
 
-  const componentFields = await resolveComponentFields(fields);
+  const componentSchemas = await resolveComponentSchemas(fields);
   const declared = new Set(fields.map(f => f.name));
 
   const { payload, droppedFields } = buildRestorePayload(
@@ -259,7 +303,7 @@ export async function restoreVersion(
       // update path makes before it touches a slug.
       hasSlug: isPlugin ? declared.has("slug") : true,
       hasTitle: isPlugin ? declared.has("title") : true,
-      componentFields,
+      componentSchemas,
       localeUnknown,
     }
   );
@@ -269,7 +313,13 @@ export async function restoreVersion(
   // — against a copy, so nothing is mutated — turns that into something the
   // caller can be told about instead of a restore that reports success for
   // content it never applied.
-  const accessProbe: Record<string, unknown> = { ...payload };
+  //
+  // The copy is deep. These rules strip nested keys by mutating the container
+  // in place, so a shallow copy would share every group and repeater with the
+  // real payload: the probe would edit the very thing it is meant to leave
+  // alone, and the comparison below — which walks keys, not identity — would
+  // see the two agreeing and report nothing.
+  const accessProbe: Record<string, unknown> = structuredClone(payload);
   try {
     await applyFieldWriteAccess({
       kind: args.scopeKind === "single" ? "single" : "collection",
@@ -282,6 +332,17 @@ export async function restoreVersion(
     });
     for (const key of Object.keys(payload)) {
       if (!(key in accessProbe)) {
+        delete payload[key];
+        droppedFields.push(key);
+        continue;
+      }
+
+      // A denied field nested inside a container leaves the key in place and
+      // the container changed, so an equality check is what catches it. The
+      // whole container is then held back: submitting it half-stripped would
+      // overwrite the live value with a partial one, which is worse than not
+      // restoring the field at all.
+      if (!deepEquals(payload[key], accessProbe[key])) {
         delete payload[key];
         droppedFields.push(key);
       }

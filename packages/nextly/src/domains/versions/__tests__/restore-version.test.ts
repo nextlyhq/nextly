@@ -339,6 +339,69 @@ describe("restoreVersion", () => {
     });
   });
 
+  it("reports a denied field nested inside a container", async () => {
+    // Field-level rules strip nested keys by mutating the container in place.
+    // Probing with a shallow copy would share that container with the real
+    // payload, so the strip would land on the payload itself while the
+    // top-level key stayed present — a half-stripped write reported as a clean
+    // restore.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { meta: { caption: "Keep", secret: "denied" } },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "caption", type: "text" },
+            { name: "secret", type: "text" },
+          ],
+        },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+    vi.mocked(applyFieldWriteAccess).mockImplementation(
+      async ({ data }: { data: Record<string, unknown> }) => {
+        const meta = data.meta as Record<string, unknown> | undefined;
+        if (meta) delete meta.secret;
+      }
+    );
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("leaves the payload untouched when the probe denies nothing", async () => {
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { meta: { caption: "Keep" } },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "caption", type: "text" }],
+        },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+
+    const result = await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      meta: { caption: "Keep" },
+    });
+    expect(result.droppedFields).toEqual([]);
+  });
+
   it("refuses to restore when versioning has been turned off", async () => {
     // The write goes through the ordinary update, which captures a version only
     // while versioning is on. Restoring anyway would overwrite live content

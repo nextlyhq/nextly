@@ -18,6 +18,19 @@ const fields = [
   { name: "body", type: "richText" },
 ] as FieldConfig[];
 
+/** A component schema map; components are unlocalized unless a test says so. */
+function componentSchemasOf(
+  entries: Record<string, FieldConfig[]>,
+  localized: string[] = []
+) {
+  return new Map(
+    Object.entries(entries).map(([slug, fields]) => [
+      slug,
+      { fields, localized: localized.includes(slug) },
+    ])
+  );
+}
+
 describe("buildRestorePayload", () => {
   it("keeps the values of fields the schema still has", () => {
     const { payload } = buildRestorePayload(
@@ -274,14 +287,14 @@ describe("buildRestorePayload — layered schemas", () => {
       { name: "auth", type: "component", component: "credentials" },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["credentials", [{ name: "secret", type: "password" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf({
+      credentials: [{ name: "secret", type: "password" }] as FieldConfig[],
+    });
 
     const { payload, droppedFields } = buildRestorePayload(
       { auth: { _componentType: "credentials" } },
       withComponent,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({});
@@ -296,9 +309,9 @@ describe("buildRestorePayload — layered schemas", () => {
       { name: "blocks", type: "component", components: ["banner"] },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
 
     const { payload } = buildRestorePayload(
       {
@@ -307,7 +320,7 @@ describe("buildRestorePayload — layered schemas", () => {
         ],
       },
       withComponent,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({
@@ -323,9 +336,9 @@ describe("buildRestorePayload — layered schemas", () => {
       { name: "blocks", type: "component", components: ["banner"] },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
 
     const { payload, droppedFields } = buildRestorePayload(
       {
@@ -335,7 +348,7 @@ describe("buildRestorePayload — layered schemas", () => {
         ],
       },
       zone,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({
@@ -351,14 +364,14 @@ describe("buildRestorePayload — layered schemas", () => {
       { name: "blocks", type: "component", components: ["banner"] },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
 
     const { payload, droppedFields } = buildRestorePayload(
       { blocks: [{ _componentType: "retired", heading: "Gone" }] },
       zone,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({});
@@ -370,14 +383,14 @@ describe("buildRestorePayload — layered schemas", () => {
       { name: "hero", type: "component", component: "banner" },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
 
     const { payload } = buildRestorePayload(
       { hero: { _componentType: "banner", heading: "Hi", gone: 1 } },
       withComponent,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({
@@ -440,25 +453,50 @@ describe("buildRestorePayload with an unknown locale", () => {
     expect(droppedFields).toEqual(["status"]);
   });
 
-  it("holds back a component whose own fields are localized", () => {
-    // The component tables carry per-locale rows too, so an embedded
+  it("holds back a component that stores its own values per locale", () => {
+    // A localized component's tables carry per-locale rows, so an embedded
     // translatable field is no more placeable than a top-level one.
     const withComponent = [
       { name: "hero", type: "component", component: "banner" },
     ] as FieldConfig[];
 
-    const componentFields = new Map([
-      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
-    ]);
+    const componentSchemas = componentSchemasOf(
+      { banner: [{ name: "heading", type: "text" }] as FieldConfig[] },
+      ["banner"]
+    );
 
     const { payload, droppedFields } = buildRestorePayload(
       { hero: { _componentType: "banner", heading: "Hi" } },
       withComponent,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({});
     expect(droppedFields).toEqual(["hero"]);
+  });
+
+  it("restores an unlocalized component embedded in a localized document", () => {
+    // The component's own switch governs its tables. Classifying its fields by
+    // the parent's switch would hold back values that are stored once and
+    // restore perfectly well.
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "banner", heading: "Hi" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { _componentType: "banner", heading: "Hi" },
+    });
+    expect(droppedFields).toEqual([]);
   });
 
   it("still applies everything when the locale is known", () => {
@@ -493,12 +531,14 @@ describe("buildRestorePayload with an empty component schema", () => {
       { name: "blocks", type: "component", components: ["banner"] },
     ] as FieldConfig[];
 
-    const componentFields = new Map([["banner", [] as FieldConfig[]]]);
+    const componentSchemas = componentSchemasOf({
+      banner: [] as FieldConfig[],
+    });
 
     const { payload, droppedFields } = buildRestorePayload(
       { blocks: [{ _componentType: "carousel", id: "c1" }] },
       zone,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({});
@@ -510,12 +550,14 @@ describe("buildRestorePayload with an empty component schema", () => {
       { name: "blocks", type: "component", components: ["banner"] },
     ] as FieldConfig[];
 
-    const componentFields = new Map([["banner", [] as FieldConfig[]]]);
+    const componentSchemas = componentSchemasOf({
+      banner: [] as FieldConfig[],
+    });
 
     const { payload, droppedFields } = buildRestorePayload(
       { blocks: [{ _componentType: "banner", id: "b1" }] },
       zone,
-      { ...ctx, componentFields }
+      { ...ctx, componentSchemas }
     );
 
     expect(payload).toEqual({
@@ -537,5 +579,112 @@ describe("restoreLocaleIsUnknown", () => {
 
   it("reports an unknown locale when a localized version names none", () => {
     expect(restoreLocaleIsUnknown(true, null)).toBe(true);
+  });
+});
+
+describe("buildRestorePayload — row metadata and retargeted components", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("drops a stale `id` key from an ordinary container", () => {
+    // Row metadata is preserved for component instances because the save path
+    // updates rows by id. A group is ordinary JSON, where a leftover key that
+    // happens to be called `id` is exactly what this filter exists to remove.
+    const withGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "caption", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { caption: "Hi", id: "left-over" } },
+      withGroup,
+      ctx
+    );
+
+    expect(payload).toEqual({ meta: { caption: "Hi" } });
+    expect(droppedFields).toEqual(["meta.id"]);
+  });
+
+  it("still preserves row metadata inside a component", () => {
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload } = buildRestorePayload(
+      { hero: { _componentType: "banner", id: "row-1", heading: "Hi" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { _componentType: "banner", id: "row-1", heading: "Hi" },
+    });
+  });
+
+  it("drops a single-component value whose field was retargeted", () => {
+    // Single-component rows are read back without `_componentType`, so the
+    // allowed-slug partition cannot see the mismatch. A value that keeps no
+    // field of the schema it is being restored into is the evidence.
+    const withComponent = [
+      { name: "hero", type: "component", component: "gallery" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      gallery: [{ name: "images", type: "json" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "row-1", heading: "Old banner heading" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("hero");
+  });
+
+  it("keeps a single-component value that still matches its schema", () => {
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "row-1", heading: "Hi" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ hero: { id: "row-1", heading: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("keeps a legitimately empty component instance", () => {
+    // A component may declare no fields; an instance of one keeps nothing but
+    // its metadata and must not be mistaken for a retargeted field.
+    const withComponent = [
+      { name: "spacer", type: "component", component: "divider" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      divider: [] as FieldConfig[],
+    });
+
+    const { payload } = buildRestorePayload(
+      { spacer: { id: "row-1" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ spacer: { id: "row-1" } });
   });
 });
