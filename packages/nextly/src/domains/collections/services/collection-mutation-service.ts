@@ -70,7 +70,10 @@ import {
 } from "../../i18n/resolve-locale";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
-import { tagComponentTypes } from "../../versions/tag-component-types";
+import {
+  tagComponentTypes,
+  tagNestedComponentTypes,
+} from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -635,12 +638,17 @@ export class CollectionMutationService extends BaseService {
     },
     fields: FieldDefinition[]
   ) {
+    const schema = fields as unknown as FieldConfig[];
     return {
       ...parts,
-      components: tagComponentTypes(
-        parts.components,
-        fields as unknown as FieldConfig[]
-      ),
+      components: tagComponentTypes(parts.components, schema),
+      // A component declared inside a group or repeater rides in that
+      // container's JSON on the parent row rather than appearing as its own
+      // key, so it has to be reached through the row.
+      parentRow: tagNestedComponentTypes(parts.parentRow, schema) as Record<
+        string,
+        unknown
+      >,
     };
   }
 

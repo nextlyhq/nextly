@@ -7,7 +7,10 @@
 import { describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import { tagComponentTypes } from "../tag-component-types";
+import {
+  tagComponentTypes,
+  tagNestedComponentTypes,
+} from "../tag-component-types";
 
 const singleComponent = [
   { name: "hero", type: "component", component: "banner" },
@@ -107,5 +110,64 @@ describe("tagComponentTypes — inherited keys", () => {
     const tagged = tagComponentTypes({ constructor: { x: 1 } }, fields);
 
     expect(tagged.constructor).toEqual({ x: 1, _componentType: "banner" });
+  });
+});
+
+describe("tagNestedComponentTypes", () => {
+  const insideGroup = [
+    {
+      name: "meta",
+      type: "group",
+      fields: [{ name: "hero", type: "component", component: "banner" }],
+    },
+  ] as FieldConfig[];
+
+  it("reaches a component declared inside a group", () => {
+    // A group is one column, so the component value rides in the container's
+    // JSON on the parent row rather than appearing as its own key.
+    const row = { meta: { hero: { heading: "Hi" } } };
+
+    const tagged = tagNestedComponentTypes(row, insideGroup) as {
+      meta: { hero: Record<string, unknown> };
+    };
+
+    expect(tagged.meta.hero).toEqual({
+      heading: "Hi",
+      _componentType: "banner",
+    });
+  });
+
+  it("leaves the row it was given untouched", () => {
+    const row = { meta: { hero: { heading: "Hi" } } };
+
+    tagNestedComponentTypes(row, insideGroup);
+
+    expect(row.meta.hero).not.toHaveProperty("_componentType");
+  });
+
+  it("reaches through a repeater's rows", () => {
+    const insideRepeater = [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "hero", type: "component", component: "banner" }],
+      },
+    ] as FieldConfig[];
+
+    const tagged = tagNestedComponentTypes(
+      { rows: [{ hero: { a: 1 } }, { hero: { a: 2 } }] },
+      insideRepeater
+    ) as { rows: { hero: Record<string, unknown> }[] };
+
+    expect(tagged.rows.map(r => r.hero._componentType)).toEqual([
+      "banner",
+      "banner",
+    ]);
+  });
+
+  it("leaves scalars and absent keys alone", () => {
+    const row = { title: "x" };
+
+    expect(tagNestedComponentTypes(row, insideGroup)).toEqual({ title: "x" });
   });
 });

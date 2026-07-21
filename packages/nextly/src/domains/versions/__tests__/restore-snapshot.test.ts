@@ -1093,9 +1093,11 @@ describe("buildRestorePayload — a zone that permits nothing", () => {
     expect(droppedFields).toContain("blocks");
   });
 
-  it("still restores a cleared value on such a field", () => {
-    // Clearing is applicable whatever the allowlist says: the field ends up
-    // empty either way, and the live rows should go.
+  it("reports a cleared value rather than pretending it was applied", () => {
+    // Clearing looks applicable whatever the allowlist says, but the component
+    // save path has no branch for a zone permitting nothing — so the clear
+    // would never run and the live rows would survive a restore that reported
+    // success.
     const zone = [
       { name: "blocks", type: "component", components: [] },
     ] as FieldConfig[];
@@ -1106,8 +1108,8 @@ describe("buildRestorePayload — a zone that permits nothing", () => {
       ctx
     );
 
-    expect(payload).toEqual({ blocks: [] });
-    expect(droppedFields).toEqual([]);
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
   });
 
   it("leaves a non-component container unconstrained", () => {
@@ -1182,6 +1184,72 @@ describe("buildRestorePayload — a retargeted single component", () => {
     );
 
     expect(payload).toEqual({ hero: { id: "g1", heading: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload — clears the save path cannot apply", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("reports a cleared zone whose allowlist is now empty", () => {
+    // The component save path has no branch for a zone permitting nothing, so
+    // the clear would never be applied and the live rows would survive a
+    // restore that reported success.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("still restores a clear the save path can apply", () => {
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      {
+        ...ctx,
+        componentSchemas,
+      }
+    );
+
+    expect(payload).toEqual({ blocks: [] });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("keeps an instance whose fields are all blank", () => {
+    // A component read carries a key per column, so an instance with nothing
+    // filled in is not metadata-only and must not be mistaken for one that
+    // lost its schema.
+    const single = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "r1", _componentType: "banner", heading: null } },
+      single,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { id: "r1", _componentType: "banner", heading: null },
+    });
     expect(droppedFields).toEqual([]);
   });
 });

@@ -67,3 +67,50 @@ export function tagComponentTypes(
   }
   return tagged;
 }
+
+/**
+ * Tag single-component values nested inside a container's stored JSON.
+ *
+ * A group or repeater is one column, so a component field declared inside one
+ * never appears as a key of `components` — its value rides along in the
+ * container's value on the parent row. The schema still says which component it
+ * names, so the same tagging applies; it just has to be reached through the
+ * container.
+ *
+ * Returns a new value. The row this reads from is also what the outbox event
+ * carries.
+ */
+export function tagNestedComponentTypes(
+  value: unknown,
+  fields: FieldConfig[]
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(row => tagNestedComponentTypes(row, fields));
+  }
+  if (typeof value !== "object" || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...source };
+
+  for (const field of fields) {
+    if (typeof field.name !== "string") continue;
+    if (!Object.prototype.hasOwnProperty.call(source, field.name)) continue;
+
+    const slug = singleComponentSlug(field);
+    if (slug !== undefined) {
+      out[field.name] = tagValue(source[field.name], slug);
+      continue;
+    }
+
+    // Containers nest, so a component two levels down is still reachable.
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      out[field.name] = tagNestedComponentTypes(
+        source[field.name],
+        children as FieldConfig[]
+      );
+    }
+  }
+
+  return out;
+}

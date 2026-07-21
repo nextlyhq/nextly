@@ -388,7 +388,13 @@ export async function setVersionLabelForDocument(
   // version, not to read its content, and returning it here would bypass the
   // redaction the version-detail endpoint applies.
   const { snapshot: _snapshot, ...meta } = row;
-  return meta as VersionRow;
+
+  // The same shape a history list returns, author included. Without this the
+  // renamed row comes back carrying only an author id, and an admin that
+  // renders the response directly would show the version losing its author the
+  // moment it is named.
+  const [withAuthor] = await attachVersionAuthors([meta]);
+  return withAuthor as unknown as VersionRow;
 }
 
 /**

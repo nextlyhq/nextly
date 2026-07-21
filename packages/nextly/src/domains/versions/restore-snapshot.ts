@@ -620,10 +620,18 @@ export function buildRestorePayload(
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
     if (isComponentField || children.length > 0) {
-      // A cleared field is restored as-is. Filtering cannot distinguish it from
-      // a value that lost every instance, and the two need opposite outcomes:
-      // this one must reach the update path so the live rows are removed.
+      // A cleared field is restored as-is, so the update path removes the live
+      // rows. Filtering cannot tell that from a value that lost every instance,
+      // and the two need opposite outcomes.
+      //
+      // Except when the field permits no component at all: the save path has no
+      // branch for an empty allowlist, so the clear would never be applied and
+      // the live rows would survive a restore that reported success.
       if (isComponentField && isClearedComponentValue(value)) {
+        if (allowed.size === 0) {
+          droppedFields.push(key);
+          continue;
+        }
         payload[key] = value;
         continue;
       }
