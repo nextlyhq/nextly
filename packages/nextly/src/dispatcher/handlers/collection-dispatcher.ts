@@ -48,6 +48,7 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
+import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -60,7 +61,10 @@ import {
 import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
+import {
+  getI18nArchiveDdl,
+  getI18nArchiveIndexRepairDdl,
+} from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -736,6 +740,19 @@ const COLLECTIONS_METHODS: Record<
           if (plan.needsArchive) {
             for (const stmt of getI18nArchiveDdl(dialect)) {
               await adapter.executeQuery(stmt);
+            }
+            // MySQL's table DDL cannot restore an index the table is missing, and
+            // index-only drift produces no reconcile operations, so the repair runs
+            // here. Tolerated rather than checked first: attempting it and accepting
+            // "duplicate key name" is one round trip instead of two, and the same
+            // tolerance the schema executor already applies.
+            const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
+            if (indexRepair) {
+              try {
+                await adapter.executeQuery(indexRepair);
+              } catch (err) {
+                if (!isIdempotencyError(err)) throw err;
+              }
             }
           }
           for (const stmt of plan.statements) {

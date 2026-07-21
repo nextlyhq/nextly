@@ -1,27 +1,27 @@
 /**
- * A MySQL archive table missing its lookup index gets it back.
+ * A MySQL archive table missing its lookup index gets it back on the next
+ * ensure.
  *
- * The bootstrap DDL declares the index inside `CREATE TABLE IF NOT EXISTS`
- * rather than as a following `CREATE INDEX`, because MySQL has no
- * `CREATE INDEX IF NOT EXISTS` and the separate statement failed with a
- * duplicate key name on every ensure after the first. Inline, re-running the
- * bootstrap is a no-op — but so is the index creation, which raises the fair
- * question of what repairs a table that exists without the index.
+ * The bootstrap declares the index inside `CREATE TABLE IF NOT EXISTS`,
+ * because MySQL has no `CREATE INDEX IF NOT EXISTS` and a separate statement
+ * failed with a duplicate key name on every ensure after the first. MySQL
+ * skips that whole statement when the table exists, though, so the inline
+ * form cannot restore an index that went missing.
  *
- * The answer is that the archive is now a bundle-managed core table, so the
- * push reconciles its indexes like any other. That is strictly more general
- * than the statement it replaced: it also repairs an index dropped later,
- * which an unconditional `CREATE INDEX` never could — that could only ever
- * fail against a table already carrying one.
+ * Nothing else covers it either: `drizzleTableToTableSpec` records names and
+ * columns only, so index-only drift produces no operations and the reconcile
+ * returns before any push. The ensure path therefore carries an explicit
+ * repair, attempted and tolerated rather than checked first, which is the same
+ * tolerance the schema executor already applies.
  *
- * This asserts that, so the claim cannot quietly stop being true.
+ * PostgreSQL and SQLite need none of this — their bootstrap emits
+ * `CREATE INDEX IF NOT EXISTS` beside the table — so the repair is null there.
  */
-import { createRequire } from "node:module";
-
 import mysql from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { nextlyI18nArchive } from "../mysql";
+import { isIdempotencyError } from "../../../domains/schema/pipeline/sql-statement-utils";
+import { getI18nArchiveDdl, getI18nArchiveIndexRepairDdl } from "../ddl";
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? "";
 const TABLE = "nextly_i18n_archive";
@@ -73,27 +73,34 @@ describeMysql("mysql archive index repair", () => {
     );
     expect(await indexExists()).toBe(false);
 
-    const kit = createRequire(import.meta.url)("drizzle-kit/payload/mysql") as {
-      pushSchema: (
-        schema: Record<string, unknown>,
-        client: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> },
-        databaseName?: string
-      ) => Promise<{ apply: () => Promise<void> }>;
+    // Exactly what the dispatchers run when a localization disable needs the
+    // archive: the bootstrap, then the repair.
+    const ensure = async (): Promise<void> => {
+      for (const statement of getI18nArchiveDdl("mysql")) {
+        await db.query(statement);
+      }
+      const repair = getI18nArchiveIndexRepairDdl("mysql");
+      if (!repair) return;
+      try {
+        await db.query(repair);
+      } catch (err) {
+        if (!isIdempotencyError(err)) throw err;
+      }
     };
 
-    const databaseName = new URL(MYSQL_URL).pathname.replace(/^\//, "");
-    const result = await kit.pushSchema(
-      { nextlyI18nArchive },
-      {
-        query: async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
-          const [rows] = await db.query(sql, params);
-          return rows as T[];
-        },
-      },
-      databaseName
-    );
-    await result.apply();
-
+    await ensure();
     expect(await indexExists()).toBe(true);
+
+    // And the ensure stays safe to repeat, which is what broke before the
+    // index moved inline.
+    await ensure();
+    await ensure();
+    expect(await indexExists()).toBe(true);
+  });
+
+  it("has no repair statement for the dialects that self-repair", () => {
+    // Their bootstrap emits CREATE INDEX IF NOT EXISTS beside the table.
+    expect(getI18nArchiveIndexRepairDdl("postgresql")).toBeNull();
+    expect(getI18nArchiveIndexRepairDdl("sqlite")).toBeNull();
   });
 });

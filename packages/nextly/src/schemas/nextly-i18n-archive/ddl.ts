@@ -71,3 +71,25 @@ export function getI18nArchiveDdl(dialect: Dialect): string[] {
     }
   }
 }
+
+/**
+ * The standalone lookup-index statement, for dialects whose table DDL cannot
+ * repair a missing index on its own.
+ *
+ * PostgreSQL and SQLite emit `CREATE INDEX IF NOT EXISTS` alongside the table,
+ * so re-running their bootstrap restores an index that went missing. MySQL has
+ * no such form: its index is declared inside `CREATE TABLE IF NOT EXISTS`, and
+ * MySQL skips that statement entirely when the table exists, so nothing there
+ * can put the index back.
+ *
+ * Nor does the reconcile cover it. `drizzleTableToTableSpec` records only
+ * names and columns, so index-only drift produces no operations, and
+ * `reconcileCore` returns early when there are none — the push that would
+ * repair the index is never reached.
+ *
+ * Returns `null` where the table DDL already repairs itself.
+ */
+export function getI18nArchiveIndexRepairDdl(dialect: Dialect): string | null {
+  if (dialect !== "mysql") return null;
+  return `CREATE INDEX \`nextly_i18n_archive_lookup_idx\` ON \`nextly_i18n_archive\` (\`collection\`, \`entry_id\`, \`locale\`)`;
+}
