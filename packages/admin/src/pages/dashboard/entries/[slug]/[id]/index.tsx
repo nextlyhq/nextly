@@ -12,7 +12,6 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import Link from "next/link";
 import type React from "react";
 import { useMemo, useState } from "react";
 
@@ -25,6 +24,7 @@ import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
