@@ -16,6 +16,8 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { getDialectTables } from "../../../database/index";
+import { getNextlyLogger } from "../../../observability/logger";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
 let current: TestNextly | undefined;
@@ -89,10 +91,10 @@ describe("audit log writes (integration)", () => {
 });
 
 describe("dialect resolution", () => {
-  it("skips the write rather than guessing when the adapter reports no dialect", async () => {
-    // Falling back to the environment would rebuild the exact coupling this
-    // removes, and silently: the row would be shaped for whatever dialect was
-    // validated first and the insert would fail inside the writer's own catch.
+  it("skips the write and says so, rather than guessing a dialect", async () => {
+    // The writer swallows its own failures, so an empty table alone proves
+    // nothing: a broken adapter lookup or a failed insert looks identical.
+    // Assert the specific skip warning so this pins the intended branch.
     current = await createTestNextly({});
     const real = current.getService("adapter") as Record<string, unknown>;
     const withoutDialect = new Proxy(real, {
@@ -103,20 +105,50 @@ describe("dialect resolution", () => {
       },
     });
 
-    const writer = buildAuditLogWriter((name: string) =>
-      name === "adapter" ? withoutDialect : current!.getService(name)
-    );
-    await writer.write({ kind: "csrf-failed", metadata: { path: "/x" } });
+    const warnings: { kind?: string; reason?: string }[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      warnings.push(payload as { kind?: string; reason?: string });
+      return originalWarn(payload as never);
+    };
 
+    try {
+      await buildAuditLogWriter((name: string) =>
+        name === "adapter" ? withoutDialect : current!.getService(name)
+      ).write({ kind: "csrf-failed", metadata: { path: "/x" } });
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(warnings.some(w => w.kind === "audit-log-write-skipped")).toBe(true);
+    // And nothing was written under a guessed shape.
     expect(await rows(current)).toHaveLength(0);
   });
 
-  it("uses the adapter's dialect when it reports one", async () => {
+  it("picks tables from the adapter's dialect, not the cached environment", async () => {
+    // The environment cache cannot be repointed mid-process, so proving the
+    // adapter wins is done at the seam instead: hand the writer an adapter
+    // that reports postgres and capture which table object it inserts into.
+    // Reading env would yield the sqlite table, since that is what this
+    // process validated first.
     current = await createTestNextly({});
-    await writerFor(current).write({
-      kind: "login-failed",
-      metadata: { code: "BAD" },
-    });
-    expect(await rows(current)).toHaveLength(1);
+    let usedTable: unknown;
+    const fakeAdapter = {
+      dialect: "postgresql",
+      getDrizzle: () => ({
+        insert: (table: unknown) => {
+          usedTable = table;
+          return { values: async () => undefined };
+        },
+      }),
+    };
+
+    await buildAuditLogWriter((name: string) =>
+      name === "adapter" ? fakeAdapter : current!.getService(name)
+    ).write({ kind: "csrf-failed", metadata: { path: "/x" } });
+
+    expect(usedTable).toBe(getDialectTables("postgresql").auditLog);
+    expect(usedTable).not.toBe(getDialectTables("sqlite").auditLog);
   });
 });

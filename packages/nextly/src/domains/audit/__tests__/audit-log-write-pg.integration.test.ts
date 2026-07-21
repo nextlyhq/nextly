@@ -15,7 +15,7 @@
  * table, so a shared database or a repeated local run leaves earlier rows
  * behind and a bare row count would fail for reasons unrelated to encoding.
  */
-import { describe, expect, it, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
 import {
@@ -25,13 +25,26 @@ import {
 import { buildAuditLogWriter } from "../audit-log-writer";
 
 const PG_URL = process.env.TEST_POSTGRES_URL ?? "";
-// Set at module scope because env.ts validates on first read, which happens
-// during the import chain below. This only satisfies validation; which tables
-// the writer uses is decided by the adapter, not by this.
-if (PG_URL) {
+
+// The integration suite runs every file in one fork, so a process-wide
+// override here outlives this file and leaks into whatever runs next. Capture
+// and restore instead of assigning at module scope. Only env validation needs
+// these; which tables the writer uses is decided by the adapter.
+const previousEnv = {
+  dialect: process.env.DB_DIALECT,
+  url: process.env.DATABASE_URL,
+};
+
+beforeAll(() => {
+  if (!PG_URL) return;
   process.env.DB_DIALECT = "postgresql";
   process.env.DATABASE_URL = PG_URL;
-}
+});
+
+afterAll(() => {
+  process.env.DB_DIALECT = previousEnv.dialect;
+  process.env.DATABASE_URL = previousEnv.url;
+});
 
 let current: TestNextly | undefined;
 
@@ -51,17 +64,28 @@ describePg("audit log writes (postgres jsonb)", () => {
     } as Parameters<typeof createAdapter>[0]);
     current = await createTestNextly({ adapter });
 
+    // `audit_log` is a fixed system table with no per-test prefix, and the
+    // harness disconnects on teardown without truncating, so a reused database
+    // carries rows from earlier runs. Tag this row so the assertion can find
+    // it among them.
+    const marker = `probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     await buildAuditLogWriter((name: string) =>
       current!.getService(name)
-    ).write({ kind: "csrf-failed", metadata: { path: "/x", method: "POST" } });
+    ).write({
+      kind: "csrf-failed",
+      metadata: { path: "/x", method: "POST", marker },
+    });
 
     const stored = await current.adapter.select<{
-      metadata: unknown;
+      metadata: { marker?: string } | null;
     }>("audit_log");
-    expect(stored).toHaveLength(1);
-    // jsonb round-trips to an object. A string would mean it was encoded
-    // twice and every consumer must double-parse.
-    expect(typeof stored[0].metadata).toBe("object");
-    expect(stored[0].metadata).toMatchObject({ path: "/x", method: "POST" });
+    const mine = stored.filter(r => r.metadata?.marker === marker);
+
+    expect(mine).toHaveLength(1);
+    // jsonb round-trips to an object. A string would mean it was encoded twice
+    // and every consumer must double-parse — and would also make the filter
+    // above find nothing, since `.marker` is undefined on a string.
+    expect(typeof mine[0].metadata).toBe("object");
+    expect(mine[0].metadata).toMatchObject({ path: "/x", method: "POST" });
   });
 });
