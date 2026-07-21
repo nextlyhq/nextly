@@ -20,4 +20,5 @@ export {
   getDispatcher,
   setHandlerConfig,
   getHandlerConfig,
+  ensureServicesInitialized,
 } from "./auth-handler";

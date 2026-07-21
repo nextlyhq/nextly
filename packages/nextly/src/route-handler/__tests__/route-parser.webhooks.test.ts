@@ -75,6 +75,21 @@ describe("webhook routes", () => {
     }
   });
 
+  it("does not match a path nested deeper than the secret route", () => {
+    // `parseRestRoute` puts the extra segment in `subId`, which the branch used
+    // to ignore, so this returned live signing secrets for an invalid URL.
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "anything"], "GET")
+    ).toEqual({});
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "a", "b"], "GET")
+    ).toEqual({});
+  });
+
+  it("does not match a path nested deeper than an endpoint", () => {
+    expect(parseRestRoute(["webhooks", "wh_1", "a", "b"], "GET")).toEqual({});
+  });
+
   it("does not fall through an unknown sub-path to the endpoint itself", () => {
     // Without the sub-resource guard this would parse as GET /webhooks/wh_1
     // and serve the endpoint document.

@@ -53,6 +53,7 @@ import {
   generateWebhookSecret,
   webhookSecretPrefix,
 } from "../secret";
+import { REDACTED_HEADER_VALUE } from "../types";
 import type { WebhookEventType } from "../types";
 
 /**
@@ -120,6 +121,16 @@ interface WebhookRow {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Replace every stored header value with the redaction placeholder. */
+function redactHeaderValues(stored: unknown): Record<string, string> | null {
+  if (!stored || typeof stored !== "object") return null;
+  const redacted: Record<string, string> = {};
+  for (const name of Object.keys(stored)) {
+    redacted[name] = REDACTED_HEADER_VALUE;
+  }
+  return redacted;
 }
 
 export class WebhookEndpointService extends BaseService {
@@ -215,10 +226,10 @@ export class WebhookEndpointService extends BaseService {
       eventTypes: (Array.isArray(row.eventTypes)
         ? row.eventTypes
         : []) as WebhookEventType[],
-      headers:
-        row.headers && typeof row.headers === "object"
-          ? (row.headers as Record<string, string>)
-          : null,
+      // Names are kept so an operator can see which headers are configured;
+      // values are not, because delivery sends them verbatim and they are
+      // routinely a credential for the receiver.
+      headers: redactHeaderValues(row.headers),
       secretPrefix: row.secretPrefix,
       createdBy: row.createdBy,
       createdAt: row.createdAt,

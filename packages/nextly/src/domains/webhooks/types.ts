@@ -40,6 +40,18 @@ export const WEBHOOK_EVENT_TYPES = [
   "form.submission.created",
 ] as const;
 
+/**
+ * What a stored static header's value is replaced with when an endpoint is
+ * read back.
+ *
+ * Static headers routinely carry a receiver credential (`Authorization`,
+ * `X-API-Key`), and delivery sends them verbatim. Reading an endpoint must not
+ * hand that credential to anyone allowed to look at the configuration, so the
+ * names survive a read and the values do not. Writes reject this exact value,
+ * so echoing a read back cannot store the placeholder as a real header.
+ */
+export const REDACTED_HEADER_VALUE = "<redacted>";
+
 /** A canonical webhook event type. */
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 

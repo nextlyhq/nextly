@@ -1736,9 +1736,16 @@ function parseApiKeyRoutes(
 function parseWebhookRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Nothing here nests further than one level, so any deeper path is not a
+  // route. Without this, `/webhooks/:id/secret/anything` would still match the
+  // secret branch and hand back active signing secrets.
+  if (subId || additionalParams.length > 0) return null;
+
   if (id && subresource === "secret") {
     // GET /api/webhooks/:id/secret → reveal active signing secrets.
     // Its own path rather than a field on the document, so the route can
@@ -2136,7 +2143,14 @@ export function parseRestRoute(
 
   // Handle Webhook endpoint management
   if (resource === "webhooks") {
-    const result = parseWebhookRoutes(id, subresource, httpMethod, routeParams);
+    const result = parseWebhookRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

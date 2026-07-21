@@ -18,7 +18,10 @@
 
 import { z } from "zod";
 
-import { WEBHOOK_EVENT_TYPES } from "../../domains/webhooks/types";
+import {
+  REDACTED_HEADER_VALUE,
+  WEBHOOK_EVENT_TYPES,
+} from "../../domains/webhooks/types";
 
 /**
  * The event types an endpoint may subscribe to.
@@ -69,6 +72,13 @@ const HeadersSchema = z
         HEADER_VALUE,
         "Header values cannot contain line breaks or control characters."
       )
+      // Reading an endpoint returns this placeholder in place of every header
+      // value. A client that echoes a read back would otherwise store the
+      // placeholder as the real header and silently break delivery.
+      .refine(value => value !== REDACTED_HEADER_VALUE, {
+        message:
+          "Header values are not returned when reading an endpoint. Send the real value to change a header, or omit headers to leave them unchanged.",
+      })
   )
   .refine(
     headers =>

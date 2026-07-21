@@ -27,6 +27,7 @@ import {
 } from "../../../schemas/webhooks/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { WEBHOOK_SECRET_PREFIX } from "../secret";
+import { REDACTED_HEADER_VALUE } from "../types";
 import { WebhookEndpointService } from "../services/webhook-endpoint-service";
 import type { WebhookEventType } from "../types";
 
@@ -193,6 +194,50 @@ describe("webhook endpoint management (real SQLite)", () => {
           "user_that_does_not_exist"
         )
       ).rejects.toThrow(NextlyError);
+    });
+  });
+
+  describe("static header values never leave the service", () => {
+    // Delivery sends these verbatim, so they are routinely a credential for the
+    // receiver. Anyone allowed to read the configuration would otherwise be
+    // handed that credential, including a read-only caller.
+    const SECRET_HEADER = { Authorization: "Bearer receiver-credential" };
+
+    it("redacts values but keeps names on create, read and list", async () => {
+      const { endpoint } = await create({ headers: SECRET_HEADER });
+
+      for (const summary of [
+        endpoint,
+        await service.getEndpoint(endpoint.id),
+        (await service.listEndpoints())[0],
+      ]) {
+        expect(JSON.stringify(summary)).not.toContain("receiver-credential");
+        expect(summary?.headers).toEqual({
+          Authorization: REDACTED_HEADER_VALUE,
+        });
+      }
+    });
+
+    it("redacts on update too", async () => {
+      const { endpoint } = await create({ headers: SECRET_HEADER });
+
+      const updated = await service.updateEndpoint(endpoint.id, {
+        name: "Renamed",
+      });
+
+      expect(JSON.stringify(updated)).not.toContain("receiver-credential");
+    });
+
+    it("still stores and delivers the real value", async () => {
+      // Redaction is a read-side concern. The stored row has to keep the real
+      // header or delivery would start sending the placeholder.
+      const { endpoint } = await create({ headers: SECRET_HEADER });
+
+      const rows = await adapter.executeQuery<{ headers: string }>(
+        `SELECT headers FROM nextly_webhooks WHERE id = '${endpoint.id}'`
+      );
+
+      expect(String(rows[0]?.headers)).toContain("receiver-credential");
     });
   });
 

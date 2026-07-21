@@ -9,7 +9,10 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { WEBHOOK_EVENT_TYPES } from "../../../domains/webhooks/types";
+import {
+  REDACTED_HEADER_VALUE,
+  WEBHOOK_EVENT_TYPES,
+} from "../../../domains/webhooks/types";
 import { CreateWebhookSchema, UpdateWebhookSchema } from "../webhooks";
 
 const valid = {
@@ -94,6 +97,17 @@ describe("CreateWebhookSchema", () => {
       expect(CreateWebhookSchema.safeParse({ ...valid, headers }).success).toBe(
         false
       );
+    });
+
+    it("refuses the redaction placeholder a read hands back", () => {
+      // Reading an endpoint replaces every header value with this. Echoing the
+      // read back would otherwise store the placeholder as the real header and
+      // break delivery silently.
+      const parsed = CreateWebhookSchema.safeParse({
+        ...valid,
+        headers: { Authorization: REDACTED_HEADER_VALUE },
+      });
+      expect(parsed.success).toBe(false);
     });
 
     it("still allows the punctuation a token permits", () => {

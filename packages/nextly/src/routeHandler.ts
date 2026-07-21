@@ -85,6 +85,7 @@ import {
   requiresAuthOnly,
   handleAuthRequest,
   getDispatcher,
+  ensureServicesInitialized,
   setHandlerConfig,
   getHandlerConfig,
 } from "./route-handler";
@@ -750,6 +751,15 @@ async function handleServiceRequest(
       }
     );
   }
+
+  // The direct-dispatch handlers below resolve their own services through
+  // `getCachedNextly()`, which does not boot anything — it throws when nothing
+  // has initialised yet. Ordinary REST requests are saved by `getDispatcher()`
+  // further down, but these branches return before reaching it, so an app that
+  // cold-boots through `createDynamicHandlers({ config })` with no
+  // instrumentation would fail its first request to any of them. Initialising
+  // here covers every direct-dispatch branch and consumes no body.
+  await ensureServicesInitialized();
 
   // ==================== API KEYS DIRECT DISPATCH ====================
   // API key handlers own their auth + body parsing. Intercepting here (before

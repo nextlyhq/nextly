@@ -53,7 +53,7 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
  * Storage is optional - if not configured, services will be initialized without it.
  * This allows collections/singles endpoints to work even when no storage plugin is set up.
  */
-async function ensureServicesInitialized(): Promise<void> {
+export async function ensureServicesInitialized(): Promise<void> {
   if (!isServicesRegistered()) {
     const nextlyConfig = _storedConfig;
 
