@@ -87,3 +87,36 @@ describe("audit log writes (integration)", () => {
     ]);
   });
 });
+
+describe("dialect resolution", () => {
+  it("skips the write rather than guessing when the adapter reports no dialect", async () => {
+    // Falling back to the environment would rebuild the exact coupling this
+    // removes, and silently: the row would be shaped for whatever dialect was
+    // validated first and the insert would fail inside the writer's own catch.
+    current = await createTestNextly({});
+    const real = current.getService("adapter") as Record<string, unknown>;
+    const withoutDialect = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "dialect") return undefined;
+        if (prop === "getCapabilities") return () => ({});
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const writer = buildAuditLogWriter((name: string) =>
+      name === "adapter" ? withoutDialect : current!.getService(name)
+    );
+    await writer.write({ kind: "csrf-failed", metadata: { path: "/x" } });
+
+    expect(await rows(current)).toHaveLength(0);
+  });
+
+  it("uses the adapter's dialect when it reports one", async () => {
+    current = await createTestNextly({});
+    await writerFor(current).write({
+      kind: "login-failed",
+      metadata: { code: "BAD" },
+    });
+    expect(await rows(current)).toHaveLength(1);
+  });
+});

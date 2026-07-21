@@ -74,6 +74,24 @@ export const NULL_AUDIT_LOG_WRITER: AuditLogWriter = {
  * the DI container finishes initialising.
  */
 /**
+ * The dialect of the adapter a write is going through.
+ *
+ * Every Drizzle adapter declares `dialect` directly; `getCapabilities()` is
+ * consulted only as a secondary source for adapters that predate it. Returns
+ * undefined rather than guessing, because the caller must not fall back to the
+ * environment: that is the coupling this exists to remove.
+ */
+function adapterDialect(adapter: unknown): string | undefined {
+  const candidate = adapter as {
+    dialect?: unknown;
+    getCapabilities?: () => { dialect?: unknown } | undefined;
+  };
+  if (typeof candidate?.dialect === "string") return candidate.dialect;
+  const fromCapabilities = candidate?.getCapabilities?.()?.dialect;
+  return typeof fromCapabilities === "string" ? fromCapabilities : undefined;
+}
+
+/**
  * Encode `metadata` for whichever column type this dialect uses.
  *
  * The column is `jsonb` on PostgreSQL and `json` on MySQL, where the driver
@@ -112,11 +130,20 @@ export function buildAuditLogWriter(
         // from the process-wide DB_DIALECT: env.ts caches that on first read,
         // so a process whose cache was populated by a different dialect would
         // build rows in the wrong shape for this connection.
-        const schema = getDialectTables(
-          (
-            adapter as { getCapabilities?: () => { dialect?: string } }
-          ).getCapabilities?.().dialect
-        );
+        const dialect = adapterDialect(adapter);
+        if (!dialect) {
+          // Falling back to the environment here would restore exactly the
+          // coupling above, and silently: the row would be built for whatever
+          // dialect happened to be validated first and the insert would fail
+          // inside the catch below. Skipping loudly is the lesser harm.
+          getNextlyLogger().warn({
+            kind: "audit-log-write-skipped",
+            eventKind: event.kind,
+            reason: "adapter did not report a dialect",
+          });
+          return;
+        }
+        const schema = getDialectTables(dialect);
         const table = (schema as { auditLog?: unknown }).auditLog;
         if (!table) {
           // Dialect tables may not include auditLog if the consumer is
