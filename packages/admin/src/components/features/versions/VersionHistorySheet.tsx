@@ -25,6 +25,7 @@ import {
 } from "@admin/components/ui";
 import {
   useRestoreVersion,
+  useSetVersionLabel,
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
@@ -32,6 +33,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
 
@@ -81,6 +83,9 @@ export function VersionHistorySheet({
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
+  // The version being renamed, which is not necessarily the one being previewed
+  // — an editor can name a row without opening it.
+  const [renaming, setRenaming] = useState<number | null>(null);
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
@@ -88,6 +93,10 @@ export function VersionHistorySheet({
     if (!open) {
       setSelected(null);
       setConfirmingRestore(false);
+      // The rename dialog is mounted outside the panel, so closing the panel
+      // does not close it. Left set, it would stay on screen over a dismissed
+      // panel, or reappear the moment the panel was reopened.
+      setRenaming(null);
     }
   }, [open]);
 
@@ -122,6 +131,29 @@ export function VersionHistorySheet({
   });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
+
+  // The row being renamed, so the dialog opens seeded with its current name
+  // rather than blank.
+  const renamingVersion =
+    renaming === null
+      ? null
+      : (versions.find(v => v.versionNo === renaming) ?? null);
+
+  const setLabel = useSetVersionLabel({
+    scope,
+    onSuccess: result => {
+      setRenaming(null);
+      toast.success(
+        result.item.label === null
+          ? "Name removed."
+          : `Version named "${result.item.label}".`
+      );
+    },
+    onError: error => {
+      // The dialog stays open so the typed name is not lost to a failed save.
+      toast.error(apiErrorMessage(error) || "Could not rename this version.");
+    },
+  });
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
 
   return (
@@ -179,7 +211,12 @@ export function VersionHistorySheet({
                 <VersionRow
                   key={version.id}
                   version={version}
+                  active={selected === version.versionNo}
                   onSelect={setSelected}
+                  // Renaming writes to the document's history, which needs the
+                  // same permission restoring does. Offering it to a read-only
+                  // caller would open a dialog whose save the route rejects.
+                  onRename={canRestore ? setRenaming : undefined}
                 />
               ))}
 
@@ -252,6 +289,25 @@ export function VersionHistorySheet({
           isPublished={liveStatus === "published"}
           isRestoring={restore.isPending}
           onConfirm={() => restore.mutate(selected)}
+        />
+      ) : null}
+
+      {/* Mounted on the same terms as the restore dialog: outside the panel
+          body so its lifecycle is independent of the panel's. */}
+      {renaming !== null ? (
+        <VersionLabelDialog
+          // A fresh dialog per version: the input seeds from its initial props
+          // and never resyncs, so a new version needs a new instance rather
+          // than an effect that would also clobber an in-progress edit.
+          key={renaming}
+          open
+          onOpenChange={open => {
+            if (!open) setRenaming(null);
+          }}
+          versionNo={renaming}
+          currentLabel={renamingVersion?.label ?? null}
+          saving={setLabel.isPending}
+          onSubmit={label => setLabel.mutate({ versionNo: renaming, label })}
         />
       ) : null}
     </Sheet>

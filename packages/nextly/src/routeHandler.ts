@@ -438,6 +438,9 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // Restoring writes the document, so the route parser marks it an `update`
   // operation and this resolves to the `update-{slug}` permission.
   "restoreEntryVersion",
+  // Naming a version writes history rather than the document, but it is still
+  // a write and resolves to the same permission.
+  "setEntryVersionLabel",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -449,6 +452,9 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleVersion",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
+  // Also a write. Deliberately absent from the read allowlist below, so the
+  // action resolves to `update` by default.
+  "setSingleVersionLabel",
 ]);
 
 /**
