@@ -194,13 +194,19 @@ export function filterUnsafeStatements(
 /**
  * Statement patterns that name the table they act on directly. Used to decide
  * which table a statement belongs to when filtering by ownership.
+ *
+ * Identifiers are captured as `[\w-]+` rather than `\w+`: a collection may
+ * declare a custom `dbName` containing hyphens, which the runtime and
+ * `resolveCollectionTableName` both keep verbatim. Capturing only up to the
+ * hyphen would yield a prefix that matches no locked table, so a statement
+ * against `dc_my-table` would slip through the ownership filter entirely.
  */
 const STATEMENT_TABLE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
-  /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
-  /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
-  /^INSERT\s+INTO\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
-  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\s+)?ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
+  /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^INSERT\s+INTO\s+(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\s+)?ON\s+(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
 ];
 
 /**

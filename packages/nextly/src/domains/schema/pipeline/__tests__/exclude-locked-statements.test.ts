@@ -50,6 +50,23 @@ describe("excludeLockedTableStatements", () => {
     expect(kept).toEqual([]);
   });
 
+  // A collection with dbName: "my-table" is stored as dc_my-table verbatim.
+  // Capturing the identifier only up to the hyphen would compare "dc_my"
+  // against the lock set, match nothing, and let the statement through — the
+  // one case where this guard failing open alters a code-first table.
+  it("recognises a locked table whose name contains a hyphen", () => {
+    const { kept, skipped } = excludeLockedTableStatements(
+      [
+        'ALTER TABLE "dc_my-table" ADD COLUMN "x" TEXT;',
+        'CREATE INDEX "i" ON "dc_my-table" ("x");',
+        'ALTER TABLE "dc_widget" ADD COLUMN "y" TEXT;',
+      ],
+      new Set(["dc_my-table"])
+    );
+    expect(kept).toEqual(['ALTER TABLE "dc_widget" ADD COLUMN "y" TEXT;']);
+    expect(skipped).toHaveLength(2);
+  });
+
   it("drops an index created on a locked table", () => {
     const { kept } = excludeLockedTableStatements(
       [
