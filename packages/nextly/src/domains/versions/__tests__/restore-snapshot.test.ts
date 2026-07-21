@@ -402,7 +402,7 @@ describe("buildRestorePayload — layered schemas", () => {
     );
 
     expect(payload).toEqual({
-      hero: { _componentType: "banner", heading: "Hi" },
+      hero: { heading: "Hi" },
     });
   });
 });
@@ -502,7 +502,7 @@ describe("buildRestorePayload with an unknown locale", () => {
     );
 
     expect(payload).toEqual({
-      hero: { _componentType: "banner", heading: "Hi" },
+      hero: { heading: "Hi" },
     });
     expect(droppedFields).toEqual([]);
   });
@@ -615,7 +615,7 @@ describe("buildRestorePayload — row metadata and retargeted components", () =>
     expect(droppedFields).toEqual(["meta.id"]);
   });
 
-  it("still preserves row metadata inside a component", () => {
+  it("still preserves the row id inside a component", () => {
     const withComponent = [
       { name: "hero", type: "component", component: "banner" },
     ] as FieldConfig[];
@@ -631,7 +631,7 @@ describe("buildRestorePayload — row metadata and retargeted components", () =>
     );
 
     expect(payload).toEqual({
-      hero: { _componentType: "banner", id: "row-1", heading: "Hi" },
+      hero: { id: "row-1", heading: "Hi" },
     });
   });
 
@@ -1168,7 +1168,7 @@ describe("buildRestorePayload — a retargeted single component", () => {
     );
 
     expect(payload).toEqual({
-      hero: { _componentType: "gallery", id: "g1", heading: "Hi" },
+      hero: { id: "g1", heading: "Hi" },
     });
     expect(droppedFields).toEqual([]);
   });
@@ -1248,8 +1248,128 @@ describe("buildRestorePayload — clears the save path cannot apply", () => {
     );
 
     expect(payload).toEqual({
-      hero: { id: "r1", _componentType: "banner", heading: null },
+      hero: { id: "r1", heading: null },
     });
     expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload — the type marker does not reach the write", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+  const componentSchemas = componentSchemasOf({
+    banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+  });
+
+  it("strips it from a component nested in a group", () => {
+    // A group is one JSON column, written whole. A marker left inside would be
+    // stored verbatim and then served by every ordinary read of the document.
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "hero", type: "component", component: "banner" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { meta: { hero: { _componentType: "banner", heading: "Hi" } } },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ meta: { hero: { heading: "Hi" } } });
+  });
+
+  it("withholds the whole container when a nested component is refused", () => {
+    // Dropping the marker from the payload must not stop it selecting the
+    // schema this value is pruned against. And the container has to be held
+    // back entirely: it is written as one JSON value, so submitting `meta`
+    // without `hero` would delete the live nested component rather than report
+    // that it could not be applied.
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [
+          { name: "summary", type: "text" },
+          { name: "hero", type: "component", component: "banner" },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        meta: {
+          summary: "Still here",
+          hero: { _componentType: "gallery", heading: "Old" },
+        },
+      },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload.meta).toBeUndefined();
+    expect(droppedFields).toContain("meta");
+  });
+
+  it("keeps it on a dynamic zone's rows, which the save path reads back", () => {
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }] },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }],
+    });
+  });
+});
+
+describe("buildRestorePayload — a component that declares no fields", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+  // A component may legitimately declare nothing, which leaves the walk with no
+  // children to recurse into.
+  const componentSchemas = componentSchemasOf({ empty: [] as FieldConfig[] });
+
+  it("still strips the marker from one nested in a group", () => {
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "inner", type: "component", component: "empty" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { meta: { inner: { _componentType: "empty" } } },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ meta: { inner: {} } });
+  });
+
+  it("keeps it on an empty dynamic zone's rows", () => {
+    const insideGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "blocks", type: "component", components: ["empty"] }],
+      },
+    ] as FieldConfig[];
+
+    const { payload } = buildRestorePayload(
+      { meta: { blocks: [{ _componentType: "empty", id: "b1" }] } },
+      insideGroup,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      meta: { blocks: [{ _componentType: "empty", id: "b1" }] },
+    });
   });
 });

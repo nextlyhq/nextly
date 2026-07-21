@@ -59,9 +59,20 @@ export class ComponentDataService {
    * well as config-defined ones. Callers that must reason about fields nested
    * inside a component reference use this rather than reaching for the registry
    * directly. Returns null when the component is unknown.
+   *
+   * `executor` is forwarded so a caller already inside a write transaction can
+   * read on that transaction's connection. Without it the lookup takes a
+   * second pooled connection while the transaction still holds its own, which
+   * stalls against a small pool.
    */
-  async getComponentFields(slug: string): Promise<FieldConfig[] | null> {
-    const record = await this.registryService.getComponentBySlug(slug);
+  async getComponentFields(
+    slug: string,
+    executor?: unknown
+  ): Promise<FieldConfig[] | null> {
+    const record = await this.registryService.getComponentBySlug(
+      slug,
+      executor
+    );
     return record?.fields ?? null;
   }
 
