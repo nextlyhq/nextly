@@ -108,7 +108,15 @@ export function buildAuditLogWriter(
       try {
         const adapter = getService("adapter");
         const db = adapter.getDrizzle();
-        const schema = getDialectTables();
+        // Resolve tables from the adapter actually being written through, not
+        // from the process-wide DB_DIALECT: env.ts caches that on first read,
+        // so a process whose cache was populated by a different dialect would
+        // build rows in the wrong shape for this connection.
+        const schema = getDialectTables(
+          (
+            adapter as { getCapabilities?: () => { dialect?: string } }
+          ).getCapabilities?.().dialect
+        );
         const table = (schema as { auditLog?: unknown }).auditLog;
         if (!table) {
           // Dialect tables may not include auditLog if the consumer is
