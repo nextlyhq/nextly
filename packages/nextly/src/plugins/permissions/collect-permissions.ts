@@ -26,20 +26,28 @@ export interface CollectedPermission {
 /** Where a permission lands when its plugin does not group its own. */
 export const DEFAULT_PERMISSION_GROUP = "General";
 
-// The actions the auto-seeder already owns for a collection or single slug. A
-// plugin declaring one of these on such a slug collides with the seeded row, so
-// they are reserved rather than merely conventional. Must track
-// `permission-seed-service.ts` — an action seeded here but missing from these
-// sets can be declared by a plugin and silently collide.
-const CRUD_ACTIONS = new Set([
-  "create",
-  "read",
-  "update",
-  "delete",
-  "publish",
-  "unpublish",
-]);
-const SINGLE_ACTIONS = new Set(["read", "update", "publish", "unpublish"]);
+// The actions the auto-seeder has always owned for a collection or single slug.
+// A plugin declaring one of these on such a slug collides with the seeded row,
+// and always would have, so the declaration is an authoring error and is
+// rejected.
+const CRUD_ACTIONS = new Set(["create", "read", "update", "delete"]);
+const SINGLE_ACTIONS = new Set(["read", "update"]);
+
+// Actions the seeder owns as of the publish lifecycle, but which were legal for
+// a plugin to declare before it.
+//
+// These are ADOPTED rather than rejected. The seeder now emits exactly the same
+// slug (`publish-posts`), so the declaration is redundant, not conflicting —
+// and rejecting it would stop an already-installed app from booting the moment
+// it upgraded, on a declaration that was valid when it was written. Dropping it
+// here leaves the permission in place, seeded, under the same slug, with grants
+// intact because rows are matched on action and resource.
+//
+// The distinction matters beyond politeness: a plugin-declared row carries an
+// `owner`, and `markOrphanedPermissions` only considers owned rows. Letting the
+// declaration through would put a permission the seeder depends on at risk of
+// being swept the day the plugin is removed.
+const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
 
 const titleCase = (s: string): string =>
   s
@@ -58,6 +66,10 @@ const titleCase = (s: string): string =>
  *  - a resource that is a built-in system resource (system-resource-reserved);
  *  - a CRUD action on a collection slug / read|update on a single slug, which
  *    the auto-seeder already owns (crud-permission-reserved).
+ *
+ * `publish` and `unpublish` on such a slug are the exception: the seeder owns
+ * them too, but only since the publish lifecycle landed, so a declaration is
+ * silently dropped instead of rejected. See `ADOPTED_LIFECYCLE_ACTIONS`.
  */
 export function collectCustomPermissions(
   config: NextlyServiceConfig,
@@ -91,6 +103,15 @@ export function collectCustomPermissions(
         "system-resource-reserved"
       );
     }
+    const ownedByEntity =
+      collectionSlugs.has(resource) || singleSlugs.has(resource);
+
+    // Redundant with what the seeder now emits, and valid before it did. Drop
+    // it and carry on rather than failing the boot of an app that upgraded.
+    if (ADOPTED_LIFECYCLE_ACTIONS.has(action) && ownedByEntity) {
+      return;
+    }
+
     if (
       (CRUD_ACTIONS.has(action) && collectionSlugs.has(resource)) ||
       (SINGLE_ACTIONS.has(action) && singleSlugs.has(resource))

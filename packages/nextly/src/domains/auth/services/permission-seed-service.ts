@@ -418,8 +418,8 @@ export class PermissionSeedService extends BaseService {
    * Seed permissions for ALL dynamic collections.
    *
    * Reads all collection slugs from the `dynamic_collections` table
-   * (including plugin-registered collections) and seeds 4 CRUD permissions
-   * for each.
+   * (including plugin-registered collections) and seeds the six CRUD and
+   * publish-lifecycle permissions for each.
    */
   async seedAllCollectionPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
@@ -450,7 +450,7 @@ export class PermissionSeedService extends BaseService {
    * Seed permissions for ALL registered singles.
    *
    * Reads all single slugs from the `dynamic_singles` table and seeds
-   * read/update permissions for each.
+   * read, update, publish and unpublish permissions for each.
    */
   async seedAllSinglePermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();

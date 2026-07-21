@@ -212,3 +212,65 @@ describe("what a declaration says beyond its identity", () => {
     expect(out[0].danger).toBe(false);
   });
 });
+
+describe("the publish lifecycle a plugin may already have declared", () => {
+  // These verbs were legal for a plugin to declare until the seeder started
+  // emitting them. Rejecting one now would stop an installed app from booting
+  // on upgrade, over a declaration that was correct when it was written.
+  it("drops a plugin's publish on a collection instead of throwing", () => {
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "publish", resource: "posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops unpublish on a collection too", () => {
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "unpublish", resource: "posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops them on a single as well", () => {
+    const out = collectCustomPermissions(cfg([], ["site-settings"]), [
+      plugin("@acme/workflow", [
+        { action: "publish", resource: "site-settings" },
+      ]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
+  it("still collects publish on a resource that is not an entity", () => {
+    // Nothing seeds `publish-newsletter`, so it remains a real custom
+    // permission — the adoption is scoped to slugs the seeder owns.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/news", [{ action: "publish", resource: "newsletter" }]),
+    ]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0].slug).toBe("publish-newsletter");
+  });
+
+  it("still throws for a CRUD verb, which was never a plugin's to declare", () => {
+    // The adoption is not a general amnesty: `update-posts` has always been
+    // the seeder's, so declaring it remains an authoring error.
+    expect(() =>
+      collectCustomPermissions(cfg(["posts"]), [
+        plugin("@acme/x", [{ action: "update", resource: "posts" }]),
+      ])
+    ).toThrow();
+  });
+
+  it("does not let a dropped declaration mask a genuine duplicate", () => {
+    // Two plugins declaring the same non-entity permission must still collide.
+    expect(() =>
+      collectCustomPermissions(cfg(["posts"]), [
+        plugin("@acme/a", [{ action: "publish", resource: "newsletter" }]),
+        plugin("@acme/b", [{ action: "publish", resource: "newsletter" }]),
+      ])
+    ).toThrow();
+  });
+});

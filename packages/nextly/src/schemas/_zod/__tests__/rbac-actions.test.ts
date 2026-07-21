@@ -15,6 +15,11 @@ import type { NextlyServiceConfig } from "../../../di/register";
 import { collectCodegenNames } from "../../../plugins/codegen/collect-codegen-names";
 import { PermissionActionSchema } from "../rbac";
 
+/**
+ * Codegen reads only `collections` and `singles` off the config, so a fixture
+ * carrying just those is enough. The double assertion is the cost of not
+ * constructing an adapter, a logger and a plugin set to assert on a slug list.
+ */
 function cfg(partial: Record<string, unknown>): NextlyServiceConfig {
   return partial as unknown as NextlyServiceConfig;
 }
