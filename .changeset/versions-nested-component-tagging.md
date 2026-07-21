@@ -20,7 +20,8 @@
 "@nextlyhq/ui": patch
 ---
 
-Restoring a version now handles components embedded inside other components.
+Restoring a version now handles components embedded inside other components,
+and inside groups, repeaters and dynamic zones.
 
 A version records which component each of its values came from, so that
 restoring an old version after a field was pointed at a different component
@@ -28,3 +29,9 @@ reports the mismatch instead of writing the old values into the new component.
 That record stopped at the top level: a component nested inside another one
 kept no such record, so the same restore could quietly put the wrong values in
 the wrong place.
+
+A nested component is now checked against the components its field allows, the
+same way a top-level one already was, so a restore reports the mismatch instead
+of writing the old values into the new component. The record itself is removed
+before the restore is written, so it stays part of the version history and
+never appears in the document.

@@ -339,6 +339,10 @@ function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
  * schema's fields rather than the value's keys — so a key removed from the
  * schema is neither rejected nor stripped. It would be written back into the
  * column and served again as though it were still part of the document.
+ *
+ * `storesType` says whether the write path reads `_componentType` back off this
+ * value. Only a dynamic zone does; a single-component field takes the component
+ * from the schema.
  */
 function pruneContainerValue(
   value: unknown,
@@ -346,7 +350,8 @@ function pruneContainerValue(
   componentSchemas: ComponentSchemas | undefined,
   removed: string[],
   path: string,
-  isComponentValue: boolean
+  isComponentValue: boolean,
+  storesType: boolean
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((row, i) =>
@@ -356,7 +361,8 @@ function pruneContainerValue(
         componentSchemas,
         removed,
         `${path}[${i}]`,
-        isComponentValue
+        isComponentValue,
+        storesType
       )
     );
   }
@@ -389,6 +395,13 @@ function pruneContainerValue(
     // a stale key that happens to be called `id` is exactly the kind of unknown
     // key this function exists to remove.
     if (isComponentValue && (key === "_componentType" || key === "id")) {
+      // The type marker exists to record what the snapshot captured, and it has
+      // already done its work above by selecting this row's schema. Carrying it
+      // into the payload is only safe where the write path consumes it, which
+      // is the dynamic zone alone. A single component nested in a group or
+      // repeater is written as part of that container's JSON, and a marker left
+      // inside would be stored verbatim and then served by ordinary reads.
+      if (key === "_componentType" && !storesType) continue;
       out[key] = child;
       continue;
     }
@@ -400,19 +413,44 @@ function pruneContainerValue(
     }
 
     const grandchildren = childrenOf(field, componentSchemas);
+
+    // A component nested in a container is checked against the components its
+    // field allows, exactly as a top-level one is. Without this the snapshot's
+    // recorded type is read only to pick a schema, so a value captured under a
+    // component the field has since stopped naming would be pruned against the
+    // new component and written into it wherever a field name overlaps.
+    //
+    // Only for a field that names components, and only for a value that holds
+    // instances. `kept: null` means nothing survived the check, which is not
+    // the same as a cleared field whose value is legitimately null.
+    const allowedHere = allowedComponentSlugs(field);
+    let kept = child;
+    if (allowedHere !== null && !isClearedComponentValue(child)) {
+      const partitioned = partitionAllowedInstances(
+        child,
+        allowedHere,
+        `${path}.${key}`,
+        fieldNamesMultipleComponents(field)
+      );
+      removed.push(...partitioned.rejected);
+      if (partitioned.kept === null) continue;
+      kept = partitioned.kept;
+    }
+
     out[key] =
       grandchildren.length > 0
         ? pruneContainerValue(
-            child,
+            kept,
             grandchildren,
             componentSchemas,
             removed,
             `${path}.${key}`,
             // A nested component's instances carry the same row metadata; a
             // nested group's values do not.
-            componentSlugs(field).length > 0
+            componentSlugs(field).length > 0,
+            fieldNamesMultipleComponents(field)
           )
-        : child;
+        : kept;
   }
 
   return out;
@@ -667,7 +705,8 @@ export function buildRestorePayload(
         componentSchemas,
         removed,
         key,
-        isComponentField
+        isComponentField,
+        fieldNamesMultipleComponents(field)
       );
 
       // Only a dynamic zone stores `_componentType`; a single-component field
