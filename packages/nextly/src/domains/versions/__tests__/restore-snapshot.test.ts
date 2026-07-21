@@ -1071,3 +1071,185 @@ describe("buildRestorePayload — dynamic zone rows keep their own schema", () =
     expect(droppedFields).toEqual([]);
   });
 });
+
+describe("buildRestorePayload — a zone that permits nothing", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("reports instances of a zone stripped back to no allowed types", () => {
+    // An empty allowlist permits nothing. Reading it as "permits anything"
+    // admits every stored instance to a save path with no component to apply
+    // them to, and the restore reports success having skipped the field.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("reports a cleared value rather than pretending it was applied", () => {
+    // Clearing looks applicable whatever the allowlist says, but the component
+    // save path has no branch for a zone permitting nothing — so the clear
+    // would never run and the live rows would survive a restore that reported
+    // success.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("leaves a non-component container unconstrained", () => {
+    // The distinction is whether the field declares a component key at all —
+    // a group names no components and must not be treated as permitting none.
+    const withGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "caption", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { caption: "Hi" } },
+      withGroup,
+      ctx
+    );
+
+    expect(payload).toEqual({ meta: { caption: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload — a retargeted single component", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  const componentSchemas = componentSchemasOf({
+    gallery: [{ name: "heading", type: "text" }] as FieldConfig[],
+  });
+
+  const field = [
+    { name: "hero", type: "component", component: "gallery" },
+  ] as FieldConfig[];
+
+  it("reports a snapshot recorded under a different component", () => {
+    // Snapshots now carry the component the field named when they were taken.
+    // Without it, an overlapping field name would be pruned against the NEW
+    // component and written into it — the old banner's heading landing in a
+    // gallery row.
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "banner", id: "b1", heading: "Old banner" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("hero");
+  });
+
+  it("restores a snapshot recorded under the component still named", () => {
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "gallery", id: "g1", heading: "Hi" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { _componentType: "gallery", id: "g1", heading: "Hi" },
+    });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("still admits an older snapshot that recorded no component", () => {
+    // Versions captured before the type was recorded cannot say, and refusing
+    // them would break restores that work today. `retainsNothing` remains their
+    // only guard, which is why the capture-side change matters.
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "g1", heading: "Hi" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ hero: { id: "g1", heading: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload — clears the save path cannot apply", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("reports a cleared zone whose allowlist is now empty", () => {
+    // The component save path has no branch for a zone permitting nothing, so
+    // the clear would never be applied and the live rows would survive a
+    // restore that reported success.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("still restores a clear the save path can apply", () => {
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      {
+        ...ctx,
+        componentSchemas,
+      }
+    );
+
+    expect(payload).toEqual({ blocks: [] });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("keeps an instance whose fields are all blank", () => {
+    // A component read carries a key per column, so an instance with nothing
+    // filled in is not metadata-only and must not be mistaken for one that
+    // lost its schema.
+    const single = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "r1", _componentType: "banner", heading: null } },
+      single,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { id: "r1", _componentType: "banner", heading: null },
+    });
+    expect(droppedFields).toEqual([]);
+  });
+});

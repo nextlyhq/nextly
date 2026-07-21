@@ -814,6 +814,21 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // Naming a version edits history rather than the document, but it is still a
+  // write, so it is authorized as one. PATCH because it is idempotent: sending
+  // the same label twice leaves the same state.
+  if (additionalParams.length === 2 && httpMethod === "PATCH") {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    routeParams.versionNo = additionalParams[1] ?? "";
+    return {
+      service: "collections",
+      operation: "update",
+      method: "setEntryVersionLabel",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
@@ -876,6 +891,19 @@ function parseSingleVersionRoutes(
       // Restoring writes the document, so it is authorized as an update.
       operation: "update",
       method: "restoreSingleVersion",
+      routeParams,
+    };
+  }
+
+  // See the collection parser: naming a version is an idempotent write on
+  // history, authorized as an update.
+  if (subId && additionalParams.length === 0 && httpMethod === "PATCH") {
+    routeParams.slug = id;
+    routeParams.versionNo = subId;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "setSingleVersionLabel",
       routeParams,
     };
   }

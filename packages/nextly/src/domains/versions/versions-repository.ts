@@ -308,6 +308,32 @@ export class VersionsRepository {
    * after the retention cap starts being enforced, and an over-large statement
    * would fail the whole write transaction rather than trimming.
    */
+  /**
+   * Set or clear a durable version's label.
+   *
+   * Scoped by the document as well as the version number, so a caller
+   * authorized for one document cannot rename a version of another by number
+   * alone. Autosave rows are excluded on the same terms as every other durable
+   * read: they are not addressable in history, so they are not nameable either.
+   */
+  async updateLabel(
+    ref: VersionRef,
+    versionNo: number,
+    label: string | null
+  ): Promise<void> {
+    await this.db.update(
+      TABLE,
+      { label },
+      {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "=", value: versionNo },
+        ],
+      }
+    );
+  }
+
   async deleteByIds(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
     let deleted = 0;

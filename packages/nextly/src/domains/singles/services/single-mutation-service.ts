@@ -55,6 +55,10 @@ import {
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  tagComponentTypes,
+  tagNestedComponentTypes,
+} from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
@@ -641,7 +645,19 @@ export class SingleMutationService extends BaseService {
                   (updatePayload as { status?: unknown }).status ??
                   companionStatus ??
                   (parentRow as { status?: unknown }).status,
-                parts: { parentRow, components },
+                // Tagged for the snapshot alone: the same component values
+                // feed the outbox event, whose payload is read shape.
+                parts: {
+                  // A component inside a group or repeater rides in that
+                  // container's JSON on the row rather than appearing in the
+                  // components map — the same shape the collection capture
+                  // reaches through.
+                  parentRow: tagNestedComponentTypes(
+                    parentRow,
+                    fieldConfigs
+                  ) as Record<string, unknown>,
+                  components: tagComponentTypes(components, fieldConfigs),
+                },
                 createdBy: options.user?.id ?? null,
                 // Labelled with a locale only when locale-specific state was
                 // actually captured. A localized Single routes every write

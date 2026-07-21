@@ -13,6 +13,7 @@ import {
   defineCollection,
   defineComponent,
   defineSingle,
+  group,
   json,
   text,
 } from "../../../config";
@@ -362,6 +363,92 @@ describe("version capture on update (integration)", () => {
     // Both the create and the update snapshot say which language they hold.
     expect(rows[0].locale).toBe("en");
     expect(rows.at(-1)?.locale).toBe("en");
+  });
+
+  it("records which component a single-component field held", async () => {
+    // An ordinary read omits the type for a field naming one component,
+    // because the schema implies it. A snapshot cannot rely on that: the field
+    // may name a different component by the time it is restored, and the type
+    // is the only thing that would reveal the mismatch.
+    current = await createTestNextly({
+      components: [
+        defineComponent({
+          slug: "hero",
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            component({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Page", hero: { heading: "Welcome" } }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      { collectionName: "pages", entryId: id, overrideAccess: true },
+      { title: "Page v2" }
+    );
+
+    const rows = await versions(current, "pages");
+    for (const row of rows) {
+      const snapshot = row.snapshot as {
+        hero?: { _componentType?: string; heading?: string };
+      };
+      expect(snapshot.hero?.heading).toBe("Welcome");
+      expect(snapshot.hero?._componentType).toBe("hero");
+    }
+  });
+
+  it("records the component type for a Single's nested component", async () => {
+    // The value rides in the group's JSON on the row rather than in the
+    // components map, so the collection path's fix had to be applied here too
+    // — the two capture paths are separate code.
+    current = await createTestNextly({
+      components: [
+        defineComponent({ slug: "hero", fields: [text({ name: "heading" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "settings",
+          versions: true,
+          fields: [
+            group({
+              name: "meta",
+              fields: [component({ name: "hero", component: "hero" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.update(
+      "settings",
+      { meta: { hero: { heading: "Welcome" } } },
+      { overrideAccess: true }
+    );
+
+    const rows = await versions(current, "settings");
+    const snapshot = rows.at(-1)?.snapshot as {
+      meta?: { hero?: { _componentType?: string; heading?: string } };
+    };
+
+    expect(snapshot.meta?.hero?.heading).toBe("Welcome");
+    expect(snapshot.meta?.hero?._componentType).toBe("hero");
   });
 
   it("records no version when the schema does not opt in", async () => {

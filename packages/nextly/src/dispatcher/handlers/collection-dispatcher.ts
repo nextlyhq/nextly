@@ -103,6 +103,7 @@ import {
   getVersionForDocument,
   restoreVersionForDocument,
   listVersionsForDocument,
+  setVersionLabelForDocument,
   userFromParams,
 } from "./versions-methods";
 
@@ -167,6 +168,22 @@ export const COLLECTION_VERSION_METHODS: Record<
       return respondList(result.items, result.meta);
     },
   },
+  setEntryVersionLabel: {
+    execute: async (_svc, p, body) => {
+      const row = await setVersionLabelForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+        // Forwarded whole: whether `label` is present is part of what the
+        // request means, and the core is what reads it.
+        body,
+        params: p,
+      });
+      return respondMutation("Version renamed.", row);
+    },
+  },
   restoreEntryVersion: {
     execute: async (_svc, p) => {
       const result = await restoreVersionForDocument({
@@ -176,6 +193,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         user: userFromParams(p),
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
+        params: p,
       });
       return respondAction("Version restored.", result);
     },

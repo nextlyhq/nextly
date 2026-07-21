@@ -438,6 +438,9 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // Restoring writes the document, so the route parser marks it an `update`
   // operation and this resolves to the `update-{slug}` permission.
   "restoreEntryVersion",
+  // Naming a version writes history rather than the document, but it is still
+  // a write and resolves to the same permission.
+  "setEntryVersionLabel",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -449,6 +452,9 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleVersion",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
+  // Also a write. Deliberately absent from the read allowlist below, so the
+  // action resolves to `update` by default.
+  "setSingleVersionLabel",
 ]);
 
 /**
@@ -1479,6 +1485,7 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedUserRoles;
   delete routeParams._authenticatedActorType;
   delete routeParams._authenticatedActorId;
+  delete routeParams._authenticatedPermissions;
 
   if (!authorizedUser) return;
 
@@ -1493,6 +1500,14 @@ async function setAuthenticatedRouteParams(
     routeParams._authenticatedUserName = authorizedUser.userName;
   if (authorizedUser.userEmail)
     routeParams._authenticatedUserEmail = authorizedUser.userEmail;
+  // The API key's own scoped grants, so a handler deciding access after
+  // dispatch judges the key rather than the account that issued it. Empty for
+  // session auth, whose grants are resolved from the database instead.
+  if (authorizedUser.authMethod === "api-key") {
+    routeParams._authenticatedPermissions = JSON.stringify(
+      authorizedUser.permissions ?? []
+    );
+  }
 
   if (!needsRoles) return;
 

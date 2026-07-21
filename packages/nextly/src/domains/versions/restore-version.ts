@@ -19,7 +19,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  applyFieldWriteAccess,
+} from "../../shared/lib/field-level-registry";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -211,6 +214,31 @@ function usableLocale(versionLocale: string | null): string | null {
 }
 
 /**
+ * Remove from `payload` every key an access probe changed, reporting each.
+ *
+ * The read and write rules are evaluated separately but answered the same way:
+ * a key the probe dropped, or a container it altered, is one this caller may
+ * not carry. Holding a changed container back whole is deliberate — submitting
+ * it half-stripped would overwrite the live value with a partial one, which is
+ * worse than not restoring the field.
+ *
+ * Shared so the two probes cannot drift apart, which is the failure this file
+ * has already seen more than once.
+ */
+function dropFieldsTheProbeRejected(
+  payload: Record<string, unknown>,
+  probe: Record<string, unknown>,
+  droppedFields: string[]
+): void {
+  for (const key of Object.keys(payload)) {
+    if (!(key in probe) || !deepEquals(payload[key], probe[key])) {
+      delete payload[key];
+      droppedFields.push(key);
+    }
+  }
+}
+
+/**
  * Structural equality for payload values.
  *
  * Used to tell whether field-level rules changed a container while probing.
@@ -345,6 +373,38 @@ export async function restoreVersion(
     }
   );
 
+  // Field-level READ rules decide what of the snapshot this caller was ever
+  // allowed to see. A field hidden from them must not be written back from a
+  // version they could not have read — the history endpoints redact the same
+  // snapshot before returning it, and restoring is the one path that would
+  // otherwise apply it unredacted.
+  //
+  // Probed on a deep copy for the same reason as the write rules below: these
+  // strip nested keys in place.
+  //
+  // The probe carries the document's id, which the payload deliberately does
+  // not: `id` is immutable and was stripped before this point. A rule keyed on
+  // the document — owner-only visibility, say — would otherwise evaluate with
+  // no id and hide fields the same caller can read in version history, making
+  // restore stricter than the endpoint the snapshot came from.
+  const readProbe: Record<string, unknown> = {
+    ...structuredClone(payload),
+    id: args.entryId,
+  };
+  try {
+    await applyFieldReadAccess({
+      kind: args.scopeKind === "single" ? "single" : "collection",
+      slug: args.slug,
+      entry: readProbe,
+      user: args.user,
+      overrideAccess: false,
+    });
+    dropFieldsTheProbeRejected(payload, readProbe, droppedFields);
+  } catch {
+    // A failure here must not block a restore the update path would allow; the
+    // write rules below remain the authority on what may be applied.
+  }
+
   // Field-level write rules strip denied keys inside the update path, silently
   // and after it has already reported success. Evaluating the same rules here
   // — against a copy, so nothing is mutated — turns that into something the
@@ -367,23 +427,7 @@ export async function restoreVersion(
       overrideAccess: false,
       id: args.entryId,
     });
-    for (const key of Object.keys(payload)) {
-      if (!(key in accessProbe)) {
-        delete payload[key];
-        droppedFields.push(key);
-        continue;
-      }
-
-      // A denied field nested inside a container leaves the key in place and
-      // the container changed, so an equality check is what catches it. The
-      // whole container is then held back: submitting it half-stripped would
-      // overwrite the live value with a partial one, which is worse than not
-      // restoring the field at all.
-      if (!deepEquals(payload[key], accessProbe[key])) {
-        delete payload[key];
-        droppedFields.push(key);
-      }
-    }
+    dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);
   } catch {
     // A failure here must not block a restore the update path would allow; the
     // update evaluates the same rules again and remains the authority.

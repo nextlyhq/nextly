@@ -70,6 +70,10 @@ import {
 } from "../../i18n/resolve-locale";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  tagComponentTypes,
+  tagNestedComponentTypes,
+} from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -618,6 +622,34 @@ export class CollectionMutationService extends BaseService {
     );
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
+  }
+
+  /**
+   * The document parts a version records, with component types tagged.
+   *
+   * A separate shape from what the outbox carries: the same parts feed both,
+   * and the marker belongs only to the snapshot.
+   */
+  private snapshotPartsFor(
+    parts: {
+      parentRow: Record<string, unknown>;
+      components: Record<string, unknown>;
+      manyToMany: Record<string, string[]>;
+    },
+    fields: FieldDefinition[]
+  ) {
+    const schema = fields as unknown as FieldConfig[];
+    return {
+      ...parts,
+      components: tagComponentTypes(parts.components, schema),
+      // A component declared inside a group or repeater rides in that
+      // container's JSON on the parent row rather than appearing as its own
+      // key, so it has to be reached through the row.
+      parentRow: tagNestedComponentTypes(parts.parentRow, schema) as Record<
+        string,
+        unknown
+      >,
+    };
   }
 
   private async buildFullSnapshotRelations(
@@ -1646,7 +1678,9 @@ export class CollectionMutationService extends BaseService {
               typeof createCompanionStatus === "string"
                 ? createCompanionStatus
                 : (entry as { status?: unknown }).status,
-            parts: documentParts,
+            // Tagged for the snapshot alone: `documentParts` is also what the
+            // outbox event below carries, and that payload is read shape.
+            parts: this.snapshotPartsFor(documentParts, fields),
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
@@ -1995,11 +2029,16 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 contentStatus: "published",
-                parts: {
-                  parentRow,
-                  components: snapshotComponents,
-                  manyToMany: snapshotM2M,
-                },
+                // Tagged like every other capture: a snapshot records which
+                // component its values came from, whichever path produced it.
+                parts: this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: snapshotComponents,
+                    manyToMany: snapshotM2M,
+                  },
+                  fields
+                ),
                 createdBy: params.user?.id ?? null,
                 // Left unlabelled deliberately. Publishing spans every locale,
                 // and this snapshot is the main row alone — on a migrated
@@ -2920,7 +2959,8 @@ export class CollectionMutationService extends BaseService {
                     (updatePayload as { status?: unknown }).status ??
                     effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
-                  parts: documentParts,
+                  // See the create path: tagged for the snapshot only.
+                  parts: this.snapshotPartsFor(documentParts, fields),
                   createdBy: params.user?.id ?? null,
                   // Labelled with a locale only when locale-specific state was
                   // actually captured. A migrated localized collection routes

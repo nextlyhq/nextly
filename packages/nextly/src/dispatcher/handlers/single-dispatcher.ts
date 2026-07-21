@@ -94,8 +94,10 @@ import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  assertLabelRequestValid,
   getVersionForDocument,
   restoreVersionForDocument,
+  setVersionLabelForDocument,
   listVersionsForDocument,
   userFromParams,
 } from "./versions-methods";
@@ -342,6 +344,7 @@ export const SINGLE_VERSION_METHODS: Record<
         user: userFromParams(p),
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
+        params: p,
       });
       return respondAction("Version restored.", result);
     },
@@ -358,6 +361,29 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  setSingleVersionLabel: {
+    execute: async (_svc, p, body) => {
+      const slug = String(p.slug ?? "");
+      // Validate before resolving anything. Otherwise the same malformed
+      // request answers 404 for an unmaterialized Single and 400 for a
+      // materialized one, and performs a lookup it was never going to use.
+      assertLabelRequestValid(Number(p.versionNo), body);
+      // The live id comes from the server, never the request: a Single has one
+      // document and a client-supplied id would be a way to reach another.
+      const entryId = await requireLiveSingleId(slug);
+      const row = await setVersionLabelForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+        // See the collection handler: the body goes through whole.
+        body,
+        params: p,
+      });
+      return respondMutation("Version renamed.", row);
     },
   },
 };

@@ -126,10 +126,20 @@ function componentSlugs(field: FieldConfig): string[] {
   return slugs;
 }
 
-/** Component slugs a field currently permits, or null when it permits any. */
+/**
+ * Component slugs a field permits, or null when it is not a component field.
+ *
+ * Keyed on whether the field DECLARES a component key, not on how many slugs it
+ * names. A dynamic zone stripped back to `components: []` permits nothing —
+ * reading that as "permits anything" admits every stored instance to a save
+ * path that has no component to apply them to, so the restore reports success
+ * having quietly skipped the field.
+ */
 function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
-  const slugs = componentSlugs(field);
-  return slugs.length > 0 ? new Set(slugs) : null;
+  const one = (field as { component?: unknown }).component;
+  const many = (field as { components?: unknown }).components;
+  const declaresComponent = typeof one === "string" || Array.isArray(many);
+  return declaresComponent ? new Set(componentSlugs(field)) : null;
 }
 
 /**
@@ -610,10 +620,18 @@ export function buildRestorePayload(
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
     if (isComponentField || children.length > 0) {
-      // A cleared field is restored as-is. Filtering cannot distinguish it from
-      // a value that lost every instance, and the two need opposite outcomes:
-      // this one must reach the update path so the live rows are removed.
+      // A cleared field is restored as-is, so the update path removes the live
+      // rows. Filtering cannot tell that from a value that lost every instance,
+      // and the two need opposite outcomes.
+      //
+      // Except when the field permits no component at all: the save path has no
+      // branch for an empty allowlist, so the clear would never be applied and
+      // the live rows would survive a restore that reported success.
       if (isComponentField && isClearedComponentValue(value)) {
+        if (allowed.size === 0) {
+          droppedFields.push(key);
+          continue;
+        }
         payload[key] = value;
         continue;
       }
