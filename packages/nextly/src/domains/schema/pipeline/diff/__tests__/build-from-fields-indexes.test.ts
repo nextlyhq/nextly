@@ -29,7 +29,10 @@ describe("buildDesiredTableFromFields — indexes", () => {
     expect(idxNames(t)).toEqual(
       [
         "idx_dc_posts_author:n", // single relationship auto-index
-        "idx_dc_posts_created_at:n", // system
+        "idx_dc_posts_created_at:n",
+        // Owner index: the collection service creates it for every table with
+        // the created_by column, so the snapshot records it too.
+        "idx_dc_posts_created_by:n", // system
         "idx_dc_posts_slug:u", // system unique
         "idx_dc_posts_views:n", // user index
         "uq_dc_posts_email:u", // user unique

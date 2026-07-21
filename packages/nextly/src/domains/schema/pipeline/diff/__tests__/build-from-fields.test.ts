@@ -538,3 +538,29 @@ describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
     expect(table.indexes?.map(i => i.name)).toContain("idx_comp_hero_parent");
   });
 });
+
+describe("owner index", () => {
+  // The collection service creates idx_<table>_created_by for every table with
+  // the owner column, and owner-scoped reads filter on it. A SQLite rebuild
+  // drops every index the replacement table does not declare, and the restore
+  // replays only what the snapshot carries — so it has to be recorded here.
+  it("is recorded for a collection", () => {
+    const table = buildDesiredTableFromFields("dc_posts", [], "sqlite");
+    expect(table.indexes).toContainEqual({
+      name: "idx_dc_posts_created_by",
+      columns: ["created_by"],
+      unique: false,
+    });
+  });
+
+  it("is not recorded for a component, which has no owner column", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [],
+      "sqlite"
+    );
+    expect(table.indexes?.map(i => i.name)).not.toContain(
+      "idx_comp_hero_created_by"
+    );
+  });
+});

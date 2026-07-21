@@ -60,13 +60,6 @@ const CAST_SUFFIX_RE = new RegExp(
   "i"
 );
 
-// Built-in no-arg function calls that PG / Drizzle may emit in different
-// cases. Conservative list: only functions that are guaranteed
-// case-insensitive at the call site, called with no arguments. Adding to
-// this list means "I've confirmed both sides of the diff treat these as
-// equivalent."
-const NORMALIZE_LOWERCASE_FUNCTIONS = new Set(["now()"]);
-
 /**
  * Return the canonical form of a column-default expression for diff
  * comparison. `undefined` (no default) is passed through unchanged.
@@ -90,10 +83,14 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
   // deliberately leaves alone — is not reduced into the expression it spells.
   normalised = stripWrappingParens(normalised);
 
-  // Step 4: lowercase a small set of known case-insensitive built-ins.
-  const lower = normalised.toLowerCase();
-  if (NORMALIZE_LOWERCASE_FUNCTIONS.has(lower)) {
-    normalised = lower;
+  // Step 4: lowercase the built-in keywords, which the dialects report back in
+  // whatever case they please — MySQL renders a DATETIME default as
+  // `current_timestamp(3)` where the schema wrote `CURRENT_TIMESTAMP(3)`.
+  // Bounded to the keyword list plus an optional precision argument, so a
+  // user-defined function keeps its case: `MyFunc()` may well be a different
+  // identifier from `myfunc()` depending on how it was quoted.
+  if (KEYWORD_WITH_OPTIONAL_PRECISION.test(normalised.trim())) {
+    normalised = normalised.toLowerCase();
   }
 
   return normalised;
@@ -136,6 +133,14 @@ const NILADIC_KEYWORDS = [
   "system_user",
   "user",
 ].join("|");
+
+// The built-in keywords, alone or with a fractional-seconds precision, and
+// `now()`. These name the same thing in any case, so both sides of the diff
+// can be reduced to lower case; anything outside this set is left as written.
+const KEYWORD_WITH_OPTIONAL_PRECISION = new RegExp(
+  `^(?:now\\(\\)|(?:${NILADIC_KEYWORDS})(?:\\s*\\(\\s*\\d+\\s*\\))?)$`,
+  "i"
+);
 
 const EXPRESSION_SHAPED = new RegExp(
   // Anything parenthesised (`(unixepoch())`), anything that calls (`now()`,

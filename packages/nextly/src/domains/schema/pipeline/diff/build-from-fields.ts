@@ -92,6 +92,8 @@ export interface BuildDesiredTableOptions {
 interface CollectionIndexContext<F> {
   hasSlugColumn: boolean;
   hasCreatedAtColumn: boolean;
+  /** Collections carry an owner column; singles and components do not. */
+  hasCreatedByColumn?: boolean;
   /** Fields whose columns live in the companion `_locales` table. */
   localizedNames: ReadonlySet<string>;
   /**
@@ -129,6 +131,18 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       name: `idx_${tableName}_slug`,
       columns: ["slug"],
       unique: true,
+    });
+  }
+  if (context.hasCreatedByColumn) {
+    // Owner-scoped reads filter on created_by, and the collection service
+    // creates this index for every table that has the column. Recording it
+    // here is what lets a rebuilt table get it back: a SQLite rebuild drops
+    // every index the replacement table does not declare, and the restore
+    // replays only what the snapshot carries.
+    indexes.push({
+      name: `idx_${tableName}_created_by`,
+      columns: ["created_by"],
+      unique: false,
     });
   }
   if (context.hasCreatedAtColumn) {
@@ -247,6 +261,7 @@ export function buildDesiredTableFromFields(
   const indexes = collectionIndexSpecs(tableName, fields, {
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
+    hasCreatedByColumn: columns.some(c => c.name === "created_by"),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(

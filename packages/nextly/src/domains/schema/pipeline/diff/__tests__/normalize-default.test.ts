@@ -197,6 +197,30 @@ describe("normalizeDefault — function calls", () => {
   });
 });
 
+describe("normalizeDefault — keyword case", () => {
+  it("treats a keyword default as the same value in any case", () => {
+    // MySQL reports a DATETIME default as current_timestamp(3) where the
+    // schema wrote CURRENT_TIMESTAMP(3); without this the bundled archive
+    // table diffs its timestamp column on every reconcile.
+    expect(normalizeDefault("CURRENT_TIMESTAMP(3)")).toBe(
+      normalizeDefault("current_timestamp(3)")
+    );
+    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe(
+      normalizeDefault("current_timestamp")
+    );
+    expect(normalizeDefault("LOCALTIMESTAMP(6)")).toBe(
+      normalizeDefault("localtimestamp(6)")
+    );
+    expect(normalizeDefault("NOW()")).toBe(normalizeDefault("now()"));
+  });
+
+  it("leaves a user-defined function's case alone", () => {
+    // Quoting decides whether MyFunc and myfunc are the same identifier, so
+    // the collapse stays inside the keyword list.
+    expect(normalizeDefault("MyFunc()")).not.toBe(normalizeDefault("myfunc()"));
+  });
+});
+
 describe("normalizeDefault — passthrough behaviour", () => {
   it("returns undefined when input is undefined (no default)", () => {
     expect(normalizeDefault(undefined)).toBeUndefined();
@@ -209,6 +233,9 @@ describe("normalizeDefault — passthrough behaviour", () => {
     expect(normalizeDefault("some_unknown_expr(1,2)")).toBe(
       "some_unknown_expr(1,2)"
     );
-    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe("CURRENT_TIMESTAMP");
+    // Keywords now normalise to lower case, because the dialects report them
+    // back in whatever case they choose. Non-keyword expressions still pass
+    // through untouched, which is what this case is really guarding.
+    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe("current_timestamp");
   });
 });
