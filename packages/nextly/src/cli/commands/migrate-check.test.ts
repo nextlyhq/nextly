@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import { BUILDER_MIGRATION_MARKER } from "../../domains/schema/migration-markers";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
 import { runChecks } from "./migrate-check";
@@ -177,6 +178,29 @@ describe("runChecks (F11 PR 4)", () => {
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("MISSING_SNAPSHOT")
       );
+    });
+
+    // A Schema Builder save records DDL that has already been applied, so there
+    // is no snapshot to pair it with. Without the marker skip, every visual edit
+    // would leave the repository failing this CI gate.
+    it("skips a builder-authored migration instead of demanding a snapshot", async () => {
+      await writeFile(
+        join(migrationsDir, "1785000000000_update_widget.sql"),
+        `-- Update dynamic collection: widget\n${BUILDER_MIGRATION_MARKER} (collection)\nALTER TABLE "dc_widget" ADD COLUMN "headline" text;`,
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(logger.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("MISSING_SNAPSHOT")
+      );
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
     });
   });
 

@@ -9,6 +9,7 @@ vi.mock("../di", () => ({
   getCollectionsHandlerFromDI: () => handler,
 }));
 
+import { BUILDER_MIGRATION_MARKER } from "../../../domains/schema/migration-markers";
 import { writeBuilderMigration } from "../write-builder-migration";
 
 beforeEach(() => {
@@ -32,6 +33,9 @@ describe("writeBuilderMigration", () => {
     expect(sql).toContain('ADD COLUMN "rating"');
     expect(sql).toContain("--> statement-breakpoint");
     expect(sql).toContain("-- Update dynamic collection: widget");
+    // migrate:check identifies these snapshot-less files by this marker; without
+    // it every Schema Builder edit would fail the CI integrity gate.
+    expect(sql).toContain(BUILDER_MIGRATION_MARKER);
     expect(fileName).toMatch(/^\d+_update_widget\.sql$/);
   });
 
