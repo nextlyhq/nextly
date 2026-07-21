@@ -83,10 +83,32 @@ describe("selectVersionsToPrune — protecting a restore's undo", () => {
     // promised.
     const rows = [row(3), row(2), row(1)];
 
-    const pruned = selectVersionsToPrune(rows, 1, 2);
+    const pruned = selectVersionsToPrune(rows, 1, [2]);
 
     expect(pruned).not.toContain("v2");
     expect(pruned).toContain("v1");
+  });
+
+  it("keeps every named version, not just the first", () => {
+    // A restore protects two: the head it replaced, and the version it was
+    // made FROM — the new row records that one as its source, so pruning it
+    // leaves the lineage pointing at nothing.
+    const rows = [row(4), row(3), row(2), row(1)];
+
+    const pruned = selectVersionsToPrune(rows, 1, [3, 1]);
+
+    expect(pruned).not.toContain("v3");
+    expect(pruned).not.toContain("v1");
+    expect(pruned).toContain("v2");
+  });
+
+  it("ignores absent entries among the named versions", () => {
+    const rows = [row(3), row(2), row(1)];
+
+    expect(selectVersionsToPrune(rows, 1, [null, undefined])).toEqual([
+      "v2",
+      "v1",
+    ]);
   });
 
   it("prunes normally when no version is named", () => {

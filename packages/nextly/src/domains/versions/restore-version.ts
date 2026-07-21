@@ -27,6 +27,7 @@ import {
   buildRestorePayload,
   payloadTouchesComponents,
   restoreLocaleIsUnknown,
+  schemaStoresPerLocaleContent,
   type ComponentSchemas,
 } from "./restore-snapshot";
 
@@ -150,17 +151,20 @@ async function resolveComponentSchemas(
           const record = await registry.getComponentBySlug(slug);
           // The component's OWN localization switch: its values live in its own
           // tables, so an unlocalized component inside a localized document
-          // stores one copy of each value.
+          // stores one copy of each value. A slug with no record behind it is
+          // marked unresolved rather than empty — a component that declares no
+          // fields is legitimate and must stay restorable.
           resolved.set(slug, {
             fields: record?.fields ?? [],
             localized:
               (record as { localized?: unknown } | null)?.localized === true,
+            resolved: record !== null && record !== undefined,
           });
         } catch {
           // Recorded as empty so the slug is not retried; an unresolved
           // subtree is treated as unknown and dropped, which is the safe
           // direction. See the note above.
-          resolved.set(slug, { fields: [], localized: false });
+          resolved.set(slug, { fields: [], localized: false, resolved: false });
         }
       })
     );
@@ -310,9 +314,19 @@ export async function restoreVersion(
   // reject an unknown one, so carrying it would fail the whole restore instead
   // of applying the shared fields it could still bring back.
   const storedLocale = usableLocale(version.locale);
-  const localeUnknown = restoreLocaleIsUnknown(localized, storedLocale);
 
   const componentSchemas = await resolveComponentSchemas(fields);
+
+  // Per-locale content is not only the document's own. An unlocalized document
+  // embedding a localized component still holds values that belong to one
+  // language, and writing them with no locale resolves the default one — so a
+  // German component snapshot would land on top of the default language.
+  const perLocaleContent = schemaStoresPerLocaleContent(
+    localized,
+    fields,
+    componentSchemas
+  );
+  const localeUnknown = restoreLocaleIsUnknown(perLocaleContent, storedLocale);
   const declared = new Set(fields.map(f => f.name));
 
   const { payload, droppedFields } = buildRestorePayload(
@@ -326,6 +340,7 @@ export async function restoreVersion(
       hasSlug: isPlugin ? declared.has("slug") : true,
       hasTitle: isPlugin ? declared.has("title") : true,
       componentSchemas,
+      documentLocalized: localized,
       localeUnknown,
     }
   );

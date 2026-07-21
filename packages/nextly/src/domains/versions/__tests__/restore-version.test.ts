@@ -485,6 +485,39 @@ describe("restoreVersion", () => {
     expect(result.droppedFields).toEqual(["title"]);
   });
 
+  it("holds back a localized component when the captured locale is gone", async () => {
+    // The parent is not localized, so the old rule left `localeUnknown` false
+    // and the component was written with no locale — which resolves the default
+    // language and lands a German snapshot on top of it.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "fr",
+      snapshot: {
+        title: "Page",
+        hero: { _componentType: "banner", heading: "Bonjour" },
+      },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "hero", type: "component", component: "banner" },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+    componentSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+
+    const result = await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      title: "Page",
+    });
+    expect(result.droppedFields).toEqual(["hero"]);
+  });
+
   it("refuses to restore when versioning has been turned off", async () => {
     // The write goes through the ordinary update, which captures a version only
     // while versioning is on. Restoring anyway would overwrite live content

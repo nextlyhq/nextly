@@ -18,15 +18,23 @@ const fields = [
   { name: "body", type: "richText" },
 ] as FieldConfig[];
 
-/** A component schema map; components are unlocalized unless a test says so. */
+/**
+ * A component schema map. Components are unlocalized and resolvable unless a
+ * test says otherwise; `unresolved` models a slug whose schema is gone.
+ */
 function componentSchemasOf(
   entries: Record<string, FieldConfig[]>,
-  localized: string[] = []
+  localized: string[] = [],
+  unresolved: string[] = []
 ) {
   return new Map(
     Object.entries(entries).map(([slug, fields]) => [
       slug,
-      { fields, localized: localized.includes(slug) },
+      {
+        fields,
+        localized: localized.includes(slug),
+        resolved: !unresolved.includes(slug),
+      },
     ])
   );
 }
@@ -686,5 +694,138 @@ describe("buildRestorePayload — row metadata and retargeted components", () =>
     );
 
     expect(payload).toEqual({ spacer: { id: "row-1" } });
+  });
+});
+
+describe("buildRestorePayload — schemas that no longer hold their old shape", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("drops a component whose schema no longer resolves", () => {
+    // An unresolved schema cannot be inspected, so the subtree can neither be
+    // pruned of keys the component has lost nor checked for a credential.
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf(
+      { banner: [] as FieldConfig[] },
+      [],
+      ["banner"]
+    );
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "row-1", heading: "Hi", token: "secret" } },
+      withComponent,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["hero"]);
+  });
+
+  it("drops an undiscriminated row from a dynamic zone", () => {
+    // The save path skips a row with no `_componentType` and then deletes every
+    // live instance the incoming set did not name, so keeping it would clear
+    // the zone. Snapshots taken while the field named a single component hold
+    // exactly this shape.
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ id: "row-1", heading: "Hi" }] },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("keeps an undiscriminated value on a single-component field", () => {
+    // The same shape is normal here: these rows are read back without a
+    // discriminator, and this save path does not reconcile a set.
+    const single = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "row-1", heading: "Hi" } },
+      single,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ hero: { id: "row-1", heading: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("drops a container whose children have all been removed", () => {
+    // Validation walks the schema's fields, not the value's keys, so the old
+    // nested keys would be written straight back into the JSON column.
+    const emptied = [
+      { name: "meta", type: "group", fields: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { caption: "Removed since" } },
+      emptied,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["meta"]);
+  });
+
+  it("still restores a scalar, which declares no child list at all", () => {
+    const scalar = [{ name: "views", type: "number" }] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { views: 7 },
+      scalar,
+      ctx
+    );
+
+    expect(payload).toEqual({ views: 7 });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload — per-locale content under an unlocalized parent", () => {
+  const withComponent = [
+    { name: "title", type: "text" },
+    { name: "hero", type: "component", component: "banner" },
+  ] as FieldConfig[];
+
+  const componentSchemas = componentSchemasOf(
+    { banner: [{ name: "heading", type: "text" }] as FieldConfig[] },
+    ["banner"]
+  );
+
+  it("holds back the component but keeps the parent's own fields", () => {
+    // The parent is not localized, so its text is stored once and restores
+    // fine; the component keeps per-locale rows and cannot be placed.
+    const { payload, droppedFields } = buildRestorePayload(
+      { title: "Page", hero: { _componentType: "banner", heading: "Hallo" } },
+      withComponent,
+      {
+        hasStatus: true,
+        hasSlug: true,
+        hasTitle: true,
+        componentSchemas,
+        documentLocalized: false,
+        localeUnknown: true,
+      }
+    );
+
+    expect(payload).toEqual({ title: "Page" });
+    expect(droppedFields).toEqual(["hero"]);
   });
 });

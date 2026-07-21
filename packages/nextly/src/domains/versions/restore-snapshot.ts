@@ -48,6 +48,13 @@ const IMMUTABLE_FIELDS = new Set([
 export interface ComponentSchemaInfo {
   fields: FieldConfig[];
   localized: boolean;
+  /**
+   * Whether the component's schema was actually found. A slug that no longer
+   * resolves is recorded as unresolved rather than as a component with no
+   * fields: the two are indistinguishable by field count, and treating a
+   * missing schema as an empty one would forward its stored subtree unchecked.
+   */
+  resolved: boolean;
 }
 
 /** Component schemas keyed by the slug a field references them under. */
@@ -74,6 +81,12 @@ export interface RestoreSchemaContext {
    * see inside one.
    */
   componentSchemas?: ComponentSchemas;
+  /**
+   * Whether the document stores its own values per locale. Distinct from
+   * `localeUnknown`: an unlocalized document can still embed a localized
+   * component, so the two are decided separately.
+   */
+  documentLocalized?: boolean;
   /**
    * Whether this is a localized document restoring a version that does not say
    * which locale it holds. Such a snapshot took its translatable values from
@@ -119,6 +132,28 @@ function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
   return slugs.length > 0 ? new Set(slugs) : null;
 }
 
+/**
+ * Whether the field selects among several components rather than naming one.
+ *
+ * Only this shape stores a `_componentType` per row, and only its save path
+ * reconciles the incoming set against the live one.
+ */
+function fieldNamesMultipleComponents(field: FieldConfig): boolean {
+  return Array.isArray((field as { components?: unknown }).components);
+}
+
+/**
+ * Whether the field is a container that now declares no children at all.
+ *
+ * Distinct from a field that carries no `fields` key: a scalar has nothing to
+ * prune against, while an emptied container has lost every key its stored value
+ * could still match.
+ */
+function declaresEmptyChildList(field: FieldConfig): boolean {
+  const nested = (field as { fields?: unknown }).fields;
+  return Array.isArray(nested) && nested.length === 0;
+}
+
 /** A field's children, wherever the schema keeps them. */
 function childrenOf(
   field: FieldConfig,
@@ -133,6 +168,36 @@ function childrenOf(
     if (component) resolved.push(...component.fields);
   }
   return resolved;
+}
+
+/**
+ * Whether every component this field reaches has a schema behind it.
+ *
+ * A slug that no longer resolves leaves the filter unable to inspect the
+ * subtree, so it can neither prune unknown keys from it nor see a password
+ * inside it. Restoring such a value blind is the one direction that cannot be
+ * undone, so the field is reported instead.
+ */
+function componentsAllResolve(
+  fields: FieldConfig[],
+  componentSchemas?: ComponentSchemas,
+  seen: Set<string> = new Set()
+): boolean {
+  return fields.every(field => {
+    const slugs = componentSlugs(field);
+    for (const slug of slugs) {
+      if (seen.has(slug)) continue;
+      seen.add(slug);
+      const component = componentSchemas?.get(slug);
+      if (component === undefined || !component.resolved) return false;
+      if (!componentsAllResolve(component.fields, componentSchemas, seen)) {
+        return false;
+      }
+    }
+
+    const inline = inlineChildren(field);
+    return inline ? componentsAllResolve(inline, componentSchemas, seen) : true;
+  });
 }
 
 /**
@@ -363,7 +428,8 @@ function retainsNothing(pruned: unknown): boolean {
 function partitionAllowedInstances(
   value: unknown,
   allowed: Set<string> | null,
-  path: string
+  path: string,
+  requiresType: boolean
 ): { kept: unknown; rejected: string[] } {
   if (allowed === null) return { kept: value, rejected: [] };
 
@@ -372,20 +438,29 @@ function partitionAllowedInstances(
       ? (row as { _componentType?: string })._componentType
       : undefined;
 
+  // A row keeps its place when its type is allowed, or when this field stores
+  // no type at all. Where a type IS required, a row without one cannot be
+  // saved and its absence would take the live instances with it.
+  const admits = (type: string | undefined): boolean =>
+    type === undefined ? !requiresType : allowed.has(type);
+
+  const describe = (type: string | undefined): string =>
+    type === undefined ? "no component type" : type;
+
   if (Array.isArray(value)) {
     const rejected: string[] = [];
     const kept = value.filter((row, i) => {
       const type = typeOf(row);
-      if (type === undefined || allowed.has(type)) return true;
-      rejected.push(`${path}[${i}] (${type})`);
+      if (admits(type)) return true;
+      rejected.push(`${path}[${i}] (${describe(type)})`);
       return false;
     });
     return kept.length > 0 ? { kept, rejected } : { kept: null, rejected };
   }
 
   const type = typeOf(value);
-  if (type !== undefined && !allowed.has(type)) {
-    return { kept: null, rejected: [`${path} (${type})`] };
+  if (!admits(type)) {
+    return { kept: null, rejected: [`${path} (${describe(type)})`] };
   }
   return { kept: value, rejected: [] };
 }
@@ -467,8 +542,20 @@ export function buildRestorePayload(
     // entity's own switch is on for this walk.
     if (
       context.localeUnknown &&
-      containsLocalizedField([field], true, componentSchemas)
+      containsLocalizedField(
+        [field],
+        context.documentLocalized ?? true,
+        componentSchemas
+      )
     ) {
+      droppedFields.push(key);
+      continue;
+    }
+
+    // A component whose schema no longer resolves cannot be inspected, so it
+    // can neither be pruned of keys the component has since lost nor checked
+    // for a credential. Reported rather than forwarded blind.
+    if (!componentsAllResolve([field], componentSchemas)) {
       droppedFields.push(key);
       continue;
     }
@@ -482,12 +569,21 @@ export function buildRestorePayload(
     const children = childrenOf(field, componentSchemas);
 
     // A component field is partitioned even when its schema resolves to no
-    // children: a component may legitimately declare none, and one that failed
-    // to resolve is empty too. Gating the partition on children alone would let
-    // those fields through unchecked.
+    // children: a component may legitimately declare none. Gating the partition
+    // on children alone would let those fields through unchecked.
     if (isComponentField || children.length > 0) {
       const removed: string[] = [];
-      const { kept, rejected } = partitionAllowedInstances(value, allowed, key);
+      const { kept, rejected } = partitionAllowedInstances(
+        value,
+        allowed,
+        key,
+        // A dynamic zone selects each row's component by its stored type. The
+        // save path skips a row that has none and then deletes every live
+        // instance the incoming set did not name, so an undiscriminated row —
+        // which is exactly what this field's snapshots hold from when it named
+        // a single component — would clear the zone.
+        fieldNamesMultipleComponents(field)
+      );
       droppedFields.push(...rejected);
 
       if (kept === null) {
@@ -523,6 +619,15 @@ export function buildRestorePayload(
 
       payload[key] = pruned;
       droppedFields.push(...removed);
+      continue;
+    }
+
+    // A container whose children have all been removed declares no key its
+    // stored value could match. Validation walks fields rather than the value's
+    // keys, so forwarding it would write the removed nested keys straight back
+    // into the JSON column.
+    if (declaresEmptyChildList(field)) {
+      droppedFields.push(key);
       continue;
     }
 
@@ -569,8 +674,25 @@ export function payloadTouchesComponents(
  * left alone while its shared fields restore normally.
  */
 export function restoreLocaleIsUnknown(
-  documentIsLocalized: boolean,
+  storesPerLocaleContent: boolean,
   versionLocale: string | null
 ): boolean {
-  return documentIsLocalized && versionLocale === null;
+  return storesPerLocaleContent && versionLocale === null;
+}
+
+/**
+ * Whether restoring this schema can put content into a specific language.
+ *
+ * True when the document keeps its own translations, and also when it merely
+ * embeds a component that keeps its own — component tables are per-locale
+ * regardless of their parent, so a document that is not localized itself still
+ * has content that cannot be placed without a locale.
+ */
+export function schemaStoresPerLocaleContent(
+  documentIsLocalized: boolean,
+  fields: FieldConfig[],
+  componentSchemas?: ComponentSchemas
+): boolean {
+  if (documentIsLocalized) return true;
+  return containsLocalizedField(fields, false, componentSchemas);
 }

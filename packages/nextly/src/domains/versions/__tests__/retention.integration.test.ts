@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { restoreVersion } from "../restore-version";
 import {
   createTestNextly,
   type TestNextly,
@@ -25,6 +26,7 @@ type VersionRow = {
   entryId: string;
   versionNo: number;
   status: string;
+  sourceVersionNo: number | null;
 };
 
 async function versionsFor(handle: TestNextly, slug: string) {
@@ -147,6 +149,53 @@ describe("version retention (integration)", () => {
     );
 
     expect(await versionsFor(current, "posts")).toHaveLength(2);
+  });
+
+  it("keeps the version a restore was made from", async () => {
+    // The restore's own row records that version as its source. Pruning it in
+    // the same transaction leaves the lineage pointing at nothing, and the
+    // editor is told the change can be undone from a version that is gone.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          versions: { maxPerDoc: 2 },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "v1" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { title: "v2" }
+    );
+
+    // The cap is 2, so restoring the oldest surviving version puts the pass in
+    // a position where it would otherwise remove the very source it just named.
+    const surviving = await versionsFor(current, "posts");
+    const source = surviving[0].versionNo;
+
+    await restoreVersion({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId: id,
+      versionNo: source,
+      user: { id: "u1", roles: ["admin"] },
+    });
+
+    const rows = await versionsFor(current, "posts");
+    expect(rows.map(r => r.versionNo)).toContain(source);
+    // The new row's lineage resolves to a version that still exists.
+    const restored = rows.find(r => r.sourceVersionNo === source);
+    expect(restored).toBeDefined();
   });
 
   it("prunes per document, not across the collection", async () => {
