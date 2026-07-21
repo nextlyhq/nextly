@@ -49,13 +49,16 @@ export function VersionLabelDialog({
   saving = false,
   onSubmit,
 }: VersionLabelDialogProps) {
-  const [value, setValue] = React.useState("");
-
-  // Reseed whenever the dialog opens on a different version, so reopening never
-  // shows the name of the one edited before it.
-  React.useEffect(() => {
-    if (open) setValue(currentLabel ?? "");
-  }, [open, versionNo, currentLabel]);
+  // Seeded once, from the name the version had when this dialog was opened.
+  //
+  // Deliberately NOT resynced afterwards. The history list refetches — a rename
+  // invalidates it — and reseeding on every change would wipe what the user was
+  // part-way through typing, or worse, silently swap it for someone else's
+  // edit and let them submit that instead.
+  //
+  // Reopening on a different version is handled by mounting a fresh dialog per
+  // version rather than by an effect, so there is no stale draft to carry over.
+  const [value, setValue] = React.useState(() => currentLabel ?? "");
 
   const trimmed = value.trim();
   const hadLabel = currentLabel !== null && currentLabel !== "";

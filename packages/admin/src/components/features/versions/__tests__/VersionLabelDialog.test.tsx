@@ -106,14 +106,39 @@ describe("VersionLabelDialog", () => {
     expect(screen.getByRole("button", { name: /saving/i })).toBeDisabled();
   });
 
-  it("reseeds when reopened on a different version", () => {
-    // Otherwise the previous version's name is offered as this one's.
+  it("keeps what the user typed when the list refetches underneath", async () => {
+    // Renaming invalidates the history list, so `currentLabel` can change while
+    // the dialog is open. Resyncing from it would wipe a draft mid-edit, or
+    // swap in someone else's rename and let this user submit that instead.
+    const user = userEvent.setup();
     const { rerender } = render(
       <VersionLabelDialog {...base} currentLabel="first" onSubmit={vi.fn()} />
     );
-    expect(screen.getByRole("textbox")).toHaveValue("first");
+
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "my draft");
 
     rerender(
+      <VersionLabelDialog
+        {...base}
+        currentLabel="changed elsewhere"
+        onSubmit={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("textbox")).toHaveValue("my draft");
+  });
+
+  it("seeds from the version it was mounted for", () => {
+    // Opening a different version mounts a fresh dialog rather than resyncing
+    // this one, so there is no stale draft to carry across.
+    const { unmount } = render(
+      <VersionLabelDialog {...base} currentLabel="first" onSubmit={vi.fn()} />
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("first");
+    unmount();
+
+    render(
       <VersionLabelDialog
         {...base}
         versionNo={4}

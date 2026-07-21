@@ -289,6 +289,10 @@ export function VersionHistorySheet({
           body so its lifecycle is independent of the panel's. */}
       {renaming !== null ? (
         <VersionLabelDialog
+          // A fresh dialog per version: the input seeds from its initial props
+          // and never resyncs, so a new version needs a new instance rather
+          // than an effect that would also clobber an in-progress edit.
+          key={renaming}
           open
           onOpenChange={open => {
             if (!open) setRenaming(null);

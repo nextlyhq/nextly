@@ -374,8 +374,8 @@ export const SINGLE_VERSION_METHODS: Record<
         entryId,
         user: userFromParams(p),
         versionNo: Number(p.versionNo),
-        // See the collection handler: absent leaves it, null clears it.
-        label: (body as { label?: unknown } | undefined)?.label ?? null,
+        // See the collection handler: the body goes through whole.
+        body,
         params: p,
       });
       return respondMutation("Version renamed.", row);

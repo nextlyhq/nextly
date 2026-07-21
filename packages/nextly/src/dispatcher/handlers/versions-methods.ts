@@ -300,12 +300,27 @@ function normalizeLabel(value: unknown, path: string): string | null {
 export async function setVersionLabelForDocument(
   args: VersionMethodArgs & {
     versionNo: number;
-    label: unknown;
+    /**
+     * The request body, not an extracted label. Whether the key is PRESENT is
+     * part of the request's meaning, and reading it here rather than at each
+     * dispatcher keeps that from being flattened on the way in — which is
+     * exactly how an omitted label became an instruction to clear one.
+     */
+    body: unknown;
     params: Params;
   }
 ): Promise<VersionRow> {
   assertPositiveInteger(args.versionNo, "versionNo");
-  const label = normalizeLabel(args.label, "label");
+
+  // PATCH is a partial update: an omitted key means "leave this alone", and
+  // only an explicit null clears. Collapsing the two would make `PATCH {}`
+  // erase a name nobody asked to remove.
+  const provided =
+    typeof args.body === "object" && args.body !== null && "label" in args.body;
+
+  const label = provided
+    ? normalizeLabel((args.body as { label: unknown }).label, "label")
+    : null;
 
   const caller = readAccessCallerFromParams(args.params, args.user);
 
@@ -329,15 +344,18 @@ export async function setVersionLabelForDocument(
   );
 
   const versions = getService("versionsService");
-  const row = await versions.setLabel(
-    {
-      scopeKind: args.scopeKind,
-      scopeSlug: args.slug,
-      entryId: args.entryId,
-    },
-    args.versionNo,
-    label
-  );
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+
+  // Nothing was asked for, so nothing is written. The version is still read
+  // back, so the response shape is the same either way and a caller cannot
+  // tell a no-op from a rename by its status.
+  const row = provided
+    ? await versions.setLabel(ref, args.versionNo, label)
+    : await versions.get(ref, args.versionNo);
 
   // The snapshot is not part of a label response: the caller asked to rename a
   // version, not to read its content, and returning it here would bypass the

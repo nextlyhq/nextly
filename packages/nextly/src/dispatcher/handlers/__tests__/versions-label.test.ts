@@ -34,7 +34,18 @@ const args = (label: unknown, versionNo = 3) => ({
   slug: "posts",
   entryId: "e1",
   versionNo,
-  label,
+  body: { label },
+  user: { id: "u1", roles: ["editor"] },
+  params: { _authenticatedUserId: "u1" },
+});
+
+/** A request that names no label at all, as distinct from one naming null. */
+const argsWithoutLabel = (body: unknown = {}) => ({
+  scopeKind: "collection" as const,
+  slug: "posts",
+  entryId: "e1",
+  versionNo: 3,
+  body,
   user: { id: "u1", roles: ["editor"] },
   params: { _authenticatedUserId: "u1" },
 });
@@ -159,5 +170,54 @@ describe("setVersionLabelForDocument — access", () => {
 
     expect(row).not.toHaveProperty("snapshot");
     expect(row).toMatchObject({ versionNo: 3, label: "named" });
+  });
+});
+
+describe("setVersionLabelForDocument — an omitted label", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canReadSpy.mockResolvedValue(true);
+    readableSpy.mockResolvedValue(undefined);
+    getSpy.mockResolvedValue({ versionNo: 3, label: "kept", snapshot: {} });
+    setLabelSpy.mockResolvedValue({ versionNo: 3, label: "x", snapshot: {} });
+  });
+
+  it("leaves an existing name alone rather than clearing it", async () => {
+    // PATCH is a partial update. Treating an absent key as null erased names
+    // nobody asked to remove.
+    const row = await setVersionLabelForDocument(argsWithoutLabel());
+
+    expect(setLabelSpy).not.toHaveBeenCalled();
+    expect(row).toMatchObject({ label: "kept" });
+  });
+
+  it("treats an absent body the same way", async () => {
+    await setVersionLabelForDocument(argsWithoutLabel(undefined));
+
+    expect(setLabelSpy).not.toHaveBeenCalled();
+  });
+
+  it("still clears on an explicit null", async () => {
+    // The distinction this whole branch exists for.
+    await setVersionLabelForDocument(argsWithoutLabel({ label: null }));
+
+    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null);
+  });
+
+  it("still gates a request that changes nothing", async () => {
+    // Otherwise a no-op PATCH answers differently for a readable and an
+    // unreadable document, which discloses which documents exist.
+    canReadSpy.mockResolvedValue(false);
+
+    await expect(
+      setVersionLabelForDocument(argsWithoutLabel())
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not return the snapshot from a no-op either", async () => {
+    const row = await setVersionLabelForDocument(argsWithoutLabel());
+
+    expect(row).not.toHaveProperty("snapshot");
   });
 });

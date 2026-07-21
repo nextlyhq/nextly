@@ -176,9 +176,9 @@ export const COLLECTION_VERSION_METHODS: Record<
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
         versionNo: Number(p.versionNo),
-        // Absent means "leave it alone"; explicit null means "clear it". The
-        // dispatcher core tells the two apart.
-        label: (body as { label?: unknown } | undefined)?.label ?? null,
+        // Forwarded whole: whether `label` is present is part of what the
+        // request means, and the core is what reads it.
+        body,
         params: p,
       });
       return respondMutation("Version renamed.", row);
