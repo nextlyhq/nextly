@@ -25,13 +25,22 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { eq, desc } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
-import { nextlyWebhooks as webhooksMysql } from "../../../schemas/webhooks/mysql";
-import { nextlyWebhooks as webhooksPg } from "../../../schemas/webhooks/postgres";
-import { nextlyWebhooks as webhooksSqlite } from "../../../schemas/webhooks/sqlite";
+import {
+  nextlyWebhooks as webhooksMysql,
+  nextlyWebhookDeliveries as deliveriesMysql,
+} from "../../../schemas/webhooks/mysql";
+import {
+  nextlyWebhooks as webhooksPg,
+  nextlyWebhookDeliveries as deliveriesPg,
+} from "../../../schemas/webhooks/postgres";
+import {
+  nextlyWebhooks as webhooksSqlite,
+  nextlyWebhookDeliveries as deliveriesSqlite,
+} from "../../../schemas/webhooks/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import {
   ExternalUrlError,
@@ -93,6 +102,11 @@ type WebhooksTable =
   | typeof webhooksMysql
   | typeof webhooksSqlite;
 
+type DeliveriesTable =
+  | typeof deliveriesPg
+  | typeof deliveriesMysql
+  | typeof deliveriesSqlite;
+
 /** A stored row, before it is narrowed to what a caller may see. */
 interface WebhookRow {
   id: string;
@@ -110,6 +124,8 @@ interface WebhookRow {
 
 export class WebhookEndpointService extends BaseService {
   private readonly table: WebhooksTable;
+  /** Needed so disabling an endpoint can end the deliveries still queued for it. */
+  private readonly deliveries: DeliveriesTable;
 
   constructor(
     adapter: ConstructorParameters<typeof BaseService>[0],
@@ -127,12 +143,15 @@ export class WebhookEndpointService extends BaseService {
     switch (this.adapter.getCapabilities().dialect) {
       case "postgresql":
         this.table = webhooksPg;
+        this.deliveries = deliveriesPg;
         break;
       case "mysql":
         this.table = webhooksMysql;
+        this.deliveries = deliveriesMysql;
         break;
       default:
         this.table = webhooksSqlite;
+        this.deliveries = deliveriesSqlite;
         break;
     }
   }
@@ -302,9 +321,48 @@ export class WebhookEndpointService extends BaseService {
     // to the old target.
     this.registry?.invalidate();
 
+    // Done here rather than in `setEnabled` so that disabling through a plain
+    // field update cannot skip it.
+    if (patch.enabled === false) await this.cancelQueuedDeliveries(id);
+
     const updated = await this.getEndpoint(id);
     if (!updated) throw this.notFound(id);
     return updated;
+  }
+
+  /**
+   * End the deliveries still outstanding for an endpoint that was just
+   * disabled.
+   *
+   * Delivery refuses a disabled endpoint when it attempts one, which covers a
+   * drain running during the disabled window. It does not cover the window
+   * itself: with no drain between disabling and re-enabling, those rows are
+   * still due and would go out in a burst afterwards, which is the opposite of
+   * what disabling promised.
+   *
+   * They are ended rather than held for the same reason delivery ends them.
+   * Sending events an operator switched off, hours late, is worse than not
+   * sending them, and replaying is a separate deliberate act.
+   */
+  private async cancelQueuedDeliveries(webhookId: string): Promise<void> {
+    await this.query(() =>
+      this.db
+        .update(this.deliveries)
+        .set({
+          status: "failed",
+          nextAttemptAt: null,
+          lockedBy: null,
+          lockedUntil: null,
+          lastError: "webhook disabled",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(this.deliveries.webhookId, webhookId),
+            inArray(this.deliveries.status, ["pending", "retrying"])
+          )
+        )
+    );
   }
 
   /**

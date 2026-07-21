@@ -20,7 +20,9 @@
 "@nextlyhq/ui": patch
 ---
 
-Webhook endpoints can now be registered, changed, disabled and removed.
+Internal: the management layer for webhook endpoints.
+
+Not yet reachable from an installed package. There is no REST route, Direct API method or exported subpath that reaches it, so webhooks remain unusable until that wiring lands. This entry is here to describe the change, not to announce a feature.
 
 The delivery engine, fan-out and signing were all built before anything could create an endpoint for them to act on — the only rows that ever reached the table were test fixtures. This adds the management layer they were waiting for: an endpoint carries a name, a target URL, the event types it subscribes to, and optional static headers, and it receives its own signing secret at creation.
 
