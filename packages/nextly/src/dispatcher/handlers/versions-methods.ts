@@ -12,6 +12,7 @@
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertVersionDocumentReadable,
+  assertVersionDocumentUpdatable,
   redactSnapshotForUser,
 } from "../../api/versions-access";
 import {
@@ -364,6 +365,18 @@ export async function setVersionLabelForDocument(
   }
 
   await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user
+  );
+
+  // Renaming a version edits a record of the document, so it owes the
+  // document's own update rules and not just the coarse `update-<slug>` the
+  // route earned. Applied even when the request turns out to write nothing:
+  // this is a write endpoint, and gating only the writing case would let the
+  // no-op be used to discover what the caller is allowed to change.
+  await assertVersionDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,

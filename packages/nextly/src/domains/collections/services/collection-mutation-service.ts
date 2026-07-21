@@ -2133,6 +2133,53 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /**
+   * Whether this user may update the entry, decided without writing anything.
+   *
+   * The same load-then-check `updateEntry` performs, so it sees the
+   * collection's stored per-document rules — owner-only and role-based — which
+   * coarse RBAC does not express. For callers that write something OTHER than
+   * the document and must still be held to the document's update rules;
+   * version history is one. Sharing this path rather than restating the
+   * decision elsewhere is what stops the gate drifting from the writer.
+   */
+  async canUpdateEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    routeAuthorized?: boolean;
+  }): Promise<boolean> {
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+
+    // Loaded because owner-only rules compare against the stored row; without
+    // it those rules cannot be evaluated at all.
+    const [existingEntry] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+
+    // A document that is not there cannot be updated. Answered as a refusal so
+    // the caller treats missing and forbidden identically, rather than letting
+    // the difference between them be probed.
+    if (!existingEntry) return false;
+
+    const denied = await this.accessService.checkCollectionAccess(
+      params.collectionName,
+      "update",
+      params.user,
+      params.entryId,
+      existingEntry,
+      // Never overridden: this exists to APPLY the document's rules, so a
+      // caller that could opt out of them would defeat the point.
+      false,
+      params.routeAuthorized
+    );
+    return denied === null;
+  }
+
   async updateEntry(
     params: {
       collectionName: string;

@@ -6,12 +6,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { setLabelSpy, getSpy, readableSpy, canReadSpy } = vi.hoisted(() => ({
-  setLabelSpy: vi.fn(),
-  getSpy: vi.fn(),
-  readableSpy: vi.fn(),
-  canReadSpy: vi.fn(),
-}));
+const { setLabelSpy, getSpy, readableSpy, canReadSpy, updatableSpy } =
+  vi.hoisted(() => ({
+    setLabelSpy: vi.fn(),
+    getSpy: vi.fn(),
+    readableSpy: vi.fn(),
+    canReadSpy: vi.fn(),
+    updatableSpy: vi.fn(),
+  }));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn(() => ({ setLabel: setLabelSpy, get: getSpy })),
@@ -19,6 +21,7 @@ vi.mock("../../../di", () => ({
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
+  assertVersionDocumentUpdatable: updatableSpy,
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
 }));
@@ -219,5 +222,75 @@ describe("setVersionLabelForDocument — an omitted label", () => {
     const row = await setVersionLabelForDocument(argsWithoutLabel());
 
     expect(row).not.toHaveProperty("snapshot");
+  });
+});
+
+describe("setVersionLabelForDocument — document-level update rules", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canReadSpy.mockResolvedValue(true);
+    readableSpy.mockResolvedValue(undefined);
+    updatableSpy.mockResolvedValue(undefined);
+    setLabelSpy.mockResolvedValue({ versionNo: 3, snapshot: {} });
+    getSpy.mockResolvedValue({ versionNo: 3, snapshot: {} });
+  });
+
+  it("refuses a caller who may read the document but not update it", async () => {
+    // The coarse `update-<slug>` the route earns says the caller may update
+    // documents of this kind, not this one. An owner-only rule refuses the
+    // document itself, and its history has to follow.
+    updatableSpy.mockRejectedValue(new Error("forbidden"));
+
+    await expect(setVersionLabelForDocument(args("Approved"))).rejects.toThrow(
+      "forbidden"
+    );
+    expect(setLabelSpy).not.toHaveBeenCalled();
+  });
+
+  it("checks the same document the read gate checked", async () => {
+    await setVersionLabelForDocument(args("Approved"));
+
+    expect(updatableSpy).toHaveBeenCalledWith(
+      "collection",
+      "posts",
+      "e1",
+      expect.objectContaining({ id: "u1" })
+    );
+  });
+
+  it("gates a Single by the same rule", async () => {
+    // Both entity kinds or neither: a gate covering one reads as complete and
+    // is not.
+    updatableSpy.mockRejectedValue(new Error("forbidden"));
+
+    await expect(
+      setVersionLabelForDocument({
+        ...args("Approved"),
+        scopeKind: "single" as const,
+        slug: "settings",
+      })
+    ).rejects.toThrow("forbidden");
+    expect(setLabelSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs after the read gates, so it cannot be used to probe", async () => {
+    // A caller who cannot see the document must be refused by the read gate
+    // first; reaching the update check would confirm the document exists.
+    readableSpy.mockRejectedValue(new Error("not found"));
+
+    await expect(setVersionLabelForDocument(args("Approved"))).rejects.toThrow(
+      "not found"
+    );
+    expect(updatableSpy).not.toHaveBeenCalled();
+  });
+
+  it("gates a request that writes nothing", async () => {
+    // Otherwise the no-op becomes a way to discover what the caller may change.
+    updatableSpy.mockRejectedValue(new Error("forbidden"));
+
+    await expect(
+      setVersionLabelForDocument(argsWithoutLabel())
+    ).rejects.toThrow("forbidden");
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });
