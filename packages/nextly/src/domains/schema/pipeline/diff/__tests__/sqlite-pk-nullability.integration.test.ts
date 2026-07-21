@@ -27,6 +27,14 @@ afterEach(async () => {
   current = undefined;
 });
 
+/**
+ * Introspect one table, booting a shared instance on first use.
+ *
+ * Both cases read the same table, so they reuse one in-memory database rather
+ * than paying a boot each. Isolation comes from the `afterEach` above, which
+ * destroys and clears the handle, so a later test never inherits this one's
+ * connection.
+ */
 async function columnsOf(table: string) {
   current = current ?? (await createTestNextly({}));
   const live = await introspectLiveSnapshot(
