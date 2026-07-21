@@ -42,9 +42,20 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  process.env.DB_DIALECT = previousEnv.dialect;
-  process.env.DATABASE_URL = previousEnv.url;
+  // Assigning undefined to process.env stores the literal string "undefined",
+  // which a later env validation in this shared fork would read as a real
+  // value. Delete the key when it was absent before.
+  restoreEnv("DB_DIALECT", previousEnv.dialect);
+  restoreEnv("DATABASE_URL", previousEnv.url);
 });
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
 
 let current: TestNextly | undefined;
 
