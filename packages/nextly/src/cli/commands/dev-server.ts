@@ -38,7 +38,6 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
-  DesiredComponent,
   DesiredSchema,
   DesiredSingle,
 } from "../../domains/schema/pipeline/types";
@@ -357,22 +356,13 @@ export async function performAutoSync(
     singles: await mergeRegisteredSafely(
       desiredSingles,
       () => singleRegistry.getAllSingles(),
-      row => ({
-        slug: row.slug,
-        tableName: row.tableName,
-        fields: (row.fields ?? []) as DesiredSingle["fields"],
-        status: row.status === true,
-      }),
+      (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
     components: await mergeRegisteredSafely(
       {},
       () => componentRegistry.getAllComponents(),
-      row => ({
-        slug: row.slug,
-        tableName: row.tableName,
-        fields: (row.fields ?? []) as DesiredComponent["fields"],
-      }),
+      (_row, base) => base,
       logger
     ),
   };

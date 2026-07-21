@@ -18,6 +18,20 @@
 import type { DesiredCollection } from "./types";
 
 /**
+ * Fields every registry-backed entity contributes to its desired entry.
+ *
+ * Built by the merge itself rather than by each caller's mapper: these parts
+ * are identical across collections, singles and components, and a hand-written
+ * mapper that omits one produces silent drift rather than a type error.
+ */
+export interface RegisteredEntityBase {
+  slug: string;
+  tableName: string;
+  fields: DesiredCollection["fields"];
+  localized: boolean;
+}
+
+/**
  * A registry row, kept structurally loose because callers reach the registry
  * through different surfaces (DI resolution, a CLI-constructed service, or a
  * partial fake in tests) and not all of them share a nominal type.
@@ -49,18 +63,23 @@ interface WarnLogger {
 export function mergeRegisteredEntities<T>(
   fromConfig: Record<string, T>,
   registered: readonly RegisteredCollectionRow[],
-  toDesired: (
-    row: RegisteredCollectionRow & { slug: string; tableName: string }
-  ) => T
+  extend: (row: RegisteredCollectionRow, base: RegisteredEntityBase) => T
 ): Record<string, T> {
   const merged: Record<string, T> = { ...fromConfig };
 
   for (const row of registered) {
     if (!row?.slug || !row?.tableName) continue;
     if (merged[row.slug]) continue;
-    merged[row.slug] = toDesired(
-      row as RegisteredCollectionRow & { slug: string; tableName: string }
-    );
+    merged[row.slug] = extend(row, {
+      slug: row.slug,
+      tableName: row.tableName,
+      fields: (row.fields ?? []) as RegisteredEntityBase["fields"],
+      // Carried for every entity kind rather than left to each caller:
+      // collections, singles and components all keep translatable columns in
+      // a companion `_locales` table, and an entity whose flag is dropped has
+      // those columns re-added to its main table by the very next diff.
+      localized: row.localized === true,
+    });
   }
 
   return merged;
@@ -71,15 +90,9 @@ export function mergeRegisteredCollections(
   fromConfig: Record<string, DesiredCollection>,
   registered: readonly RegisteredCollectionRow[]
 ): Record<string, DesiredCollection> {
-  return mergeRegisteredEntities(fromConfig, registered, row => ({
-    slug: row.slug,
-    tableName: row.tableName,
-    fields: (row.fields ?? []) as DesiredCollection["fields"],
+  return mergeRegisteredEntities(fromConfig, registered, (row, base) => ({
+    ...base,
     status: row.status === true,
-    // Carried so a localized Schema-Builder collection keeps translatable
-    // columns out of its main table; without it the diff re-adds columns
-    // that belong in the companion `_locales` table.
-    localized: row.localized === true,
   }));
 }
 
@@ -97,17 +110,11 @@ export function mergeRegisteredCollections(
 export async function mergeRegisteredSafely<T>(
   fromConfig: Record<string, T>,
   loadRegistered: () => Promise<readonly RegisteredCollectionRow[]>,
-  toDesired: (
-    row: RegisteredCollectionRow & { slug: string; tableName: string }
-  ) => T,
+  extend: (row: RegisteredCollectionRow, base: RegisteredEntityBase) => T,
   logger?: WarnLogger
 ): Promise<Record<string, T>> {
   try {
-    return mergeRegisteredEntities(
-      fromConfig,
-      await loadRegistered(),
-      toDesired
-    );
+    return mergeRegisteredEntities(fromConfig, await loadRegistered(), extend);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger?.warn(
@@ -127,13 +134,7 @@ export async function mergeRegisteredCollectionsSafely(
   return mergeRegisteredSafely(
     fromConfig,
     loadRegistered,
-    row => ({
-      slug: row.slug,
-      tableName: row.tableName,
-      fields: (row.fields ?? []) as DesiredCollection["fields"],
-      status: row.status === true,
-      localized: row.localized === true,
-    }),
+    (row, base) => ({ ...base, status: row.status === true }),
     logger
   );
 }

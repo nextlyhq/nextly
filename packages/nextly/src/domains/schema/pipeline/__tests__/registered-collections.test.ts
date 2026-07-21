@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   mergeRegisteredCollections,
   mergeRegisteredCollectionsSafely,
+  mergeRegisteredEntities,
   type RegisteredCollectionRow,
 } from "../registered-collections";
 import type { DesiredCollection } from "../types";
@@ -52,6 +53,27 @@ describe("mergeRegisteredCollections", () => {
       { slug: "city", tableName: "dc_city", fields: [], localized: true },
     ]);
     expect(merged.city.localized).toBe(true);
+  });
+
+  it("supplies localized to every entity kind, not just collections", () => {
+    // Singles and components keep translatable columns in their own companion
+    // tables too. A mapper that omitted the flag dropped it silently, and the
+    // next diff re-added those columns to the main table.
+    const merged = mergeRegisteredEntities(
+      {},
+      [{ slug: "hero", tableName: "single_hero", fields: [], localized: true }],
+      (_row, base) => base
+    );
+    expect(merged.hero.localized).toBe(true);
+  });
+
+  it("defaults localized to false rather than undefined", () => {
+    const merged = mergeRegisteredEntities(
+      {},
+      [{ slug: "x", tableName: "comp_x", fields: [] }],
+      (_row, base) => base
+    );
+    expect(merged.x.localized).toBe(false);
   });
 
   it("skips rows too incomplete to diff", () => {
