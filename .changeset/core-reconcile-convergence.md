@@ -5,6 +5,7 @@
 "@nextlyhq/adapter-postgres": patch
 "@nextlyhq/adapter-sqlite": patch
 "@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
 "create-nextly-app": patch
 "@nextlyhq/eslint-config": patch
 "nextly": patch

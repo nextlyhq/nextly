@@ -3,8 +3,8 @@ import {
   mysqlTable,
   bigint,
   varchar,
-  text,
   datetime,
+  longtext,
   index,
 } from "drizzle-orm/mysql-core";
 
@@ -20,7 +20,12 @@ export const nextlyI18nArchive = mysqlTable(
     entryId: varchar("entry_id", { length: 191 }).notNull(),
     locale: varchar("locale", { length: 20 }).notNull(),
     field: varchar("field", { length: 191 }).notNull(),
-    value: text("value"),
+    // LONGTEXT, matching the bootstrap DDL. A localized rich-text or JSON
+    // field can exceed TEXT's 64KB, and this table is the recoverable backup
+    // taken when localization is disabled — truncating here loses the data it
+    // exists to preserve. Declaring TEXT would also reconcile an existing
+    // LONGTEXT archive down to TEXT on the next push.
+    value: longtext("value"),
     // The localization-disable path archives with a raw `INSERT ... SELECT`
     // that names no `archived_at`, so the column needs a default the database
     // applies — matching `getI18nArchiveDdl`, which has always created this
