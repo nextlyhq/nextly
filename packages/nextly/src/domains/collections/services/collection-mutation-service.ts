@@ -640,6 +640,12 @@ export class CollectionMutationService extends BaseService {
           const populated =
             await this.componentDataService.populateComponentData({
               entry: { id: entryId },
+              // Record each instance's component type. A field naming a
+              // single component omits it on an ordinary read, because the
+              // schema implies it — but the field may name a different
+              // component by the time this snapshot is restored, and the type
+              // is the only thing that would reveal the mismatch.
+              includeComponentType: true,
               // Resolved parent table (custom `dbName` collections do not match
               // getTableName(slug)) so the read targets the right comp_ tables.
               parentTable,

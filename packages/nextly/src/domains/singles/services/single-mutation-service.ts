@@ -584,6 +584,10 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
+                        // Record each instance's component type — see the
+                        // collection snapshot for why an ordinary read omits it
+                        // and a snapshot cannot afford to.
+                        includeComponentType: true,
                         // Read as the locale the components were written at,
                         // with no fallback, so an embedded localized component
                         // records this language's text rather than another's

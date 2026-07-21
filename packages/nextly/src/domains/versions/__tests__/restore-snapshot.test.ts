@@ -1131,3 +1131,57 @@ describe("buildRestorePayload — a zone that permits nothing", () => {
     expect(droppedFields).toEqual([]);
   });
 });
+
+describe("buildRestorePayload — a retargeted single component", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  const componentSchemas = componentSchemasOf({
+    gallery: [{ name: "heading", type: "text" }] as FieldConfig[],
+  });
+
+  const field = [
+    { name: "hero", type: "component", component: "gallery" },
+  ] as FieldConfig[];
+
+  it("reports a snapshot recorded under a different component", () => {
+    // Snapshots now carry the component the field named when they were taken.
+    // Without it, an overlapping field name would be pruned against the NEW
+    // component and written into it — the old banner's heading landing in a
+    // gallery row.
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "banner", id: "b1", heading: "Old banner" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("hero");
+  });
+
+  it("restores a snapshot recorded under the component still named", () => {
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "gallery", id: "g1", heading: "Hi" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      hero: { _componentType: "gallery", id: "g1", heading: "Hi" },
+    });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("still admits an older snapshot that recorded no component", () => {
+    // Versions captured before the type was recorded cannot say, and refusing
+    // them would break restores that work today. `retainsNothing` remains their
+    // only guard, which is why the capture-side change matters.
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { id: "g1", heading: "Hi" } },
+      field,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ hero: { id: "g1", heading: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+});

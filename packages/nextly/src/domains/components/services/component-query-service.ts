@@ -32,6 +32,20 @@ import {
  * Parameters for populating component data on a single parent entry.
  */
 export interface PopulateComponentDataParams {
+  /**
+   * Record each instance's component type alongside its values.
+   *
+   * A dynamic zone always carries one, because the editor picks per row. A
+   * field naming a single component does not: the type is implied by the
+   * schema, so an ordinary read omits it. A VERSION SNAPSHOT is the case where
+   * the implication does not hold — the field may name a different component by
+   * the time the snapshot is restored, and without the type recorded there is
+   * nothing to detect that with.
+   *
+   * @default false
+   */
+  includeComponentType?: boolean;
+
   /** The entry to populate with component data */
   entry: Record<string, unknown>;
 
@@ -299,6 +313,7 @@ export class ComponentQueryService extends BaseService {
       locale,
       fallbackLocale,
       executor,
+      includeComponentType = false,
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -337,7 +352,8 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              includeComponentType
             );
           } else {
             result[fieldName] = await this.populateSingleField(
@@ -349,7 +365,8 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              includeComponentType
             );
           }
         }
@@ -478,7 +495,8 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    includeComponentType = false
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -496,6 +514,11 @@ export class ComponentQueryService extends BaseService {
     if (rows.length === 0) return null;
 
     let data = this.deserializeComponentRow(rows[0], componentFields, false);
+    // The row itself stores no type for a single-component field — the schema
+    // implies it, so nothing is written to the column. The slug this field
+    // names IS that type, and recording it is what lets a later restore notice
+    // the field was retargeted since.
+    if (includeComponentType) data._componentType = componentSlug;
     // i18n: overlay translatable fields from the companion for the requested locale.
     await this.overlayLocalizedComponent(
       meta,
@@ -524,7 +547,8 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    includeComponentType = false
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -539,9 +563,12 @@ export class ComponentQueryService extends BaseService {
       executor
     );
 
-    let dataArray = rows.map(row =>
-      this.deserializeComponentRow(row, componentFields, false)
-    );
+    let dataArray = rows.map(row => {
+      const data = this.deserializeComponentRow(row, componentFields, false);
+      // See populateSingleField: the type comes from the schema, not the row.
+      if (includeComponentType) data._componentType = componentSlug;
+      return data;
+    });
 
     // i18n: overlay translatable fields per instance from the companion.
     await this.overlayLocalizedComponent(
