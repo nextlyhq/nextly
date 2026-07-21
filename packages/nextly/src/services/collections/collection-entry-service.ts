@@ -253,6 +253,11 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /**
+       * Set when this write restores an earlier version, recorded on the
+       * version it captures.
+       */
+      sourceVersionNo?: number;
     },
     body: Record<string, unknown>,
     depth?: number

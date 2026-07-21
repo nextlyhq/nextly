@@ -413,6 +413,23 @@ export class CollectionMutationService extends BaseService {
    * migrated main table no longer has them). Returns `null` when the collection isn't localized
    * or the companion table doesn't exist yet (dev/unmigrated → localized cols stay on main).
    */
+  /**
+   * The locale a component subtree in a snapshot belongs to.
+   *
+   * Component tables are per-locale whether or not their parent is, and a write
+   * that names no locale still reaches them at the configured default — the
+   * component read and write both resolve `undefined` that way. Recording null
+   * would leave that snapshot unplaceable, so the default is made explicit
+   * here. Without localization configured there are no per-locale rows and
+   * nothing to record.
+   */
+  private componentSnapshotLocale(
+    requested: string | undefined
+  ): string | null {
+    if (!this.localization) return null;
+    return resolveRequestedLocale(this.localization, requested);
+  }
+
   private async splitLocalizedWriteData(
     collectionName: string,
     entryData: Record<string, unknown>,
@@ -1631,6 +1648,18 @@ export class CollectionMutationService extends BaseService {
                 : (entry as { status?: unknown }).status,
             parts: documentParts,
             createdBy: params.user?.id ?? null,
+            // Set only when localized values were actually routed, for the
+            // same reason the update path is careful about it.
+            // Set when locale-specific state was actually captured. A
+            // collection whose translatable content lives only in embedded
+            // components routes nothing through `localizedWrite`, yet the
+            // components above were read as this locale — so without counting
+            // them the version would be unlabelled and unrestorable.
+            locale:
+              localizedWrite?.writeLocale ??
+              (Object.keys(snapshotComponents ?? {}).length > 0
+                ? this.componentSnapshotLocale(params.locale)
+                : null),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
         }
@@ -1972,6 +2001,12 @@ export class CollectionMutationService extends BaseService {
                   manyToMany: snapshotM2M,
                 },
                 createdBy: params.user?.id ?? null,
+                // Left unlabelled deliberately. Publishing spans every locale,
+                // and this snapshot is the main row alone — on a migrated
+                // collection the localized columns live only in the companion,
+                // so it holds no locale's translatable values. Claiming one
+                // would tell a restore to write content it never captured.
+                locale: null,
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
@@ -2058,6 +2093,12 @@ export class CollectionMutationService extends BaseService {
       // to what this user may read (this is not a trusted-server read).
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /**
+       * Set when this write restores an earlier version, recording which one on
+       * the version it captures. Lineage cannot be inferred afterwards: a
+       * restore is an ordinary write that happens to reproduce an earlier state.
+       */
+      sourceVersionNo?: number;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -2850,6 +2891,19 @@ export class CollectionMutationService extends BaseService {
                 manyToMany: snapshotM2M,
               };
 
+              // Whether anything in this snapshot is specific to the write
+              // locale: values read back from its companion row, values this
+              // write put there, or its own status.
+              const capturedLocaleState =
+                Object.keys(priorLocalizedValues).length > 0 ||
+                Object.keys(localizedUpdate?.localizedFieldValues ?? {})
+                  .length > 0 ||
+                typeof effectiveLocaleStatus === "string" ||
+                // Components were read as the write locale just above, so a
+                // translation edit touching only embedded component content is
+                // locale-specific too — the singles path counts it the same way.
+                Object.keys(snapshotComponents ?? {}).length > 0;
+
               if (versionsConfig?.enabled) {
                 await captureInTx(tx, this.versionCapture, {
                   ref: {
@@ -2868,6 +2922,25 @@ export class CollectionMutationService extends BaseService {
                     (currentParent as { status?: unknown }).status,
                   parts: documentParts,
                   createdBy: params.user?.id ?? null,
+                  // Labelled with a locale only when locale-specific state was
+                  // actually captured. A migrated localized collection routes
+                  // every write through `localizedUpdate`, including one that
+                  // touches only shared fields on a locale with no companion
+                  // row — that snapshot holds no translations and falls back to
+                  // the MAIN row's status, so calling it that locale's would let
+                  // a restore publish a language from entry-level state.
+                  // The write locale when the collection stores its own
+                  // translations, otherwise the requested one: a collection
+                  // that is not localized itself can still embed a localized
+                  // component, and the components above were read as this
+                  // language. The create path records it the same way; leaving
+                  // it null here would make component translations captured on
+                  // update unrestorable.
+                  locale: capturedLocaleState
+                    ? (localizedUpdate?.writeLocale ??
+                      this.componentSnapshotLocale(params.locale))
+                    : null,
+                  sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,
                 });
               }

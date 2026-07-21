@@ -153,6 +153,21 @@ describe("LocalStorageAdapter", () => {
       const url = adapter.getPublicUrl("/2026/04/uuid-photo.jpg");
       expect(url).toBe("/uploads/2026/04/uuid-photo.jpg");
     });
+
+    it("should round-trip: upload URL points to file on disk", async () => {
+      const buffer = Buffer.from("test content");
+      const result = await adapter.upload(buffer, {
+        filename: "roundtrip.jpg",
+        mimeType: "image/jpeg",
+      });
+
+      // URL should be baseUrl + path (no "uploads/" duplication)
+      expect(result.url).toBe(`/uploads/${result.path}`);
+
+      // File should exist at exactly that location on disk
+      const fullPath = path.join(testDir, result.path);
+      expect(await fileExists(fullPath)).toBe(true);
+    });
   });
 
   describe("bulkDelete()", () => {

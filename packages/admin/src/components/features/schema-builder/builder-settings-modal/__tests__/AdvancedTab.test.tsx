@@ -77,6 +77,35 @@ describe("AdvancedTab", () => {
   });
 });
 
+describe("AdvancedTab -- version history", () => {
+  it("renders nothing when the kind does not enable it", () => {
+    render(<Controlled fields={["status"]} />);
+    expect(
+      screen.queryByRole("switch", { name: /version history/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("toggles versions when the switch is clicked", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled fields={["versions"]} onChange={onChange} />);
+    await user.click(screen.getByRole("switch", { name: /version history/i }));
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.versions).toBe(true);
+  });
+
+  it("renders checked when versioning is already on", () => {
+    render(<Controlled fields={["versions"]} initial={{ versions: true }} />);
+    const sw = screen.getByRole("switch", { name: /version history/i });
+    expect(sw.getAttribute("data-state")).toBe("checked");
+  });
+
+  it("says what it does not do, so nobody reads it as drafts", () => {
+    render(<Controlled fields={["versions"]} />);
+    expect(screen.getByText(/does not add drafts/i)).toBeInTheDocument();
+  });
+});
+
 describe("AdvancedTab -- showSystemFields", () => {
   beforeEach(() => {
     localStorage.clear();

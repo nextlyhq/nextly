@@ -15,7 +15,12 @@ export type BasicsField =
 
 // tab. Server-side `admin.group` / `admin.order` still work for code-first
 // users; only the in-builder UI affordance is gone.
-export type AdvancedField = "category" | "status" | "i18n" | "showSystemFields";
+export type AdvancedField =
+  | "category"
+  | "status"
+  | "i18n"
+  | "versions"
+  | "showSystemFields";
 
 export type BuilderConfig = {
   kind: BuilderKind;

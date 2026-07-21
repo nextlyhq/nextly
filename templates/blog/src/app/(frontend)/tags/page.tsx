@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 
 import { ListingHeader } from "@/components/ListingHeader";
 import { TagCloud } from "@/components/TagCloud";
+import { EmptyState } from "@/components/EmptyState";
 import { getAllTagsWithCounts, getSiteSettings } from "@/lib/queries";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -40,7 +41,11 @@ export default async function TagsIndexPage() {
         title="All tags"
         description="Browse posts by topic. Tag size reflects how often it's been written about."
       />
-      <TagCloud tags={sorted} />
+      {sorted.length > 0 ? (
+        <TagCloud tags={sorted} />
+      ) : (
+        <EmptyState type="posts" entityName="tags" />
+      )}
     </div>
   );
 }

@@ -584,6 +584,11 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /**
+       * Set when this write restores an earlier version, recorded on the
+       * version it captures.
+       */
+      sourceVersionNo?: number;
     },
     body: Record<string, unknown>
   ) {
@@ -592,6 +597,12 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        // Named explicitly rather than left to the spread above, because this
+        // facade rebuilds the params object field by field: anything not named
+        // here survives only by passing through `resolveUserParam`'s rest, and
+        // a silently dropped lineage marker would leave a restore
+        // indistinguishable from an ordinary edit.
+        sourceVersionNo: params.sourceVersionNo,
       },
       body,
       params.depth

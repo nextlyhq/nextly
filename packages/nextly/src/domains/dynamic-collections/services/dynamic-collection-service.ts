@@ -18,6 +18,7 @@ import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec"
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { resolveBuilderVersions } from "../../versions/builder-versions";
 
 import {
   DynamicCollectionRegistryService,
@@ -77,6 +78,8 @@ export interface CreateCollectionInput {
    * omitted from the main table and a companion `<table>_locales` table is created.
    */
   localized?: boolean;
+  /** Whether every save is recorded as a restorable version. */
+  versions?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -96,6 +99,8 @@ export interface UpdateCollectionInput {
   status?: boolean;
   /** i18n: toggle Internationalization. Honoured when defined; undefined leaves it unchanged. */
   localized?: boolean;
+  /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
+  versions?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -273,6 +278,10 @@ export class DynamicCollectionService extends BaseService {
       // i18n: persist the localized flag so the read/write path routes translatable
       // fields to the companion table and the admin shows per-language editing.
       localized: data.localized === true,
+      // Persist version history from the create payload; without it a
+      // collection created with the switch on is written unversioned and the
+      // switch reads as off the moment the editor loads.
+      versions: resolveBuilderVersions(data.versions),
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -491,6 +500,14 @@ export class DynamicCollectionService extends BaseService {
     // it). Mirrors `status` — only written when the caller explicitly sent it.
     if (updates.localized !== undefined)
       metadataUpdates.localized = updates.localized;
+    // Version history toggle. The column holds the resolved config every
+    // runtime reader tests, so the boolean is normalized before it is stored;
+    // off writes null. `status` is deliberately not passed to the resolver —
+    // it aliases to a versioned config for back-compat, which would stop the
+    // toggle from ever turning versioning off on a Draft/Published entity.
+    if (updates.versions !== undefined) {
+      metadataUpdates.versions = resolveBuilderVersions(updates.versions);
+    }
 
     let migrationSQL: string | null = null;
     let migrationFileName: string | null = null;

@@ -105,6 +105,10 @@ export default defineConfig({
       // second dies before it serves anything. With this, the suite runs
       // while a contributor's dev server keeps going on 3000.
       NEXT_DIST_DIR: ".next-e2e",
+      // Turns on the playground's brand colors, which admin-branding.spec.ts
+      // asserts against. They are off by default so a contributor's admin
+      // keeps the monochrome identity a default install has.
+      NEXTLY_E2E_BRANDING: "1",
     },
   },
 

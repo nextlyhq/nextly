@@ -59,6 +59,16 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
         />
       )}
 
+      {fields.includes("versions") && (
+        <SwitchRow
+          ariaLabel="Version history"
+          label="Version history"
+          help="Record every save so earlier versions can be previewed and restored. Turning it off keeps the versions already recorded but stops new ones; it does not add drafts."
+          checked={values.versions ?? false}
+          onChange={v => set("versions", v)}
+        />
+      )}
+
       {fields.includes("showSystemFields") && <ShowSystemFieldsSwitch />}
     </div>
   );

@@ -89,3 +89,47 @@ describe("singleEntityFromSettings", () => {
     expect(entity.status).toBe(false);
   });
 });
+
+describe("version history in the manifest mirror", () => {
+  // Both mappers, because the committed ui-schema.json is the other half of the
+  // builder's dual write: a kind missing here silently reverts the setting the
+  // next time the manifest syncs.
+  const cases = [
+    ["collection", collectionEntityFromSettings],
+    ["single", singleEntityFromSettings],
+  ] as const;
+
+  for (const [kind, build] of cases) {
+    it(`${kind}: mirrors the toggle when on`, () => {
+      const entity = build(
+        "posts",
+        {
+          singularName: "Post",
+          pluralName: "Posts",
+          slug: "posts",
+          icon: "FileText",
+          versions: true,
+        },
+        FIELDS
+      );
+      expect(entity.versions).toBe(true);
+    });
+
+    it(`${kind}: writes versions: false explicitly`, () => {
+      // Omitting it would let a stale `true` survive in the manifest and turn
+      // versioning back on at the next sync.
+      const entity = build(
+        "posts",
+        {
+          singularName: "Post",
+          pluralName: "Posts",
+          slug: "posts",
+          icon: "FileText",
+          versions: false,
+        },
+        FIELDS
+      );
+      expect(entity.versions).toBe(false);
+    });
+  }
+});
