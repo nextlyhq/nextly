@@ -25,6 +25,7 @@ import {
 } from "@admin/components/ui";
 import {
   useRestoreVersion,
+  useSetVersionLabel,
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
@@ -32,6 +33,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
 
@@ -81,6 +83,9 @@ export function VersionHistorySheet({
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
+  // The version being renamed, which is not necessarily the one being previewed
+  // — an editor can name a row without opening it.
+  const [renaming, setRenaming] = useState<number | null>(null);
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
@@ -122,6 +127,29 @@ export function VersionHistorySheet({
   });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
+
+  // The row being renamed, so the dialog opens seeded with its current name
+  // rather than blank.
+  const renamingVersion =
+    renaming === null
+      ? null
+      : (versions.find(v => v.versionNo === renaming) ?? null);
+
+  const setLabel = useSetVersionLabel({
+    scope,
+    onSuccess: result => {
+      setRenaming(null);
+      toast.success(
+        result.item.label === null
+          ? "Name removed."
+          : `Version named "${result.item.label}".`
+      );
+    },
+    onError: error => {
+      // The dialog stays open so the typed name is not lost to a failed save.
+      toast.error(apiErrorMessage(error) || "Could not rename this version.");
+    },
+  });
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
 
   return (
@@ -179,7 +207,9 @@ export function VersionHistorySheet({
                 <VersionRow
                   key={version.id}
                   version={version}
+                  active={selected === version.versionNo}
                   onSelect={setSelected}
+                  onRename={setRenaming}
                 />
               ))}
 
@@ -252,6 +282,21 @@ export function VersionHistorySheet({
           isPublished={liveStatus === "published"}
           isRestoring={restore.isPending}
           onConfirm={() => restore.mutate(selected)}
+        />
+      ) : null}
+
+      {/* Mounted on the same terms as the restore dialog: outside the panel
+          body so its lifecycle is independent of the panel's. */}
+      {renaming !== null ? (
+        <VersionLabelDialog
+          open
+          onOpenChange={open => {
+            if (!open) setRenaming(null);
+          }}
+          versionNo={renaming}
+          currentLabel={renamingVersion?.label ?? null}
+          saving={setLabel.isPending}
+          onSubmit={label => setLabel.mutate({ versionNo: renaming, label })}
         />
       ) : null}
     </Sheet>

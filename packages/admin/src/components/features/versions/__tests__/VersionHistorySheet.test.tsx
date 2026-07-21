@@ -13,12 +13,14 @@ const {
   useVersionsMock,
   useVersionMock,
   restoreMock,
+  setLabelMock,
   mutateMock,
   toastErrorMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
   restoreMock: vi.fn(),
+  setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
 }));
@@ -37,6 +39,7 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
   useVersion: (...a: unknown[]) => useVersionMock(...a),
   useRestoreVersion: (...a: unknown[]) => restoreMock(...a),
+  useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
 }));
 
 import { VersionHistorySheet } from "../VersionHistorySheet";
@@ -97,6 +100,7 @@ describe("VersionHistorySheet", () => {
     useVersionsMock.mockReturnValue(listState());
     useVersionMock.mockReturnValue(detailState());
     restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
+    setLabelMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
   });
 
   it("lists the versions it received", () => {

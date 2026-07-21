@@ -22,6 +22,7 @@ import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
   type RestoreVersionResponse,
+  type SetVersionLabelResponse,
   type VersionDetail,
   type VersionListResponse,
   type VersionScope,
@@ -122,8 +123,10 @@ export interface UseVersionOptions {
 /**
  * One stored version, including its snapshot.
  *
- * A stored version never changes, so this stays fresh longer than the list —
- * which does change as the document is edited.
+ * A version's CONTENT never changes — history is append-only — so this stays
+ * fresh longer than the list, which grows as the document is edited. Its label
+ * can change, and a rename invalidates this key rather than waiting the window
+ * out.
  */
 export function useVersion({
   scope,
@@ -155,6 +158,50 @@ export interface UseRestoreVersionOptions {
   scope: VersionScope;
   onSuccess?: (result: RestoreVersionResponse) => void;
   onError?: (error: Error) => void;
+}
+
+/** Options for renaming a version. */
+export interface UseSetVersionLabelOptions {
+  scope: VersionScope;
+  onSuccess?: (result: SetVersionLabelResponse) => void;
+  onError?: (error: Error) => void;
+}
+
+/** What a rename is asked to do: `null` clears the name. */
+export interface SetVersionLabelInput {
+  versionNo: number;
+  label: string | null;
+}
+
+/**
+ * Name a version, or clear its name.
+ *
+ * Only the version caches are invalidated: a label is metadata about history
+ * and touches no document content, so the entry and single-document caches a
+ * restore has to clear are left alone. The detail key is included because a
+ * renamed version is stale there too, despite its snapshot being unchanged.
+ *
+ * Unlike a restore this is idempotent — the same name applied twice leaves the
+ * same state — so the default retry behaviour is correct and is left in place.
+ */
+export function useSetVersionLabel({
+  scope,
+  onSuccess,
+  onError,
+}: UseSetVersionLabelOptions) {
+  const queryClient = useQueryClient();
+
+  return useMutation<SetVersionLabelResponse, Error, SetVersionLabelInput>({
+    mutationFn: ({ versionNo, label }) =>
+      versionApi.setLabel(scope, versionNo, label),
+    onError: error => {
+      onError?.(error);
+    },
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
+      onSuccess?.(result);
+    },
+  });
 }
 
 /**
