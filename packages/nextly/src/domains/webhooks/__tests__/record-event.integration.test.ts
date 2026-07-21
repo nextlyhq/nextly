@@ -56,7 +56,7 @@ describe("webhook outbox capture (real SQLite)", () => {
     await adapter.connect();
     for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
 
-    const schemaRegistry = new SchemaRegistry();
+    const schemaRegistry = new SchemaRegistry("sqlite");
     schemaRegistry.registerStaticSchemas({ nextlyEvents });
     adapter.setTableResolver(schemaRegistry);
   });

@@ -80,7 +80,7 @@ describe("webhook delivery engine (real SQLite)", () => {
     await adapter.connect();
     for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
 
-    const schemaRegistry = new SchemaRegistry();
+    const schemaRegistry = new SchemaRegistry("sqlite");
     schemaRegistry.registerStaticSchemas(tables);
     adapter.setTableResolver(schemaRegistry);
   });
@@ -324,6 +324,40 @@ describe("webhook delivery engine (real SQLite)", () => {
     const row = await getDelivery("dlv_1");
     expect(row.status).toBe("failed");
     expect(row.lastError).toContain("no signing secret");
+  });
+
+  it("stops delivering to an endpoint that was disabled after the row was queued", async () => {
+    // Disabling only removes an endpoint from fan-out, so a row queued before
+    // it happened — or a retry scheduled by an earlier failure — would still be
+    // due. Without a check at send time, disabling would keep POSTing until the
+    // row succeeded or exhausted its attempts.
+    // Ordered deliberately: the endpoint is enabled while the delivery is
+    // queued and only disabled afterwards, which is the sequence that actually
+    // happens. Seeding it disabled would only prove a delivery is never created
+    // for an endpoint that was already off.
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1", {
+      status: "retrying",
+      attemptCount: 1,
+    });
+    await adapter.update(
+      "nextly_webhooks",
+      { enabled: false },
+      { and: [{ column: "id", op: "=", value: "wh_a" }] }
+    );
+    const { transport, calls } = makeTransport(200);
+
+    const result = await deliverDueDeliveries(deps(transport));
+
+    expect(result).toMatchObject({ attempted: 1, failed: 1 });
+    expect(calls).toHaveLength(0);
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("failed");
+    expect(row.lastError).toContain("webhook disabled");
+    // Terminal, not held: re-enabling must not later release a burst of events
+    // the receiver has stopped expecting.
+    expect(row.nextAttemptAt).toBeNull();
   });
 
   it("records an unexpected mid-attempt throw as a transient failure without escaping the batch", async () => {

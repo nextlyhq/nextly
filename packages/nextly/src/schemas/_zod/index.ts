@@ -13,3 +13,4 @@ export * from "./rbac";
 export * from "./validation";
 export * from "./api-keys";
 export * from "./ui-schema";
+export * from "./webhooks";

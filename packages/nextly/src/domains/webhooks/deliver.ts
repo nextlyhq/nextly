@@ -65,6 +65,8 @@ interface WebhookRow {
   headers: Record<string, string> | null;
   /** Encrypted (not hashed) active signing secrets, primary first. */
   secretHash: string[];
+  /** Stored as an integer on SQLite, so it is coerced before it is trusted. */
+  enabled: unknown;
 }
 
 /** The subset of a `nextly_events` row delivery needs (camelCase). */
@@ -293,8 +295,9 @@ async function attemptDelivery(
   const transport = deps.transport ?? safeFetch;
   const timeoutMs = deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
-  // Load the endpoint and the event. A delivery for a deleted webhook or a
-  // missing event can never be sent, so mark it failed and move on.
+  // Load the endpoint and the event. A delivery for a deleted webhook, a
+  // disabled one, or a missing event can never be sent, so mark it failed and
+  // move on.
   const webhookRows = await deps.db.select<WebhookRow>("nextly_webhooks", {
     where: { and: [{ column: "id", op: "=", value: row.webhookId }] },
     limit: 1,
@@ -306,8 +309,24 @@ async function attemptDelivery(
   });
   const event = eventRows[0];
 
-  if (!webhook || !event) {
-    const reason = !webhook ? "webhook deleted" : "event missing";
+  // Disabling is checked here and not only at fan-out because rows can already
+  // be queued when it happens: a retry scheduled by an earlier failure, or an
+  // event that fanned out moments before. Without this, disabling stops new
+  // deliveries but the existing ones keep POSTing until they succeed or
+  // exhaust their attempts, which is the opposite of what disabling means.
+  //
+  // The row is failed rather than held, so re-enabling does not later release a
+  // burst of events the receiver has long since stopped expecting. Replaying
+  // them is a separate, deliberate act.
+  // Truthiness rather than a strict comparison: SQLite stores the flag as 0/1
+  // and the other dialects as a boolean.
+  const disabled = webhook !== undefined && !webhook.enabled;
+  if (!webhook || !event || disabled) {
+    const reason = !webhook
+      ? "webhook deleted"
+      : disabled
+        ? "webhook disabled"
+        : "event missing";
     deps.logger?.warn(
       `webhook delivery ${row.id} undeliverable (${reason}); marking failed`
     );

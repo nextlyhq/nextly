@@ -51,7 +51,7 @@ describe("webhook fan-out (real SQLite)", () => {
     await adapter.connect();
     for (const stmt of await schemaDdl()) await adapter.executeQuery(stmt);
 
-    const schemaRegistry = new SchemaRegistry();
+    const schemaRegistry = new SchemaRegistry("sqlite");
     schemaRegistry.registerStaticSchemas(tables);
     adapter.setTableResolver(schemaRegistry);
   });
