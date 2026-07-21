@@ -105,8 +105,35 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
  * unwrap costs a spurious op, which this module has always preferred; a wrong
  * unwrap silently drops a real migration.
  */
-const EXPRESSION_SHAPED =
-  /^\s*(?:[\w.]+\s*\(|-?\d|(?:true|false|null|current_timestamp|current_date|current_time)\s*$)/i;
+const NILADIC_KEYWORDS = [
+  // Literals.
+  "true",
+  "false",
+  "null",
+  // Date/time keywords that need no call syntax. PostgreSQL accepts all of
+  // these bare; SQLite accepts the CURRENT_ trio; MySQL accepts
+  // CURRENT_TIMESTAMP.
+  "current_timestamp",
+  "current_date",
+  "current_time",
+  "localtime",
+  "localtimestamp",
+  // Identity keywords, all bare-callable in PostgreSQL.
+  "current_user",
+  "current_role",
+  "current_schema",
+  "current_catalog",
+  "session_user",
+  "system_user",
+  "user",
+].join("|");
+
+const EXPRESSION_SHAPED = new RegExp(
+  // Anything that calls (`now()`, `gen_random_uuid()`), any number, or any
+  // keyword above standing alone.
+  `^\\s*(?:[\\w.]+\\s*\\(|-?\\d|(?:${NILADIC_KEYWORDS})\\s*$)`,
+  "i"
+);
 
 /**
  * Reduce a quoted string literal to its contents.

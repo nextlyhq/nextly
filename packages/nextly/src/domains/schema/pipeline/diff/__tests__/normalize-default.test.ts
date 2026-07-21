@@ -103,6 +103,19 @@ describe("normalizeDefault — string-literal unwrapping", () => {
       ["'42'", "42"],
       ["'-1'", "-1"],
       ["'gen_random_uuid()'", "gen_random_uuid()"],
+      // Bare-callable keywords: no parentheses, so the call-shape half of the
+      // guard does not see them and each has to be named.
+      ["'LOCALTIME'", "LOCALTIME"],
+      ["'LOCALTIMESTAMP'", "LOCALTIMESTAMP"],
+      ["'CURRENT_USER'", "CURRENT_USER"],
+      ["'SESSION_USER'", "SESSION_USER"],
+      ["'CURRENT_SCHEMA'", "CURRENT_SCHEMA"],
+      ["'CURRENT_CATALOG'", "CURRENT_CATALOG"],
+      ["'CURRENT_ROLE'", "CURRENT_ROLE"],
+      ["'SYSTEM_USER'", "SYSTEM_USER"],
+      ["'USER'", "USER"],
+      ["'CURRENT_DATE'", "CURRENT_DATE"],
+      ["'CURRENT_TIME'", "CURRENT_TIME"],
     ];
     for (const [literal, expression] of distinct) {
       expect(normalizeDefault(literal)).not.toBe(normalizeDefault(expression));
