@@ -60,6 +60,8 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         // collection is actually created as localized (was dropped here, so the
         // collection always persisted as non-localized regardless of the toggle).
         localized: values.i18n === true,
+        // Version history opt-in at create; the server resolves the boolean.
+        versions: values.versions === true,
         // Why: useAsTitle + timestamps removed in PR B. Backend defaults
         // (timestamps always on, useAsTitle = system title) take over.
         // Code-first config can still override either.
@@ -86,6 +88,8 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                     status: values.status === true,
                     // keep ui-schema.json in sync with the localized flag.
                     localized: values.i18n === true,
+                    // and with version history.
+                    versions: values.versions === true,
                   },
                   fields: [],
                 })

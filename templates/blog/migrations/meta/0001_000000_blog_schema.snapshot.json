@@ -1,0 +1,483 @@
+{
+  "$schema": "https://nextly.dev/schema/migration-snapshot.v1.json",
+  "version": 1,
+  "template": "blog",
+  "collections": [
+    {
+      "slug": "posts",
+      "tableName": "dc_posts",
+      "labels": {
+        "singular": "Post",
+        "plural": "Posts"
+      },
+      "description": "Blog posts with rich content, categories, tags, and SEO",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "required": true,
+          "index": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "required": true,
+          "unique": true,
+          "index": true
+        },
+        {
+          "name": "content",
+          "type": "richText"
+        },
+        {
+          "name": "excerpt",
+          "type": "textarea"
+        },
+        {
+          "name": "featuredImage",
+          "type": "upload",
+          "relationTo": "media",
+          "columnType": "text",
+          "columnTypeNote": "text to match media.id (core schema uses text PKs, not uuid)"
+        },
+        {
+          "name": "author",
+          "type": "relationship",
+          "relationTo": "users",
+          "index": true,
+          "columnType": "text",
+          "columnTypeNote": "text to match users.id (core schema uses text PKs, not uuid)"
+        },
+        {
+          "name": "categories",
+          "type": "relationship",
+          "relationTo": "categories",
+          "hasMany": true,
+          "junctionTable": "dc_posts_categories"
+        },
+        {
+          "name": "tags",
+          "type": "relationship",
+          "relationTo": "tags",
+          "hasMany": true,
+          "junctionTable": "dc_posts_tags"
+        },
+        {
+          "name": "publishedAt",
+          "type": "date",
+          "index": true
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "options": ["draft", "published"],
+          "defaultValue": "draft",
+          "index": true
+        },
+        {
+          "name": "featured",
+          "type": "checkbox",
+          "defaultValue": false,
+          "index": true
+        },
+        {
+          "name": "seo",
+          "type": "group",
+          "fields": [
+            {
+              "name": "metaTitle",
+              "type": "text"
+            },
+            {
+              "name": "metaDescription",
+              "type": "textarea"
+            },
+            {
+              "name": "ogImage",
+              "type": "upload",
+              "relationTo": "media",
+              "hasMany": false
+            },
+            {
+              "name": "canonical",
+              "type": "text"
+            },
+            {
+              "name": "noindex",
+              "type": "checkbox",
+              "defaultValue": false
+            }
+          ],
+          "storageNote": "Stored as a single jsonb column. ogImage is a FK reference embedded inside the JSON blob; resolution to a full media object is handled at the application layer by the relationship service."
+        },
+        {
+          "name": "readingTime",
+          "type": "number",
+          "defaultValue": 0
+        },
+        {
+          "name": "wordCount",
+          "type": "number",
+          "defaultValue": 0
+        }
+      ],
+      "timestamps": true,
+      "status": true
+    },
+    {
+      "slug": "categories",
+      "tableName": "dc_categories",
+      "labels": {
+        "singular": "Category",
+        "plural": "Categories"
+      },
+      "description": "Blog categories for organizing posts hierarchically",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "required": true,
+          "unique": true,
+          "index": true
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "textarea"
+        }
+      ],
+      "timestamps": true
+    },
+    {
+      "slug": "tags",
+      "tableName": "dc_tags",
+      "labels": {
+        "singular": "Tag",
+        "plural": "Tags"
+      },
+      "description": "Blog tags for cross-cutting topic organization",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "required": true,
+          "unique": true,
+          "index": true
+        },
+        {
+          "name": "description",
+          "type": "textarea"
+        }
+      ],
+      "timestamps": true
+    }
+  ],
+  "singles": [
+    {
+      "slug": "site-settings",
+      "tableName": "single_site_settings",
+      "labels": {
+        "singular": "Site Settings",
+        "plural": "Site Settings"
+      },
+      "description": "Global site settings and social media links",
+      "fields": [
+        {
+          "name": "siteName",
+          "type": "text",
+          "required": true,
+          "defaultValue": "My Blog"
+        },
+        {
+          "name": "tagline",
+          "type": "text",
+          "defaultValue": "Thoughts on web development"
+        },
+        {
+          "name": "siteDescription",
+          "type": "textarea"
+        },
+        {
+          "name": "logo",
+          "type": "upload",
+          "relationTo": "media",
+          "columnType": "text",
+          "columnTypeNote": "text to match media.id (core schema uses text PKs, not uuid)"
+        },
+        {
+          "name": "social",
+          "type": "group",
+          "fields": [
+            {
+              "name": "twitter",
+              "type": "text"
+            },
+            {
+              "name": "github",
+              "type": "text"
+            },
+            {
+              "name": "linkedin",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "navigation",
+      "tableName": "single_navigation",
+      "labels": {
+        "singular": "Navigation",
+        "plural": "Navigation"
+      },
+      "description": "Header and footer navigation links",
+      "fields": [
+        {
+          "name": "headerLinks",
+          "type": "repeater",
+          "fields": [
+            {
+              "name": "label",
+              "type": "text"
+            },
+            {
+              "name": "href",
+              "type": "text"
+            },
+            {
+              "name": "openInNewTab",
+              "type": "checkbox",
+              "defaultValue": false
+            }
+          ]
+        },
+        {
+          "name": "footerReadLinks",
+          "type": "repeater",
+          "fields": [
+            {
+              "name": "label",
+              "type": "text"
+            },
+            {
+              "name": "href",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "name": "showThemeToggle",
+          "type": "checkbox",
+          "defaultValue": true
+        },
+        {
+          "name": "showSearchIcon",
+          "type": "checkbox",
+          "defaultValue": true
+        }
+      ]
+    },
+    {
+      "slug": "homepage",
+      "tableName": "single_homepage",
+      "labels": {
+        "singular": "Homepage",
+        "plural": "Homepage"
+      },
+      "description": "Homepage layout and content configuration",
+      "fields": [
+        {
+          "name": "heroTitle",
+          "type": "text",
+          "required": true,
+          "defaultValue": "Ideas on building, shipping, and surviving software."
+        },
+        {
+          "name": "heroSubtitle",
+          "type": "text",
+          "defaultValue": "Essays and notes from our engineering team."
+        },
+        {
+          "name": "showFeaturedPost",
+          "type": "checkbox",
+          "defaultValue": true
+        },
+        {
+          "name": "featuredSectionTitle",
+          "type": "text",
+          "defaultValue": "Featured"
+        },
+        {
+          "name": "showLatestPosts",
+          "type": "checkbox",
+          "defaultValue": true
+        },
+        {
+          "name": "latestSectionTitle",
+          "type": "text",
+          "defaultValue": "Latest"
+        },
+        {
+          "name": "latestPostsCount",
+          "type": "number",
+          "defaultValue": 3
+        },
+        {
+          "name": "showCategoryStrip",
+          "type": "checkbox",
+          "defaultValue": true
+        },
+        {
+          "name": "showNewsletterCta",
+          "type": "checkbox",
+          "defaultValue": true
+        },
+        {
+          "name": "newsletterHeading",
+          "type": "text",
+          "defaultValue": "Get new posts in your inbox"
+        },
+        {
+          "name": "newsletterSubheading",
+          "type": "text",
+          "defaultValue": "No spam. Unsubscribe anytime."
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "posts",
+      "to": "media",
+      "type": "many-to-one",
+      "field": "featured_image"
+    },
+    {
+      "from": "posts",
+      "to": "media",
+      "type": "many-to-one",
+      "field": "seo.og_image",
+      "storageNote": "Reference is embedded inside the seo jsonb column, not a dedicated FK column. Enforced at the application layer only."
+    },
+    {
+      "from": "posts",
+      "to": "users",
+      "type": "many-to-one",
+      "field": "author"
+    },
+    {
+      "from": "posts",
+      "to": "categories",
+      "type": "many-to-many",
+      "field": "categories",
+      "junctionTable": "dc_posts_categories",
+      "junctionColumns": {
+        "source": "post_id",
+        "target": "category_id"
+      }
+    },
+    {
+      "from": "posts",
+      "to": "tags",
+      "type": "many-to-many",
+      "field": "tags",
+      "junctionTable": "dc_posts_tags",
+      "junctionColumns": {
+        "source": "post_id",
+        "target": "tag_id"
+      }
+    },
+    {
+      "from": "site-settings",
+      "to": "media",
+      "type": "many-to-one",
+      "field": "logo"
+    },
+    {
+      "from": "user_ext",
+      "to": "users",
+      "type": "one-to-one",
+      "field": "user_id",
+      "onDelete": "CASCADE"
+    }
+  ],
+  "userExtension": {
+    "tableName": "user_ext",
+    "description": "Extends the built-in users table with blog author profile fields. Structure matches what UserExtSchemaService.generateMigrationSQL() produces at runtime.",
+    "baseColumns": [
+      { "name": "id", "type": "text", "primaryKey": true },
+      {
+        "name": "user_id",
+        "type": "text",
+        "notNull": true,
+        "unique": true,
+        "references": "users.id",
+        "onDelete": "CASCADE"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp",
+        "notNull": true,
+        "default": "NOW()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp",
+        "notNull": true,
+        "default": "NOW()"
+      }
+    ],
+    "fields": [
+      {
+        "name": "bio",
+        "type": "textarea",
+        "columnName": "bio",
+        "nullable": true,
+        "source": "codefirst.config.ts → users.fields"
+      },
+      {
+        "name": "avatarUrl",
+        "type": "text",
+        "columnName": "avatar_url",
+        "nullable": true,
+        "source": "codefirst.config.ts → users.fields"
+      },
+      {
+        "name": "slug",
+        "type": "text",
+        "columnName": "slug",
+        "nullable": true,
+        "unique": true,
+        "source": "codefirst.config.ts → users.fields"
+      }
+    ],
+    "indexes": [
+      { "name": "uq_user_ext_user_id", "columns": ["user_id"], "unique": true },
+      { "name": "uq_user_ext_slug", "columns": ["slug"], "unique": true }
+    ]
+  }
+}

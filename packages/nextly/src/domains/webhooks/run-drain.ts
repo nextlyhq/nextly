@@ -12,6 +12,9 @@
 
 import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
+import { pruneWebhookDataSafely, type PruneDeps } from "./prune";
+import type { ResolvedWebhookRetentionConfig } from "./retention-config";
+import { claimRetentionPass, type RetentionGateStore } from "./retention-gate";
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -21,6 +24,16 @@ export interface RunDrainDeps {
   deliver: DeliverDeps;
   /** Max fan-out/deliver rounds before returning. Defaults to 100. */
   maxRounds?: number;
+  /**
+   * Retention, when configured. The pass runs after delivery so it only ever
+   * sees rows this drain has finished with, and it is gated so a frequently
+   * invoked drain does not prune on every call.
+   */
+  retention?: {
+    policy: ResolvedWebhookRetentionConfig;
+    prune: PruneDeps;
+    gate: RetentionGateStore;
+  };
 }
 
 export interface RunDrainResult {
@@ -31,6 +44,8 @@ export interface RunDrainResult {
   delivered: number;
   retried: number;
   failed: number;
+  /** Rows retention removed on this call; zero when the gate held it off. */
+  pruned: { events: number; deliveries: number };
 }
 
 /**
@@ -50,6 +65,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     delivered: 0,
     retried: 0,
     failed: 0,
+    pruned: { events: 0, deliveries: 0 },
   };
 
   for (let round = 0; round < maxRounds; round += 1) {
@@ -67,6 +83,26 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // Nothing was fanned out and nothing was attempted this round → the queue is
     // drained of everything currently due; stop.
     if (fan.eventsProcessed === 0 && del.attempted === 0) break;
+  }
+
+  // After the queue is quiet, not between rounds: pruning mid-drain would race
+  // the deliveries this very call is still working through. Failure is
+  // swallowed — a drain that delivered successfully must not report failure
+  // because housekeeping could not run.
+  const retention = deps.retention;
+  if (retention) {
+    const due = await claimRetentionPass(
+      retention.gate,
+      retention.policy.intervalMs
+    );
+    if (due) {
+      const pruned = await pruneWebhookDataSafely(
+        retention.prune,
+        retention.policy
+      );
+      result.pruned.events = pruned.events.webhook + pruned.events.audit;
+      result.pruned.deliveries = pruned.deliveries;
+    }
   }
 
   return result;

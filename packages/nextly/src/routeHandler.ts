@@ -26,6 +26,7 @@ import {
   type AuthContext,
   type ErrorResponse,
 } from "@nextly/auth/middleware";
+import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
 
 import {
@@ -94,7 +95,7 @@ import {
   isBuilderRoute,
 } from "./shared/builder-access";
 import {
-  hexToHslTriplet,
+  hexToCssColor,
   getForegroundForBackground,
   isValidHex,
 } from "./utils/color-utils";
@@ -430,12 +431,41 @@ const COLLECTION_ENTRY_METHODS = new Set([
   "countEntries",
   "duplicateEntry",
   "publishAllLocales",
+  // Version history is guarded by the same per-collection read permission as
+  // the entry itself; the document-level rules run inside the methods.
+  "listEntryVersions",
+  "getEntryVersion",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
 const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleDocument",
   "updateSingleDocument",
+  // Read-only history for the document, guarded by the same read permission.
+  "listSingleVersions",
+  "getSingleVersion",
+]);
+
+/**
+ * Read methods that still need resolved role slugs, even though reads normally
+ * skip the lookup.
+ *
+ * All four run the version access gate, which reads the live document through
+ * `checkCollectionAccess`. That evaluates roles twice over: the super-admin
+ * bypass is keyed on the role set (`isSuperAdminContext`), and stored
+ * role-based access rules match against the roles forwarded in the request
+ * context. A caller arriving without roles would therefore be treated as a
+ * non-super-admin with no roles and wrongly denied — surfaced as a 404, since
+ * the gate does not disclose existence.
+ *
+ * The two `get*` methods additionally return a snapshot that is redacted by
+ * field-level `access.read`, which reads the same role set.
+ */
+const ROLE_AWARE_READ_METHODS = new Set([
+  "listEntryVersions",
+  "getEntryVersion",
+  "listSingleVersions",
+  "getSingleVersion",
 ]);
 
 /**
@@ -473,8 +503,14 @@ async function resolveAuthorization(
   // --- Singles endpoints ---
   if (service === "singles") {
     if (SINGLE_DOCUMENT_METHODS.has(method)) {
-      // Document operations → {action}-{singleSlug}
-      const action = method === "getSingleDocument" ? "read" : "update";
+      // Document operations → {action}-{singleSlug}. The read-only methods
+      // must not demand update permission just by sharing this set.
+      const action =
+        method === "getSingleDocument" ||
+        method === "listSingleVersions" ||
+        method === "getSingleVersion"
+          ? "read"
+          : "update";
       const slug = routeParams?.slug || "";
       return requireCollectionAccess(req, action, slug);
     }
@@ -813,10 +849,13 @@ async function handleServiceRequest(
   // the lookup for reads and every other service so they don't incur a
   // permissions query.
   const needsRoles =
-    (service === "collections" || service === "singles") &&
-    httpMethod !== "GET" &&
-    httpMethod !== "HEAD" &&
-    httpMethod !== "OPTIONS";
+    ((service === "collections" || service === "singles") &&
+      httpMethod !== "GET" &&
+      httpMethod !== "HEAD" &&
+      httpMethod !== "OPTIONS") ||
+    // Version reads are GETs but still redact per field-level `access.read`,
+    // which needs the caller's roles to evaluate role-based rules.
+    ROLE_AWARE_READ_METHODS.has(method);
   await setAuthenticatedRouteParams(routeParams, authorizedUser, needsRoles);
 
   const dispatchRequest: DispatchRequest = {
@@ -957,8 +996,10 @@ async function handleServiceRequest(
  *
  * Returns the admin branding configuration to the admin UI.
  * Public — no authentication required.
- * Colors are converted from user-supplied hex to HSL triplets here on the
- * server so the client only has to inject them as CSS variables.
+ * Colors are converted from user-supplied hex to complete CSS colors here on
+ * the server so the client only has to inject them as CSS variables. They must
+ * be complete colors: the `--nx-*` tokens are consumed directly by the theme,
+ * so a bare "H S% L%" triplet would be an invalid value and get dropped.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
   const config = getHandlerConfig();
@@ -991,11 +1032,11 @@ async function handleAdminMetaRequest(): Promise<Response> {
     const resolved: Record<string, string> = {};
 
     if (colors.primary && isValidHex(colors.primary)) {
-      resolved.primary = hexToHslTriplet(colors.primary);
+      resolved.primary = hexToCssColor(colors.primary);
       resolved.primaryForeground = getForegroundForBackground(colors.primary);
     }
     if (colors.accent && isValidHex(colors.accent)) {
-      resolved.accent = hexToHslTriplet(colors.accent);
+      resolved.accent = hexToCssColor(colors.accent);
       resolved.accentForeground = getForegroundForBackground(colors.accent);
     }
 
@@ -1431,10 +1472,18 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedUserName;
   delete routeParams._authenticatedUserEmail;
   delete routeParams._authenticatedUserRoles;
+  delete routeParams._authenticatedActorType;
+  delete routeParams._authenticatedActorId;
 
   if (!authorizedUser) return;
 
   routeParams._authenticatedUserId = authorizedUser.userId;
+  // The acting identity is resolved here, the only place that knows how the
+  // request authenticated: a write attributes to the API key itself when one
+  // was used, rather than silently to the user that owns the key.
+  const actor = actorFromAuthContext(authorizedUser);
+  routeParams._authenticatedActorType = actor.type;
+  if (actor.id) routeParams._authenticatedActorId = actor.id;
   if (authorizedUser.userName)
     routeParams._authenticatedUserName = authorizedUser.userName;
   if (authorizedUser.userEmail)

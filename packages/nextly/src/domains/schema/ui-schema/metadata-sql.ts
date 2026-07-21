@@ -12,9 +12,11 @@
  * the slug via the shared helpers. `id` is derived deterministically from the
  * slug so the committed SQL is byte-stable.
  *
- * KNOWN LIMITATION (v1): label-only edits produce no DDL operation, so no
- * migration is generated and the label change is not propagated until a schema
- * change co-occurs.
+ * KNOWN LIMITATION (v1): metadata-only edits produce no DDL operation, so no
+ * migration is generated and the change is not propagated until a schema
+ * change co-occurs. This covers labels, and equally the `status`, `localized`
+ * and `versions` flags: flipping one alone leaves the deployed registry row on
+ * its previous value until the next migration for that table.
  *
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
@@ -28,6 +30,7 @@ import {
   toPluralLabel,
   toSingularLabel,
 } from "../../../shared/lib/pluralization";
+import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 
@@ -54,6 +57,21 @@ function sqlStr(value: string): string {
 function jsonLiteral(value: unknown, dialect: Dialect): string {
   const lit = sqlStr(JSON.stringify(value));
   return dialect === "postgresql" ? `${lit}::jsonb` : lit;
+}
+
+/**
+ * The `versions` column value for a manifest entity.
+ *
+ * The column holds the resolved config every runtime reader tests, so the
+ * manifest's boolean is normalized through the same mapping the Builder's write
+ * paths use.
+ */
+function versionsLiteral(
+  versions: boolean | undefined,
+  dialect: Dialect
+): string {
+  const resolved = resolveBuilderVersions(versions);
+  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
 /** Boolean literal: integer on SQLite, keyword elsewhere. */
@@ -170,6 +188,14 @@ export function buildCollectionMetadataUpsert(
       value: boolLiteral(entity.localized === true, dialect),
       update: true,
     },
+    {
+      // Always written, including when off: turning the switch off has to clear
+      // the column, and a column left out of the upsert is untouched by its
+      // DO UPDATE SET.
+      name: "versions",
+      value: versionsLiteral(entity.versions, dialect),
+      update: true,
+    },
     { name: "migration_status", value: sqlStr("applied") },
   ];
   if (entity.admin !== undefined) {
@@ -212,6 +238,14 @@ export function buildSingleMetadataUpsert(
       // boot-time companion registration reflect the single's config.
       name: "localized",
       value: boolLiteral(entity.localized === true, dialect),
+      update: true,
+    },
+    {
+      // Always written, including when off: turning the switch off has to clear
+      // the column, and a column left out of the upsert is untouched by its
+      // DO UPDATE SET.
+      name: "versions",
+      value: versionsLiteral(entity.versions, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },

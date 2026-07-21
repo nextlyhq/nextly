@@ -74,6 +74,7 @@ import {
   resolveComponentTableName,
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -134,9 +135,7 @@ export async function runMigrateCheck(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -151,9 +150,7 @@ export async function runMigrateCheck(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(
-      `UI_SCHEMA_INVALID: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`UI_SCHEMA_INVALID: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -470,9 +467,7 @@ export function registerMigrateCheckCommand(program: Command): void {
       try {
         await runMigrateCheck(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

@@ -19,6 +19,8 @@
  *   mimeType: 'image/jpeg',
  * });
  * // result.url = '/uploads/2026/04/abc-photo.jpg'
+ * // result.path = '2026/04/abc-photo.jpg'
+ * // File on disk: ./public/uploads/2026/04/abc-photo.jpg
  * ```
  */
 
@@ -156,7 +158,6 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
    * Returns baseUrl + relative path for Next.js static file serving.
    */
   getPublicUrl(filePath: string): string {
-    // Strip leading slash from filePath to avoid double slashes
     const cleanPath = filePath.replace(/^\/+/, "");
     return `${this.baseUrl}/${cleanPath}`;
   }

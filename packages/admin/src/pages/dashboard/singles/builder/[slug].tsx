@@ -52,6 +52,7 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import type {
   FieldResolution,
@@ -162,6 +163,11 @@ export default function SingleBuilderEditPage({
       // i18n: reflect the saved localization flag so the Internationalization toggle shows its
       // real state (mirrors the collection builder).
       i18n: (single as { localized?: boolean }).localized === true,
+      // The registry stores the resolved config, so presence of an enabled one
+      // is what the switch reflects.
+      versions:
+        (single as { versions?: { enabled?: boolean } | null }).versions
+          ?.enabled === true,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
@@ -184,18 +190,10 @@ export default function SingleBuilderEditPage({
   // Settings-only dirty signal — same fix as the collection builder. A
   // status flip / label edit on its own would otherwise leave Save
   // disabled because the field array hadn't changed.
-  const settingsDirty = useMemo(() => {
-    if (!originalSettings || !settings) return false;
-    return (
-      originalSettings.singularName !== settings.singularName ||
-      originalSettings.slug !== settings.slug ||
-      originalSettings.description !== settings.description ||
-      originalSettings.icon !== settings.icon ||
-      originalSettings.status !== settings.status ||
-      // i18n: toggling Internationalization on its own must enable Save.
-      originalSettings.i18n !== settings.i18n
-    );
-  }, [originalSettings, settings]);
+  const settingsDirty = useMemo(
+    () => settingsAreDirty(originalSettings, settings),
+    [originalSettings, settings]
+  );
 
   const unsavedCount = fieldsDirtyCount + (settingsDirty ? 1 : 0);
 
@@ -243,7 +241,37 @@ export default function SingleBuilderEditPage({
           setShowSchemaDialog(false);
           setPreviewData(null);
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
-          if (settings) setOriginalSettings(settings);
+
+          // The schema apply carries fields only, so a save that changed the
+          // settings as well would clear the dirty badge while the registry
+          // kept the old values. Persist them here, without `fields` so no
+          // second migration is generated for a schema already applied.
+          if (settings) {
+            updateSingle(
+              {
+                slug,
+                updates: {
+                  label: settings.singularName,
+                  description: settings.description,
+                  status: settings.status === true,
+                  localized: settings.i18n === true,
+                  versions: settings.versions === true,
+                },
+              },
+              {
+                // The baseline moves only once the write lands. Clearing it
+                // first would show a clean form over a registry that still
+                // holds the old settings, with no way to retry.
+                onSuccess: () => setOriginalSettings(settings),
+                onError: err => {
+                  const m = (err as { message?: string })?.message;
+                  toast.error(
+                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+                  );
+                },
+              }
+            );
+          }
 
           // D-series: database mode also writes the committable ui-schema.json
           // so the single has a migration record. Non-fatal if it fails.
@@ -277,7 +305,7 @@ export default function SingleBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, settings, builder.fields]
+    [slug, startRestart, stopRestart, settings, builder.fields, updateSingle]
   );
 
   // No-schema-change path: persist labels/settings only.
@@ -306,6 +334,9 @@ export default function SingleBuilderEditPage({
             // companion single_<slug>_locales table; always send the boolean so OFF also reaches
             // the server. Mirrors the collection builder.
             localized: settings.i18n === true,
+            // Version history: the server normalizes this into the resolved
+            // config the registry column holds.
+            versions: settings.versions === true,
           },
         },
         {

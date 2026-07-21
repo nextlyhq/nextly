@@ -10,13 +10,13 @@
  * array so editors can curate which links appear in the footer "Read"
  * column independently from the top-level header nav.
  */
-import { defineSingle, text, checkbox, array } from "nextly/config";
+import { defineSingle, text, checkbox, repeater } from "nextly/config";
 
 export const Navigation = defineSingle({
   slug: "navigation",
   label: { singular: "Navigation" },
   fields: [
-    array({
+    repeater({
       name: "headerLinks",
       fields: [
         text({ name: "label", required: true }),
@@ -24,7 +24,7 @@ export const Navigation = defineSingle({
         checkbox({ name: "openInNewTab", defaultValue: false }),
       ],
     }),
-    array({
+    repeater({
       name: "footerReadLinks",
       fields: [
         text({ name: "label", required: true }),

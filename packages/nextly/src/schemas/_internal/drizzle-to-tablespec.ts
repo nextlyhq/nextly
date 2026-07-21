@@ -63,17 +63,32 @@ export function drizzleTableToTableSpec(table: Table): TableSpec {
 function normalizeDrizzleType(col: {
   columnType: string;
   dataType: string;
+  dimensions?: number;
   getSQLType?: () => string;
 }): string {
+  let base: string | undefined;
   if (typeof col.getSQLType === "function") {
     try {
-      return col.getSQLType().toLowerCase();
+      base = col.getSQLType().toLowerCase();
     } catch {
       // Some column subclasses throw if called without a configured table;
       // fall through to the dataType fallback below.
     }
   }
-  return col.dataType.toLowerCase();
+  base ??= col.dataType.toLowerCase();
+
+  // Array-ness lives in `dimensions`, not in the rendered type: Drizzle marks
+  // `text("tags").array()` as PgText with dimensions 1, so getSQLType() returns
+  // "text" for both a text column and a text[] column. Live introspection
+  // reads PostgreSQL's `_text` for the array, which normalises to "text[]", so
+  // omitting this reports a type change on a column nobody touched — and a
+  // type change is destructive, which refuses the entire core reconcile.
+  //
+  // One suffix regardless of depth: PostgreSQL's udt_name is `_text` for any
+  // dimensionality, so the live side cannot distinguish text[] from text[][]
+  // and matching that keeps both sides comparable.
+  const dimensions = col.dimensions ?? 0;
+  return dimensions > 0 ? `${base}[]` : base;
 }
 
 /**

@@ -14,6 +14,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
+import { describeError, immediateMessage } from "../../errors/index";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
@@ -106,9 +107,10 @@ export async function syncCollections(
       onRemoved: options.removeOrphaned ? "delete" : "warn",
     });
   } catch (error) {
-    logger.error(
-      `Sync failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    // Name the phase that failed, then rethrow. The detail is deliberately
+    // left to the top-level handler: printing it here too would render the
+    // same description twice for a single failure.
+    logger.error("Sync failed while registering collections.");
     throw error;
   }
 
@@ -190,9 +192,7 @@ export async function syncSingles(
   try {
     result = await singleRegistry.syncCodeFirstSingles(codeFirstConfigs);
   } catch (error) {
-    logger.error(
-      `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error("Singles sync failed while registering singles.");
     throw error;
   }
 
@@ -304,9 +304,7 @@ export async function syncComponents(
   try {
     result = await componentRegistry.syncCodeFirstComponents(codeFirstConfigs);
   } catch (error) {
-    logger.error(
-      `Components sync failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error("Components sync failed while registering components.");
     throw error;
   }
 
@@ -476,15 +474,20 @@ export async function syncUserFields(
       logger.warn("user_ext table creation SQL executed but table not found");
     }
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    // Table already exists is expected with CREATE TABLE IF NOT EXISTS
-    if (errorMsg.includes("already exists") || errorMsg.includes("duplicate")) {
+    // Table already exists is expected with CREATE TABLE IF NOT EXISTS.
+    // Match the immediate message only, so a wrapped failure carrying those
+    // words deeper in its cause chain is still reported rather than skipped.
+    const immediate = immediateMessage(error);
+    if (
+      immediate.includes("already exists") ||
+      immediate.includes("duplicate")
+    ) {
       const tableExists = await drizzleAdapter.tableExists("user_ext");
       if (tableExists) {
         logger.success("user_ext table already exists");
       }
     } else {
-      logger.warn(`user_ext sync error: ${errorMsg}`);
+      logger.warn(`user_ext sync error: ${describeError(error)}`);
     }
   }
 }
@@ -599,17 +602,19 @@ export async function performPermissionSeeding(
       }
     }
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    // Handle fresh DB scenarios gracefully (tables may not exist yet)
+    // Handle fresh DB scenarios gracefully (tables may not exist yet). The
+    // immediate message decides: a real seeding failure that merely wraps a
+    // "does not exist" cause must still be reported, not skipped silently.
+    const immediate = immediateMessage(error);
     if (
-      errorMsg.includes("no such table") ||
-      errorMsg.includes("does not exist") ||
-      errorMsg.includes("relation") ||
-      errorMsg.includes("doesn't exist")
+      immediate.includes("no such table") ||
+      immediate.includes("does not exist") ||
+      immediate.includes("relation") ||
+      immediate.includes("doesn't exist")
     ) {
       logger.debug("Skipping permission seeding (tables may not exist yet)");
     } else {
-      logger.warn(`Permission seeding failed: ${errorMsg}`);
+      logger.warn(`Permission seeding failed: ${describeError(error)}`);
     }
   }
 }
@@ -680,7 +685,7 @@ async function handleRemovedSingles(
       logger.success(`Deleted orphaned single: ${slug} (table: ${tableName})`);
     } catch (error) {
       logger.error(
-        `Failed to delete single "${slug}": ${error instanceof Error ? error.message : String(error)}`
+        `Failed to delete single "${slug}": ${describeError(error)}`
       );
     }
   }
@@ -732,7 +737,7 @@ async function handleRemovedComponents(
       );
     } catch (error) {
       logger.error(
-        `Failed to delete component "${slug}": ${error instanceof Error ? error.message : String(error)}`
+        `Failed to delete component "${slug}": ${describeError(error)}`
       );
     }
   }

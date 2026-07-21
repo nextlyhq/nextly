@@ -110,3 +110,117 @@ describe("buildComponentMetadataUpsert", () => {
     expect(sql).not.toContain('"status"');
   });
 });
+
+describe("versions column", () => {
+  const versioned = uiSchemaManifest.parse({
+    collections: [
+      { slug: "posts", versions: true, fields: [{ name: "t", type: "text" }] },
+    ],
+    singles: [
+      { slug: "about", versions: true, fields: [{ name: "t", type: "text" }] },
+    ],
+    components: [],
+  });
+
+  // Every entity kind that can hold entries needs the column written, not just
+  // the one the toggle was first wired for.
+  const cases = [
+    ["collection", buildCollectionMetadataUpsert, versioned.collections[0]],
+    ["single", buildSingleMetadataUpsert, versioned.singles[0]],
+  ] as const;
+
+  for (const [kind, build, entity] of cases) {
+    it(`${kind}: stores the resolved config, not the raw boolean`, () => {
+      // Every runtime reader tests `versions.enabled`, so a bare `true` in the
+      // column would read as unversioned.
+      const sql = build(entity, "sqlite");
+      expect(sql).toContain('"versions"');
+      expect(sql).toContain('"enabled":true');
+      expect(sql).not.toMatch(/"versions"[^,)]*\btrue\b/);
+    });
+
+    it(`${kind}: writes NULL when the entity is unversioned`, () => {
+      // The column must be written even when off: an omitted column is left
+      // untouched by the upsert's DO UPDATE SET, so turning the switch off
+      // would never clear a previously versioned row.
+      const off = { ...entity, versions: undefined };
+      const sql = build(off, "sqlite");
+      expect(sql).toContain('"versions"');
+      expect(sql).toMatch(/NULL/);
+    });
+
+    it(`${kind}: keeps the column updatable on conflict`, () => {
+      const sql = build(entity, "postgresql");
+      expect(sql).toContain('"versions" = EXCLUDED."versions"');
+    });
+  }
+
+  it("writes NULL for an explicit versions: false alongside status", () => {
+    // The pair matters: `status: true` aliases to a versioned config in the
+    // code-first resolver, so an explicit off has to win over the alias.
+    const explicit = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "posts",
+          status: true,
+          versions: false,
+          fields: [{ name: "t", type: "text" }],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const sql = buildCollectionMetadataUpsert(
+      explicit.collections[0],
+      "sqlite"
+    );
+    expect(sql).toContain('"versions"');
+    expect(sql).not.toContain('"enabled":true');
+  });
+
+  it("rejects versions on a component", () => {
+    // Components hold no entries of their own; their parent's versioning
+    // covers them, so the key would persist a setting nothing reads.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [],
+      singles: [],
+      components: [
+        { slug: "seo", versions: true, fields: [{ name: "t", type: "text" }] },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("stores the switch as history-only, not drafts", () => {
+    // The control records saves so they can be restored and says so; the
+    // code-first default of `true` would additionally turn drafts and autosave
+    // on, which the help text explicitly disclaims.
+    const sql = buildCollectionMetadataUpsert(
+      versioned.collections[0],
+      "sqlite"
+    );
+    expect(sql).toContain('"enabled":true');
+    expect(sql).toMatch(/"drafts":\{[^}]*"enabled":false/);
+  });
+
+  it("does not enable versioning just because status is on", () => {
+    // `status: true` aliases to a versioned config in the code-first resolver
+    // for back-compat. Honouring that here would leave the Builder's switch
+    // unable to turn versioning off on any Draft/Published entity.
+    const statusOnly = uiSchemaManifest.parse({
+      collections: [
+        { slug: "posts", status: true, fields: [{ name: "t", type: "text" }] },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const sql = buildCollectionMetadataUpsert(
+      statusOnly.collections[0],
+      "sqlite"
+    );
+    expect(sql).not.toContain('"enabled":true');
+  });
+});

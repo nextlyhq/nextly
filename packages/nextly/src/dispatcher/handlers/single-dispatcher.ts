@@ -27,6 +27,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { resolveSingleDocumentId } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
@@ -58,6 +59,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -91,6 +93,11 @@ import { writeBuilderMigration } from "../helpers/write-builder-migration";
 import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import {
+  getVersionForDocument,
+  listVersionsForDocument,
+  userFromParams,
+} from "./versions-methods";
 
 // ============================================================
 // Default field helpers
@@ -294,7 +301,65 @@ async function reconcileSingleCompanion(args: {
 // Method definitions
 // ============================================================
 
+/**
+ * Version-history reads for a Single document.
+ *
+ * A Single's URL carries no entry id — there is only ever one document — so the
+ * id is resolved from the live row rather than taken from params. Trusting a
+ * client-supplied value would defeat the check that stops a Single recreated
+ * under a new id from exposing its predecessor's snapshots.
+ */
+export const SINGLE_VERSION_METHODS: Record<
+  string,
+  MethodHandler<SinglesServices>
+> = {
+  listSingleVersions: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const result = await listVersionsForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        limit: p.limit !== undefined ? Number(p.limit) : undefined,
+        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+      });
+      return respondList(result.items, result.meta);
+    },
+  },
+  getSingleVersion: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const row = await getVersionForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondDoc(row);
+    },
+  },
+};
+
+/**
+ * The live document's id, or a not-found error when the Single has never been
+ * materialized — in which case it has no history to show either.
+ */
+async function requireLiveSingleId(slug: string): Promise<string> {
+  const id = await resolveSingleDocumentId(slug);
+  if (id === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "single-not-materialized", slug },
+    });
+  }
+  return id;
+}
+
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
+  ...SINGLE_VERSION_METHODS,
   listSingles: {
     // Permission filtering is pushed into the registry as a slug allowlist
     // so the SQL count and the row results share the same scope. This keeps
@@ -375,6 +440,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization opt-in; persists to dynamic_singles.localized and
             // provisions the companion single_<slug>_locales table.
             localized?: boolean;
+            // Version history opt-in; persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -511,6 +578,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         status: b.status === true,
         // i18n: persist the Internationalization flag so the single reads/writes per language.
         localized: isLocalized,
+        // Persist version history from the create payload; without it a Single
+        // created with the switch on is written unversioned and the switch
+        // reads as off the moment the editor loads.
+        versions: resolveBuilderVersions(b.versions),
         schemaHash,
         migrationStatus,
       });
@@ -777,6 +848,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization toggle; honoured when defined, undefined leaves the
             // existing value untouched. Persists to dynamic_singles.localized.
             localized?: boolean;
+            // Version history toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -803,6 +877,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // managed on the companion (moving existing rows between the two is the `nextly migrate`
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
+      // Version history toggle. The registry column holds the resolved config
+      // every runtime reader tests, so the boolean is normalized before it is
+      // stored; off writes null. `status` is deliberately not passed to the
+      // resolver: it aliases to a versioned config for back-compat, which would
+      // stop the toggle from turning versioning off on a Draft/Published single.
+      if (b.versions !== undefined) {
+        updateData.versions = resolveBuilderVersions(b.versions);
+      }
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;

@@ -11,6 +11,7 @@ import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { describeError } from "../../errors/index";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CommandContext } from "../program";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
@@ -37,9 +38,7 @@ export async function runDemote(
     const result = await loadNextlyConfig(context.cwd);
     config = result.config;
   } catch (err) {
-    logger.error(
-      `Could not load nextly config: ${err instanceof Error ? err.message : String(err)}`
-    );
+    logger.error(`Could not load nextly config: ${describeError(err)}`);
     process.exit(1);
   }
 

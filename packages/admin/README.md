@@ -26,7 +26,7 @@ pnpm add @nextlyhq/admin
 Peer dependencies (must be installed in the consuming project):
 
 ```bash
-pnpm add nextly react react-dom next
+pnpm add nextly @nextlyhq/ui lucide-react react react-dom next
 ```
 
 ## Quick usage

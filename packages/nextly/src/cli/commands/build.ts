@@ -28,8 +28,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, basename } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -41,6 +41,7 @@ import {
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import { describeError } from "../../errors/index";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { createContext, type CommandContext } from "../program";
@@ -53,6 +54,11 @@ import {
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 
 // ============================================================================
 // Types
@@ -217,9 +223,7 @@ export async function runBuild(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -309,9 +313,7 @@ export async function runBuild(
       }
     } catch (error) {
       result.success = false;
-      logger.error(
-        `File generation failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      logger.error(`File generation failed: ${describeError(error)}`);
     }
   }
 
@@ -451,7 +453,7 @@ function validateAllCollections(
     try {
       assertValidCollectionConfig(collection);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       errors.push({
         collection: collection.slug,
         message,
@@ -729,9 +731,7 @@ async function checkMigrationStatus(
     });
     logger.debug(`Connected to ${getDialectDisplayName(dialect)}`);
   } catch (error) {
-    logger.debug(
-      `Cannot check migrations: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.debug(`Cannot check migrations: ${describeError(error)}`);
     return result;
   }
 
@@ -740,7 +740,7 @@ async function checkMigrationStatus(
 
     // Discover migration files
     const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-    const migrationFiles = await discoverMigrations(migrationsDir);
+    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
 
     // Get applied migrations from database
     const appliedMigrations = await getAppliedMigrations(
@@ -777,30 +777,28 @@ async function checkMigrationStatus(
  * Discover migration files from the migrations directory
  */
 async function discoverMigrations(
-  migrationsDir: string
+  migrationsDir: string,
+  dialect?: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  let files: string[];
-
-  try {
-    files = await readdir(migrationsDir);
-  } catch {
-    return [];
-  }
-
-  const sqlFiles = files
-    .filter(f => f.endsWith(".sql"))
-    .sort((a, b) => a.localeCompare(b));
-
+  // Use shared migration discovery to group dialect variants
+  const groups = await discoverMigrationGroups(migrationsDir);
   const migrations: ParsedMigration[] = [];
 
-  for (const file of sqlFiles) {
-    const filePath = resolve(migrationsDir, file);
-    const name = basename(file, ".sql");
+  // Process each migration group in sorted order
+  for (const baseName of getSortedBaseNames(groups)) {
+    const group = groups.get(baseName)!;
+    const selectedFile = selectVariant(group.variants, dialect);
+
+    if (!selectedFile) {
+      continue;
+    }
+
+    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
       const checksum = createHash("sha256").update(content).digest("hex");
-      migrations.push({ name, filePath, checksum });
+      migrations.push({ name: baseName, filePath, checksum });
     } catch {
       // Skip files that can't be read
     }
@@ -871,9 +869,7 @@ export function registerBuildCommand(program: Command): void {
       try {
         await runBuild(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

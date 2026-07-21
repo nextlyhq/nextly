@@ -44,7 +44,8 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     const rules: string[] = [];
 
-    // Note: The /admin-meta API already returns HSL triplets like "0 0% 0%"
+    // The /admin-meta API resolves these to complete CSS colors (e.g.
+    // "hsl(239 84.3% 64.7%)"), which is what the `--nx-*` tokens hold.
     const primaryHsl = colors.primary;
     const accentHsl = colors.accent;
 
@@ -70,7 +71,9 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     // Scoped to .nextly-admin so we never leak styles to the host application.
     // Applied to both light and dark variants since the user's brand colors
-    // are injected as the same HSL values in both modes.
+    // are injected as the same values in both modes. Keep this selector and the
+    // token names in step with `getBrandingCss`, which server-renders the same
+    // declarations to avoid a flash of unbranded color before this runs.
     const css = `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} }`;
 
     const style = document.createElement("style");

@@ -27,6 +27,8 @@
 
 import { randomUUID } from "crypto";
 
+import { getColumns } from "drizzle-orm";
+
 import { getDialectTables } from "../../database/index";
 import { getNextlyLogger } from "../../observability/logger";
 
@@ -71,6 +73,50 @@ export const NULL_AUDIT_LOG_WRITER: AuditLogWriter = {
  * the adapter lazily on each write — handlers can be constructed before
  * the DI container finishes initialising.
  */
+/**
+ * The dialect of the adapter a write is going through.
+ *
+ * Every Drizzle adapter declares `dialect` directly; `getCapabilities()` is
+ * consulted only as a secondary source for adapters that predate it. Returns
+ * undefined rather than guessing, because the caller must not fall back to the
+ * environment: that is the coupling this exists to remove.
+ */
+function adapterDialect(adapter: unknown): string | undefined {
+  const candidate = adapter as {
+    dialect?: unknown;
+    getCapabilities?: () => { dialect?: unknown } | undefined;
+  };
+  if (typeof candidate?.dialect === "string") return candidate.dialect;
+  const fromCapabilities = candidate?.getCapabilities?.()?.dialect;
+  return typeof fromCapabilities === "string" ? fromCapabilities : undefined;
+}
+
+/**
+ * Encode `metadata` for whichever column type this dialect uses.
+ *
+ * The column is `jsonb` on PostgreSQL and `json` on MySQL, where the driver
+ * serialises an object itself and handing it a pre-encoded string would store
+ * a JSON string rather than an object. On SQLite it is plain `text`, which
+ * cannot bind an object at all — the insert fails, and because the writer
+ * swallows its own failures the loss is silent.
+ *
+ * Decided from the column rather than a dialect string so the two stay in step
+ * if either schema changes.
+ */
+function encodeMetadata(
+  table: unknown,
+  metadata: Record<string, unknown> | undefined
+): unknown {
+  if (metadata === undefined) return null;
+  const column = (
+    getColumns(table as Parameters<typeof getColumns>[0]) as Record<
+      string,
+      { dataType?: string } | undefined
+    >
+  ).metadata;
+  return column?.dataType === "string" ? JSON.stringify(metadata) : metadata;
+}
+
 export function buildAuditLogWriter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
@@ -80,7 +126,24 @@ export function buildAuditLogWriter(
       try {
         const adapter = getService("adapter");
         const db = adapter.getDrizzle();
-        const schema = getDialectTables();
+        // Resolve tables from the adapter actually being written through, not
+        // from the process-wide DB_DIALECT: env.ts caches that on first read,
+        // so a process whose cache was populated by a different dialect would
+        // build rows in the wrong shape for this connection.
+        const dialect = adapterDialect(adapter);
+        if (!dialect) {
+          // Falling back to the environment here would restore exactly the
+          // coupling above, and silently: the row would be built for whatever
+          // dialect happened to be validated first and the insert would fail
+          // inside the catch below. Skipping loudly is the lesser harm.
+          getNextlyLogger().warn({
+            kind: "audit-log-write-skipped",
+            eventKind: event.kind,
+            reason: "adapter did not report a dialect",
+          });
+          return;
+        }
+        const schema = getDialectTables(dialect);
         const table = (schema as { auditLog?: unknown }).auditLog;
         if (!table) {
           // Dialect tables may not include auditLog if the consumer is
@@ -94,7 +157,7 @@ export function buildAuditLogWriter(
           targetUserId: event.targetUserId ?? null,
           ipAddress: event.ipAddress ?? null,
           userAgent: event.userAgent ?? null,
-          metadata: event.metadata ?? null,
+          metadata: encodeMetadata(table, event.metadata),
           createdAt: new Date(),
         });
       } catch (err) {

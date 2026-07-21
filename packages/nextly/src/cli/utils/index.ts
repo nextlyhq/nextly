@@ -43,3 +43,12 @@ export {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "./adapter";
+
+// Shared dialect-variant resolution contract for CLI commands
+export {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+  type MigrationVariant,
+  type MigrationGroup,
+} from "./migration-discovery";

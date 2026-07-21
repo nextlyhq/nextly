@@ -10,7 +10,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  confineVariantClasses,
   findUnscopedRules,
+  isScoped,
+  prefixKeyframes,
   scopeCss,
   scopeSelector,
   splitTopLevel,
@@ -161,5 +164,191 @@ describe("findUnscopedRules", () => {
         "/*! tailwindcss v4 */\n@layer base{.nextly-admin a{color:red}}"
       )
     ).toEqual([]);
+  });
+});
+
+describe("a custom scope", () => {
+  // The same sheet is emitted for embedding outside the admin, where the root
+  // class differs; preflight and the token block must follow the scope given.
+  it("collapses document-root selectors onto the given scope", () => {
+    expect(scopeSelector(":root", ".nextly-ui")).toBe(".nextly-ui");
+    expect(scopeSelector("html", ".nextly-ui")).toBe(".nextly-ui");
+    expect(scopeSelector("body", ".nextly-ui")).toBe(".nextly-ui");
+  });
+
+  it("puts the dark class on the scope root, not a descendant", () => {
+    expect(scopeSelector(".dark", ".nextly-ui")).toBe(".nextly-ui.dark");
+  });
+
+  it("scopes each part of a grouped preflight selector", () => {
+    expect(scopeSelector("*, ::after, ::before", ".nextly-ui")).toBe(
+      ".nextly-ui *, .nextly-ui ::after, .nextly-ui ::before"
+    );
+  });
+
+  it("leaves selectors already carrying the scope alone", () => {
+    expect(scopeSelector(".nextly-ui .card", ".nextly-ui")).toBe(
+      ".nextly-ui .card"
+    );
+  });
+
+  it("scopes a whole sheet and reports nothing unscoped", () => {
+    const out = scopeCss(":root{--nx-a:1}\n.card{color:red}", ".nextly-ui");
+    expect(out).toContain(".nextly-ui{--nx-a:1}");
+    expect(out).toContain(".nextly-ui .card{color:red}");
+    expect(findUnscopedRules(out, ".nextly-ui")).toEqual([]);
+  });
+
+  it("still reports a leak when a rule escapes the given scope", () => {
+    expect(findUnscopedRules(".nextly-ui .a, .leak{color:red}", ".nextly-ui"))
+      .toHaveLength(1);
+  });
+
+  // A class that merely starts with the scope text is a different class, and an
+  // attribute selector matching the scope as a substring is not constrained by
+  // the wrapper at all. Both must be treated as unscoped, or they pass straight
+  // through scoping and the leak check into the shipped sheet.
+  it("does not mistake a longer class name for the scope", () => {
+    expect(scopeSelector(".nextly-ui-card", ".nextly-ui")).toBe(
+      ".nextly-ui .nextly-ui-card"
+    );
+    expect(
+      findUnscopedRules(".nextly-ui-card{color:red}", ".nextly-ui")
+    ).toEqual([".nextly-ui-card"]);
+  });
+
+  it("does not accept the scope appearing inside an attribute selector", () => {
+    expect(
+      findUnscopedRules('[class*=".nextly-ui"]{color:red}', ".nextly-ui")
+    ).toEqual(['[class*=".nextly-ui"]']);
+  });
+
+  it("accepts the scope when the class ends at a boundary", () => {
+    expect(isScoped(".nextly-ui.dark .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui > .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-uix", ".nextly-ui")).toBe(false);
+  });
+
+  // The scope class can appear in a selector without constraining the rule to
+  // the wrapper: negated, or on a sibling the wrapper does not contain.
+  it("rejects a negated scope", () => {
+    expect(isScoped(":not(.nextly-ui)", ".nextly-ui")).toBe(false);
+    expect(isScoped(".card:not(.nextly-ui)", ".nextly-ui")).toBe(false);
+    expect(
+      findUnscopedRules(":not(.nextly-ui){color:red}", ".nextly-ui")
+    ).toEqual([":not(.nextly-ui)"]);
+  });
+
+  it("rejects a sibling of the wrapper", () => {
+    expect(isScoped(".nextly-ui + .host", ".nextly-ui")).toBe(false);
+    expect(isScoped(".nextly-ui ~ .host", ".nextly-ui")).toBe(false);
+    expect(
+      findUnscopedRules(".nextly-ui + .host{color:red}", ".nextly-ui")
+    ).toEqual([".nextly-ui + .host"]);
+  });
+
+  it("accepts a sibling of an element already inside the wrapper", () => {
+    // `.b` shares a parent with `.a`, and `.a` is inside, so `.b` is too. Only
+    // a sibling of the wrapper itself escapes.
+    expect(isScoped(".nextly-ui .a + .b", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui .a ~ .b", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui > .a + .b", ".nextly-ui")).toBe(true);
+    expect(
+      findUnscopedRules(".nextly-ui .a + .b{color:red}", ".nextly-ui")
+    ).toEqual([]);
+  });
+
+  it("accepts descendant and child steps below the wrapper", () => {
+    expect(isScoped(".nextly-ui > .card", ".nextly-ui")).toBe(true);
+    expect(isScoped(".nextly-ui .a > .b", ".nextly-ui")).toBe(true);
+    // A sibling BEFORE the scope is fine: the subject is still inside it.
+    expect(isScoped(".host + .nextly-ui .card", ".nextly-ui")).toBe(true);
+  });
+
+  it("keeps combinators inside :is()/:where() out of the structural check", () => {
+    expect(isScoped(".nextly-ui .a:is(.x + .y)", ".nextly-ui")).toBe(true);
+  });
+
+  // Tailwind escapes arbitrary variants into the class name, so `~`, `[` and
+  // `:not(` can appear as literal characters that are not structure.
+  it("reads escaped characters in a class name as literals", () => {
+    const cmdk =
+      ".nextly-ui .\\[\\&_\\[cmdk-group\\]\\:not\\(\\[hidden\\]\\)_\\~\\[cmdk-group\\]\\]\\:pt-0";
+    expect(isScoped(cmdk, ".nextly-ui")).toBe(true);
+    expect(findUnscopedRules(`${cmdk}{color:red}`, ".nextly-ui")).toEqual([]);
+  });
+
+  it("does not read an escaped class as the scope itself", () => {
+    expect(isScoped(".nextly-ui\\~x", ".nextly-ui")).toBe(false);
+  });
+
+  it("confines dark and group variants to the scope", () => {
+    const css =
+      ".nextly-ui .dark\\:bg-x:where(.dark, .dark *){color:red}" +
+      ".nextly-ui .group-hover\\:x:is(:where(.group):hover *){color:blue}";
+    const out = confineVariantClasses(css, ".nextly-ui");
+
+    expect(out).toContain(":where(.nextly-ui.dark,.nextly-ui.dark *)");
+    expect(out).toContain(":where(.nextly-ui .group)");
+    // No bare ancestor reference is left for the host to satisfy.
+    expect(out).not.toContain(":where(.dark, .dark *)");
+    expect(out).not.toContain(":where(.group)");
+  });
+
+  // Named variants (`group-hover/item:`) reference `.group\/item`. The leak
+  // check cannot see these — the rule's own compound is scoped, so the ancestor
+  // reference is the only part that reaches outside the wrapper.
+  it("confines named group and peer markers", () => {
+    const css =
+      ".nextly-ui .group-hover\\/item\\:underline:is(:where(.group\\/item):hover *){color:red}" +
+      ".nextly-ui .peer-checked\\/field\\:font-bold:is(:where(.peer\\/field):checked ~ *){color:blue}";
+    const out = confineVariantClasses(css, ".nextly-ui");
+
+    expect(out).toContain(":where(.nextly-ui .group\\/item)");
+    expect(out).toContain(":where(.nextly-ui .peer\\/field)");
+    expect(out).not.toContain(":where(.group\\/item)");
+    expect(out).not.toContain(":where(.peer\\/field)");
+  });
+
+  it("namespaces keyframe names and the references to them", () => {
+    const css = [
+      "@keyframes spin{to{transform:rotate(360deg)}}",
+      ".nextly-ui .a{animation:spin 1s linear infinite}",
+      ".nextly-ui{--animate-spin:spin 1s linear infinite}",
+      ".nextly-ui .b{animation-name:spin}",
+    ].join("\n");
+    const out = prefixKeyframes(css, "nx-");
+
+    expect(out).toContain("@keyframes nx-spin");
+    expect(out).toContain("animation:nx-spin 1s linear infinite");
+    expect(out).toContain("--animate-spin:nx-spin 1s linear infinite");
+    expect(out).toContain("animation-name:nx-spin");
+    // No bare reference survives to collide with a host animation.
+    expect(out).not.toMatch(/(^|[\s,:]) spin(?=$|[\s,;}])/);
+  });
+
+  it("leaves identifiers that merely share a keyframe name alone", () => {
+    const css = [
+      "@keyframes spin{to{opacity:1}}",
+      ".nextly-ui .a{content:'spin';transition:spin 1s}",
+    ].join("\n");
+    const out = prefixKeyframes(css, "nx-");
+
+    expect(out).toContain("content:'spin'");
+    expect(out).toContain("transition:spin 1s");
+  });
+
+  it("keeps a var() reference intact while namespacing the token value", () => {
+    const out = prefixKeyframes(
+      "@keyframes pulse{to{opacity:1}}\n.nextly-ui .a{animation:var(--animate-pulse)}",
+      "nx-"
+    );
+    expect(out).toContain("animation:var(--animate-pulse)");
+  });
+
+  it("scopes the unscoped half of a partially scoped selector list", () => {
+    expect(scopeCss(".nextly-ui .a, .b{color:red}", ".nextly-ui")).toContain(
+      ".nextly-ui .a, .nextly-ui .b{"
+    );
   });
 });

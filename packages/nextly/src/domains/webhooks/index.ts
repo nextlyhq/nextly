@@ -23,7 +23,7 @@ export {
   type FanOutResult,
 } from "./fan-out";
 export {
-  sensitiveFieldNames,
+  sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 export {

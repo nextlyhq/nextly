@@ -25,13 +25,14 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { resolve, basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { describeError } from "../../errors/index";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
@@ -46,6 +47,11 @@ import {
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 
 /**
  * Options specific to the migrate:status command
@@ -192,7 +198,7 @@ export async function runMigrateStatus(
       debug: options.verbose,
     });
   } catch (error) {
-    const errorMsg = `Failed to load config: ${error instanceof Error ? error.message : String(error)}`;
+    const errorMsg = `Failed to load config: ${describeError(error)}`;
     if (options.json) {
       console.log(JSON.stringify({ error: errorMsg }, null, 2));
       process.exit(1);
@@ -221,7 +227,7 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    const errorMsg = `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`;
+    const errorMsg = `Failed to connect to database: ${describeError(error)}`;
     if (options.json) {
       console.log(JSON.stringify({ error: errorMsg }, null, 2));
       process.exit(1);
@@ -236,7 +242,7 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    const migrationFiles = await discoverMigrations(migrationsDir);
+    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const appliedMigrations = await getAppliedMigrations(
@@ -286,29 +292,27 @@ export async function runMigrateStatus(
 }
 
 async function discoverMigrations(
-  migrationsDir: string
+  migrationsDir: string,
+  dialect?: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  let files: string[];
-
-  try {
-    files = await readdir(migrationsDir);
-  } catch {
-    return [];
-  }
-
-  const sqlFiles = files
-    .filter(f => f.endsWith(".sql"))
-    .sort((a, b) => a.localeCompare(b));
-
+  // Use shared migration discovery to group dialect variants
+  const groups = await discoverMigrationGroups(migrationsDir);
   const migrations: ParsedMigration[] = [];
 
-  for (const file of sqlFiles) {
-    const filePath = resolve(migrationsDir, file);
-    const name = basename(file, ".sql");
+  // Process each migration group in sorted order
+  for (const baseName of getSortedBaseNames(groups)) {
+    const group = groups.get(baseName)!;
+    const selectedFile = selectVariant(group.variants, dialect);
+
+    if (!selectedFile) {
+      continue;
+    }
+
+    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
-      const parsed = parseMigrationFile(name, filePath, content);
+      const parsed = parseMigrationFile(baseName, filePath, content);
       migrations.push(parsed);
     } catch {
       // Skip files that can't be read
@@ -654,17 +658,9 @@ export function registerMigrateStatusCommand(program: Command): void {
         await runMigrateStatus(resolvedOptions, context);
       } catch (error) {
         if (resolvedOptions.json) {
-          console.log(
-            JSON.stringify(
-              { error: error instanceof Error ? error.message : String(error) },
-              null,
-              2
-            )
-          );
+          console.log(JSON.stringify({ error: describeError(error) }, null, 2));
         } else {
-          context.logger.error(
-            error instanceof Error ? error.message : String(error)
-          );
+          context.logger.error(describeError(error));
         }
         process.exit(1);
       }

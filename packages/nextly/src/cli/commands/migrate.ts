@@ -30,15 +30,18 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { resolve, basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  truncateErrorMessage,
+} from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import {
@@ -52,6 +55,7 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { NextlyError, describeError } from "../../errors";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -63,6 +67,11 @@ import {
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  selectVariant,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 
 /**
  * Options specific to the migrate command
@@ -171,9 +180,7 @@ export async function runMigrate(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -201,9 +208,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -234,7 +239,6 @@ export async function runMigrate(
     }
 
     // Operator-set override; never in CI config (spec §4.6.1).
-    // eslint-disable-next-line turbo/no-undeclared-env-vars
     const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
 
     const dz = adapter as unknown as DrizzleAdapter & {
@@ -277,7 +281,7 @@ export async function runMigrate(
           : `${formatCount(applied, "migration")} applied.`
       );
     } catch (err) {
-      logger.error(err instanceof Error ? err.message : String(err));
+      logger.error(describeError(err));
       process.exit(1);
     }
 
@@ -392,7 +396,8 @@ export async function findPendingFiles(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
-  const all = await discoverMigrations(migrationsDir, logger, "app");
+  // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
+  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -422,13 +427,41 @@ async function loadTargetSnapshot(
   name: string
 ): Promise<NextlySchemaSnapshot | null> {
   const file = `${name}.snapshot.json`;
+  const filePath = resolve(metaDir, file);
+
+  // Check if file exists first
+  let content: string;
   try {
-    const content = await readFile(resolve(metaDir, file), "utf-8");
-    return parseSnapshotFile(content, file).snapshot;
+    content = await readFile(filePath, "utf-8");
   } catch (err) {
+    // File not found - treat as no snapshot (apply SQL verbatim)
     if ((err as { code?: string }).code === "ENOENT") return null;
-    throw err;
+    throw NextlyError.internal({ cause: err as Error });
   }
+
+  // Detect snapshot format before parsing
+  // - Drift snapshots have { version, migrationHash, snapshot: { tables: [...] } }
+  // - Custom metadata snapshots (e.g., blog template) have { collections, singles }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Invalid JSON - let parseSnapshotFile handle the error reporting
+  }
+
+  // If it looks like a custom metadata format (has collections/singles, no migrationHash),
+  // treat as no snapshot so migration runs verbatim
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !("migrationHash" in parsed) &&
+    ("collections" in parsed || "singles" in parsed)
+  ) {
+    return null;
+  }
+
+  // Otherwise, parse as a drift snapshot
+  return parseSnapshotFile(content, file).snapshot;
 }
 
 /**
@@ -445,7 +478,8 @@ export async function runFileMigrations(args: {
   logger: CommandContext["logger"];
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
-  const all = await discoverMigrations(migrationsDir, logger, "app");
+  // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
+  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   if (all.length === 0) {
     logger.debug("No user migration files found.");
     return 0;
@@ -500,7 +534,14 @@ export async function runFileMigrations(args: {
         });
       } catch (err) {
         await repo.markFailed(id, {
-          errorMessage: err instanceof Error ? err.message : String(err),
+          // Bounded, and without logContext: this row is persisted and is
+          // served back by the schema-journal endpoint, so it keeps the code,
+          // message and cause chain but not the arbitrary identifiers a log
+          // context can carry. An unbounded write could also fail here and
+          // leave the migration with no recorded failure at all.
+          errorMessage: truncateErrorMessage(
+            describeError(err, { context: false })
+          ),
         });
         throw err;
       }
@@ -552,36 +593,38 @@ export async function runFileMigrations(args: {
 async function discoverMigrations(
   migrationsDir: string,
   logger: CommandContext["logger"],
+  dialect?: SupportedDialect,
   source: MigrationSource = "app"
 ): Promise<ParsedMigration[]> {
-  let files: string[];
-
-  try {
-    files = await readdir(migrationsDir);
-  } catch {
-    return [];
-  }
-
-  const sqlFiles = files
-    .filter(f => f.endsWith(".sql"))
-    .sort((a, b) => a.localeCompare(b));
-
+  // Use shared migration discovery to group dialect variants
+  const groups = await discoverMigrationGroups(migrationsDir);
   const migrations: ParsedMigration[] = [];
 
-  for (const file of sqlFiles) {
-    const filePath = resolve(migrationsDir, file);
-    const name = basename(file, ".sql");
+  // Process each migration group in sorted order
+  for (const baseName of getSortedBaseNames(groups)) {
+    const group = groups.get(baseName)!;
+    const selectedFile = selectVariant(group.variants, dialect);
+
+    if (!selectedFile) {
+      logger.warn(`No suitable migration file found for ${baseName}`);
+      continue;
+    }
+
+    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
-      const parsed = parseMigrationFile(name, filePath, content, source);
+      const parsed = parseMigrationFile(baseName, filePath, content, source);
       migrations.push(parsed);
     } catch (error) {
       logger.warn(
-        `Failed to parse migration file ${file}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
+
+  // Sort migrations by name to ensure consistent ordering
+  migrations.sort((a, b) => a.name.localeCompare(b.name));
 
   return migrations;
 }
@@ -654,11 +697,21 @@ export function parseSqlSections(content: string): {
   for (const line of lines) {
     const trimmedLine = line.trim();
 
-    if (trimmedLine === "-- UP" || trimmedLine.startsWith("-- UP ")) {
+    // Handle both "-- UP" and "-- UP:" formats
+    if (
+      trimmedLine === "-- UP" ||
+      trimmedLine.startsWith("-- UP ") ||
+      trimmedLine.startsWith("-- UP:")
+    ) {
       currentSection = "up";
       continue;
     }
-    if (trimmedLine === "-- DOWN" || trimmedLine.startsWith("-- DOWN ")) {
+    // Handle both "-- DOWN" and "-- DOWN:" formats
+    if (
+      trimmedLine === "-- DOWN" ||
+      trimmedLine.startsWith("-- DOWN ") ||
+      trimmedLine.startsWith("-- DOWN:")
+    ) {
       currentSection = "down";
       continue;
     }
@@ -822,9 +875,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         await runMigrate(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

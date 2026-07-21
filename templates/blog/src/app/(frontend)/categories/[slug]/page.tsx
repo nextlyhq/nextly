@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { JsonLd } from "@/components/JsonLd";
+import { EmptyState } from "@/components/EmptyState";
 import { ListingHeader } from "@/components/ListingHeader";
 import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
@@ -116,7 +117,11 @@ export default async function CategoryPage({
           ]}
         />
 
-        <PostGrid posts={posts.items} />
+        {posts.items.length > 0 ? (
+          <PostGrid posts={posts.items} />
+        ) : (
+          <EmptyState type="category" entityName={category.name} />
+        )}
 
         <div className="mt-12">
           <Pagination

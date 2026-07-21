@@ -9,7 +9,11 @@
  */
 export {
   scopeCss,
+  confineVariantClasses,
   findUnscopedRules,
+  isScoped,
+  namespaceInternalProperties,
+  prefixKeyframes,
   scopeSelector,
   splitTopLevel,
 } from "./css-scope.mjs";

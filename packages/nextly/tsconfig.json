@@ -20,6 +20,7 @@
       "@nextly/schemas/*": ["./src/schemas/*"],
       "@nextly/scripts/*": ["./src/scripts/*"],
       "@nextly/services/*": ["./src/services/*"],
+      "@nextly/singles/*": ["./src/singles/*"],
       "@nextly/storage": ["./src/storage/index.ts"],
       "@nextly/storage/*": ["./src/storage/*"],
       "@nextly/types/*": ["./src/types/*"],

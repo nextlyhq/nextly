@@ -130,10 +130,16 @@ export interface PluginAdminContributions {
    * Precompiled, `.nextly-admin`-scoped, token-driven CSS this plugin ships for
    * admin components whose utilities are not in the built-in safelist. A
    * package-relative reference (or several), e.g. "@acme/plugin/dist/admin.css".
-   * The plugin's admin entry side-effect-imports the file so the consumer's
-   * bundler loads/dedups it; this declaration is the contract the plugin doctor
-   * and tooling key off. Omit when the plugin styles itself from SDK components
-   * plus safelisted utilities.
+   *
+   * Declaring this does NOT load anything. The plugin's admin entry must
+   * side-effect-import the file (`import "./dist/admin.css"`), which is what
+   * makes the consumer's bundler load and dedupe it; this field is the
+   * machine-readable statement of that fact, for tooling and for anyone reading
+   * the manifest. The two can therefore disagree — declaring a file the entry
+   * never imports renders unstyled with no error — so keep them in step.
+   *
+   * Omit when the plugin styles itself from SDK components plus safelisted
+   * utilities.
    */
   styles?: string | string[];
   /**

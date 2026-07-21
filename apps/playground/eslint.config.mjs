@@ -8,6 +8,9 @@ const eslintConfig = [
     ignores: [
       "node_modules/**",
       ".next/**",
+      // The e2e run builds into its own directory; without this, linting after
+      // an e2e run reports thousands of problems in generated chunks.
+      ".next-e2e/**",
       "out/**",
       "build/**",
       "next-env.d.ts",

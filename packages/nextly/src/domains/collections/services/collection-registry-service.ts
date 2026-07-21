@@ -19,7 +19,7 @@ import { toDbError } from "../../../database/errors";
 // NextlyError API. Public messages follow §13.8 — generic, no identifiers,
 // no constraint hints — and identifying detail moves to logContext.
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
-import { NextlyError } from "../../../errors";
+import { NextlyError, describeError, immediateMessage } from "../../../errors";
 import type {
   DynamicCollectionInsert,
   DynamicCollectionRecord,
@@ -37,41 +37,6 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-
-/**
- * Build a developer-readable error string from any thrown value.
- *
- * For `NextlyError`, the public `message` is a generic fallback like
- * "An unexpected error occurred." that hides the actual cause from
- * server logs. This pulls the structured `code`, `cause.message`, and
- * key `logContext` fields so the recorded error string carries enough
- * signal to debug without re-running with a debugger attached.
- */
-function describeError(error: unknown): string {
-  if (NextlyError.is(error)) {
-    const parts: string[] = [];
-    parts.push(`[${error.code}] ${error.message}`);
-    if (error.cause instanceof Error && error.cause.message) {
-      parts.push(`cause: ${error.cause.message}`);
-    } else if (typeof error.cause === "string") {
-      // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-      parts.push(`cause: ${error.cause}`);
-    }
-    const ctx = error.logContext;
-    if (ctx && typeof ctx === "object" && Object.keys(ctx).length > 0) {
-      try {
-        parts.push(`context: ${JSON.stringify(ctx)}`);
-      } catch {
-        // Drop unprintable context rather than mask the rest.
-      }
-    }
-    return parts.join(" | ");
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -596,14 +561,19 @@ export class CollectionRegistryService extends BaseRegistryService<
         // with a debugger. Fall back to plain `error.message` for
         // non-NextlyError throws.
         const message = describeError(error);
+        // Classify on the thrown error's own message: a description
+        // concatenates the cause chain, so a genuine failure that merely
+        // wraps something saying "already exists" would enter duplicate
+        // recovery and mask the real error.
+        const immediate = immediateMessage(error).toLowerCase();
         // Prefer the structured NextlyError code over message string matching.
         // Falls back to legacy substring sniffing for any non-NextlyError that
         // bubbles up from deeper layers during the migration window.
         const isDuplicate =
           (NextlyError.is(error) && error.code === "DUPLICATE") ||
-          message.toLowerCase().includes("already exists") ||
-          message.toLowerCase().includes("duplicate") ||
-          message.toLowerCase().includes("unique constraint");
+          immediate.includes("already exists") ||
+          immediate.includes("duplicate") ||
+          immediate.includes("unique constraint");
         if (isDuplicate) {
           const refetched = await this.getCollectionBySlug(config.slug).catch(
             () => null

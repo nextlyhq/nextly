@@ -30,6 +30,7 @@ import { confirm, input } from "@inquirer/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
+import { describeError } from "../../errors/index";
 import {
   createContext,
   type CommandContext,
@@ -654,9 +655,7 @@ export function registerInitCommand(program: Command): void {
       try {
         await runInit(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

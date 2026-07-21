@@ -1,5 +1,5 @@
 /**
- * Blog Template Seed Script (Payload-style)
+ * Blog Template Seed Script
  *
  * Exports a `seed({ nextly })` function that populates demo content
  * (roles, posts, categories, tags, navigation, site-settings,
@@ -9,22 +9,18 @@
  * authenticated Nextly instance and passes it here. Idempotent —
  * safe to re-run.
  *
+ * Schema is now created via SQL migrations (boot-time auto-apply),
+ * so this seed only handles content population (Phase C).
+ *
  * Media files resolve local-first, then from a configurable GitHub
  * base URL as fallback, with per-file failures captured in an
  * end-of-run summary.
- *
- * The {{approach}} placeholder is replaced by the CLI during
- * scaffolding.
  */
 
 import fs from "fs";
 import path from "path";
 
 import type { Nextly } from "nextly";
-
-import { runPhaseA } from "./phases/phase-a";
-import { runPhaseB } from "./phases/phase-b";
-import { BLOG_SCHEMA_MANIFEST } from "./schema-manifest";
 
 /**
  * Structured summary of what the seed produced. Returned to the
@@ -39,9 +35,6 @@ export interface SeedSummary {
   postsCreated: number;
   mediaUploaded: number;
   mediaSkipped: number;
-  collectionsRegistered: number;
-  singlesRegistered: number;
-  permissionsSynced: number;
 }
 
 export interface SeedResult {
@@ -207,9 +200,6 @@ async function seedRoles(
 
   return { idsBySlug: roleIdBySlug, created };
 }
-
-// Approach is replaced by the CLI during scaffolding
-const APPROACH = "{{approach}}";
 
 interface SeedMediaConfig {
   baseUrl?: string;
@@ -438,6 +428,9 @@ async function uploadMediaFile(
  * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
  * route has already initialised with `{ config }` and a verified
  * super-admin session.
+ *
+ * Schema is created via SQL migrations (boot-time auto-apply).
+ * This function only populates demo content (Phase C).
  */
 export async function seed({
   nextly,
@@ -452,9 +445,6 @@ export async function seed({
     postsCreated: 0,
     mediaUploaded: 0,
     mediaSkipped: 0,
-    collectionsRegistered: 0,
-    singlesRegistered: 0,
-    permissionsSynced: 0,
   };
   const warnings: string[] = [];
 
@@ -480,28 +470,8 @@ export async function seed({
   const seedData: SeedData = JSON.parse(fs.readFileSync(seedDataPath, "utf-8"));
   const seedMedia = seedData.seedMedia;
 
-  // ===== Phase A — Schema seed (visual approach only) =====
-  // Code-first projects skip this entirely (their schemas were registered
-  // from nextly.config.ts at boot). For visual projects this creates the
-  // posts/categories/tags collections and the singles before any content
-  // is written.
-  const phaseA = await runPhaseA(nextly, BLOG_SCHEMA_MANIFEST, {
-    approach: APPROACH === "visual" ? "visual" : "codefirst",
-  });
-  summary.collectionsRegistered = phaseA.registeredCollections.length;
-  summary.singlesRegistered = phaseA.registeredSingles.length;
-  warnings.push(...phaseA.warnings);
-
-  // ===== Phase B — Permission sync =====
-  // Generate CRUD permission rows for the just-registered resources and
-  // wire them to the super-admin role. No-op for code-first projects
-  // (collections list is empty so permSeeder isn't invoked).
-  const phaseB = await runPhaseB(nextly, {
-    collections: phaseA.registeredCollections,
-    singles: phaseA.registeredSingles,
-  });
-  summary.permissionsSynced = phaseB.permissionsSynced;
-  warnings.push(...phaseB.warnings);
+  // Schema creation is now handled by SQL migrations (boot-time auto-apply)
+  console.log("  Schema already applied via migrations. Seeding content...");
 
   // Step 1: Upload media up front so content records can reference IDs directly.
   // Per-file failures are captured into `outcomes` for an end-of-run summary.

@@ -611,6 +611,7 @@ export class SingleMutationService extends BaseService {
                   (parentRow as { status?: unknown }).status,
                 parts: { parentRow, components },
                 createdBy: options.user?.id ?? null,
+                maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
 
