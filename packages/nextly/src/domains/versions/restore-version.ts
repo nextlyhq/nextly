@@ -20,10 +20,12 @@ import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
+import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
 import {
   buildRestorePayload,
+  payloadTouchesComponents,
   restoreLocaleIsUnknown,
   type ComponentSchemas,
 } from "./restore-snapshot";
@@ -189,6 +191,22 @@ async function resolveComponentSchemas(
 }
 
 /**
+ * The version's locale, when the app still configures it.
+ *
+ * Locales come and go from configuration. A version captured under one that has
+ * since been removed names a language nothing can be written to, so it is
+ * treated the same as a version that never recorded one.
+ */
+function usableLocale(versionLocale: string | null): string | null {
+  if (versionLocale === null) return null;
+  const localization = getService("config")?.localization;
+  // Without localization configured there is no locale to validate against, and
+  // nothing reads one either.
+  if (!localization) return null;
+  return isValidLocale(localization, versionLocale) ? versionLocale : null;
+}
+
+/**
  * Structural equality for payload values.
  *
  * Used to tell whether field-level rules changed a container while probing.
@@ -288,7 +306,11 @@ export async function restoreVersion(
   // a shared-field-only edit then restores exactly what it captured. Whatever is
   // held back is reported; a snapshot with nothing shared left falls through to
   // the empty-payload refusal below.
-  const localeUnknown = restoreLocaleIsUnknown(localized, version.locale);
+  // A locale the app no longer configures cannot be written: both update paths
+  // reject an unknown one, so carrying it would fail the whole restore instead
+  // of applying the shared fields it could still bring back.
+  const storedLocale = usableLocale(version.locale);
+  const localeUnknown = restoreLocaleIsUnknown(localized, storedLocale);
 
   const componentSchemas = await resolveComponentSchemas(fields);
   const declared = new Set(fields.map(f => f.name));
@@ -371,6 +393,18 @@ export async function restoreVersion(
     });
   }
 
+  // The locale to write at. A document that stores its own translations needs
+  // one; so does a payload carrying component values, because components keep
+  // per-locale rows of their own even when their parent is not localized —
+  // without it the save path resolves the default language and a translation
+  // restores over the wrong one. A document since un-localized whose payload
+  // reaches no component needs none, and passing a stale one would be rejected.
+  const writeLocale =
+    storedLocale !== null &&
+    (localized || payloadTouchesComponents(payload, fields))
+      ? storedLocale
+      : null;
+
   if (args.scopeKind === "single") {
     const singles = getService("singleEntryService");
     const result = await singles.update(args.slug, payload, {
@@ -379,11 +413,7 @@ export async function restoreVersion(
       // The route authorized the caller for this document; the update still
       // runs its own document-level rules.
       routeAuthorized: true,
-      // Forwarded only while the entity still stores values per locale. A
-      // document since un-localized needs no write locale, and an old
-      // version's locale may no longer be configured at all — which the update
-      // path would reject outright.
-      ...(localized && version.locale ? { locale: version.locale } : {}),
+      ...(writeLocale ? { locale: writeLocale } : {}),
       sourceVersionNo: args.versionNo,
     });
     assertWriteSucceeded(result, args);
@@ -396,8 +426,8 @@ export async function restoreVersion(
         user: args.user,
         overrideAccess: false,
         routeAuthorized: true,
-        // See the Single branch: only while the entity is still localized.
-        ...(localized && version.locale ? { locale: version.locale } : {}),
+        // See the note above the Single branch.
+        ...(writeLocale ? { locale: writeLocale } : {}),
         ...(args.actor ? { actor: args.actor } : {}),
         sourceVersionNo: args.versionNo,
       },

@@ -2912,8 +2912,15 @@ export class CollectionMutationService extends BaseService {
                   // row — that snapshot holds no translations and falls back to
                   // the MAIN row's status, so calling it that locale's would let
                   // a restore publish a language from entry-level state.
+                  // The write locale when the collection stores its own
+                  // translations, otherwise the requested one: a collection
+                  // that is not localized itself can still embed a localized
+                  // component, and the components above were read as this
+                  // language. The create path records it the same way; leaving
+                  // it null here would make component translations captured on
+                  // update unrestorable.
                   locale: capturedLocaleState
-                    ? (localizedUpdate?.writeLocale ?? null)
+                    ? (localizedUpdate?.writeLocale ?? params.locale ?? null)
                     : null,
                   sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,

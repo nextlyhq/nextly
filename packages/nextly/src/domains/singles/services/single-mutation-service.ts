@@ -291,6 +291,11 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      // The locale this write's content belongs to. `writeLocale` covers the
+      // Single's own translations; when it has none, embedded components may
+      // still be localized and were saved with the requested locale, so that is
+      // what a snapshot of them represents.
+      const snapshotLocale = writeLocale ?? options.locale;
       const localizedFieldNames = new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       );
@@ -573,13 +578,17 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
-                        // Read as the write locale with no fallback, so an
-                        // embedded localized component records this language's
-                        // text rather than another's standing in for it — the
-                        // document is labelled as THIS locale.
-                        ...(writeLocale !== undefined
+                        // Read as the locale the components were written at,
+                        // with no fallback, so an embedded localized component
+                        // records this language's text rather than another's
+                        // standing in for it. `writeLocale` is undefined when
+                        // the Single itself is not localized, but its embedded
+                        // components can still be — and they were saved with
+                        // `options.locale` just above, so the snapshot has to
+                        // be read back the same way.
+                        ...(snapshotLocale !== undefined
                           ? {
-                              locale: writeLocale,
+                              locale: snapshotLocale,
                               fallbackLocale: false as const,
                             }
                           : {}),
@@ -611,7 +620,8 @@ export class SingleMutationService extends BaseService {
               // state too, so a component-only translation edit is not mistaken
               // for a shared-field write and left unrestorable.
               const capturedLocalizedComponents =
-                writeLocale !== undefined && Object.keys(components).length > 0;
+                snapshotLocale !== undefined &&
+                Object.keys(components).length > 0;
 
               await captureInTx(tx, this.versionCapture, {
                 ref: {
@@ -638,7 +648,7 @@ export class SingleMutationService extends BaseService {
                   Object.keys(companionData).length > 0 ||
                   companionStatus !== undefined ||
                   capturedLocalizedComponents
-                    ? (writeLocale ?? null)
+                    ? (snapshotLocale ?? null)
                     : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,

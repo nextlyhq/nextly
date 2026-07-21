@@ -38,6 +38,7 @@ type VersionRow = {
   entryId: string;
   versionNo: number;
   status: string;
+  locale: string | null;
   snapshot: unknown;
 };
 
@@ -261,6 +262,58 @@ describe("version capture on update (integration)", () => {
     expect(latest.title).toBe("t2");
     // The untouched localized field survives into the new version.
     expect(latest.body).toBe("b1");
+  });
+
+  it("labels an update with the locale its embedded component was written at", async () => {
+    // A collection that is not localized itself can embed one that is. The
+    // component rows are per-locale, so a version that does not say which
+    // language it holds cannot be restored to the right one. The create path
+    // records this; the update path has to agree or a translation edit made
+    // after creation becomes unrestorable.
+    current = await createTestNextly({
+      localization: {
+        defaultLocale: "en",
+        locales: [{ code: "en" }, { code: "de" }],
+      },
+      components: [
+        defineComponent({
+          slug: "hero",
+          localized: true,
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            component({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Page", hero: { heading: "Welcome" } }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        overrideAccess: true,
+        locale: "de",
+      },
+      { hero: { heading: "Willkommen" } }
+    );
+
+    const rows = await versions(current, "pages");
+    expect(rows.at(-1)?.locale).toBe("de");
   });
 
   it("records no version when the schema does not opt in", async () => {

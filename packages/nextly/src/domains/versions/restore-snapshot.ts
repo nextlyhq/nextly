@@ -533,6 +533,33 @@ export function buildRestorePayload(
 }
 
 /**
+ * Whether any payload key carries component values.
+ *
+ * Components keep their own per-locale rows, so a document that is not
+ * localized itself still needs a write locale when its payload reaches one.
+ */
+export function payloadTouchesComponents(
+  payload: Record<string, unknown>,
+  fields: FieldConfig[]
+): boolean {
+  const known = topLevelFields(fields);
+
+  // A field naming component slugs is the signal by itself, so the resolved
+  // schemas are not needed: the walk only has to reach fields declared inline.
+  const hasComponent = (list: FieldConfig[]): boolean =>
+    list.some(field => {
+      if (componentSlugs(field).length > 0) return true;
+      const inline = inlineChildren(field);
+      return inline ? hasComponent(inline) : false;
+    });
+
+  return Object.keys(payload).some(key => {
+    const field = known.get(key);
+    return field === undefined ? false : hasComponent([field]);
+  });
+}
+
+/**
  * Whether a restore has no locale to write a document's per-locale values into.
  *
  * A localized snapshot holds one locale's values, so applying it requires

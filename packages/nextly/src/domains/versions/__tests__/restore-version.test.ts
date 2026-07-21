@@ -12,6 +12,7 @@ const {
   collectionSpy,
   singleRegistrySpy,
   componentSpy,
+  configSpy,
 } = vi.hoisted(() => ({
   getVersionSpy: vi.fn(),
   updateEntrySpy: vi.fn(),
@@ -19,6 +20,7 @@ const {
   collectionSpy: vi.fn(),
   singleRegistrySpy: vi.fn(),
   componentSpy: vi.fn(),
+  configSpy: vi.fn(),
 }));
 
 // Field-level write rules are evaluated by the update path too; stubbed here so
@@ -40,6 +42,8 @@ vi.mock("../../../di", () => ({
         return { getCollectionBySlug: collectionSpy };
       case "componentRegistryService":
         return { getComponentBySlug: componentSpy };
+      case "config":
+        return configSpy();
       default:
         return { getSingleBySlug: singleRegistrySpy };
     }
@@ -81,6 +85,14 @@ describe("restoreVersion", () => {
       versions: { enabled: true },
     });
     componentSpy.mockResolvedValue({ fields: [] });
+    // The app's configured locales; a version naming one outside this list is
+    // treated as having no usable locale.
+    configSpy.mockReturnValue({
+      localization: {
+        defaultLocale: "en",
+        locales: [{ code: "en" }, { code: "de" }],
+      },
+    });
   });
 
   it("writes the snapshot through the normal update path", async () => {
@@ -400,6 +412,77 @@ describe("restoreVersion", () => {
       meta: { caption: "Keep" },
     });
     expect(result.droppedFields).toEqual([]);
+  });
+
+  it("writes at the captured locale when the payload reaches a component", async () => {
+    // A collection that is not localized itself can embed one that is, and the
+    // component keeps per-locale rows. Dropping the locale here would resolve
+    // the default language and restore a translation over the wrong one.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "de",
+      snapshot: { hero: { _componentType: "banner", heading: "Hallo" } },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [{ name: "hero", type: "component", component: "banner" }],
+      localized: false,
+      versions: { enabled: true },
+    });
+    componentSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "de" }),
+      expect.anything()
+    );
+  });
+
+  it("names no locale for an unlocalized document with no component values", async () => {
+    // The stale-locale case: nothing in this payload is stored per locale, and
+    // the update path rejects a locale it cannot place.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "de",
+      snapshot: { title: "Hallo" },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it("restores shared fields when the version's locale no longer exists", async () => {
+    // Locales are removed from configuration. Carrying one anyway fails the
+    // whole write, so it is treated as a version that names none: the
+    // per-locale part is held back and the shared fields still apply.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "fr",
+      snapshot: { title: "Bonjour", views: 7 },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "views", type: "number" },
+      ],
+      localized: true,
+      versions: { enabled: true },
+    });
+
+    const result = await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() }),
+      { views: 7 }
+    );
+    expect(result.droppedFields).toEqual(["title"]);
   });
 
   it("refuses to restore when versioning has been turned off", async () => {
