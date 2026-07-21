@@ -265,12 +265,25 @@ describe("the publish lifecycle a plugin may already have declared", () => {
   });
 
   it("does not let a dropped declaration mask a genuine duplicate", () => {
-    // Two plugins declaring the same non-entity permission must still collide.
+    // A dropped `publish:posts` sits alongside a real duplicate on a resource
+    // nothing seeds. Skipping the first must not consume or excuse the second.
     expect(() =>
       collectCustomPermissions(cfg(["posts"]), [
+        plugin("@acme/legacy", [{ action: "publish", resource: "posts" }]),
         plugin("@acme/a", [{ action: "publish", resource: "newsletter" }]),
         plugin("@acme/b", [{ action: "publish", resource: "newsletter" }]),
       ])
     ).toThrow();
+  });
+
+  it("does not register a dropped declaration as seen", () => {
+    // The drop happens before `seen` is written, so a later declaration of the
+    // same pair on a non-entity resource is not mistaken for a duplicate of it.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/legacy", [{ action: "publish", resource: "posts" }]),
+      plugin("@acme/news", [{ action: "publish", resource: "newsletter" }]),
+    ]);
+
+    expect(out.map(p => p.slug)).toEqual(["publish-newsletter"]);
   });
 });
