@@ -28,6 +28,8 @@ import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { freshPushSchema, type FreshPushDialect } from "../pipeline/fresh-push";
 
+import { resolveSafeNullabilityOps } from "./resolve-safe-nullability";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 interface LoggerLike {
@@ -92,7 +94,17 @@ export async function reconcileCore(
   const mode: ClassifierMode = deps.mode ?? "production-strict";
   // Always compute the destructive reasons via production-strict so both the
   // strict-refuse path and the non-strict confirmation path share one source.
-  const strict = classifyForMode(ops, dialect, "production-strict");
+  // Ask the data before judging DESTRUCTIVENESS only: requiring a column that
+  // holds no NULL cannot fail on an existing row. Without this every SQLite
+  // primary key reads as a pending NOT NULL addition and the whole reconcile
+  // is refused on an untouched database. `ops` stays whole for the apply — a
+  // safe op still has to be performed, or the constraint is never enforced.
+  const opsForClassification = await resolveSafeNullabilityOps(db, ops);
+  const strict = classifyForMode(
+    opsForClassification,
+    dialect,
+    "production-strict"
+  );
   const destructiveReasons = strict.verdict === "refuse" ? strict.reasons : [];
 
   if (destructiveReasons.length > 0) {

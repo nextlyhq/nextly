@@ -38,10 +38,7 @@ interface IndexRow {
  * DEFINED array (possibly empty) — introspection never leaves it undefined, so
  * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
  */
-function attachIndexes(
-  snapshot: NextlySchemaSnapshot,
-  rows: IndexRow[]
-): void {
+function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
   const byTable = new Map<
     string,
     Map<string, { unique: boolean; columns: string[] }>
@@ -241,9 +238,9 @@ export async function introspectLiveSnapshot(
     if (rows.length === 0) continue;
     // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
     // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
-    const idxList = (await dbAny.all(
+    const idxList = await dbAny.all(
       sql`PRAGMA index_list(${sql.identifier(table)})`
-    ));
+    );
     const indexes: IndexSpec[] = [];
     for (const ix of idxList) {
       if (ix.origin === "pk") continue;
@@ -276,7 +273,11 @@ export async function introspectLiveSnapshot(
           // ever running. Lowercasing here is safe because SQLite
           // type names are case-insensitive at the engine level.
           type: r.type.toLowerCase(),
-          // SQLite stores notnull as 0/1 integer.
+          // SQLite stores notnull as 0/1 integer. Reported as stored: a
+          // TEXT PRIMARY KEY really is nullable here (only INTEGER PRIMARY KEY
+          // is implicitly NOT NULL), and the snapshot must describe the
+          // database. Whether requiring such a column is safe is decided from
+          // the data, in resolve-safe-nullability.ts.
           nullable: r.notnull === 0,
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
