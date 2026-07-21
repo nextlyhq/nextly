@@ -3,12 +3,15 @@
  *
  * Two of these are load-bearing for reasons that are not obvious from the call
  * site: nothing downstream removes a key the schema no longer has, and a
- * localized snapshot holds one locale's values with no way to guess which.
+ * snapshot that names no locale carries per-locale values belonging to none.
  */
 import { describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import { buildRestorePayload, canRestoreLocale } from "../restore-snapshot";
+import {
+  buildRestorePayload,
+  restoreLocaleIsUnknown,
+} from "../restore-snapshot";
 
 const fields = [
   { name: "title", type: "text" },
@@ -383,19 +386,156 @@ describe("buildRestorePayload — layered schemas", () => {
   });
 });
 
-describe("canRestoreLocale", () => {
-  it("allows an unlocalized document regardless of the version's locale", () => {
-    expect(canRestoreLocale(false, null)).toBe(true);
-    expect(canRestoreLocale(false, "de")).toBe(true);
+describe("buildRestorePayload with an unknown locale", () => {
+  const ctx = {
+    hasStatus: true,
+    hasSlug: true,
+    hasTitle: true,
+    localeUnknown: true,
+  };
+
+  it("restores shared fields and reports the per-locale ones", () => {
+    // `body` is richText, which localizes by default once the entity does, so
+    // its snapshot value belongs to no locale. `views` is shared and applies.
+    const mixed = [
+      { name: "body", type: "richText" },
+      { name: "views", type: "number" },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { body: { root: {} }, views: 12 },
+      mixed,
+      ctx
+    );
+
+    expect(payload).toEqual({ views: 12 });
+    expect(droppedFields).toEqual(["body"]);
   });
 
-  it("allows a localized document when the version names its locale", () => {
-    expect(canRestoreLocale(true, "de")).toBe(true);
+  it("honors an explicit localized:false over the per-type default", () => {
+    const shared = [
+      { name: "sku", type: "text", localized: false },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { sku: "A-1" },
+      shared,
+      ctx
+    );
+
+    expect(payload).toEqual({ sku: "A-1" });
+    expect(droppedFields).toEqual([]);
   });
 
-  it("refuses a localized document when the version does not", () => {
-    // Writing it anyway would put one language's content into whichever locale
-    // happens to be the default.
-    expect(canRestoreLocale(true, null)).toBe(false);
+  it("holds back status, which a localized entity also keeps per locale", () => {
+    const shared = [{ name: "views", type: "number" }] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { status: "published", views: 3 },
+      shared,
+      ctx
+    );
+
+    expect(payload).toEqual({ views: 3 });
+    expect(droppedFields).toEqual(["status"]);
+  });
+
+  it("holds back a component whose own fields are localized", () => {
+    // The component tables carry per-locale rows too, so an embedded
+    // translatable field is no more placeable than a top-level one.
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([
+      ["banner", [{ name: "heading", type: "text" }] as FieldConfig[]],
+    ]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: { _componentType: "banner", heading: "Hi" } },
+      withComponent,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["hero"]);
+  });
+
+  it("still applies everything when the locale is known", () => {
+    const mixed = [
+      { name: "body", type: "richText" },
+      { name: "views", type: "number" },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { status: "published", body: { root: {} }, views: 12 },
+      mixed,
+      { hasStatus: true, hasSlug: true, hasTitle: true }
+    );
+
+    expect(payload).toEqual({
+      status: "published",
+      body: { root: {} },
+      views: 12,
+    });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("buildRestorePayload with an empty component schema", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("rejects a no-longer-permitted type even when the component declares no fields", () => {
+    // A component with no fields resolves to no children. Letting the value
+    // through unpartitioned sends removed types to the save path, which skips
+    // them and then deletes the live instances they failed to match.
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([["banner", [] as FieldConfig[]]]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "carousel", id: "c1" }] },
+      zone,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["blocks[0] (carousel)", "blocks"]);
+  });
+
+  it("keeps a permitted instance of a component that declares no fields", () => {
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const componentFields = new Map([["banner", [] as FieldConfig[]]]);
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "banner", id: "b1" }] },
+      zone,
+      { ...ctx, componentFields }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ _componentType: "banner", id: "b1" }],
+    });
+    expect(droppedFields).toEqual([]);
+  });
+});
+
+describe("restoreLocaleIsUnknown", () => {
+  it("reports a known locale for an unlocalized document", () => {
+    expect(restoreLocaleIsUnknown(false, null)).toBe(false);
+    expect(restoreLocaleIsUnknown(false, "de")).toBe(false);
+  });
+
+  it("reports a known locale when the version names one", () => {
+    expect(restoreLocaleIsUnknown(true, "de")).toBe(false);
+  });
+
+  it("reports an unknown locale when a localized version names none", () => {
+    expect(restoreLocaleIsUnknown(true, null)).toBe(true);
   });
 });

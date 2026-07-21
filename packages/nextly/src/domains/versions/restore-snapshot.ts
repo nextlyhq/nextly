@@ -17,6 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
  * Columns a write must never carry.
@@ -58,6 +59,13 @@ export interface RestoreSchemaContext {
    * cannot see inside one.
    */
   componentFields?: Map<string, FieldConfig[]>;
+  /**
+   * Whether this is a localized document restoring a version that does not say
+   * which locale it holds. Such a snapshot took its translatable values from
+   * the main row rather than any language's companion, so those values belong
+   * to no locale — but its shared fields are the entity's and restore fine.
+   */
+  localeUnknown?: boolean;
 }
 
 export interface RestorePayloadResult {
@@ -137,6 +145,44 @@ function containsPasswordField(
     const children = childrenOf(field, componentFields);
     return children.length > 0
       ? containsPasswordField(children, componentFields, seen)
+      : false;
+  });
+}
+
+/**
+ * Whether anything in this subtree stores its value per locale.
+ *
+ * Classification follows the same rules the write path uses, so a field the
+ * companion table owns is recognised here even when the schema leaves
+ * `localized` unset and the per-type default decides it. A component's own
+ * fields count: the component tables carry per-locale rows of their own.
+ */
+function containsLocalizedField(
+  fields: FieldConfig[],
+  componentFields?: Map<string, FieldConfig[]>,
+  seen: Set<string> = new Set()
+): boolean {
+  return fields.some(field => {
+    const declared = (field as { localized?: unknown }).localized;
+    const localized = isFieldLocalized(
+      {
+        type: field.type,
+        name: typeof field.name === "string" ? field.name : "",
+        ...(typeof declared === "boolean" ? { localized: declared } : {}),
+      },
+      true
+    );
+    if (localized) return true;
+
+    // A component can reference itself through a descendant, so a slug already
+    // walked is not followed again.
+    const slugs = componentSlugs(field);
+    if (slugs.length > 0 && slugs.every(slug => seen.has(slug))) return false;
+    for (const slug of slugs) seen.add(slug);
+
+    const children = childrenOf(field, componentFields);
+    return children.length > 0
+      ? containsLocalizedField(children, componentFields, seen)
       : false;
   });
 }
@@ -316,11 +362,21 @@ export function buildRestorePayload(
       // A system column exists only when the entity has it; naming one it does
       // not have would fail the whole restore in the raw SET clause.
       const systemColumnExists = systemColumns.get(key);
-      if (systemColumnExists === true) {
-        payload[key] = value;
-      } else {
+      if (systemColumnExists !== true) {
         droppedFields.push(key);
+        continue;
       }
+
+      // A localized entity keeps draft/published state per locale as well as at
+      // entity level, and a version that names no locale carries the entity's.
+      // Writing it would resolve to some locale and publish or retract that
+      // language from state that was never its own.
+      if (context.localeUnknown && key === "status") {
+        droppedFields.push(key);
+        continue;
+      }
+
+      payload[key] = value;
       continue;
     }
 
@@ -332,16 +388,30 @@ export function buildRestorePayload(
       continue;
     }
 
-    const children = childrenOf(field, componentFields);
-    if (children.length > 0) {
-      const removed: string[] = [];
+    // Values stored per locale cannot be placed without knowing which locale
+    // they belong to, so they are reported rather than written into whichever
+    // one the update happens to resolve. Shared fields are unaffected.
+    if (
+      context.localeUnknown &&
+      containsLocalizedField([field], componentFields)
+    ) {
+      droppedFields.push(key);
+      continue;
+    }
 
-      // A dynamic zone's allowed component list can change. The save path skips
-      // an instance whose type is no longer allowed and then deletes the live
-      // instances that were not in the incoming set — so resubmitting a
-      // snapshot of only-removed types would clear the field rather than
-      // leaving it alone.
-      const allowed = allowedComponentSlugs(field);
+    // A dynamic zone's allowed component list can change. The save path skips
+    // an instance whose type is no longer allowed and then deletes the live
+    // instances that were not in the incoming set — so resubmitting a snapshot
+    // of only-removed types would clear the field rather than leaving it alone.
+    const allowed = allowedComponentSlugs(field);
+    const children = childrenOf(field, componentFields);
+
+    // A component field is partitioned even when its schema resolves to no
+    // children: a component may legitimately declare none, and one that failed
+    // to resolve is empty too. Gating the partition on children alone would let
+    // those fields through unchecked.
+    if (allowed !== null || children.length > 0) {
+      const removed: string[] = [];
       const { kept, rejected } = partitionAllowedInstances(value, allowed, key);
       droppedFields.push(...rejected);
 
@@ -350,13 +420,10 @@ export function buildRestorePayload(
         continue;
       }
 
-      payload[key] = pruneContainerValue(
-        kept,
-        children,
-        componentFields,
-        removed,
-        key
-      );
+      payload[key] =
+        children.length > 0
+          ? pruneContainerValue(kept, children, componentFields, removed, key)
+          : kept;
       droppedFields.push(...removed);
       continue;
     }
@@ -368,17 +435,17 @@ export function buildRestorePayload(
 }
 
 /**
- * Whether a version can be restored into a document that stores values per
- * locale.
+ * Whether a restore has no locale to write a document's per-locale values into.
  *
- * A localized snapshot holds exactly one locale's values, so restoring it
- * requires knowing which. Versions captured before the locale was recorded
- * cannot say, and writing them anyway would put one language's content into
- * whichever locale happens to be the default.
+ * A localized snapshot holds one locale's values, so applying it requires
+ * knowing which. A version records none either because it predates the locale
+ * being captured or because the write that produced it touched only shared
+ * fields. Neither can be placed, so the per-locale part of such a snapshot is
+ * left alone while its shared fields restore normally.
  */
-export function canRestoreLocale(
+export function restoreLocaleIsUnknown(
   documentIsLocalized: boolean,
   versionLocale: string | null
 ): boolean {
-  return !documentIsLocalized || versionLocale !== null;
+  return documentIsLocalized && versionLocale === null;
 }

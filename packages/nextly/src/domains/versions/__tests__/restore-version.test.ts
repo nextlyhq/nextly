@@ -1,7 +1,7 @@
 /**
  * Restore orchestration. The cases worth pinning are the ones where writing
- * anyway would be worse than refusing: a snapshot whose locale is unknown, and
- * a write that reported failure without throwing.
+ * anyway would be worse than holding back: a snapshot whose locale is unknown,
+ * and a write that reported failure without throwing.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -127,10 +127,68 @@ describe("restoreVersion", () => {
     );
   });
 
-  it("refuses a localized version that does not say which language it holds", async () => {
-    // Writing it would put one language's content into whichever locale is
-    // default. Versions captured before the locale was recorded cannot say.
-    collectionSpy.mockResolvedValue({ fields, localized: true });
+  it("restores only the shared fields of a localized version with no locale", async () => {
+    // A shared-field-only edit captures no locale because it put nothing in one.
+    // Its shared values still belong to the entity, so they apply; `title` is
+    // text, which a localized entity keeps per locale, so it is held back.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old title", views: 41 },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "views", type: "number" },
+      ],
+      localized: true,
+      versions: { enabled: true },
+    });
+
+    const result = await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      views: 41,
+    });
+    expect(result.droppedFields).toEqual(["title"]);
+  });
+
+  it("does not name a locale when writing a version that records none", async () => {
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old title", views: 41 },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "views", type: "number" },
+      ],
+      localized: true,
+      versions: { enabled: true },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it("refuses a localized version whose every field is per-locale", async () => {
+    // Nothing survives the holdback, so there is no write to make — refusing is
+    // the honest answer rather than reporting a restore that applied nothing.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old title" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: true,
+      versions: { enabled: true },
+    });
 
     await expect(restoreVersion(base)).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
@@ -300,8 +358,23 @@ describe("restoreVersion", () => {
 
   it("keeps a rejected write's own reason instead of reporting a fault", async () => {
     // A snapshot can fail today's rules for ordinary reasons — an option since
-    // removed, a slug that now collides. Those are answers an editor can act
+    // removed, a validator tightened since. Those are answers an editor can act
     // on, not server faults.
+    updateEntrySpy.mockResolvedValue({
+      success: false,
+      statusCode: 422,
+      message: "That option no longer exists.",
+    });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("reports a conflicting write as a conflict", async () => {
+    // A REST client reads the outer status, so flattening this into a
+    // validation error would answer 400 and stop matching the contract the same
+    // collision reports through an ordinary update.
     updateEntrySpy.mockResolvedValue({
       success: false,
       statusCode: 409,
@@ -309,7 +382,7 @@ describe("restoreVersion", () => {
     });
 
     await expect(restoreVersion(base)).rejects.toMatchObject({
-      code: "VALIDATION_ERROR",
+      code: "CONFLICT",
     });
   });
 

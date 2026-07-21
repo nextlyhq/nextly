@@ -22,7 +22,10 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
 import type { UserContext } from "../singles/types";
 
-import { buildRestorePayload, canRestoreLocale } from "./restore-snapshot";
+import {
+  buildRestorePayload,
+  restoreLocaleIsUnknown,
+} from "./restore-snapshot";
 
 export interface RestoreVersionArgs {
   scopeKind: VersionScopeKind;
@@ -235,28 +238,13 @@ export async function restoreVersion(
     });
   }
 
-  // A localized snapshot holds exactly one locale's values. Writing one that
-  // does not say which would put a language's content into whichever locale
-  // happens to be the default, so it is refused rather than guessed.
-  if (!canRestoreLocale(localized, version.locale)) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "versionNo",
-          code: "LOCALE_UNKNOWN",
-          message:
-            "This version does not record which language it holds, so it cannot be restored.",
-        },
-      ],
-      logContext: {
-        reason: "restore-locale-unknown",
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-        versionNo: args.versionNo,
-      },
-    });
-  }
+  // A localized snapshot holds one locale's values, and a version that records
+  // none cannot say whose. Rather than refuse the whole restore, the per-locale
+  // part is left alone and the shared fields are applied — a version produced by
+  // a shared-field-only edit then restores exactly what it captured. Whatever is
+  // held back is reported; a snapshot with nothing shared left falls through to
+  // the empty-payload refusal below.
+  const localeUnknown = restoreLocaleIsUnknown(localized, version.locale);
 
   const componentFields = await resolveComponentFields(fields);
   const declared = new Set(fields.map(f => f.name));
@@ -272,6 +260,7 @@ export async function restoreVersion(
       hasSlug: isPlugin ? declared.has("slug") : true,
       hasTitle: isPlugin ? declared.has("title") : true,
       componentFields,
+      localeUnknown,
     }
   );
 
@@ -309,12 +298,13 @@ export async function restoreVersion(
           path: "versionNo",
           code: "NOTHING_TO_RESTORE",
           message:
-            "No part of this version can be applied to the current schema.",
+            "No part of this version can be applied to the document as it is now.",
         },
       ],
       logContext: {
         reason: "restore-empty-payload",
         droppedFields,
+        localeUnknown,
         versionNo: args.versionNo,
       },
     });
@@ -390,10 +380,26 @@ function assertWriteSucceeded(
     });
   }
 
+  // A conflict stays a conflict. Wrapping it in a validation error would answer
+  // 400/VALIDATION_ERROR, and a REST client reads the outer status — so a
+  // restore whose slug now collides would stop matching the contract the same
+  // collision reports through an ordinary update.
+  if (status === 409) {
+    throw NextlyError.conflict({
+      logContext: {
+        reason: "restore-write-conflict",
+        message: result.message,
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+      },
+    });
+  }
+
   // A snapshot can fail today's rules for ordinary reasons — a select option
-  // since removed, a slug that now collides, a validator tightened since. Those
-  // are answers the editor can act on, so the update's own status and message
-  // are preserved rather than flattened into a server fault.
+  // since removed, a validator tightened since. Those are answers the editor can
+  // act on, so the update's own message is preserved rather than flattened into
+  // a server fault.
   if (status >= 400 && status < 500) {
     throw NextlyError.validation({
       errors: Array.isArray(result.errors)
@@ -401,7 +407,7 @@ function assertWriteSucceeded(
         : [
             {
               path: "versionNo",
-              code: status === 409 ? "CONFLICT" : "RESTORE_REJECTED",
+              code: "RESTORE_REJECTED",
               message:
                 result.message ??
                 "This version could not be applied to the document as it is now.",
