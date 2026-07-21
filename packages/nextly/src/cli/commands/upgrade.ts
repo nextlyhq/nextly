@@ -29,7 +29,7 @@ import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-dd
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError } from "../../errors";
+import { NextlyError, describeError } from "../../errors";
 import { createContext } from "../program";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 
@@ -387,7 +387,7 @@ export function registerUpgradeCommand(program: Command): void {
         })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
       } catch (error) {
         context.logger.error(
-          `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
+          `Failed to connect to database: ${describeError(error)}`
         );
         process.exit(1);
       }
@@ -425,9 +425,7 @@ export function registerUpgradeCommand(program: Command): void {
           );
         }
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exitCode = 1;
       } finally {
         await adapter.disconnect?.();

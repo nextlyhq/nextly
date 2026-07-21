@@ -41,6 +41,7 @@ import {
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import { describeError } from "../../errors/index";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { createContext, type CommandContext } from "../program";
@@ -222,9 +223,7 @@ export async function runBuild(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -314,9 +313,7 @@ export async function runBuild(
       }
     } catch (error) {
       result.success = false;
-      logger.error(
-        `File generation failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      logger.error(`File generation failed: ${describeError(error)}`);
     }
   }
 
@@ -456,7 +453,7 @@ function validateAllCollections(
     try {
       assertValidCollectionConfig(collection);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       errors.push({
         collection: collection.slug,
         message,
@@ -734,9 +731,7 @@ async function checkMigrationStatus(
     });
     logger.debug(`Connected to ${getDialectDisplayName(dialect)}`);
   } catch (error) {
-    logger.debug(
-      `Cannot check migrations: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.debug(`Cannot check migrations: ${describeError(error)}`);
     return result;
   }
 
@@ -874,9 +869,7 @@ export function registerBuildCommand(program: Command): void {
       try {
         await runBuild(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

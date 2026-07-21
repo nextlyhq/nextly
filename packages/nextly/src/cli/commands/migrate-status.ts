@@ -32,6 +32,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { describeError } from "../../errors/index";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
@@ -197,7 +198,7 @@ export async function runMigrateStatus(
       debug: options.verbose,
     });
   } catch (error) {
-    const errorMsg = `Failed to load config: ${error instanceof Error ? error.message : String(error)}`;
+    const errorMsg = `Failed to load config: ${describeError(error)}`;
     if (options.json) {
       console.log(JSON.stringify({ error: errorMsg }, null, 2));
       process.exit(1);
@@ -226,7 +227,7 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    const errorMsg = `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`;
+    const errorMsg = `Failed to connect to database: ${describeError(error)}`;
     if (options.json) {
       console.log(JSON.stringify({ error: errorMsg }, null, 2));
       process.exit(1);
@@ -657,17 +658,9 @@ export function registerMigrateStatusCommand(program: Command): void {
         await runMigrateStatus(resolvedOptions, context);
       } catch (error) {
         if (resolvedOptions.json) {
-          console.log(
-            JSON.stringify(
-              { error: error instanceof Error ? error.message : String(error) },
-              null,
-              2
-            )
-          );
+          console.log(JSON.stringify({ error: describeError(error) }, null, 2));
         } else {
-          context.logger.error(
-            error instanceof Error ? error.message : String(error)
-          );
+          context.logger.error(describeError(error));
         }
         process.exit(1);
       }

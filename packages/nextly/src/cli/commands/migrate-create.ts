@@ -69,6 +69,7 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../../domains/schema/ui-schema/metadata-sql";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
@@ -171,9 +172,7 @@ export async function runMigrateCreate(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -241,7 +240,7 @@ export async function runMigrateCreate(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(error instanceof Error ? error.message : String(error));
+    logger.error(`Failed to load UI schema: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -330,9 +329,7 @@ export async function runMigrateCreate(
       // message before throwing. Just exit.
       process.exit(1);
     }
-    logger.error(
-      `Failed to generate migration: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to generate migration: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -520,9 +517,7 @@ export function registerMigrateCreateCommand(program: Command): void {
         try {
           await runMigrateCreate(positionalName, resolvedOptions, context);
         } catch (error) {
-          context.logger.error(
-            error instanceof Error ? error.message : String(error)
-          );
+          context.logger.error(describeError(error));
           process.exit(1);
         }
       }

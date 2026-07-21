@@ -25,6 +25,7 @@ import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { describeError } from "../../errors/index";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -219,9 +220,7 @@ export function registerMigrateResolveCommand(program: Command): void {
       try {
         await runMigrateResolve(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

@@ -38,7 +38,10 @@ import type { Command } from "commander";
 
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  truncateErrorMessage,
+} from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import {
@@ -52,7 +55,7 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
-import { NextlyError } from "../../errors";
+import { NextlyError, describeError } from "../../errors";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -177,9 +180,7 @@ export async function runMigrate(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -207,9 +208,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -282,7 +281,7 @@ export async function runMigrate(
           : `${formatCount(applied, "migration")} applied.`
       );
     } catch (err) {
-      logger.error(err instanceof Error ? err.message : String(err));
+      logger.error(describeError(err));
       process.exit(1);
     }
 
@@ -535,7 +534,14 @@ export async function runFileMigrations(args: {
         });
       } catch (err) {
         await repo.markFailed(id, {
-          errorMessage: err instanceof Error ? err.message : String(err),
+          // Bounded, and without logContext: this row is persisted and is
+          // served back by the schema-journal endpoint, so it keeps the code,
+          // message and cause chain but not the arbitrary identifiers a log
+          // context can carry. An unbounded write could also fail here and
+          // leave the migration with no recorded failure at all.
+          errorMessage: truncateErrorMessage(
+            describeError(err, { context: false })
+          ),
         });
         throw err;
       }
@@ -869,9 +875,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         await runMigrate(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

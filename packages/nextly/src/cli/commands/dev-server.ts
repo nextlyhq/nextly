@@ -20,6 +20,7 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -30,6 +31,10 @@ import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanu
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import {
+  mergeRegisteredCollectionsSafely,
+  mergeRegisteredSafely,
+} from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
@@ -45,16 +50,17 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { describeError, immediateMessage } from "../../errors/index";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  type ComponentRegistryService,
+  ComponentRegistryService,
   type SyncComponentResult,
 } from "../../services/components/component-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
-  type SingleRegistryService,
+  SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service";
 import type { CommandContext } from "../program";
@@ -122,8 +128,7 @@ export async function ensureCoreTables(
   } catch (pushError) {
     // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
     // Fall back to raw SQL for SQLite, or error for PG/MySQL.
-    const pushMsg =
-      pushError instanceof Error ? pushError.message : String(pushError);
+    const pushMsg = describeError(pushError);
     logger.debug(`pushSchema failed: ${pushMsg}`);
 
     if (dialect === "sqlite") {
@@ -133,9 +138,13 @@ export async function ensureCoreTables(
         try {
           await drizzleAdapter.executeQuery(statement);
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          if (!msg.includes("already exists")) {
-            logger.debug(`Table creation statement failed: ${msg}`);
+          // Branch on the immediate message only: a wrapped failure whose
+          // cause chain happens to mention "already exists" is not the benign
+          // duplicate-table case and must not be silenced.
+          if (!immediateMessage(error).includes("already exists")) {
+            logger.debug(
+              `Table creation statement failed: ${describeError(error)}`
+            );
           }
         }
       }
@@ -157,8 +166,7 @@ export async function ensureCoreTables(
         );
         await systemTableService.ensureSystemTables();
       } catch (sysError) {
-        const msg =
-          sysError instanceof Error ? sysError.message : String(sysError);
+        const msg = describeError(sysError);
         logger.debug(`System table creation: ${msg}`);
       }
 
@@ -314,10 +322,52 @@ export async function performAutoSync(
     }
   }
 
+  // The loop above sees only `nextly.config.ts`. Collections created in the
+  // Schema Builder exist solely in the registry, and on SQLite/MySQL the diff
+  // introspects the whole database, so leaving them out proposes dropping
+  // every one of them. Same helper the HMR path uses.
+  const registryLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const registry = new CollectionRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+
+  // Singles and components created in the Schema Builder are registry-only
+  // too, and the same whole-database introspection applies to their
+  // `single_*` and `comp_*` tables, so omitting them proposes the same
+  // orphan drops the collections merge above prevents.
+  const singleRegistry = new SingleRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+  const componentRegistry = new ComponentRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+
   const desired: DesiredSchema = {
-    collections: desiredCollections,
-    singles: desiredSingles,
-    components: {},
+    collections: await mergeRegisteredCollectionsSafely(
+      desiredCollections,
+      () => registry.getAllCollections(),
+      logger
+    ),
+    singles: await mergeRegisteredSafely(
+      desiredSingles,
+      () => singleRegistry.getAllSingles(),
+      (row, base) => ({ ...base, status: row.status === true }),
+      logger
+    ),
+    components: await mergeRegisteredSafely(
+      {},
+      () => componentRegistry.getAllComponents(),
+      (_row, base) => base,
+      logger
+    ),
   };
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
@@ -391,7 +441,7 @@ export async function performAutoSync(
     // Catastrophic failures (DB connection lost, etc.) reach here. The
     // pipeline's typed errors come back as { success: false } — those are
     // handled below.
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = describeError(error);
     logger.error(`Auto-sync failed: ${msg}`);
     throw error;
   }
@@ -496,7 +546,7 @@ function registerSingleTableInResolver(
     // Deliberately swallow: subsequent queries in this boot may fail but
     // the next restart rebuilds the resolver from the registry rows.
     logger.debug(
-      `Could not register runtime schema for ${tableName}: ${err instanceof Error ? err.message : String(err)}`
+      `Could not register runtime schema for ${tableName}: ${describeError(err)}`
     );
   }
 }
@@ -650,7 +700,7 @@ export async function performSinglesAutoSync(
         }
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = describeError(error);
       try {
         await singleRegistry.updateMigrationStatus(slug, "failed");
       } catch {
@@ -919,7 +969,7 @@ export async function performComponentsAutoSync(
         }
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = describeError(error);
       try {
         await componentRegistry.updateMigrationStatus(slug, "failed");
       } catch {

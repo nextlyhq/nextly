@@ -7,6 +7,7 @@ import { createHash, randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
@@ -130,6 +131,63 @@ export class DynamicCollectionService extends BaseService {
   async generateCollection(
     data: CreateCollectionInput
   ): Promise<CollectionArtifacts> {
+    // The REST dispatcher forwards the request body unvalidated, so `data` is
+    // caller-controlled and the fields below may be absent. Check them before
+    // dereferencing: without this a body missing `name` throws a TypeError
+    // from `.toLowerCase()`, which is indistinguishable from a defect in our
+    // own code and cannot be reported as the client error it is.
+    if (typeof data?.name !== "string" || data.name.trim() === "") {
+      throw NextlyError.validation({
+        errors: [
+          { path: "name", code: "REQUIRED", message: "Name is required." },
+        ],
+      });
+    }
+    if (!Array.isArray(data.fields)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "REQUIRED",
+            message: "Fields must be an array.",
+          },
+        ],
+      });
+    }
+    // Element shape matters too: the array is normalised with `f.name
+    // .toLowerCase()` below, before field validation runs, so an element
+    // without a string name throws the same untyped TypeError the checks
+    // above exist to prevent.
+    const malformed = data.fields.findIndex(
+      f => typeof (f as { name?: unknown })?.name !== "string"
+    );
+    if (malformed !== -1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields[${malformed}].name`,
+            code: "REQUIRED",
+            message: "Each field requires a name.",
+          },
+        ],
+      });
+    }
+
+    // `group` is lower-cased later without a type check; `?.` guards null and
+    // undefined but not a number or object, which would throw an untyped
+    // TypeError from a caller-supplied value.
+    if (data.group !== undefined && typeof data.group !== "string") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "group",
+            code: "INVALID",
+            message: "Group must be a string.",
+          },
+        ],
+      });
+    }
+
     const normalizedName = data.name.toLowerCase();
     const tableName = `dc_${normalizedName}`;
 
@@ -331,6 +389,56 @@ export class DynamicCollectionService extends BaseService {
     migrationFileName: string | null;
     metadataUpdates: Record<string, unknown>;
   }> {
+    if (updates.group !== undefined && typeof updates.group !== "string") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "group",
+            code: "INVALID",
+            message: "Group must be a string.",
+          },
+        ],
+      });
+    }
+
+    // Validate caller input before any I/O: the shape checks below cannot
+    // depend on the registry, and rejecting a malformed body after a fetch
+    // does pointless work for a request that was never going to apply.
+    //
+    // Presence, not truthiness: `fields: null` or `fields: ""` is a supplied
+    // value that cannot be applied, and treating it as absent would report
+    // success for an update that silently did nothing to the fields.
+    if (updates.fields !== undefined) {
+      if (!Array.isArray(updates.fields)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "REQUIRED",
+              message: "Fields must be an array.",
+            },
+          ],
+        });
+      }
+      // The array is normalised through `f.name.toLowerCase()` before field
+      // validation runs, so an element without a string name throws an
+      // untyped TypeError rather than reporting the client error it is.
+      const malformedUpdate = updates.fields.findIndex(
+        f => typeof (f as { name?: unknown })?.name !== "string"
+      );
+      if (malformedUpdate !== -1) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `fields[${malformedUpdate}].name`,
+              code: "REQUIRED",
+              message: "Each field requires a name.",
+            },
+          ],
+        });
+      }
+    }
+
     const collection = (await this.registryService.getCollection(
       collectionName
     )) as CollectionMetadata;
@@ -421,7 +529,7 @@ export class DynamicCollectionService extends BaseService {
       (f: FieldDefinition) => !reservedForFields.includes(f.name)
     );
 
-    if (updates.fields) {
+    if (updates.fields !== undefined) {
       const normalizedFields = updates.fields.map(f => ({
         ...f,
         name: f.name.toLowerCase(),

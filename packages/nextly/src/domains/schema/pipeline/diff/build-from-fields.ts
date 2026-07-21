@@ -31,7 +31,6 @@ import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
-  toSnakeCase,
 } from "../../services/field-column-descriptor";
 
 import { indexKey } from "./index-util";
@@ -89,6 +88,86 @@ export interface BuildDesiredTableOptions {
  * created_at, updated_at, and conditionally status) are injected to match
  * runtime-schema-generator's behavior — the descriptor module owns that list.
  */
+/** Inputs the index rules need that only the caller can determine. */
+interface CollectionIndexContext<F> {
+  hasSlugColumn: boolean;
+  hasCreatedAtColumn: boolean;
+  /** Fields whose columns live in the companion `_locales` table. */
+  localizedNames: ReadonlySet<string>;
+  /**
+   * The column a field materialises, or null when it materialises none (a
+   * component field stores its data in its own table and must receive no
+   * index). Supplied by the caller so the field-to-column mapping stays in
+   * the descriptor module rather than being recomputed here: a descriptor
+   * change would otherwise produce indexes naming columns that do not exist.
+   */
+  columnNameFor: (field: F) => string | null;
+}
+
+/**
+ * The indexes a collection table should carry, derived from its fields.
+ *
+ * Shared with the runtime schema generator rather than restated there. Two
+ * places decide what a collection table looks like — this one, which the diff
+ * compares against, and the Drizzle table the push path builds — and when only
+ * one of them knew about indexes, a push rebuilt the table without them and
+ * the indexes were silently lost.
+ */
+export function collectionIndexSpecs<F extends MinimalFieldDef>(
+  tableName: string,
+  fields: readonly F[],
+  context: CollectionIndexContext<F>
+): IndexSpec[] {
+  const { columnNameFor } = context;
+
+  // System slug(unique)+created_at, plus per-field unique/index and a
+  // single-relationship auto-index (matches the runtime live-DDL). hasMany /
+  // polymorphic relationships are JSON columns and get NO index.
+  const indexes: IndexSpec[] = [];
+  if (context.hasSlugColumn) {
+    indexes.push({
+      name: `idx_${tableName}_slug`,
+      columns: ["slug"],
+      unique: true,
+    });
+  }
+  if (context.hasCreatedAtColumn) {
+    indexes.push({
+      name: `idx_${tableName}_created_at`,
+      columns: ["created_at"],
+      unique: false,
+    });
+  }
+  for (const field of fields) {
+    if (context.localizedNames.has(field.name)) continue; // companion-owned; no main-table index
+    const col = columnNameFor(field);
+    // A field materialising no column (e.g. a component, which stores its data
+    // in its own table) gets no index: one on a nonexistent column is invalid
+    // DDL. Asking the descriptor per field, rather than checking whether a
+    // column of that name exists, keeps a component named after a system
+    // column from indexing the system-injected column instead.
+    if (col === null) continue;
+    const isSingleRelation =
+      (field.type === "relationship" || field.type === "upload") &&
+      field.hasMany !== true &&
+      !Array.isArray(field.relationTo);
+    if (field.unique === true) {
+      indexes.push({
+        name: `uq_${tableName}_${col}`,
+        columns: [col],
+        unique: true,
+      });
+    } else if (field.index === true || isSingleRelation) {
+      indexes.push({
+        name: `idx_${tableName}_${col}`,
+        columns: [col],
+        unique: false,
+      });
+    }
+  }
+  return dedupeIndexes(indexes);
+}
+
 export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -160,51 +239,18 @@ export function buildDesiredTableFromFields(
     });
   }
 
-  // Indexes: system slug(unique)+created_at, plus per-field unique/index and a
-  // single-relationship auto-index (matches the runtime live-DDL). hasMany /
-  // polymorphic relationships are JSON columns and get NO index.
-  const indexes: IndexSpec[] = [];
-  if (columns.some(c => c.name === "slug")) {
-    indexes.push({
-      name: `idx_${tableName}_slug`,
-      columns: ["slug"],
-      unique: true,
-    });
-  }
-  if (columns.some(c => c.name === "created_at")) {
-    indexes.push({
-      name: `idx_${tableName}_created_at`,
-      columns: ["created_at"],
-      unique: false,
-    });
-  }
-  for (const field of fields) {
-    if (localizedNames.has(field.name)) continue; // companion-owned; no main-table index
-    const col = toSnakeCase(field.name);
-    // Skip fields that materialize no column (e.g. component fields): a unique
-    // or plain index on a nonexistent column is invalid DDL. Check the field
-    // directly (not column presence) so a component named after a system column
-    // like `title` does not index the system-injected column instead.
-    if (!producesColumn(field)) continue;
-    const isSingleRelation =
-      (field.type === "relationship" || field.type === "upload") &&
-      field.hasMany !== true &&
-      !Array.isArray(field.relationTo);
-    if (field.unique === true) {
-      indexes.push({
-        name: `uq_${tableName}_${col}`,
-        columns: [col],
-        unique: true,
-      });
-    } else if (field.index === true || isSingleRelation) {
-      indexes.push({
-        name: `idx_${tableName}_${col}`,
-        columns: [col],
-        unique: false,
-      });
-    }
-  }
-  return { name: tableName, columns, indexes: dedupeIndexes(indexes) };
+  const indexes = collectionIndexSpecs(tableName, fields, {
+    hasSlugColumn: columns.some(c => c.name === "slug"),
+    hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
+    localizedNames,
+    columnNameFor: field =>
+      getColumnDescriptor(
+        field as unknown as Parameters<typeof getColumnDescriptor>[0],
+        dialect
+      )?.name ?? null,
+  });
+
+  return { name: tableName, columns, indexes };
 }
 
 /**
