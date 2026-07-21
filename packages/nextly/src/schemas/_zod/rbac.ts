@@ -121,11 +121,20 @@ export const DeleteRoleSchema = z.object({
   roleId: IdSchema,
 });
 
-// Actions: standard CRUD + "manage" for broad resource control
+// Actions: standard CRUD, the publish lifecycle, and "manage" for broad
+// resource control.
+//
+// `publish` and `unpublish` are separate rather than one verb: making content
+// live and taking it down are different responsibilities, and a role that may
+// withdraw a page in an emergency is not necessarily one that may put pages up.
+// Granting them together is a role decision, not something the model should
+// force. No action implies another — `roleSetHasPermission` matches the action
+// column exactly — so both must be granted explicitly.
 export const PermissionActionSchema = z.enum(
-  ["create", "read", "update", "delete", "manage"],
+  ["create", "read", "update", "delete", "publish", "unpublish", "manage"],
   {
-    message: "Action must be one of: create, read, update, delete, manage",
+    message:
+      "Action must be one of: create, read, update, delete, publish, unpublish, manage",
   }
 );
 

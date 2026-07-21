@@ -36,9 +36,18 @@ export interface CodegenNames {
   eventNames: string[];
 }
 
-// Mirror the auto-seeder's action lists (permission-seed-service.ts).
-const COLLECTION_ACTIONS = ["create", "read", "update", "delete"] as const;
-const SINGLE_ACTIONS = ["read", "update"] as const;
+// Mirror the auto-seeder's action lists (permission-seed-service.ts). Generated
+// permission-slug types come from here, so a drift shows up as a slug the app
+// seeds but the types deny.
+const COLLECTION_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+const SINGLE_ACTIONS = ["read", "update", "publish", "unpublish"] as const;
 
 /**
  * Derive the permission-slug + event-name unions for codegen from the merged

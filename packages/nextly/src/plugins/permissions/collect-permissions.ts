@@ -26,8 +26,20 @@ export interface CollectedPermission {
 /** Where a permission lands when its plugin does not group its own. */
 export const DEFAULT_PERMISSION_GROUP = "General";
 
-const CRUD_ACTIONS = new Set(["create", "read", "update", "delete"]);
-const SINGLE_ACTIONS = new Set(["read", "update"]);
+// The actions the auto-seeder already owns for a collection or single slug. A
+// plugin declaring one of these on such a slug collides with the seeded row, so
+// they are reserved rather than merely conventional. Must track
+// `permission-seed-service.ts` — an action seeded here but missing from these
+// sets can be declared by a plugin and silently collide.
+const CRUD_ACTIONS = new Set([
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
+const SINGLE_ACTIONS = new Set(["read", "update", "publish", "unpublish"]);
 
 const titleCase = (s: string): string =>
   s
