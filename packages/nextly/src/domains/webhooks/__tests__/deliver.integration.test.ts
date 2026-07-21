@@ -105,14 +105,13 @@ describe("webhook delivery engine (real SQLite)", () => {
       secrets?: string[];
       headers?: Record<string, string> | null;
       eventTypes?: WebhookEventType[];
-      enabled?: boolean;
     } = {}
   ): Promise<void> {
     await adapter.insert("nextly_webhooks", {
       id,
       name: id,
       url: `https://example.com/${id}`,
-      enabled: opts.enabled ?? true,
+      enabled: true,
       event_types: opts.eventTypes ?? ["entry.updated"],
       filter: null,
       headers: opts.headers ?? null,
@@ -332,12 +331,21 @@ describe("webhook delivery engine (real SQLite)", () => {
     // it happened — or a retry scheduled by an earlier failure — would still be
     // due. Without a check at send time, disabling would keep POSTing until the
     // row succeeded or exhausted its attempts.
-    await seedWebhook("wh_a", { enabled: false });
+    // Ordered deliberately: the endpoint is enabled while the delivery is
+    // queued and only disabled afterwards, which is the sequence that actually
+    // happens. Seeding it disabled would only prove a delivery is never created
+    // for an endpoint that was already off.
+    await seedWebhook("wh_a");
     await seedEvent("evt_1");
     await seedDelivery("dlv_1", "wh_a", "evt_1", {
       status: "retrying",
       attemptCount: 1,
     });
+    await adapter.update(
+      "nextly_webhooks",
+      { enabled: false },
+      { and: [{ column: "id", op: "=", value: "wh_a" }] }
+    );
     const { transport, calls } = makeTransport(200);
 
     const result = await deliverDueDeliveries(deps(transport));
