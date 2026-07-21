@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   bigint,
@@ -20,7 +21,13 @@ export const nextlyI18nArchive = mysqlTable(
     locale: varchar("locale", { length: 20 }).notNull(),
     field: varchar("field", { length: 191 }).notNull(),
     value: text("value"),
-    archivedAt: datetime("archived_at", { fsp: 3 }).notNull(),
+    // The localization-disable path archives with a raw `INSERT ... SELECT`
+    // that names no `archived_at`, so the column needs a default the database
+    // applies — matching `getI18nArchiveDdl`, which has always created this
+    // table with `DEFAULT CURRENT_TIMESTAMP(3)`.
+    archivedAt: datetime("archived_at", { fsp: 3 })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP(3)`),
   },
   t => [
     index("nextly_i18n_archive_lookup_idx").on(

@@ -79,6 +79,13 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
       name: "id",
       type: "text",
       nullable: false,
+      default: undefined,
+      // Carried through from the column descriptor. The diff exempts primary
+      // keys from the nullability comparison, and a desired `id` that arrives
+      // without this marker takes no exemption — which on SQLite means every
+      // Schema-Builder table keeps proposing a nullability change no ALTER
+      // there can make.
+      primaryKey: true,
     });
     expect(findColumn(table.columns, "title")).toEqual({
       name: "title",

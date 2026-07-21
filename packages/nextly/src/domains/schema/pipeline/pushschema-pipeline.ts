@@ -54,6 +54,7 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  rebuiltTableNames,
 } from "./filter-unsafe-statements";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
@@ -162,32 +163,6 @@ function applyMakeOptionalToDesired(
 }
 
 /**
- * Tables this batch replaces wholesale, read from the statements themselves.
- *
- * SQLite cannot alter most of a column in place, so drizzle-kit applies the
- * change by building `__new_<table>`, copying the rows across, dropping the
- * original and renaming the copy into its place. The closing rename is the
- * reliable marker: `CREATE TABLE "__new_x"` alone can appear in a batch that
- * later fails a guard, whereas the rename only follows a rebuild that ran.
- *
- * Derived from what the apply is about to do rather than from the diff,
- * because "was this table replaced" is a fact about the emitted SQL. An
- * `add_column` on PostgreSQL or MySQL touches the table without replacing it,
- * keeps its indexes, and correctly appears nowhere in this set.
- */
-const SQLITE_REBUILD_RENAME =
-  /ALTER\s+TABLE\s+[`"']?__new_[A-Za-z0-9_]+[`"']?\s+RENAME\s+TO\s+[`"']?([A-Za-z0-9_]+)/i;
-
-function rebuiltTableNames(statements: readonly string[]): Set<string> {
-  const names = new Set<string>();
-  for (const statement of statements) {
-    const match = statement.match(SQLITE_REBUILD_RENAME);
-    if (match) names.add(match[1]);
-  }
-  return names;
-}
-
-/**
  * `CREATE INDEX` for every index the desired schema declares on a table this
  * apply rebuilt.
  *
@@ -224,7 +199,7 @@ export function indexRestoreStatements(
   if (rebuilt.size === 0) return [];
 
   return desired.tables
-    .filter(table => rebuilt.has(table.name))
+    .filter(table => rebuilt.has(table.name.toLowerCase()))
     .flatMap(table =>
       // `undefined` means "this snapshot never tracked indexes", which is not
       // the same as "this table has none". Only an explicit list is actionable.

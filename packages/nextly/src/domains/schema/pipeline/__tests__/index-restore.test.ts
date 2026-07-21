@@ -83,18 +83,34 @@ describe("index restore", () => {
     expect(out).toEqual([]);
   });
 
-  it("matches the rename however the dialect quotes it", () => {
-    const backticks = ["ALTER TABLE `__new_dc_posts` RENAME TO `dc_posts`"];
-    const bare = ["ALTER TABLE __new_dc_posts RENAME TO dc_posts"];
+  it("matches the rename however the dialect writes it", () => {
+    const shapes = [
+      ["ALTER TABLE `__new_dc_posts` RENAME TO `dc_posts`"],
+      ["ALTER TABLE __new_dc_posts RENAME TO dc_posts"],
+      // Schema-qualified, which drizzle-kit emits and the destructive scanner
+      // already accepts. Missing it would leave the rebuilt table without its
+      // indexes in exactly the case this exists to cover.
+      ['ALTER TABLE "main"."__new_dc_posts" RENAME TO "dc_posts"'],
+      ["ALTER TABLE main.__new_dc_posts RENAME TO dc_posts"],
+    ];
+    for (const shape of shapes) {
+      expect(indexRestoreStatements(desired, "sqlite", shape)).toHaveLength(2);
+    }
+  });
 
-    expect(indexRestoreStatements(desired, "sqlite", backticks)).toHaveLength(
-      2
-    );
-    expect(indexRestoreStatements(desired, "sqlite", bare)).toHaveLength(2);
+  it("ignores a rename that does not restore the original name", () => {
+    // `__new_x` renaming to something else is not a rebuild of `x`, so it must
+    // not trigger a restore against a table that was never replaced.
+    const out = indexRestoreStatements(desired, "sqlite", [
+      'ALTER TABLE "__new_dc_posts" RENAME TO "dc_archive"',
+    ]);
+
+    expect(out).toEqual([]);
   });
 
   it("emits nothing when the rebuilt table tracks no indexes", () => {
-    // `undefined` is the pre-C1 "never tracked" sentinel, not "has none".
+    // `undefined` means the snapshot never tracked indexes, which is not the
+    // same as the table having none.
     const untracked: NextlySchemaSnapshot = {
       tables: [
         {

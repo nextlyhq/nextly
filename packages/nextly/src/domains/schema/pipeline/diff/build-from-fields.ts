@@ -215,6 +215,11 @@ export function buildDesiredTableFromFields(
       // Forward descriptor default so the classifier doesn't flag status as
       // `add_required_field_no_default` and require TTY confirmation.
       default: reserved.default,
+      // Forward the primary-key marker too. The diff exempts primary keys
+      // from the nullability comparison, and without this the exemption
+      // would cover core tables only — every Schema-Builder table would keep
+      // emitting the nullability change SQLite can never satisfy.
+      ...(reserved.primaryKey ? { primaryKey: true as const } : {}),
     });
   }
 
@@ -281,6 +286,9 @@ export function buildDesiredTableFromComponentFields(
       type: "text",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
@@ -318,6 +326,9 @@ export function buildDesiredTableFromComponentFields(
       type: "varchar(36)",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
@@ -356,6 +367,9 @@ export function buildDesiredTableFromComponentFields(
       type: "text",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
