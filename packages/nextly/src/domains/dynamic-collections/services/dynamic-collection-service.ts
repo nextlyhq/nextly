@@ -374,6 +374,44 @@ export class DynamicCollectionService extends BaseService {
     migrationFileName: string | null;
     metadataUpdates: Record<string, unknown>;
   }> {
+    // Validate caller input before any I/O: the shape checks below cannot
+    // depend on the registry, and rejecting a malformed body after a fetch
+    // does pointless work for a request that was never going to apply.
+    //
+    // Presence, not truthiness: `fields: null` or `fields: ""` is a supplied
+    // value that cannot be applied, and treating it as absent would report
+    // success for an update that silently did nothing to the fields.
+    if (updates.fields !== undefined) {
+      if (!Array.isArray(updates.fields)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "REQUIRED",
+              message: "Fields must be an array.",
+            },
+          ],
+        });
+      }
+      // The array is normalised through `f.name.toLowerCase()` before field
+      // validation runs, so an element without a string name throws an
+      // untyped TypeError rather than reporting the client error it is.
+      const malformedUpdate = updates.fields.findIndex(
+        f => typeof (f as { name?: unknown })?.name !== "string"
+      );
+      if (malformedUpdate !== -1) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `fields[${malformedUpdate}].name`,
+              code: "REQUIRED",
+              message: "Each field requires a name.",
+            },
+          ],
+        });
+      }
+    }
+
     const collection = (await this.registryService.getCollection(
       collectionName
     )) as CollectionMetadata;
@@ -464,38 +502,7 @@ export class DynamicCollectionService extends BaseService {
       (f: FieldDefinition) => !reservedForFields.includes(f.name)
     );
 
-    if (updates.fields) {
-      // Same caller-controlled dereference as the create path: the update
-      // body arrives unvalidated and is normalised through `f.name
-      // .toLowerCase()` before field validation runs, so a field without a
-      // string name throws an untyped TypeError instead of reporting the
-      // client error it is.
-      if (!Array.isArray(updates.fields)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "fields",
-              code: "REQUIRED",
-              message: "Fields must be an array.",
-            },
-          ],
-        });
-      }
-      const malformedUpdate = updates.fields.findIndex(
-        f => typeof (f as { name?: unknown })?.name !== "string"
-      );
-      if (malformedUpdate !== -1) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `fields[${malformedUpdate}].name`,
-              code: "REQUIRED",
-              message: "Each field requires a name.",
-            },
-          ],
-        });
-      }
-
+    if (updates.fields !== undefined) {
       const normalizedFields = updates.fields.map(f => ({
         ...f,
         name: f.name.toLowerCase(),

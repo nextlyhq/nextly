@@ -91,3 +91,33 @@ describe("generateCollection request validation", () => {
     expect((err as NextlyError).statusCode).toBe(400);
   });
 });
+
+describe("generateCollectionUpdate field validation", () => {
+  async function update(updates: unknown): Promise<unknown> {
+    return service()
+      .generateCollectionUpdate("posts", updates as never)
+      .catch((e: unknown) => e);
+  }
+
+  it("rejects an explicitly null fields value rather than treating it as absent", async () => {
+    // `if (updates.fields)` skipped these, so the update reported success
+    // while silently applying no field change at all.
+    const err = await update({ fields: null });
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).statusCode).toBe(400);
+  });
+
+  it("rejects other supplied falsy non-arrays", async () => {
+    for (const value of ["", false, 0]) {
+      const err = await update({ fields: value });
+      expect(NextlyError.is(err)).toBe(true);
+      expect((err as NextlyError).statusCode).toBe(400);
+    }
+  });
+
+  it("rejects a field element with no name on the update path", async () => {
+    const err = await update({ fields: [{ type: "text" }] });
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).statusCode).toBe(400);
+  });
+});
