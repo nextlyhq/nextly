@@ -31,7 +31,6 @@ import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
-  toSnakeCase,
 } from "../../services/field-column-descriptor";
 
 import { indexKey } from "./index-util";
@@ -96,11 +95,13 @@ interface CollectionIndexContext<F> {
   /** Fields whose columns live in the companion `_locales` table. */
   localizedNames: ReadonlySet<string>;
   /**
-   * Whether a field materialises a column on this table. Supplied by the
-   * caller because each already resolves descriptors in its own field shape;
-   * a column-less field must receive no index.
+   * The column a field materialises, or null when it materialises none (a
+   * component field stores its data in its own table and must receive no
+   * index). Supplied by the caller so the field-to-column mapping stays in
+   * the descriptor module rather than being recomputed here: a descriptor
+   * change would otherwise produce indexes naming columns that do not exist.
    */
-  producesColumn: (field: F) => boolean;
+  columnNameFor: (field: F) => string | null;
 }
 
 /**
@@ -117,7 +118,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   fields: readonly F[],
   context: CollectionIndexContext<F>
 ): IndexSpec[] {
-  const { producesColumn } = context;
+  const { columnNameFor } = context;
 
   // System slug(unique)+created_at, plus per-field unique/index and a
   // single-relationship auto-index (matches the runtime live-DDL). hasMany /
@@ -139,12 +140,13 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   }
   for (const field of fields) {
     if (context.localizedNames.has(field.name)) continue; // companion-owned; no main-table index
-    const col = toSnakeCase(field.name);
-    // Skip fields that materialize no column (e.g. component fields): a unique
-    // or plain index on a nonexistent column is invalid DDL. Check the field
-    // directly (not column presence) so a component named after a system column
-    // like `title` does not index the system-injected column instead.
-    if (!producesColumn(field)) continue;
+    const col = columnNameFor(field);
+    // A field materialising no column (e.g. a component, which stores its data
+    // in its own table) gets no index: one on a nonexistent column is invalid
+    // DDL. Asking the descriptor per field, rather than checking whether a
+    // column of that name exists, keeps a component named after a system
+    // column from indexing the system-injected column instead.
+    if (col === null) continue;
     const isSingleRelation =
       (field.type === "relationship" || field.type === "upload") &&
       field.hasMany !== true &&
@@ -241,7 +243,11 @@ export function buildDesiredTableFromFields(
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     localizedNames,
-    producesColumn,
+    columnNameFor: field =>
+      getColumnDescriptor(
+        field as unknown as Parameters<typeof getColumnDescriptor>[0],
+        dialect
+      )?.name ?? null,
   });
 
   return { name: tableName, columns, indexes };
