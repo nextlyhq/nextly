@@ -381,7 +381,16 @@ export async function restoreVersion(
   //
   // Probed on a deep copy for the same reason as the write rules below: these
   // strip nested keys in place.
-  const readProbe: Record<string, unknown> = structuredClone(payload);
+  //
+  // The probe carries the document's id, which the payload deliberately does
+  // not: `id` is immutable and was stripped before this point. A rule keyed on
+  // the document — owner-only visibility, say — would otherwise evaluate with
+  // no id and hide fields the same caller can read in version history, making
+  // restore stricter than the endpoint the snapshot came from.
+  const readProbe: Record<string, unknown> = {
+    ...structuredClone(payload),
+    id: args.entryId,
+  };
   try {
     await applyFieldReadAccess({
       kind: args.scopeKind === "single" ? "single" : "collection",

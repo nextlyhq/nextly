@@ -70,6 +70,7 @@ import {
 } from "../../i18n/resolve-locale";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { tagComponentTypes } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -620,6 +621,29 @@ export class CollectionMutationService extends BaseService {
     return typeof status === "string" ? status : null;
   }
 
+  /**
+   * The document parts a version records, with component types tagged.
+   *
+   * A separate shape from what the outbox carries: the same parts feed both,
+   * and the marker belongs only to the snapshot.
+   */
+  private snapshotPartsFor(
+    parts: {
+      parentRow: Record<string, unknown>;
+      components: Record<string, unknown>;
+      manyToMany: Record<string, string[]>;
+    },
+    fields: FieldDefinition[]
+  ) {
+    return {
+      ...parts,
+      components: tagComponentTypes(
+        parts.components,
+        fields as unknown as FieldConfig[]
+      ),
+    };
+  }
+
   private async buildFullSnapshotRelations(
     tx: { getDrizzle<T = unknown>(): T },
     entryId: string,
@@ -640,12 +664,6 @@ export class CollectionMutationService extends BaseService {
           const populated =
             await this.componentDataService.populateComponentData({
               entry: { id: entryId },
-              // Record each instance's component type. A field naming a
-              // single component omits it on an ordinary read, because the
-              // schema implies it — but the field may name a different
-              // component by the time this snapshot is restored, and the type
-              // is the only thing that would reveal the mismatch.
-              includeComponentType: true,
               // Resolved parent table (custom `dbName` collections do not match
               // getTableName(slug)) so the read targets the right comp_ tables.
               parentTable,
@@ -1652,7 +1670,9 @@ export class CollectionMutationService extends BaseService {
               typeof createCompanionStatus === "string"
                 ? createCompanionStatus
                 : (entry as { status?: unknown }).status,
-            parts: documentParts,
+            // Tagged for the snapshot alone: `documentParts` is also what the
+            // outbox event below carries, and that payload is read shape.
+            parts: this.snapshotPartsFor(documentParts, fields),
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
@@ -2926,7 +2946,8 @@ export class CollectionMutationService extends BaseService {
                     (updatePayload as { status?: unknown }).status ??
                     effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
-                  parts: documentParts,
+                  // See the create path: tagged for the snapshot only.
+                  parts: this.snapshotPartsFor(documentParts, fields),
                   createdBy: params.user?.id ?? null,
                   // Labelled with a locale only when locale-specific state was
                   // actually captured. A migrated localized collection routes
