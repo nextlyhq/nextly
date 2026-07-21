@@ -129,9 +129,10 @@ const NILADIC_KEYWORDS = [
 ].join("|");
 
 const EXPRESSION_SHAPED = new RegExp(
-  // Anything that calls (`now()`, `gen_random_uuid()`), any number, or any
-  // keyword above standing alone.
-  `^\\s*(?:[\\w.]+\\s*\\(|-?\\d|(?:${NILADIC_KEYWORDS})\\s*$)`,
+  // Anything that calls (`now()`, `gen_random_uuid()`), any number in any
+  // form a dialect accepts (`1`, `-1`, `+1`, `.5`, `-.5`), or any keyword
+  // above standing alone.
+  `^\\s*(?:[\\w.]+\\s*\\(|[-+]?\\.?\\d|(?:${NILADIC_KEYWORDS})\\s*$)`,
   "i"
 );
 

@@ -102,6 +102,12 @@ describe("normalizeDefault — string-literal unwrapping", () => {
       ["'0'", "0"],
       ["'42'", "42"],
       ["'-1'", "-1"],
+      // Signs and a leading point are numeric too; only the minus form was
+      // recognised, so `'+1'` reduced to the numeric expression it spells.
+      ["'+1'", "+1"],
+      ["'.5'", ".5"],
+      ["'-.5'", "-.5"],
+      ["'+.5'", "+.5"],
       ["'gen_random_uuid()'", "gen_random_uuid()"],
       // Bare-callable keywords: no parentheses, so the call-shape half of the
       // guard does not see them and each has to be named.
