@@ -18,7 +18,7 @@ beforeEach(() => {
 
 describe("writeBuilderMigration", () => {
   it("writes the executed DDL as an update migration", async () => {
-    await writeBuilderMigration("widget", [
+    await writeBuilderMigration("collection", "widget", [
       'ALTER TABLE "dc_widget" ADD COLUMN "headline" text;',
       'ALTER TABLE "dc_widget" ADD COLUMN "rating" integer;',
     ]);
@@ -36,7 +36,7 @@ describe("writeBuilderMigration", () => {
   });
 
   it("normalizes a slug that isn't filename-safe", async () => {
-    await writeBuilderMigration("My Widget!", [
+    await writeBuilderMigration("collection", "My Widget!", [
       'ALTER TABLE "x" ADD COLUMN "y" text;',
     ]);
 
@@ -45,15 +45,17 @@ describe("writeBuilderMigration", () => {
   });
 
   it("writes nothing when no statements were executed", async () => {
-    await writeBuilderMigration("widget", []);
-    await writeBuilderMigration("widget", undefined);
+    await writeBuilderMigration("collection", "widget", []);
+    await writeBuilderMigration("collection", "widget", undefined);
     expect(saveMigration).not.toHaveBeenCalled();
   });
 
   it("does not throw when the collections handler is unavailable", async () => {
     handler = undefined;
     await expect(
-      writeBuilderMigration("widget", ['ALTER TABLE "x" ADD COLUMN "y" text;'])
+      writeBuilderMigration("collection", "widget", [
+        'ALTER TABLE "x" ADD COLUMN "y" text;',
+      ])
     ).resolves.toBeUndefined();
   });
 
@@ -62,7 +64,26 @@ describe("writeBuilderMigration", () => {
       new Error("EROFS: read-only file system")
     );
     await expect(
-      writeBuilderMigration("widget", ['ALTER TABLE "x" ADD COLUMN "y" text;'])
+      writeBuilderMigration("collection", "widget", [
+        'ALTER TABLE "x" ADD COLUMN "y" text;',
+      ])
     ).resolves.toBeUndefined();
+  });
+
+  it("labels the migration with the entity kind for singles and components", async () => {
+    await writeBuilderMigration("single", "promo-banner", [
+      'ALTER TABLE "single_promo_banner" ADD COLUMN "headline" text;',
+    ]);
+    expect(saveMigration.mock.calls[0][0]).toContain(
+      "-- Update dynamic single: promo-banner"
+    );
+
+    saveMigration.mockReset();
+    await writeBuilderMigration("component", "cta_block", [
+      'ALTER TABLE "comp_cta_block" ADD COLUMN "button_text" text;',
+    ]);
+    expect(saveMigration.mock.calls[0][0]).toContain(
+      "-- Update dynamic component: cta_block"
+    );
   });
 });

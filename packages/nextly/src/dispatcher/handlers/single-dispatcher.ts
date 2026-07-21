@@ -87,6 +87,7 @@ import {
   requireParam,
   toNumber,
 } from "../helpers/validation";
+import { writeBuilderMigration } from "../helpers/write-builder-migration";
 import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
@@ -1258,6 +1259,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         databaseName,
         uiTargetSlug: slug,
       });
+
+      if (result.success) {
+        // Persist the DDL that just ran so the change is reproducible on a
+        // fresh database, matching the collection path.
+        await writeBuilderMigration("single", slug, result.executedStatements);
+      }
 
       if (!result.success) {
         throw new Error(

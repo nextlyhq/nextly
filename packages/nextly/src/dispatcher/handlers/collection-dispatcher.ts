@@ -636,6 +636,7 @@ const COLLECTIONS_METHODS: Record<
         // edit is the registry row, and replaying the migration folder would
         // recreate the collection without its fields.
         await writeBuilderMigration(
+          "collection",
           p.collectionName,
           result.executedStatements
         );
