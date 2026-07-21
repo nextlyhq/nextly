@@ -62,6 +62,48 @@ export type EnsureFirstRunSetupResult =
 
 const PROBE_TABLE = "nextly_schema_events";
 
+/**
+ * Compare the live core tables against the running code and warn on a gap.
+ *
+ * Never throws and never blocks boot: a database that cannot be introspected
+ * is a problem for whatever queries it next, not a reason to refuse to start.
+ * Upgrades are an explicit step, so this reports and does not repair.
+ */
+async function warnIfCoreSchemaIsBehind(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): Promise<void> {
+  try {
+    const [{ introspectLiveSnapshot }, { getCoreSchema, CORE_TABLE_NAMES }] =
+      await Promise.all([
+        import("../domains/schema/pipeline/diff/introspect-live"),
+        import("../schemas/index"),
+      ]);
+    const { findCoreSchemaDrift, formatCoreSchemaDriftWarning } = await import(
+      "./core-schema-drift"
+    );
+
+    const desired = getCoreSchema(adapter.dialect);
+    const live = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [...CORE_TABLE_NAMES]
+    );
+
+    const drift = findCoreSchemaDrift(live, desired);
+    if (drift.length > 0) {
+      logger.warn(formatCoreSchemaDriftWarning(drift));
+    }
+  } catch (error) {
+    // Diagnostics must not be the reason a boot fails.
+    logger.debug?.(
+      `[nextly] Could not check core schema state: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
 export async function ensureFirstRunSetup(
   args: EnsureFirstRunSetupArgs
 ): Promise<EnsureFirstRunSetupResult> {
@@ -83,6 +125,11 @@ export async function ensureFirstRunSetup(
   }
 
   if (probeExists) {
+    // The database has been set up before, so nothing here creates tables.
+    // Core tables never gain columns after first run, though, so a database
+    // created by an earlier release can be missing columns this one expects.
+    // Report that rather than let a downstream query fail far from the cause.
+    await warnIfCoreSchemaIsBehind(adapter, logger);
     return { ranSetup: false, reason: "already_initialized" };
   }
 
