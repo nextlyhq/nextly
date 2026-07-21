@@ -192,6 +192,22 @@ export class CollectionsHandler {
    * field. Trusted-server bypass is a separate, explicit `overrideAccess: true`
    * (seeds, plugin `as:'system'`), never inferred from route auth.
    */
+  /**
+   * Whether this user may update the entry, without performing the update.
+   *
+   * Routed through the handler for the same reason the version read gate is:
+   * this is the instance that actually serves collection writes, so a decision
+   * taken here is the decision the write would take.
+   */
+  async canUpdateEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    routeAuthorized?: boolean;
+  }): Promise<boolean> {
+    return this.entryService.canUpdateEntry(params);
+  }
+
   private resolveUserParam<
     T extends {
       userId?: string;

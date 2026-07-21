@@ -17,10 +17,12 @@
 
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
+import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
+import { AccessControlService } from "../services/access/access-control-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
 import { stripPasswordFieldValues } from "../shared/lib/password-fields";
@@ -98,6 +100,104 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
+}
+
+/**
+ * Confirm the caller may UPDATE the live document, for writes to its history.
+ *
+ * Renaming or otherwise editing a version changes a record of the document, so
+ * it owes the document's own update rules. The route-level `update-<slug>`
+ * permission is coarse: it says the caller may update documents of this kind,
+ * not that they may update THIS one. A collection or Single carrying an
+ * owner-only or role-based per-document rule refuses the document itself while
+ * that coarse permission still stands, and without this gate the history would
+ * stay editable.
+ *
+ * Read access is assumed to have been established already. That is why a
+ * refusal here is 403 rather than the read gate's 404: the caller has proven
+ * they can see this document, so concealing its existence protects nothing and
+ * only makes the refusal harder to act on.
+ *
+ * Both entity kinds are covered deliberately. A gate that reached only one
+ * would read as complete and would not be.
+ */
+export async function assertVersionDocumentUpdatable(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext
+): Promise<void> {
+  const allowed =
+    scopeKind === "single"
+      ? await canUpdateLiveSingle(slug, entryId, user)
+      : await getService("collectionsHandler").canUpdateEntry({
+          collectionName: slug,
+          entryId,
+          user,
+          // As the read gate does: route authorization already ran, so skip
+          // only the redundant coarse re-check. The stored per-document rules
+          // this gate exists for still run.
+          routeAuthorized: true,
+        });
+
+  if (!allowed) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "version-document-not-updatable",
+        scopeKind,
+        scopeSlug: slug,
+        entryId,
+        userId: user.id,
+      },
+    });
+  }
+}
+
+/**
+ * Single variant of the update gate.
+ *
+ * Reads the row directly rather than through `SingleEntryService`, which
+ * materializes a missing Single. The live id is compared with the requested
+ * one for the same reason the read gate compares it: version rows outlive the
+ * document they came from, so a Single recreated under a new id must not have
+ * the previous document's history edited through it.
+ */
+async function canUpdateLiveSingle(
+  slug: string,
+  entryId: string,
+  user: UserContext
+): Promise<boolean> {
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return false;
+
+  const liveId = await resolveSingleDocumentId(slug);
+  if (liveId === null || liveId !== entryId) return false;
+
+  const adapter = getService("adapter");
+  // Loaded because an owner-only rule compares against the stored row, and
+  // `checkSingleAccess` refuses outright when such a rule has no document.
+  const document = await adapter.selectOne<Record<string, unknown>>(
+    record.tableName,
+    {}
+  );
+  if (!document) return false;
+
+  const denied = await checkSingleAccess({
+    slug,
+    operation: "update",
+    user,
+    overrideAccess: false,
+    routeAuthorized: true,
+    rbacAccessControlService: getService("rbacAccessControlService"),
+    // Stateless evaluator for the Single's stored rules; it holds no
+    // per-request state, so constructing one here matches the write path.
+    accessControlService: new AccessControlService(),
+    accessRules: record.accessRules,
+    document,
+    logger: getService("logger"),
+  });
+  return denied === null;
 }
 
 /**
