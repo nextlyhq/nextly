@@ -91,6 +91,24 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
 }
 
 /**
+ * Contents that must keep their quotes, because unquoted they would read as
+ * something other than a string.
+ *
+ * `'now()'` is the word "now()" stored in a text column; `now()` is a call
+ * evaluated per row. Unwrap the first and the two compare equal, so a change
+ * between them is reported as no change at all and the column keeps a default
+ * nobody intended. The same holds for `'true'` against the boolean, `'0'`
+ * against the number, and `'CURRENT_TIMESTAMP'` against the keyword.
+ *
+ * Matching is deliberately broad — anything that calls, any bare keyword, any
+ * number — because the cost of the two sides is not symmetric. Declining to
+ * unwrap costs a spurious op, which this module has always preferred; a wrong
+ * unwrap silently drops a real migration.
+ */
+const EXPRESSION_SHAPED =
+  /^\s*(?:[\w.]+\s*\(|-?\d|(?:true|false|null|current_timestamp|current_date|current_time)\s*$)/i;
+
+/**
  * Reduce a quoted string literal to its contents.
  *
  * The two sides of the diff read a string default from different places and
@@ -105,16 +123,19 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
  * seeing a clean database, and on SQLite the rebuild that follows takes the
  * table's indexes with it.
  *
- * Only a fully-quoted literal is unwrapped. Anything with an interior quote
- * is left alone rather than guessed at: PG escapes by doubling, SQLite the
- * same, and a wrong unwrap here would compare two different values equal,
- * which is the one failure this module must not have.
+ * Two things are never unwrapped. A literal with an interior quote, because
+ * both PG and SQLite escape by doubling and the contents cannot be recovered
+ * by removing the outer pair. And a literal whose contents would read as an
+ * expression, so that a quoted `'now()'` can never compare equal to a called
+ * `now()`.
  */
 function unquoteStringLiteral(expr: string): string {
   if (expr.length < 2) return expr;
   if (!expr.startsWith("'") || !expr.endsWith("'")) return expr;
   const inner = expr.slice(1, -1);
-  return inner.includes("'") ? expr : inner;
+  if (inner.includes("'")) return expr;
+  if (EXPRESSION_SHAPED.test(inner)) return expr;
+  return inner;
 }
 
 function stripRedundantCast(expr: string): string {

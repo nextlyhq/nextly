@@ -87,6 +87,35 @@ describe("normalizeDefault — string-literal unwrapping", () => {
     expect(normalizeDefault("'it''s'")).toBe("'it''s'");
   });
 
+  it("never equates a quoted literal with the expression it spells", () => {
+    // The unwrap exists to make `'pending'` and `pending` compare equal. It
+    // must not go on to make `'now()'` equal `now()`: the first is the word
+    // stored in a text column, the second is evaluated per row. Equating them
+    // reports a real default change as no change, and the column silently
+    // keeps a default nobody chose.
+    const distinct: Array<[string, string]> = [
+      ["'now()'", "now()"],
+      ["'CURRENT_TIMESTAMP'", "CURRENT_TIMESTAMP"],
+      ["'true'", "true"],
+      ["'false'", "false"],
+      ["'null'", "null"],
+      ["'0'", "0"],
+      ["'42'", "42"],
+      ["'-1'", "-1"],
+      ["'gen_random_uuid()'", "gen_random_uuid()"],
+    ];
+    for (const [literal, expression] of distinct) {
+      expect(normalizeDefault(literal)).not.toBe(normalizeDefault(expression));
+    }
+  });
+
+  it("still unwraps ordinary word defaults", () => {
+    // The cases this was built for — every one of them a real column default
+    // in the core schema.
+    for (const word of ["pending", "ui", "draft", "template", "inside", "auto"])
+      expect(normalizeDefault(`'${word}'`)).toBe(normalizeDefault(word));
+  });
+
   it("leaves unbalanced or unquoted expressions alone", () => {
     expect(normalizeDefault("'unterminated")).toBe("'unterminated");
     expect(normalizeDefault("gen_random_uuid()")).toBe("gen_random_uuid()");

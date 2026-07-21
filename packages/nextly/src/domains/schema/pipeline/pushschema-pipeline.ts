@@ -162,49 +162,79 @@ function applyMakeOptionalToDesired(
 }
 
 /**
- * `CREATE INDEX` for every index the desired schema declares.
+ * Tables this batch replaces wholesale, read from the statements themselves.
+ *
+ * SQLite cannot alter most of a column in place, so drizzle-kit applies the
+ * change by building `__new_<table>`, copying the rows across, dropping the
+ * original and renaming the copy into its place. The closing rename is the
+ * reliable marker: `CREATE TABLE "__new_x"` alone can appear in a batch that
+ * later fails a guard, whereas the rename only follows a rebuild that ran.
+ *
+ * Derived from what the apply is about to do rather than from the diff,
+ * because "was this table replaced" is a fact about the emitted SQL. An
+ * `add_column` on PostgreSQL or MySQL touches the table without replacing it,
+ * keeps its indexes, and correctly appears nowhere in this set.
+ */
+const SQLITE_REBUILD_RENAME =
+  /ALTER\s+TABLE\s+[`"']?__new_[A-Za-z0-9_]+[`"']?\s+RENAME\s+TO\s+[`"']?([A-Za-z0-9_]+)/i;
+
+function rebuiltTableNames(statements: readonly string[]): Set<string> {
+  const names = new Set<string>();
+  for (const statement of statements) {
+    const match = statement.match(SQLITE_REBUILD_RENAME);
+    if (match) names.add(match[1]);
+  }
+  return names;
+}
+
+/**
+ * `CREATE INDEX` for every index the desired schema declares on a table this
+ * apply rebuilt.
  *
  * Two things decide what a dynamic table looks like and only one of them
  * knows about indexes. The diff's desired side comes from
  * `buildDesiredTableFromFields`, which carries a full `IndexSpec[]`; the
  * Drizzle tables handed to drizzle-kit come from `generateRuntimeSchema`,
  * which declares none. drizzle-kit therefore believes every table should have
- * no secondary index, and on SQLite — where a schema change is applied by
- * building a new table and copying the rows across — the indexes go with the
- * table it dropped. Nothing reports it: the push succeeds, the rows are
- * intact, and the queries just get slower.
+ * no secondary index, so the replacement table it builds during a rebuild has
+ * none either, and the indexes go with the table it dropped. Nothing reports
+ * it: the push succeeds, the rows are intact, and the queries just get slower.
  *
  * Re-asserting them is what closes the gap. Teaching the generator to declare
  * them instead would mean passing Drizzle's three-argument table overload a
  * loosely-typed column record it does not accept, which has no answer that
  * isn't `any`.
  *
+ * Scoped to rebuilt tables, NOT to every table the apply touched. A table that
+ * was altered in place still has its indexes, and re-creating one that exists
+ * is not harmless: MySQL has no `CREATE INDEX IF NOT EXISTS`, so a duplicate
+ * key name aborts the apply — after MySQL has already auto-committed the DDL
+ * ahead of it.
+ *
  * Pure so the statements can be asserted directly; the caller appends them to
  * the push batch, which keeps them in the same transaction and after the
  * table changes they index.
  */
-function indexRestoreStatements(
+export function indexRestoreStatements(
   desired: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  affectedTableNames: ReadonlySet<string>
+  statements: readonly string[]
 ): string[] {
-  return (
-    desired.tables
-      // Only tables this apply touched. An untouched table was not rebuilt, so
-      // its indexes are still there, and re-asserting them would put a
-      // `CREATE INDEX` for the whole schema into every apply.
-      .filter(table => affectedTableNames.has(table.name))
-      .flatMap(table =>
-        // `undefined` means "this snapshot never tracked indexes", which is not
-        // the same as "this table has none". Only an explicit list is actionable.
-        (table.indexes ?? []).map(index =>
-          generateSQL(
-            { type: "add_index", tableName: table.name, index },
-            dialect
-          )
+  const rebuilt = rebuiltTableNames(statements);
+  if (rebuilt.size === 0) return [];
+
+  return desired.tables
+    .filter(table => rebuilt.has(table.name))
+    .flatMap(table =>
+      // `undefined` means "this snapshot never tracked indexes", which is not
+      // the same as "this table has none". Only an explicit list is actionable.
+      (table.indexes ?? []).map(index =>
+        generateSQL(
+          { type: "add_index", tableName: table.name, index },
+          dialect
         )
       )
-  );
+    );
 }
 
 export interface PipelineResult {
@@ -956,11 +986,7 @@ export class PushSchemaPipeline {
         // Appended to the same batch, after the table changes they index and
         // inside the same transaction, so a table can never commit without
         // the indexes the desired schema declares for it.
-        const restore = indexRestoreStatements(
-          desiredSnapshot,
-          dialect,
-          affectedTableNames
-        );
+        const restore = indexRestoreStatements(desiredSnapshot, dialect, safe);
 
         try {
           await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
