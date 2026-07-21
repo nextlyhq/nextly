@@ -14,6 +14,10 @@ import {
   assertVersionDocumentReadable,
   redactSnapshotForUser,
 } from "../../api/versions-access";
+import {
+  canReadEntity,
+  type ReadAccessCaller,
+} from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
@@ -25,10 +29,6 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../../services/lib/permissions";
 import type { Params } from "../types";
 
 /** Page size when the caller does not ask for one. */
@@ -205,25 +205,35 @@ export async function getVersionForDocument(
 }
 
 /**
- * Whether the caller holds the coarse read permission for this entity.
+ * The resolved identity, as the shared read decision needs it.
  *
- * The dispatcher authorizes a restore as `update-{slug}`, so the `read-{slug}`
- * permission that guards history is never evaluated on this path. A caller with
- * update but not read could otherwise recover an unseen snapshot through the
- * write — reading history by writing it back.
- *
- * Document-level rules are a separate gate; this is only the coarse half.
+ * An API key's own scoped grants arrive on the params; a session caller has
+ * none there, and `canReadEntity` resolves theirs from the database.
  */
-async function hasHistoryReadPermission(
-  slug: string,
+function readAccessCallerFromParams(
+  p: Params,
   user: UserContext
-): Promise<boolean> {
-  const userId = user.id;
-  if (!userId) return false;
-  if (await isSuperAdmin(userId)) return true;
+): ReadAccessCaller {
+  const isApiKey = p._authenticatedActorType === "apiKey";
 
-  const permissions = await listEffectivePermissions(userId);
-  return permissions.includes(`${slug}:read`);
+  let permissions: string[] = [];
+  if (isApiKey && p._authenticatedPermissions) {
+    try {
+      const parsed: unknown = JSON.parse(String(p._authenticatedPermissions));
+      if (Array.isArray(parsed)) permissions = parsed as string[];
+    } catch {
+      // A corrupt value must not read as a broader grant than the key holds;
+      // an empty list denies, which is the safe direction.
+      permissions = [];
+    }
+  }
+
+  return {
+    userId: user.id,
+    authMethod: isApiKey ? "api-key" : "session",
+    permissions,
+    roles: user.roles ?? [],
+  };
 }
 
 /**
@@ -237,9 +247,20 @@ async function hasHistoryReadPermission(
  * fails.
  */
 export async function restoreVersionForDocument(
-  args: VersionMethodArgs & { versionNo: number; actor?: RequestActor }
+  args: VersionMethodArgs & {
+    versionNo: number;
+    actor?: RequestActor;
+    /**
+     * The dispatch params, so the caller's identity is assembled here rather
+     * than at each dispatcher. Both entity kinds route through this function,
+     * and building it twice is how the two drift.
+     */
+    params: Params;
+  }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
-  if (!(await hasHistoryReadPermission(args.slug, args.user))) {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
     // "Not found" rather than "forbidden", matching the document gate below: a
     // distinct 403 would confirm the document exists to a caller not allowed to
     // know that.

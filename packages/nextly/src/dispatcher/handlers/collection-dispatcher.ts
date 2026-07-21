@@ -176,6 +176,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         user: userFromParams(p),
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
+        params: p,
       });
       return respondAction("Version restored.", result);
     },

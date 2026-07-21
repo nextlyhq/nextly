@@ -126,10 +126,20 @@ function componentSlugs(field: FieldConfig): string[] {
   return slugs;
 }
 
-/** Component slugs a field currently permits, or null when it permits any. */
+/**
+ * Component slugs a field permits, or null when it is not a component field.
+ *
+ * Keyed on whether the field DECLARES a component key, not on how many slugs it
+ * names. A dynamic zone stripped back to `components: []` permits nothing —
+ * reading that as "permits anything" admits every stored instance to a save
+ * path that has no component to apply them to, so the restore reports success
+ * having quietly skipped the field.
+ */
 function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
-  const slugs = componentSlugs(field);
-  return slugs.length > 0 ? new Set(slugs) : null;
+  const one = (field as { component?: unknown }).component;
+  const many = (field as { components?: unknown }).components;
+  const declaresComponent = typeof one === "string" || Array.isArray(many);
+  return declaresComponent ? new Set(componentSlugs(field)) : null;
 }
 
 /**

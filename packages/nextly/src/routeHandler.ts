@@ -1479,6 +1479,7 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedUserRoles;
   delete routeParams._authenticatedActorType;
   delete routeParams._authenticatedActorId;
+  delete routeParams._authenticatedPermissions;
 
   if (!authorizedUser) return;
 
@@ -1493,6 +1494,14 @@ async function setAuthenticatedRouteParams(
     routeParams._authenticatedUserName = authorizedUser.userName;
   if (authorizedUser.userEmail)
     routeParams._authenticatedUserEmail = authorizedUser.userEmail;
+  // The API key's own scoped grants, so a handler deciding access after
+  // dispatch judges the key rather than the account that issued it. Empty for
+  // session auth, whose grants are resolved from the database instead.
+  if (authorizedUser.authMethod === "api-key") {
+    routeParams._authenticatedPermissions = JSON.stringify(
+      authorizedUser.permissions ?? []
+    );
+  }
 
   if (!needsRoles) return;
 

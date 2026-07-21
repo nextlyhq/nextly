@@ -27,6 +27,7 @@ const {
 // these tests exercise restore's own decisions rather than access configuration.
 vi.mock("../../../shared/lib/field-level-registry", () => ({
   applyFieldWriteAccess: vi.fn(),
+  applyFieldReadAccess: vi.fn(),
 }));
 
 vi.mock("../../../di", () => ({
@@ -50,7 +51,10 @@ vi.mock("../../../di", () => ({
   }),
 }));
 
-import { applyFieldWriteAccess } from "../../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  applyFieldWriteAccess,
+} from "../../../shared/lib/field-level-registry";
 import { restoreVersion } from "../restore-version";
 
 const user = { id: "u1" };
@@ -516,6 +520,69 @@ describe("restoreVersion", () => {
       title: "Page",
     });
     expect(result.droppedFields).toEqual(["hero"]);
+  });
+
+  it("does not write back a field the caller may not read", async () => {
+    // The history endpoints redact a snapshot before returning it. Restoring is
+    // the one path that would otherwise apply the unredacted value, letting a
+    // caller push content they were never allowed to see into the document.
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Public", secret: "hidden" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "secret", type: "text" },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+    vi.mocked(applyFieldReadAccess).mockImplementation(
+      async ({ entry }: { entry: Record<string, unknown> }) => {
+        delete entry.secret;
+      }
+    );
+
+    const result = await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      title: "Public",
+    });
+    expect(result.droppedFields).toContain("secret");
+  });
+
+  it("reports an unreadable field nested inside a container", async () => {
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { meta: { caption: "Public", secret: "hidden" } },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "caption", type: "text" },
+            { name: "secret", type: "text" },
+          ],
+        },
+      ],
+      localized: false,
+      versions: { enabled: true },
+    });
+    vi.mocked(applyFieldReadAccess).mockImplementation(
+      async ({ entry }: { entry: Record<string, unknown> }) => {
+        const meta = entry.meta as Record<string, unknown> | undefined;
+        if (meta) delete meta.secret;
+      }
+    );
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
   });
 
   it("refuses to restore when versioning has been turned off", async () => {

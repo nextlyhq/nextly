@@ -19,7 +19,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  applyFieldWriteAccess,
+} from "../../shared/lib/field-level-registry";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -344,6 +347,34 @@ export async function restoreVersion(
       localeUnknown,
     }
   );
+
+  // Field-level READ rules decide what of the snapshot this caller was ever
+  // allowed to see. A field hidden from them must not be written back from a
+  // version they could not have read — the history endpoints redact the same
+  // snapshot before returning it, and restoring is the one path that would
+  // otherwise apply it unredacted.
+  //
+  // Probed on a deep copy for the same reason as the write rules below: these
+  // strip nested keys in place.
+  const readProbe: Record<string, unknown> = structuredClone(payload);
+  try {
+    await applyFieldReadAccess({
+      kind: args.scopeKind === "single" ? "single" : "collection",
+      slug: args.slug,
+      entry: readProbe,
+      user: args.user,
+      overrideAccess: false,
+    });
+    for (const key of Object.keys(payload)) {
+      if (!(key in readProbe) || !deepEquals(payload[key], readProbe[key])) {
+        delete payload[key];
+        droppedFields.push(key);
+      }
+    }
+  } catch {
+    // A failure here must not block a restore the update path would allow; the
+    // write rules below remain the authority on what may be applied.
+  }
 
   // Field-level write rules strip denied keys inside the update path, silently
   // and after it has already reported success. Evaluating the same rules here

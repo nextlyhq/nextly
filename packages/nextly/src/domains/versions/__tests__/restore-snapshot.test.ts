@@ -1071,3 +1071,63 @@ describe("buildRestorePayload — dynamic zone rows keep their own schema", () =
     expect(droppedFields).toEqual([]);
   });
 });
+
+describe("buildRestorePayload — a zone that permits nothing", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  it("reports instances of a zone stripped back to no allowed types", () => {
+    // An empty allowlist permits nothing. Reading it as "permits anything"
+    // admits every stored instance to a save path with no component to apply
+    // them to, and the restore reports success having skipped the field.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+
+  it("still restores a cleared value on such a field", () => {
+    // Clearing is applicable whatever the allowlist says: the field ends up
+    // empty either way, and the live rows should go.
+    const zone = [
+      { name: "blocks", type: "component", components: [] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      ctx
+    );
+
+    expect(payload).toEqual({ blocks: [] });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("leaves a non-component container unconstrained", () => {
+    // The distinction is whether the field declares a component key at all —
+    // a group names no components and must not be treated as permitting none.
+    const withGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "caption", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { caption: "Hi" } },
+      withGroup,
+      ctx
+    );
+
+    expect(payload).toEqual({ meta: { caption: "Hi" } });
+    expect(droppedFields).toEqual([]);
+  });
+});
