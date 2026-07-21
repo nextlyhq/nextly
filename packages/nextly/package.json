@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.37",
+  "version": "0.0.2-alpha.38",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
@@ -131,6 +131,14 @@
       "types": "./dist/api/singles.d.ts",
       "import": "./dist/api/singles.mjs"
     },
+    "./api/versions": {
+      "types": "./dist/api/versions.d.ts",
+      "import": "./dist/api/versions.mjs"
+    },
+    "./api/versions-detail": {
+      "types": "./dist/api/versions-detail.d.ts",
+      "import": "./dist/api/versions-detail.mjs"
+    },
     "./api/singles-detail": {
       "types": "./dist/api/singles-detail.d.ts",
       "import": "./dist/api/singles-detail.mjs"
@@ -182,6 +190,9 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@nextlyhq/adapter-mysql": "workspace:*",
+    "@nextlyhq/adapter-postgres": "workspace:*",
+    "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",

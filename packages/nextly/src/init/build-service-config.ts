@@ -167,6 +167,17 @@ export function buildServiceConfig(
     if (!serviceConfig.localization && nextlyConfig?.localization) {
       serviceConfig.localization = nextlyConfig.localization;
     }
+
+    // Webhook retention — carry the resolved policy through so writes can offer
+    // a retention pass. `undefined` here means "not carried"; the sanitizer
+    // always produces either a policy or an explicit null, so a null must be
+    // preserved rather than treated as absent.
+    if (
+      serviceConfig.webhookRetention === undefined &&
+      nextlyConfig?.webhookRetention !== undefined
+    ) {
+      serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
+    }
   }
 
   // Ensure imageProcessor is always provided

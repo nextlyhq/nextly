@@ -350,6 +350,7 @@ export class SingleQueryService extends BaseService {
         operation: "read",
         user: options.user,
         overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
         logger: this.logger,
       });
@@ -778,6 +779,7 @@ export class SingleQueryService extends BaseService {
           // System-materialized default: no authoring user.
           parts: { parentRow, components: {} },
           createdBy: null,
+          maxPerDoc: versionsConfig.maxPerDoc,
         });
         return row;
       })

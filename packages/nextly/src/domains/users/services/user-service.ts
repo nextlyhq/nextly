@@ -226,6 +226,23 @@ export class UserService {
   }
 
   /**
+   * Display names for a set of user ids, for surfaces that attribute an action
+   * to a person.
+   *
+   * Takes no RequestContext because it exposes nothing beyond a name the
+   * caller is already entitled to see alongside the record naming the id, and
+   * unknown ids are simply omitted rather than raising.
+   *
+   * @param ids - User IDs to resolve
+   * @returns One entry per id that still exists
+   */
+  async listUsersByIds(
+    ids: string[]
+  ): Promise<{ id: string; name: string | null }[]> {
+    return this.queryService.listUsersByIds(ids);
+  }
+
+  /**
    * Find a user by email address
    *
    * @param email - Email address

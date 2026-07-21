@@ -68,6 +68,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -98,6 +99,11 @@ import type { MethodHandler, Params } from "../types";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import {
+  getVersionForDocument,
+  listVersionsForDocument,
+  userFromParams,
+} from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -136,10 +142,49 @@ function formatToastSummary(summary: {
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
+/**
+ * Version-history reads for a collection entry.
+ *
+ * Split out so the dispatcher registration and the auth method set in
+ * `routeHandler.ts` stay in step, and so the Single equivalent can mirror it.
+ * The shared methods return data; the canonical envelope is applied here.
+ */
+export const COLLECTION_VERSION_METHODS: Record<
+  string,
+  MethodHandler<CollectionsHandlerType>
+> = {
+  listEntryVersions: {
+    execute: async (_svc, p) => {
+      const result = await listVersionsForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        limit: p.limit !== undefined ? Number(p.limit) : undefined,
+        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+      });
+      return respondList(result.items, result.meta);
+    },
+  },
+  getEntryVersion: {
+    execute: async (_svc, p) => {
+      const row = await getVersionForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondDoc(row);
+    },
+  },
+};
+
 const COLLECTIONS_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
 > = {
+  ...COLLECTION_VERSION_METHODS,
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through
@@ -941,6 +986,8 @@ const COLLECTIONS_METHODS: Record<
           // i18n M5: `?locale=de` stores the translatable values for German.
           locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Who performed the write, recorded on the outbox event.
+          actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
@@ -1014,6 +1061,8 @@ const COLLECTIONS_METHODS: Record<
           // i18n M5: `?locale=de` updates only the German translatable values.
           locale: p.locale,
           userRoles: readAuthenticatedRoles(p),
+          // Who performed the write, recorded on the outbox event.
+          actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
@@ -1160,6 +1209,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,
@@ -1222,6 +1272,7 @@ const COLLECTIONS_METHODS: Record<
           // collection's access rules.
           where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
           data: b.data,
+          actor: readAuthenticatedActor(p),
           userId: p._authenticatedUserId
             ? String(p._authenticatedUserId)
             : undefined,
@@ -1262,6 +1313,7 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,

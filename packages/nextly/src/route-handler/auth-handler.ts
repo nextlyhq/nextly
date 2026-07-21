@@ -88,6 +88,12 @@ async function ensureServicesInitialized(): Promise<void> {
       if (nextlyConfig.localization)
         serviceConfig.localization = nextlyConfig.localization;
       if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;
+      // Webhook retention: carry the resolved policy so a request-path boot
+      // wires the cleanup runner too. Compared against undefined rather than
+      // truthiness because null is the meaningful "retention off" value and
+      // must not be mistaken for absent.
+      if (nextlyConfig.webhookRetention !== undefined)
+        serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;
         if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;

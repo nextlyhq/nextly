@@ -757,6 +757,39 @@ export class UserQueryService extends BaseService {
   }
 
   /**
+   * Display-name projection for a set of user ids, for surfaces that show who
+   * performed an action.
+   *
+   * Unknown ids are absent from the result rather than raising: unlike
+   * `getUserById`, whose 404 exists to keep user existence unguessable, a
+   * caller here already holds a record naming the id and only wants something
+   * to render. A deleted user must degrade to an unattributed row.
+   *
+   * Columns are listed explicitly rather than selecting the row: the user
+   * table carries a password hash and lockout counters that must never reach
+   * a display surface.
+   */
+  async listUsersByIds(
+    ids: string[]
+  ): Promise<{ id: string; name: string | null }[]> {
+    if (ids.length === 0) return [];
+
+    const { users } = this.tables;
+
+    // Required by Drizzle ORM — runtime-generated tables need untyped db
+    // access. Await of DrizzleChain resolves to Record<string, unknown>[].
+    const rows = await (this.db as unknown as DrizzleChain)
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(inArray(users.id, ids));
+
+    return rows.map(r => ({
+      id: String(r.id),
+      name: typeof r.name === "string" ? r.name : null,
+    }));
+  }
+
+  /**
    * Find a user by email address.
    *
    * Returns null when the email is not registered (callers explicitly need

@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import type { Logger } from "../../../shared/types";
@@ -31,7 +32,7 @@ export class ComponentDataService {
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    registryService: ComponentRegistryService,
+    private readonly registryService: ComponentRegistryService,
     relationshipService?: CollectionRelationshipService,
     // i18n: threaded to the query/mutation services so a localized embedded component
     // resolves/writes its translatable fields via `comp_<slug>_locales` per language.
@@ -50,6 +51,18 @@ export class ComponentDataService {
       registryService,
       localization
     );
+  }
+
+  /**
+   * The component's own field definitions, resolved from the registry so
+   * Schema-Builder components (which exist only in the database) are covered as
+   * well as config-defined ones. Callers that must reason about fields nested
+   * inside a component reference use this rather than reaching for the registry
+   * directly. Returns null when the component is unknown.
+   */
+  async getComponentFields(slug: string): Promise<FieldConfig[] | null> {
+    const record = await this.registryService.getComponentBySlug(slug);
+    return record?.fields ?? null;
   }
 
   setRelationshipService(service: CollectionRelationshipService): void {

@@ -5,6 +5,10 @@
 // then invalidates caches and shows success/error toast.
 "use client";
 
+// Restart notifications go through @nextlyhq/ui's toast so they land in the
+// same sonner instance as the mounted Toaster; importing sonner directly here
+// would queue them in admin's bundled copy, where nothing is listening.
+import { toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
@@ -14,7 +18,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { toast } from "sonner";
 
 interface RestartContextValue {
   isRestarting: boolean;

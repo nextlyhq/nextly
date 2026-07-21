@@ -936,6 +936,15 @@ export class PostgresAdapter extends DrizzleAdapter {
         return result.rows as T[];
       },
 
+      lockRow: async (table: string, id: SqlParam): Promise<void> => {
+        const idColumn = this.escapeIdentifier("id");
+        await client.query(
+          `SELECT ${idColumn} FROM ${this.escapeIdentifier(table)} ` +
+            `WHERE ${idColumn} = $1 FOR UPDATE`,
+          [id] as unknown[]
+        );
+      },
+
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,

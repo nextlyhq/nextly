@@ -82,6 +82,24 @@ export interface TransactionContext {
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
 
   /**
+   * Take an exclusive lock on a single row for the rest of this transaction.
+   *
+   * @remarks
+   * For read-modify-write sequences that must not interleave: without a lock
+   * another transaction can commit between the read and the write, leaving the
+   * caller's view of the prior state inconsistent with what its own write
+   * applied on top of.
+   *
+   * No-ops on dialects without row-level locking. SQLite is the case that
+   * matters and needs nothing — its transactions open with `BEGIN IMMEDIATE`,
+   * which already serializes writers.
+   *
+   * @param table - Table name
+   * @param id - Primary-key value of the row to lock
+   */
+  lockRow(table: string, id: SqlParam): Promise<void>;
+
+  /**
    * Insert a single record.
    *
    * @param table - Table name

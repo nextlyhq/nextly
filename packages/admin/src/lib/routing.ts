@@ -27,7 +27,7 @@ export interface RouteResult {
 }
 
 type Params = Record<string, string | string[]>;
-type SearchParams = Record<string, string | string[] | undefined>;
+export type SearchParams = Record<string, string | string[] | undefined>;
 
 // Parse URL search parameters
 export function parseSearchParams(search: string): SearchParams {
@@ -43,6 +43,19 @@ export function parseSearchParams(search: string): SearchParams {
           : values;
   }
   return out;
+}
+
+/**
+ * Read a single search-param value, mirroring `URLSearchParams.get()`: the
+ * first value when a key is repeated, and `null` when it is absent.
+ */
+export function getSearchParam(
+  params: SearchParams,
+  key: string
+): string | null {
+  const value = params[key];
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
 // Normalize Next.js App Router patterns

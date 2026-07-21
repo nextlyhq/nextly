@@ -23,7 +23,7 @@ export {
   type FanOutResult,
 } from "./fan-out";
 export {
-  sensitiveFieldNames,
+  sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 export {
@@ -37,6 +37,28 @@ export {
   type SignHeadersInput,
   type VerifyInput,
 } from "./signing";
+export {
+  classifyResponse,
+  nextAttemptDelayMs,
+  decideDelivery,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_BASE_DELAY_MS,
+  DEFAULT_MAX_DELAY_MS,
+  type AttemptOutcome,
+  type BackoffOptions,
+  type DeliveryDecision,
+  type DecideDeliveryInput,
+} from "./delivery-policy";
+export {
+  deliverDueDeliveries,
+  type DeliverDeps,
+  type DeliverDatabase,
+  type DeliverTx,
+  type DeliverLogger,
+  type DeliverTransport,
+  type DeliverResult,
+} from "./deliver";
+export { runDrain, type RunDrainDeps, type RunDrainResult } from "./run-drain";
 export {
   WEBHOOK_EVENT_TYPES,
   type WebhookEventType,

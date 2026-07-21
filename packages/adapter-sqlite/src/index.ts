@@ -709,6 +709,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
     const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
+      // SQLite has no row-level locking and needs none here: `withTransaction`
+      // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write
+      // lock up front and serializes writers for the whole transaction.
+      lockRow: (): Promise<void> => Promise.resolve(),
+
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
         sql: string,

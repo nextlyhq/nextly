@@ -7,6 +7,7 @@
       "nextly",
       "create-nextly-app",
       "@nextlyhq/admin",
+      "@nextlyhq/admin-css",
       "@nextlyhq/ui",
       "@nextlyhq/adapter-drizzle",
       "@nextlyhq/adapter-postgres",

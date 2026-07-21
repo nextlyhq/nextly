@@ -11,6 +11,7 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
 import type { Action, Filter } from "../filters";
@@ -225,6 +226,11 @@ export interface PluginContext {
     media: MediaService;
     /** Email service for sending emails via templates and providers */
     email: EmailService;
+    /**
+     * @experimental Read-only content version history (list/get). Restore and
+     * diff arrive in later stages.
+     */
+    versions: VersionsService;
     /**
      * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
@@ -681,6 +687,7 @@ export function createPluginContext(
       | "userService"
       | "mediaService"
       | "emailService"
+      | "versionsService"
       | "db"
       | "logger"
       | "config",
@@ -694,13 +701,15 @@ export function createPluginContext(
         ? MediaService
         : T extends "emailService"
           ? EmailService
-          : T extends "db"
-            ? DatabaseInstance
-            : T extends "logger"
-              ? Logger
-              : T extends "config"
-                ? NextlyServiceConfig
-                : never,
+          : T extends "versionsService"
+            ? VersionsService
+            : T extends "db"
+              ? DatabaseInstance
+              : T extends "logger"
+                ? Logger
+                : T extends "config"
+                  ? NextlyServiceConfig
+                  : never,
   hookRegistry: {
     register: (
       hookType: HookType,
@@ -791,6 +800,13 @@ export function createPluginContext(
       users: userService,
       media: mediaService,
       email: emailService,
+      // Resolved on access, not at construction: `createPluginContext` is
+      // exported, and a resolver written before this service existed would
+      // otherwise throw while building the context for callers that never
+      // touch version history.
+      get versions() {
+        return getServiceFn("versionsService");
+      },
       plugins: buildPluginServicesNamespace(),
     },
     db,

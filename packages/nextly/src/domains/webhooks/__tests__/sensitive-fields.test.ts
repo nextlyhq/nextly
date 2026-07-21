@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { sensitiveFieldNames } from "../sensitive-fields";
+import { sensitiveFieldPaths } from "../sensitive-fields";
 
-describe("sensitiveFieldNames", () => {
+describe("sensitiveFieldPaths", () => {
   it("collects password fields and hidden fields, skips the rest", () => {
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       { name: "title", type: "text" },
       { name: "secret", type: "password" },
       { name: "internalNote", type: "text", hidden: true },
@@ -14,7 +14,7 @@ describe("sensitiveFieldNames", () => {
   });
 
   it("walks nested group/repeater fields at any depth", () => {
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       {
         name: "profile",
         type: "group",
@@ -35,11 +35,11 @@ describe("sensitiveFieldNames", () => {
         ],
       },
     ]);
-    expect(names.sort()).toEqual(["apiKey", "token"]);
+    expect(names.sort()).toEqual(["profile.apiKey", "rows.row.token"]);
   });
 
   it("walks per-block fields of a blocks field", () => {
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       {
         name: "content",
         type: "blocks",
@@ -49,12 +49,12 @@ describe("sensitiveFieldNames", () => {
         ],
       },
     ]);
-    expect(names).toEqual(["apiKey"]);
+    expect(names).toEqual(["content.apiKey"]);
   });
 
   it("treats an admin-scoped hidden flag as sensitive", () => {
     // Real collection fields carry hidden under admin.hidden, not top-level.
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       { name: "editorMode", type: "text", admin: { hidden: true } },
       { name: "title", type: "text", admin: { hidden: false } },
     ]);
@@ -64,7 +64,7 @@ describe("sensitiveFieldNames", () => {
   it("strips all children of a hidden (even nameless) group", () => {
     // A hidden presentational group makes everything under it sensitive, so no
     // child leaks just because it was not individually marked hidden.
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       {
         type: "group",
         admin: { hidden: true },
@@ -81,7 +81,7 @@ describe("sensitiveFieldNames", () => {
     // A named hidden group is dropped whole by its own name, so its child
     // names must not join the deny-list (that would strip unrelated fields of
     // the same name, e.g. a top-level "title").
-    const names = sensitiveFieldNames([
+    const names = sensitiveFieldPaths([
       {
         name: "seo",
         type: "group",
@@ -93,8 +93,8 @@ describe("sensitiveFieldNames", () => {
     expect(names).toEqual(["seo"]);
   });
 
-  it("deduplicates repeated field names", () => {
-    const names = sensitiveFieldNames([
+  it("keeps same-named fields apart by path", () => {
+    const names = sensitiveFieldPaths([
       { name: "secret", type: "password" },
       {
         name: "block",
@@ -102,10 +102,26 @@ describe("sensitiveFieldNames", () => {
         fields: [{ name: "secret", hidden: true }],
       },
     ]);
-    expect(names).toEqual(["secret"]);
+    expect(names.sort()).toEqual(["block.secret", "secret"]);
+  });
+
+  it("scopes a nested sensitive name so a same-named sibling survives", () => {
+    // The failure this prevents: a bare `title` in the deny list strips the
+    // document's own title at every depth, so a legitimate change silently
+    // vanishes from the payload and from changedFields.
+    const paths = sensitiveFieldPaths([
+      { name: "title", type: "text" },
+      {
+        name: "profile",
+        type: "group",
+        fields: [{ name: "title", type: "text", admin: { hidden: true } }],
+      },
+    ]);
+    expect(paths).toEqual(["profile.title"]);
+    expect(paths).not.toContain("title");
   });
 
   it("returns an empty list when nothing is sensitive", () => {
-    expect(sensitiveFieldNames([{ name: "title", type: "text" }])).toEqual([]);
+    expect(sensitiveFieldPaths([{ name: "title", type: "text" }])).toEqual([]);
   });
 });

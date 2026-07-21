@@ -274,6 +274,15 @@
         // theme.css), so CSS is a real test input; without it a CSS-only change
         // could reuse a cached pass and skip the assertion.
         "src/**/*.css",
+        // Same reasoning for the package's markdown and manifest. Tests here
+        // assert documentation and packaging against the real code — tokens,
+        // entry points, the stability ledger, the exports map — so a change to
+        // any of them must invalidate the cached result rather than reuse a
+        // pass that never read it. Matched by category rather than by file so
+        // a newly asserted document is covered without editing this list.
+        "docs/**/*.md",
+        "*.md",
+        "package.json",
         "vitest.config.ts",
         "tsconfig.json"
       ],

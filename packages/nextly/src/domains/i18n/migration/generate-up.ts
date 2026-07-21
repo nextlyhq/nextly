@@ -3,6 +3,15 @@ import type { CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
  *  enable UP and the create-only path so the companion shape stays identical. */
+
+/**
+ * The status a companion row takes when one is created without an explicit
+ * `_status` — the DDL default below. Exported so write paths that need to know
+ * what a freshly-upserted locale row holds read it from the definition rather
+ * than repeating the literal.
+ */
+export const COMPANION_DEFAULT_STATUS = "draft";
+
 function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
   const { dialect, mainTable, companionTable, parentIdType, columns } = spec;
   const colDefs = columns
@@ -10,7 +19,7 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
     .join(",\n");
   // i18n M6: per-locale draft/publish status column (only when the collection has Draft/Published).
   const statusDef = spec.status
-    ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT 'draft',\n`
+    ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
   return (
     `CREATE TABLE ${q(companionTable, dialect)} (\n` +

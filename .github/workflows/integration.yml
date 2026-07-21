@@ -109,9 +109,12 @@ jobs:
       # dialect-gated files self-skip unless the matching URL is set, so the
       # pushschema / notifications / drizzle-v1 pg suites run on the postgres
       # leg and the mysql suites on the mysql leg. nextly's database/factory.ts
-      # statically references @nextlyhq/adapter-{postgres,mysql,sqlite}, so the
-      # three concrete adapters are built first (they are `^build` siblings,
-      # not dependencies of the test:integration task).
+      # references @nextlyhq/adapter-{postgres,mysql,sqlite}, which are optional
+      # peers. Turbo's `^build` does not traverse peerDependencies, so nextly
+      # also lists them as devDependencies purely to give the build graph that
+      # edge; without it `nextly#build` can start before the adapters emit their
+      # declarations and fails on TS7016. They stay in the filter list so each
+      # leg still builds all three regardless of which suites it runs.
       - name: Run integration tests (postgres)
         if: matrix.dialect == 'postgres'
         run: |

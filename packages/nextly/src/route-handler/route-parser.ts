@@ -641,7 +641,20 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "GET") {
+  // The three branches below match the entry itself, so they must not claim a
+  // path that carries further segments. Every real sub-route (duplicate,
+  // publish-all, count, bulk, versions) is matched earlier, so anything still
+  // trailing here belongs to no route: without this guard
+  // `DELETE /entries/{id}/versions` would silently delete the entry.
+  const targetsEntryItself = additionalParams.length === 0;
+
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "GET"
+  ) {
     // GET /api/collections/products/entries/123 → get entry by id
     routeParams.collectionName = id;
     routeParams.entryId = subId;
@@ -653,7 +666,13 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "PATCH") {
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "PATCH"
+  ) {
     // PATCH /api/collections/products/entries/123 → update entry
     routeParams.collectionName = id;
     routeParams.entryId = subId;
@@ -665,7 +684,13 @@ function parseCollectionRoutes(
     };
   }
 
-  if (id && subresource === "entries" && subId && httpMethod === "DELETE") {
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    targetsEntryItself &&
+    httpMethod === "DELETE"
+  ) {
     // DELETE /api/collections/products/entries/123 → delete entry
     routeParams.collectionName = id;
     routeParams.entryId = subId;
@@ -745,6 +770,98 @@ function parseCollectionEntryPublishAllRoute(
  * Parse bulk delete route for collection entries
  * POST /api/collections/{slug}/entries/bulk-delete
  */
+/**
+ * `/collections/{slug}/entries/{entryId}/versions[/{versionNo}]`
+ *
+ * Version history nests under its entry so the existing `read-{slug}`
+ * permission that guards the document guards its history too, with no separate
+ * authorization branch.
+ */
+function parseCollectionEntryVersionRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (
+    !id ||
+    subresource !== "entries" ||
+    !subId ||
+    additionalParams[0] !== "versions" ||
+    // Only `versions` or `versions/{versionNo}`; anything deeper is not a
+    // route this owns and must not be silently truncated to one that is.
+    additionalParams.length > 2 ||
+    httpMethod !== "GET"
+  ) {
+    return null;
+  }
+
+  routeParams.collectionName = id;
+  routeParams.entryId = subId;
+
+  const versionNo = additionalParams[1];
+  if (versionNo) {
+    routeParams.versionNo = versionNo;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryVersion",
+      routeParams,
+    };
+  }
+
+  return {
+    service: "collections",
+    operation: "list",
+    method: "listEntryVersions",
+    routeParams,
+  };
+}
+
+/**
+ * `/singles/{slug}/versions[/{versionNo}]` — the Single equivalent, nesting
+ * under the document for the same reason.
+ */
+function parseSingleVersionRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (
+    !id ||
+    subresource !== "versions" ||
+    // Only `versions` or `versions/{versionNo}`; a deeper path is not ours.
+    additionalParams.length > 0 ||
+    httpMethod !== "GET"
+  ) {
+    return null;
+  }
+
+  routeParams.slug = id;
+
+  if (subId) {
+    routeParams.versionNo = subId;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleVersion",
+      routeParams,
+    };
+  }
+
+  return {
+    service: "singles",
+    operation: "list",
+    method: "listSingleVersions",
+    routeParams,
+  };
+}
+
 function parseCollectionEntryBulkDeleteRoute(
   id: string | undefined,
   subresource: string | undefined,
@@ -1747,6 +1864,18 @@ export function parseRestRoute(
 
   // Handle Collections endpoints
   if (resource === "collections") {
+    // Nested version history is matched first: it sits deeper than the entry
+    // routes below, which would otherwise claim the path.
+    const versionResult = parseCollectionEntryVersionRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (versionResult) return versionResult;
+
     const result = parseCollectionRoutes(
       id,
       subresource,
@@ -1766,6 +1895,18 @@ export function parseRestRoute(
 
   // Handle Singles endpoints (globals)
   if (resource === "singles") {
+    // Version history is matched before the schema/document routes so
+    // `/singles/{slug}/versions` is not read as a sub-resource of the document.
+    const versionResult = parseSingleVersionRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (versionResult) return versionResult;
+
     const result = parseSingleRoutes(
       id,
       subresource,

@@ -4,10 +4,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
+import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -62,10 +66,27 @@ export class CollectionsHandler {
     logger: Logger = consoleLogger,
     consumerAppRoot?: string,
     /** Normalized localization config (i18n M4) — enables companion-aware reads. */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    /**
+     * Resolved webhook retention policy. Content writes offer to run a pass so
+     * the event ledger stays bounded in installs that never configure a webhook
+     * and therefore never run the drain. Null or absent disables it.
+     */
+    webhookRetention?: ResolvedWebhookRetentionConfig | null
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
+
+    // Built here because this is where the resolved policy arrives, but handed
+    // to the entry service, which is the seam every write path runs through.
+    const retentionRunner = webhookRetention
+      ? new WebhookRetentionRunner({
+          policy: webhookRetention,
+          prune: { adapter, logger },
+          gate: new MetaRetentionGate(adapter),
+          logger,
+        })
+      : undefined;
 
     const hookRegistry = getHookRegistry();
 
@@ -149,7 +170,8 @@ export class CollectionsHandler {
       accessControlService,
       componentDataService,
       undefined,
-      this.localization
+      this.localization,
+      retentionRunner
     );
   }
 
@@ -425,6 +447,8 @@ export class CollectionsHandler {
       depth?: number;
       /** User context for access control */
       user?: UserContext;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** Write locale (i18n M5) — translatable values stored for this language. */
@@ -441,7 +465,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.createEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );
@@ -484,6 +512,13 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * Set by a route that already authenticated and authorized the caller.
+     * Skips the redundant RBAC re-check (which resolves the caller's stored
+     * roles and would reject a scoped API key) while leaving owner-only and
+     * other document-level rules in force.
+     */
+    routeAuthorized?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -537,6 +572,8 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /** Who performed the write, recorded on the outbox event. */
+      actor?: RequestActor;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       /**
@@ -551,7 +588,11 @@ export class CollectionsHandler {
     body: Record<string, unknown>
   ) {
     return this.entryService.updateEntry(
-      { ...this.resolveUserParam(params), locale: params.locale },
+      {
+        ...this.resolveUserParam(params),
+        locale: params.locale,
+        actor: params.actor,
+      },
       body,
       params.depth
     );
@@ -670,6 +711,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
   }
@@ -699,6 +742,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
     },
     options?: { limit?: number }
   ) {
@@ -771,6 +816,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.duplicateEntry(this.resolveUserParam(params));
   }

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin-css",
-  "version": "0.0.2-alpha.36",
+  "version": "0.0.2-alpha.38",
   "description": "Build tooling to scope and compile Nextly admin CSS (shared by the admin build and third-party plugins).",
   "type": "module",
   "exports": {
@@ -22,8 +22,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
-    "@nextlyhq/ui": "workspace:*",
     "eslint": "^9.39.1",
+    "tailwindcss": "^4.3.2",
     "vitest": "^4.1.0"
   }
 }
