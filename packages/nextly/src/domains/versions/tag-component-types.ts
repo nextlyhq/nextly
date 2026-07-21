@@ -19,6 +19,17 @@
 import type { FieldConfig } from "../../collections/fields/types";
 
 /**
+ * Looks up a component's own fields by slug.
+ *
+ * Supplied by the capture site, which holds the component data service. Without
+ * it the walk stops at the entity's schema and a component embedded in another
+ * component goes untagged.
+ */
+export type ComponentFieldResolver = (
+  slug: string
+) => FieldConfig[] | undefined;
+
+/**
  * Fields addressable at this level, with presentational groups flattened.
  *
  * A group with no name exists to lay fields out: its children are stored at the
@@ -54,13 +65,39 @@ function singleComponentSlug(field: FieldConfig): string | undefined {
   return typeof slug === "string" ? slug : undefined;
 }
 
-/** Stamp one value, or each element when the field is repeatable. */
-function tagValue(value: unknown, slug: string): unknown {
+/**
+ * Stamp one value, or each element when the field is repeatable.
+ *
+ * Descends into the component's OWN fields when they can be resolved, so a
+ * component embedded in another component is tagged too. Its values live in the
+ * outer component's deserialized object, so the same walk reaches them.
+ */
+function tagValue(
+  value: unknown,
+  slug: string,
+  resolve?: ComponentFieldResolver,
+  seen: Set<string> = new Set()
+): unknown {
   if (Array.isArray(value)) {
-    return value.map(item => tagValue(item, slug));
+    return value.map(item => tagValue(item, slug, resolve, seen));
   }
   if (typeof value !== "object" || value === null) return value;
-  return { ...(value as Record<string, unknown>), _componentType: slug };
+
+  const source = value as Record<string, unknown>;
+
+  // A component can reach itself through a descendant; a slug already walked is
+  // not followed again.
+  const ownFields = seen.has(slug) ? undefined : resolve?.(slug);
+  const inner = ownFields
+    ? (tagNestedComponentTypes(
+        source,
+        ownFields,
+        resolve,
+        new Set([...seen, slug])
+      ) as Record<string, unknown>)
+    : source;
+
+  return { ...inner, _componentType: slug };
 }
 
 /**
@@ -72,7 +109,8 @@ function tagValue(value: unknown, slug: string): unknown {
  */
 export function tagComponentTypes(
   components: Record<string, unknown>,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  resolve?: ComponentFieldResolver
 ): Record<string, unknown> {
   const slugByField = new Map<string, string>();
   for (const field of addressableFields(fields)) {
@@ -90,7 +128,7 @@ export function tagComponentTypes(
     // `constructor` or `__proto__` would be treated as captured and tagged
     // when nothing of the sort was read back.
     if (Object.prototype.hasOwnProperty.call(tagged, name)) {
-      tagged[name] = tagValue(tagged[name], slug);
+      tagged[name] = tagValue(tagged[name], slug, resolve);
     }
   }
   return tagged;
@@ -110,10 +148,14 @@ export function tagComponentTypes(
  */
 export function tagNestedComponentTypes(
   value: unknown,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  resolve?: ComponentFieldResolver,
+  seen: Set<string> = new Set()
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map(row => tagNestedComponentTypes(row, fields));
+    return value.map(row =>
+      tagNestedComponentTypes(row, fields, resolve, seen)
+    );
   }
   if (typeof value !== "object" || value === null) return value;
 
@@ -126,7 +168,7 @@ export function tagNestedComponentTypes(
 
     const slug = singleComponentSlug(field);
     if (slug !== undefined) {
-      out[field.name] = tagValue(source[field.name], slug);
+      out[field.name] = tagValue(source[field.name], slug, resolve, seen);
       continue;
     }
 
@@ -135,10 +177,67 @@ export function tagNestedComponentTypes(
     if (Array.isArray(children)) {
       out[field.name] = tagNestedComponentTypes(
         source[field.name],
-        children as FieldConfig[]
+        children as FieldConfig[],
+        resolve,
+        seen
       );
     }
   }
 
   return out;
+}
+
+/**
+ * Every component schema the fields reach, keyed by slug.
+ *
+ * Resolved to a fixed point so a component embedded in another component is
+ * included. The map doubles as the visited set, so a schema that references
+ * itself terminates. A slug that fails to resolve is simply absent, which stops
+ * the walk there rather than failing the write — a snapshot missing one tag is
+ * recoverable; a rejected save is not.
+ */
+export async function resolveComponentFieldMap(
+  fields: FieldConfig[],
+  getComponentFields: (slug: string) => Promise<FieldConfig[] | null>
+): Promise<Map<string, FieldConfig[]>> {
+  const resolved = new Map<string, FieldConfig[]>();
+
+  const slugsIn = (list: FieldConfig[]): string[] => {
+    const found: string[] = [];
+    for (const field of list) {
+      const one = (field as { component?: unknown }).component;
+      const many = (field as { components?: unknown }).components;
+      if (typeof one === "string") found.push(one);
+      if (Array.isArray(many)) {
+        for (const slug of many) if (typeof slug === "string") found.push(slug);
+      }
+      const children = (field as { fields?: unknown }).fields;
+      if (Array.isArray(children)) {
+        found.push(...slugsIn(children as FieldConfig[]));
+      }
+    }
+    return found;
+  };
+
+  let pending = slugsIn(fields);
+  while (pending.length > 0) {
+    const batch = pending.filter(slug => !resolved.has(slug));
+    if (batch.length === 0) break;
+
+    await Promise.all(
+      batch.map(async slug => {
+        try {
+          const own = await getComponentFields(slug);
+          if (own) resolved.set(slug, own);
+        } catch {
+          // Unresolvable: leave it out. See the note above — a missing tag is
+          // recoverable, a failed write is not.
+        }
+      })
+    );
+
+    pending = batch.flatMap(slug => slugsIn(resolved.get(slug) ?? []));
+  }
+
+  return resolved;
 }

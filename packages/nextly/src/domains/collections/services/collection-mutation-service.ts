@@ -71,6 +71,7 @@ import {
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -630,7 +631,7 @@ export class CollectionMutationService extends BaseService {
    * A separate shape from what the outbox carries: the same parts feed both,
    * and the marker belongs only to the snapshot.
    */
-  private snapshotPartsFor(
+  private async snapshotPartsFor(
     parts: {
       parentRow: Record<string, unknown>;
       components: Record<string, unknown>;
@@ -639,16 +640,28 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ) {
     const schema = fields as unknown as FieldConfig[];
+
+    // A component embedded in another component is tagged too, which needs the
+    // inner component's own schema. The data service already exposes that
+    // lookup; resolving the whole set once keeps the walk itself synchronous.
+    const componentFields = this.componentDataService
+      ? await resolveComponentFieldMap(schema, slug =>
+          this.componentDataService!.getComponentFields(slug)
+        )
+      : new Map<string, FieldConfig[]>();
+    const resolve = (slug: string) => componentFields.get(slug);
+
     return {
       ...parts,
-      components: tagComponentTypes(parts.components, schema),
+      components: tagComponentTypes(parts.components, schema, resolve),
       // A component declared inside a group or repeater rides in that
       // container's JSON on the parent row rather than appearing as its own
       // key, so it has to be reached through the row.
-      parentRow: tagNestedComponentTypes(parts.parentRow, schema) as Record<
-        string,
-        unknown
-      >,
+      parentRow: tagNestedComponentTypes(
+        parts.parentRow,
+        schema,
+        resolve
+      ) as Record<string, unknown>,
     };
   }
 
@@ -1680,7 +1693,7 @@ export class CollectionMutationService extends BaseService {
                 : (entry as { status?: unknown }).status,
             // Tagged for the snapshot alone: `documentParts` is also what the
             // outbox event below carries, and that payload is read shape.
-            parts: this.snapshotPartsFor(documentParts, fields),
+            parts: await this.snapshotPartsFor(documentParts, fields),
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
@@ -2031,7 +2044,7 @@ export class CollectionMutationService extends BaseService {
                 contentStatus: "published",
                 // Tagged like every other capture: a snapshot records which
                 // component its values came from, whichever path produced it.
-                parts: this.snapshotPartsFor(
+                parts: await this.snapshotPartsFor(
                   {
                     parentRow,
                     components: snapshotComponents,
@@ -2960,7 +2973,7 @@ export class CollectionMutationService extends BaseService {
                     effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
                   // See the create path: tagged for the snapshot only.
-                  parts: this.snapshotPartsFor(documentParts, fields),
+                  parts: await this.snapshotPartsFor(documentParts, fields),
                   createdBy: params.user?.id ?? null,
                   // Labelled with a locale only when locale-specific state was
                   // actually captured. A migrated localized collection routes

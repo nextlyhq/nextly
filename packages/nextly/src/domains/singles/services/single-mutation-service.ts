@@ -56,6 +56,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -629,6 +630,16 @@ export class SingleMutationService extends BaseService {
               // A component subtree read as the write locale is locale-specific
               // state too, so a component-only translation edit is not mistaken
               // for a shared-field write and left unrestorable.
+              // Component schemas the snapshot's tagging needs, resolved once
+              // so the walk itself stays synchronous.
+              const snapshotComponentSchemas = this.componentDataService
+                ? await resolveComponentFieldMap(fieldConfigs, slug =>
+                    this.componentDataService!.getComponentFields(slug)
+                  )
+                : new Map<string, (typeof fieldConfigs)[number][]>();
+              const snapshotComponentResolver = (slug: string) =>
+                snapshotComponentSchemas.get(slug);
+
               const capturedLocalizedComponents =
                 snapshotLocale !== undefined &&
                 Object.keys(components).length > 0;
@@ -651,12 +662,19 @@ export class SingleMutationService extends BaseService {
                   // A component inside a group or repeater rides in that
                   // container's JSON on the row rather than appearing in the
                   // components map — the same shape the collection capture
-                  // reaches through.
+                  // reaches through. `snapshotComponentResolver` supplies the
+                  // inner schemas so a component inside a component is reached
+                  // as well.
                   parentRow: tagNestedComponentTypes(
                     parentRow,
-                    fieldConfigs
+                    fieldConfigs,
+                    snapshotComponentResolver
                   ) as Record<string, unknown>,
-                  components: tagComponentTypes(components, fieldConfigs),
+                  components: tagComponentTypes(
+                    components,
+                    fieldConfigs,
+                    snapshotComponentResolver
+                  ),
                 },
                 createdBy: options.user?.id ?? null,
                 // Labelled with a locale only when locale-specific state was

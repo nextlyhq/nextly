@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
+  resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../tag-component-types";
@@ -231,5 +232,119 @@ describe("tagging through presentational groups", () => {
     ) as { meta: { hero: Record<string, unknown> } };
 
     expect(tagged.meta.hero._componentType).toBe("banner");
+  });
+});
+
+describe("tagging a component inside another component", () => {
+  // The inner component's values live in the outer component's deserialized
+  // object, so the same walk reaches them — it just needs the inner schema,
+  // which the capture site resolves and passes in.
+  const outer = [
+    { name: "hero", type: "component", component: "wrapper" },
+  ] as FieldConfig[];
+
+  const resolve = (slug: string) =>
+    slug === "wrapper"
+      ? ([
+          { name: "heading", type: "text" },
+          { name: "inner", type: "component", component: "leaf" },
+        ] as FieldConfig[])
+      : slug === "leaf"
+        ? ([{ name: "deep", type: "text" }] as FieldConfig[])
+        : undefined;
+
+  it("tags the inner component as well as the outer", () => {
+    const tagged = tagComponentTypes(
+      { hero: { heading: "Hi", inner: { deep: "value" } } },
+      outer,
+      resolve
+    ) as { hero: { _componentType: string; inner: Record<string, unknown> } };
+
+    expect(tagged.hero._componentType).toBe("wrapper");
+    expect(tagged.hero.inner).toEqual({
+      deep: "value",
+      _componentType: "leaf",
+    });
+  });
+
+  it("tags only the outer one when no resolver is supplied", () => {
+    // The previous behaviour, kept working: without the inner schema there is
+    // nothing to say what the nested value is.
+    const tagged = tagComponentTypes(
+      { hero: { heading: "Hi", inner: { deep: "value" } } },
+      outer
+    ) as { hero: { _componentType: string; inner: Record<string, unknown> } };
+
+    expect(tagged.hero._componentType).toBe("wrapper");
+    expect(tagged.hero.inner).not.toHaveProperty("_componentType");
+  });
+
+  it("terminates on a component that reaches itself", () => {
+    const selfRef = (slug: string) =>
+      slug === "node"
+        ? ([
+            { name: "child", type: "component", component: "node" },
+          ] as FieldConfig[])
+        : undefined;
+
+    const tagged = tagComponentTypes(
+      { hero: { child: { child: {} } } },
+      [{ name: "hero", type: "component", component: "node" }] as FieldConfig[],
+      selfRef
+    ) as { hero: Record<string, unknown> };
+
+    expect(tagged.hero._componentType).toBe("node");
+  });
+
+  it("still leaves the value it was given untouched", () => {
+    const components = { hero: { inner: { deep: "value" } } };
+
+    tagComponentTypes(components, outer, resolve);
+
+    expect(components.hero.inner).not.toHaveProperty("_componentType");
+  });
+});
+
+describe("resolveComponentFieldMap", () => {
+  it("resolves nested component schemas to a fixed point", async () => {
+    const schemas: Record<string, FieldConfig[]> = {
+      wrapper: [
+        { name: "inner", type: "component", component: "leaf" },
+      ] as FieldConfig[],
+      leaf: [{ name: "deep", type: "text" }] as FieldConfig[],
+    };
+
+    const map = await resolveComponentFieldMap(
+      [
+        { name: "hero", type: "component", component: "wrapper" },
+      ] as FieldConfig[],
+      async slug => schemas[slug] ?? null
+    );
+
+    expect([...map.keys()].sort()).toEqual(["leaf", "wrapper"]);
+  });
+
+  it("terminates on a cycle", async () => {
+    const map = await resolveComponentFieldMap(
+      [{ name: "hero", type: "component", component: "node" }] as FieldConfig[],
+      async () =>
+        [
+          { name: "child", type: "component", component: "node" },
+        ] as FieldConfig[]
+    );
+
+    expect([...map.keys()]).toEqual(["node"]);
+  });
+
+  it("omits a slug that cannot be resolved rather than failing", async () => {
+    // A snapshot missing one tag is recoverable; a rejected save is not.
+    const map = await resolveComponentFieldMap(
+      [{ name: "hero", type: "component", component: "gone" }] as FieldConfig[],
+      async () => {
+        throw new Error("not found");
+      }
+    );
+
+    expect(map.size).toBe(0);
   });
 });
