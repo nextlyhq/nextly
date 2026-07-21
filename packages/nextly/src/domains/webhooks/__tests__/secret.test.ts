@@ -14,6 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { buildSignatureHeaders } from "../signing";
 
 import {
@@ -60,13 +61,39 @@ describe("generateWebhookSecret", () => {
 });
 
 describe("webhookSecretPrefix", () => {
-  it("keeps enough to identify a secret and little enough to be public", () => {
+  it("keeps the scheme prefix plus eight random characters", () => {
     const secret = `${WEBHOOK_SECRET_PREFIX}abcdefghijklmnop`;
 
-    // Includes the scheme prefix, so what is stored reads as an identifier
-    // rather than as key material.
-    expect(webhookSecretPrefix(secret)).toBe("whsec_ab");
-    expect(webhookSecretPrefix(secret).length).toBeLessThan(secret.length / 2);
+    expect(webhookSecretPrefix(secret)).toBe("whsec_abcdefgh");
+  });
+
+  it("fits the column on every dialect", () => {
+    // secret_prefix is varchar(16) on PostgreSQL and MySQL.
+    expect(
+      webhookSecretPrefix(generateWebhookSecret()).length
+    ).toBeLessThanOrEqual(16);
+  });
+
+  it("distinguishes real secrets rather than colliding", () => {
+    // Counting from the whole string instead of the random part left two
+    // random characters, and two of fifty endpoints would then usually share
+    // a prefix — which is exactly the case the display value exists for.
+    const prefixes = new Set(
+      Array.from({ length: 50 }, () =>
+        webhookSecretPrefix(generateWebhookSecret())
+      )
+    );
+    expect(prefixes.size).toBe(50);
+  });
+
+  it("reveals only a small fraction of the key", () => {
+    const secret = generateWebhookSecret();
+    const shown = webhookSecretPrefix(secret).slice(
+      WEBHOOK_SECRET_PREFIX.length
+    );
+    expect(shown.length).toBeLessThan(
+      (secret.length - WEBHOOK_SECRET_PREFIX.length) / 4
+    );
   });
 });
 
@@ -100,7 +127,15 @@ describe("encrypt/decrypt round trip", () => {
 
     expect(() =>
       decryptWebhookSecret(stored, "a-different-application-secret")
-    ).toThrow();
+    ).toThrow(NextlyError);
+  });
+
+  it("reports a malformed stored value as a NextlyError", () => {
+    // utils/encryption throws a bare Error, and node's cipher does too. This
+    // is inside packages/nextly, so neither may escape untyped.
+    expect(() => decryptWebhookSecret("not-ciphertext", KEY)).toThrow(
+      NextlyError
+    );
   });
 });
 

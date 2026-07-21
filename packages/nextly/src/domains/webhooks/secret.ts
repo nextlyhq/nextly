@@ -28,16 +28,26 @@ import { decrypt, encrypt } from "../../utils/encryption";
  */
 export const WEBHOOK_SECRET_PREFIX = "whsec_";
 
-/** 32 bytes: the HMAC-SHA256 block size, and what the reference tooling emits. */
+/**
+ * 32 bytes — SHA-256's digest size, and the key length the reference Standard
+ * Webhooks tooling emits. (Its block size is 64; a key at least as long as the
+ * digest is what HMAC guidance asks for.)
+ */
 const SECRET_BYTES = 32;
 
 /**
- * Characters of the secret kept for display. Enough to tell two secrets apart
- * in a list without being enough to attack: the prefix is stored in the clear
- * and shown after the one-time reveal, so it must never narrow the key
- * meaningfully.
+ * Characters kept from the secret's random part for display.
+ *
+ * Counted AFTER the fixed `whsec_`, which carries no information: keeping eight
+ * characters of the whole string would leave two random ones, about 12 bits,
+ * and two of fifty endpoints would then share a prefix more often than not.
+ * Eight base64 characters is roughly 48 bits, which distinguishes secrets in a
+ * list and across a rotation while revealing a small fraction of a 256-bit key.
+ *
+ * The total stored value is `whsec_` plus this, so it must stay within the
+ * column: `secret_prefix` is varchar(16) on PostgreSQL and MySQL.
  */
-const DISPLAY_PREFIX_LENGTH = 8;
+const DISPLAY_RANDOM_CHARS = 8;
 
 /** A new signing secret, in the form a receiver's library expects. */
 export function generateWebhookSecret(): string {
@@ -53,7 +63,7 @@ export function generateWebhookSecret(): string {
  * to identify the secret by.
  */
 export function webhookSecretPrefix(secret: string): string {
-  return secret.slice(0, DISPLAY_PREFIX_LENGTH);
+  return secret.slice(0, WEBHOOK_SECRET_PREFIX.length + DISPLAY_RANDOM_CHARS);
 }
 
 /**
@@ -99,7 +109,17 @@ export function encryptWebhookSecret(
   plaintext: string,
   key: string = webhookEncryptionKey()
 ): string {
-  return encrypt(plaintext, key);
+  try {
+    return encrypt(plaintext, key);
+  } catch (err) {
+    // `utils/encryption` throws bare Errors, and node's cipher does too. This
+    // is the domain boundary, so the failure is translated here rather than
+    // travelling out of packages/nextly as an untyped error.
+    throw NextlyError.internal({
+      cause: err instanceof Error ? err : undefined,
+      logContext: { reason: "webhook-secret-encrypt-failed" },
+    });
+  }
 }
 
 /**
@@ -114,5 +134,16 @@ export function decryptWebhookSecret(
   ciphertext: string,
   key: string = webhookEncryptionKey()
 ): string {
-  return decrypt(ciphertext, key);
+  try {
+    return decrypt(ciphertext, key);
+  } catch (err) {
+    // A malformed value throws `Invalid encrypted data format`; a value stored
+    // under a different NEXTLY_SECRET fails the GCM auth tag. Both arrive as
+    // bare Errors, and both mean the same thing to a caller: this secret
+    // cannot sign. The cause is preserved for the operator-facing rendering.
+    throw NextlyError.internal({
+      cause: err instanceof Error ? err : undefined,
+      logContext: { reason: "webhook-secret-decrypt-failed" },
+    });
+  }
 }
