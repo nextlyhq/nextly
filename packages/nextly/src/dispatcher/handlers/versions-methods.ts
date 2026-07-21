@@ -25,6 +25,10 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import {
+  isSuperAdmin,
+  listEffectivePermissions,
+} from "../../services/lib/permissions";
 import type { Params } from "../types";
 
 /** Page size when the caller does not ask for one. */
@@ -201,16 +205,55 @@ export async function getVersionForDocument(
 }
 
 /**
+ * Whether the caller holds the coarse read permission for this entity.
+ *
+ * The dispatcher authorizes a restore as `update-{slug}`, so the `read-{slug}`
+ * permission that guards history is never evaluated on this path. A caller with
+ * update but not read could otherwise recover an unseen snapshot through the
+ * write — reading history by writing it back.
+ *
+ * Document-level rules are a separate gate; this is only the coarse half.
+ */
+async function hasHistoryReadPermission(
+  slug: string,
+  user: UserContext
+): Promise<boolean> {
+  const userId = user.id;
+  if (!userId) return false;
+  if (await isSuperAdmin(userId)) return true;
+
+  const permissions = await listEffectivePermissions(userId);
+  return permissions.includes(`${slug}:read`);
+}
+
+/**
  * Put a document back to an earlier version.
  *
- * The document gate runs first for the same reason every other version method
- * runs it: a caller who may not see this document must not learn that a given
- * version of it exists. The write that follows enforces access again on its own
- * terms, so an update the caller may not make still fails.
+ * Two gates, because a restore both reads history and writes the document.
+ * Reading it: the caller must hold read permission for the entity and must be
+ * able to see this particular document, or they could recover a snapshot they
+ * were never allowed to look at. Writing it: the update that follows enforces
+ * access again on its own terms, so an update the caller may not make still
+ * fails.
  */
 export async function restoreVersionForDocument(
   args: VersionMethodArgs & { versionNo: number; actor?: RequestActor }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
+  if (!(await hasHistoryReadPermission(args.slug, args.user))) {
+    // "Not found" rather than "forbidden", matching the document gate below: a
+    // distinct 403 would confirm the document exists to a caller not allowed to
+    // know that.
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "restore-history-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,

@@ -353,7 +353,19 @@ function pruneContainerValue(
 
   if (typeof value !== "object" || value === null) return value;
 
-  const known = topLevelFields(fields);
+  // A dynamic zone resolves to every allowed component's fields concatenated,
+  // but each row belongs to exactly one of them. Pruning against the union
+  // keeps a key that this row's component has since lost merely because a
+  // sibling component still declares it — and the save path, which serializes
+  // against the row's own schema, then drops it without saying so.
+  const rowType = (value as { _componentType?: unknown })._componentType;
+  const rowSchema =
+    isComponentValue && typeof rowType === "string"
+      ? componentSchemas?.get(rowType)
+      : undefined;
+  const effectiveFields = rowSchema?.resolved ? rowSchema.fields : fields;
+
+  const known = topLevelFields(effectiveFields);
   const out: Record<string, unknown> = {};
 
   for (const [key, child] of Object.entries(value)) {

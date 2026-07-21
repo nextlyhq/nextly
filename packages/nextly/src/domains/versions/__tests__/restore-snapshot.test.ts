@@ -999,3 +999,75 @@ describe("buildRestorePayload — shared content under an unknown locale", () =>
     expect(droppedFields).toEqual(["status"]);
   });
 });
+
+describe("buildRestorePayload — dynamic zone rows keep their own schema", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  const zone = [
+    { name: "blocks", type: "component", components: ["banner", "gallery"] },
+  ] as FieldConfig[];
+
+  // `banner` has lost `subtitle`; `gallery` still declares it.
+  const componentSchemas = componentSchemasOf({
+    banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    gallery: [
+      { name: "heading", type: "text" },
+      { name: "subtitle", type: "text" },
+    ] as FieldConfig[],
+  });
+
+  it("drops a key the row's own component no longer declares", () => {
+    // Pruning against every allowed component's fields at once would keep
+    // `subtitle` because `gallery` still has it. The save path serializes
+    // against `banner` and drops it silently, so the restore would claim to
+    // have applied content it did not.
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        blocks: [
+          {
+            _componentType: "banner",
+            id: "b1",
+            heading: "Hi",
+            subtitle: "Gone from banner",
+          },
+        ],
+      },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ _componentType: "banner", id: "b1", heading: "Hi" }],
+    });
+    expect(droppedFields).toContain("blocks[0].subtitle");
+  });
+
+  it("keeps the same key on a row whose component still declares it", () => {
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        blocks: [
+          {
+            _componentType: "gallery",
+            id: "g1",
+            heading: "Hi",
+            subtitle: "Still valid",
+          },
+        ],
+      },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({
+      blocks: [
+        {
+          _componentType: "gallery",
+          id: "g1",
+          heading: "Hi",
+          subtitle: "Still valid",
+        },
+      ],
+    });
+    expect(droppedFields).toEqual([]);
+  });
+});
