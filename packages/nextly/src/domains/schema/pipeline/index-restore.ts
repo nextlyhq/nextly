@@ -20,7 +20,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { NextlySchemaSnapshot } from "./diff/types";
+import type { IndexSpec, NextlySchemaSnapshot, Operation } from "./diff/types";
 import { rebuiltTableNames } from "./filter-unsafe-statements";
 import { generateSQL } from "./sql-templates";
 
@@ -40,21 +40,40 @@ import { generateSQL } from "./sql-templates";
 export function indexRestoreStatements(
   desired: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  statements: readonly string[]
+  statements: readonly string[],
+  ops: readonly Operation[] = []
 ): string[] {
   const rebuilt = rebuiltTableNames(statements);
-  if (rebuilt.size === 0) return [];
+  const emitted = new Set<string>();
+  const out: string[] = [];
 
-  return desired.tables
-    .filter(table => rebuilt.has(table.name.toLowerCase()))
-    .flatMap(table =>
-      // `undefined` means the snapshot never tracked indexes, which is not the
-      // same as the table having none. Only an explicit list is actionable.
-      (table.indexes ?? []).map(index =>
-        generateSQL(
-          { type: "add_index", tableName: table.name, index },
-          dialect
-        )
-      )
-    );
+  const add = (tableName: string, index: IndexSpec): void => {
+    // Same index can arrive from both sources — a rebuilt table whose diff
+    // also asked for one of its indexes. Emit it once.
+    const key = `${tableName.toLowerCase()}::${index.name.toLowerCase()}`;
+    if (emitted.has(key)) return;
+    emitted.add(key);
+    out.push(generateSQL({ type: "add_index", tableName, index }, dialect));
+  };
+
+  // A rebuilt table lost every index it had, so all of them are replayed.
+  for (const table of desired.tables) {
+    if (!rebuilt.has(table.name.toLowerCase())) continue;
+    // `undefined` means the snapshot never tracked indexes, which is not the
+    // same as the table having none. Only an explicit list is actionable.
+    for (const index of table.indexes ?? []) add(table.name, index);
+  }
+
+  // An `add_index` op is the diff stating the index is absent, so creating it
+  // cannot duplicate one. This is the only thing that creates it on SQLite and
+  // MySQL: the fast-path emitter is PostgreSQL-only, and the schema handed to
+  // drizzle-kit declares no dynamic-table indexes, so a diff of nothing but
+  // index additions would otherwise apply zero statements and report success
+  // while the index stayed missing.
+  for (const op of ops) {
+    if (op.type !== "add_index") continue;
+    add(op.tableName, op.index);
+  }
+
+  return out;
 }

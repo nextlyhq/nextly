@@ -148,4 +148,42 @@ describe("index restore", () => {
 
     expect(indexRestoreStatements(untracked, "sqlite", REBUILD)).toEqual([]);
   });
+
+  it("creates an index the diff asked for even with no rebuild", () => {
+    // On SQLite and MySQL nothing else does: the fast-path emitter is
+    // PostgreSQL-only, and the schema handed to drizzle-kit declares no
+    // dynamic-table indexes, so an index-only diff would apply zero
+    // statements and report success with the index still missing.
+    const out = indexRestoreStatements(
+      desired,
+      "sqlite",
+      [],
+      [
+        {
+          type: "add_index",
+          tableName: "dc_tags",
+          index: { name: "idx_dc_tags_slug", columns: ["slug"], unique: true },
+        },
+      ]
+    );
+
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("idx_dc_tags_slug");
+  });
+
+  it("emits a rebuilt table's index once when the diff also asks for it", () => {
+    const out = indexRestoreStatements(desired, "sqlite", REBUILD, [
+      {
+        type: "add_index",
+        tableName: "dc_posts",
+        index: {
+          name: "idx_dc_posts_slug",
+          columns: ["slug"],
+          unique: true,
+        },
+      },
+    ]);
+
+    expect(out.filter(s => s.includes("idx_dc_posts_slug"))).toHaveLength(1);
+  });
 });

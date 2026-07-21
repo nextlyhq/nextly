@@ -911,7 +911,12 @@ export class PushSchemaPipeline {
         // index. On PG and MySQL that batch is transactional; SQLite runs
         // without a transaction by design, so a failing restore there is
         // reported but the rebuild it followed has already landed.
-        const restore = indexRestoreStatements(desiredSnapshot, dialect, safe);
+        const restore = indexRestoreStatements(
+          desiredSnapshot,
+          dialect,
+          safe,
+          resolvedOps
+        );
 
         try {
           await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
