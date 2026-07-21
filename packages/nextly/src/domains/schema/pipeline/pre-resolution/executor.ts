@@ -62,6 +62,23 @@ export async function executePreResolutionOps(
   return ordered.length;
 }
 
+/**
+ * The SQL this phase would run, in execution order, without running it.
+ *
+ * Renames and drops execute here rather than through the additive emitter, so
+ * they are invisible to the statements that pass comes back with. Recording a
+ * builder save as a replayable migration needs both halves; this exposes the
+ * pre-resolution half. Pure — no database access.
+ */
+export function preResolutionStatements(
+  ops: Operation[],
+  dialect: SupportedDialect
+): string[] {
+  return orderForExecution(ops.filter(isPreResolutionOp)).map(op =>
+    sqlForOp(op, dialect)
+  );
+}
+
 // Returns ops sorted into the execution-safe order described above.
 // Within each op-type bucket, original input order is preserved.
 function orderForExecution(ops: Operation[]): Operation[] {

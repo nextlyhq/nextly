@@ -55,7 +55,10 @@ import {
 } from "./filter-unsafe-statements";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
-import { executePreResolutionOps } from "./pre-resolution/executor";
+import {
+  executePreResolutionOps,
+  preResolutionStatements,
+} from "./pre-resolution/executor";
 import {
   PromptCancelledError,
   TTYRequiredError,
@@ -1017,7 +1020,13 @@ export class PushSchemaPipeline {
           );
         }
 
-        executedStatements = safe;
+        // Renames and drops ran in the pre-resolution phase, so `safe` holds
+        // only the additive remainder. Record both halves, in execution order,
+        // so the persisted migration reproduces the whole change.
+        executedStatements = [
+          ...preResolutionStatements(resolvedOps, dialect),
+          ...safe,
+        ];
         return safe.length;
       };
 
