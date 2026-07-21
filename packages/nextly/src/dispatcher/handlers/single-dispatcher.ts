@@ -30,9 +30,11 @@ import {
 import { resolveSingleDocumentId } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -739,20 +741,28 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const tableName = single.tableName;
       if (tableName && container.has("adapter")) {
         const adapter = container.get<DrizzleAdapter>("adapter");
-        try {
-          // Use dialect-appropriate quoting for the table name.
-          const dialect = adapter.dialect || "postgresql";
-          const quotedTableName =
-            dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
-          await adapter.executeQuery(`DROP TABLE IF EXISTS ${quotedTableName}`);
-        } catch (dropError) {
-          const message =
-            dropError instanceof Error ? dropError.message : String(dropError);
-          // Log but don't throw; continue to delete metadata even if table drop fails.
-          console.warn(
-            `[Singles] Failed to drop data table "${tableName}": ${message}`
-          );
-        }
+        // Embedded component instances point back at this table by a plain string with
+        // no FK, so the drop below cascades nothing and would strand them. Sweep first.
+        await teardownEntityComponentData({ adapter, parentTable: tableName });
+
+        // Remove the companion `_locales` table and this single's archive rows before
+        // the main table. The companion holds an FK to `<main>.id`, so it must go first
+        // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
+        await teardownEntityI18n({ adapter, slug, tableName });
+
+        // Use dialect-appropriate quoting for the table name.
+        const dialect = adapter.dialect || "postgresql";
+        const quotedTableName =
+          dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
+        // Postgres needs CASCADE to drop dependent objects; without it the drop of an
+        // FK-referenced table raises, which previously went unnoticed because the error
+        // was swallowed and the registry row was deleted anyway, leaking both tables.
+        // Failures now propagate so the single stays intact and the delete can be retried.
+        const dropSql =
+          dialect === "postgresql"
+            ? `DROP TABLE IF EXISTS ${quotedTableName} CASCADE`
+            : `DROP TABLE IF EXISTS ${quotedTableName}`;
+        await adapter.executeQuery(dropSql);
       }
 
       // Delete the metadata from the dynamic_singles registry.

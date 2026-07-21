@@ -12,6 +12,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
+import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import { describeError, immediateMessage } from "../../errors/index";
@@ -670,6 +672,13 @@ async function handleRemovedSingles(
 
   for (const { slug, tableName } of removed) {
     try {
+      // Dependent data first: embedded component instances have no FK back to this table
+      // so the drop cascades nothing onto them, and the `_locales` companion holds an FK
+      // to `<main>.id` which blocks the drop outright on MySQL. Running before the registry
+      // delete keeps the single detectable as an orphan if any of this fails.
+      await teardownEntityComponentData({ adapter, parentTable: tableName });
+      await teardownEntityI18n({ adapter, slug, tableName });
+
       // Delete registry entry directly
       await adapter.delete("dynamic_singles", {
         and: [{ column: "slug", op: "=", value: slug }],
@@ -720,6 +729,13 @@ async function handleRemovedComponents(
 
   for (const { slug, tableName } of removed) {
     try {
+      // A component can host other components, whose instances point at THIS table and
+      // would be stranded by the drop. The `_locales` companion also holds an FK to
+      // `<main>.id`, blocking the drop on MySQL. Both go before the registry delete so a
+      // failure leaves the component detectable as an orphan.
+      await teardownEntityComponentData({ adapter, parentTable: tableName });
+      await teardownEntityI18n({ adapter, slug, tableName });
+
       // Delete registry entry directly
       await adapter.delete("dynamic_components", {
         and: [{ column: "slug", op: "=", value: slug }],
