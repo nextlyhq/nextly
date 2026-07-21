@@ -1,10 +1,10 @@
 /**
  * Detecting a database whose core tables are behind the running code.
  *
- * This is the shape of the failure that made a real playground database
- * unusable: `dynamic_collections` was created before `localized` and
- * `versions` existed, nothing added them on upgrade, and every collection
- * query failed with an error that named neither the cause nor the remedy.
+ * Core tables are created once and never altered, so a column added in a later
+ * release is absent from an existing database. These pin which differences
+ * count as drift, which are ignored, and that the resulting message names both
+ * the missing columns and the command that fixes them.
  */
 import { describe, expect, it } from "vitest";
 
@@ -26,6 +26,7 @@ function snapshot(tables: Record<string, string[]>): NextlySchemaSnapshot {
 
 describe("findCoreSchemaDrift", () => {
   it("reports a column the code expects that the database lacks", () => {
+    // A collection table created before the localization columns existed.
     const drift = findCoreSchemaDrift(
       snapshot({ dynamic_collections: ["id", "slug"] }),
       snapshot({ dynamic_collections: ["id", "slug", "localized", "versions"] })

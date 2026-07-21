@@ -63,36 +63,47 @@ export type EnsureFirstRunSetupResult =
 const PROBE_TABLE = "nextly_schema_events";
 
 /**
+ * How long the check may take before boot proceeds without it.
+ *
+ * A rejection is caught below, but a STALLED query never rejects: a saturated
+ * pool or an unresponsive database would hold the await for the driver's own
+ * timeout, which can be minutes. That would make a diagnostic the reason an
+ * initialized deployment could not restart, so the wait is bounded here rather
+ * than left to the driver.
+ */
+const DRIFT_CHECK_TIMEOUT_MS = 2_000;
+
+/**
  * Compare the live core tables against the running code and warn on a gap.
  *
- * Never throws and never blocks boot: a database that cannot be introspected
- * is a problem for whatever queries it next, not a reason to refuse to start.
- * Upgrades are an explicit step, so this reports and does not repair.
+ * Never throws, and never delays boot by more than
+ * {@link DRIFT_CHECK_TIMEOUT_MS}: a database that cannot be introspected
+ * promptly is a problem for whatever queries it next, not a reason to refuse
+ * to start. Upgrades are an explicit step, so this reports and does not repair.
  */
-async function warnIfCoreSchemaIsBehind(
+export async function warnIfCoreSchemaIsBehind(
   adapter: AdapterLike,
-  logger: LoggerLike
+  logger: LoggerLike,
+  timeoutMs: number = DRIFT_CHECK_TIMEOUT_MS,
+  runCheck: (
+    a: AdapterLike,
+    l: LoggerLike
+  ) => Promise<void> = runCoreSchemaDriftCheck
 ): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const [{ introspectLiveSnapshot }, { getCoreSchema, CORE_TABLE_NAMES }] =
-      await Promise.all([
-        import("../domains/schema/pipeline/diff/introspect-live"),
-        import("../schemas/index"),
-      ]);
-    const { findCoreSchemaDrift, formatCoreSchemaDriftWarning } = await import(
-      "./core-schema-drift"
-    );
+    const timedOut = Symbol("drift-check-timeout");
+    const deadline = new Promise<typeof timedOut>(resolve => {
+      timer = setTimeout(() => resolve(timedOut), timeoutMs);
+      // Do not hold the event loop open for a diagnostic.
+      timer.unref?.();
+    });
 
-    const desired = getCoreSchema(adapter.dialect);
-    const live = await introspectLiveSnapshot(
-      adapter.getDrizzle(),
-      adapter.dialect,
-      [...CORE_TABLE_NAMES]
-    );
-
-    const drift = findCoreSchemaDrift(live, desired);
-    if (drift.length > 0) {
-      logger.warn(formatCoreSchemaDriftWarning(drift));
+    const outcome = await Promise.race([runCheck(adapter, logger), deadline]);
+    if (outcome === timedOut) {
+      logger.debug?.(
+        "[nextly] Core schema check timed out; continuing startup."
+      );
     }
   } catch (error) {
     // Diagnostics must not be the reason a boot fails.
@@ -101,6 +112,35 @@ async function warnIfCoreSchemaIsBehind(
         error instanceof Error ? error.message : String(error)
       }`
     );
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** The check itself; bounded by its caller. */
+async function runCoreSchemaDriftCheck(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): Promise<void> {
+  const [{ introspectLiveSnapshot }, { getCoreSchema, CORE_TABLE_NAMES }] =
+    await Promise.all([
+      import("../domains/schema/pipeline/diff/introspect-live"),
+      import("../schemas/index"),
+    ]);
+  const { findCoreSchemaDrift, formatCoreSchemaDriftWarning } = await import(
+    "./core-schema-drift"
+  );
+
+  const desired = getCoreSchema(adapter.dialect);
+  const live = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [...CORE_TABLE_NAMES]
+  );
+
+  const drift = findCoreSchemaDrift(live, desired);
+  if (drift.length > 0) {
+    logger.warn(formatCoreSchemaDriftWarning(drift));
   }
 }
 
