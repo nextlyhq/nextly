@@ -31,10 +31,14 @@ import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanu
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { mergeRegisteredCollectionsSafely } from "../../domains/schema/pipeline/registered-collections";
+import {
+  mergeRegisteredCollectionsSafely,
+  mergeRegisteredSafely,
+} from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
+  DesiredComponent,
   DesiredSchema,
   DesiredSingle,
 } from "../../domains/schema/pipeline/types";
@@ -51,12 +55,12 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  type ComponentRegistryService,
+  ComponentRegistryService,
   type SyncComponentResult,
 } from "../../services/components/component-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
-  type SingleRegistryService,
+  SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service";
 import type { CommandContext } from "../program";
@@ -320,12 +324,29 @@ export async function performAutoSync(
   // Schema Builder exist solely in the registry, and on SQLite/MySQL the diff
   // introspects the whole database, so leaving them out proposes dropping
   // every one of them. Same helper the HMR path uses.
-  const registry = new CollectionRegistryService(drizzleAdapter, {
+  const registryLogger: ServiceLogger = {
     info: (msg: string) => logger.debug(msg),
     warn: (msg: string) => logger.warn(msg),
     error: (msg: string) => logger.error(msg),
     debug: (msg: string) => logger.debug(msg),
-  });
+  };
+  const registry = new CollectionRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+
+  // Singles and components created in the Schema Builder are registry-only
+  // too, and the same whole-database introspection applies to their
+  // `single_*` and `comp_*` tables, so omitting them proposes the same
+  // orphan drops the collections merge above prevents.
+  const singleRegistry = new SingleRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+  const componentRegistry = new ComponentRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
 
   const desired: DesiredSchema = {
     collections: await mergeRegisteredCollectionsSafely(
@@ -333,8 +354,27 @@ export async function performAutoSync(
       () => registry.getAllCollections(),
       logger
     ),
-    singles: desiredSingles,
-    components: {},
+    singles: await mergeRegisteredSafely(
+      desiredSingles,
+      () => singleRegistry.getAllSingles(),
+      row => ({
+        slug: row.slug,
+        tableName: row.tableName,
+        fields: (row.fields ?? []) as DesiredSingle["fields"],
+        status: row.status === true,
+      }),
+      logger
+    ),
+    components: await mergeRegisteredSafely(
+      {},
+      () => componentRegistry.getAllComponents(),
+      row => ({
+        slug: row.slug,
+        tableName: row.tableName,
+        fields: (row.fields ?? []) as DesiredComponent["fields"],
+      }),
+      logger
+    ),
   };
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.

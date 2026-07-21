@@ -36,35 +36,51 @@ interface WarnLogger {
 }
 
 /**
- * Add registry-only collections to a config-derived desired schema.
+ * Add registry-only entities to a config-derived desired schema.
  *
- * Config entries win: a collection defined in code is authoritative over the
+ * Config entries win: an entity defined in code is authoritative over the
  * registry row that mirrors it, so a field removed from the config is seen as
  * a removal rather than being resurrected from the registry.
+ *
+ * Generic over the desired shape because collections, singles and components
+ * all face the same orphan-drop problem and differ only in which fields their
+ * desired entry carries.
  */
-export function mergeRegisteredCollections(
-  fromConfig: Record<string, DesiredCollection>,
-  registered: readonly RegisteredCollectionRow[]
-): Record<string, DesiredCollection> {
-  const merged: Record<string, DesiredCollection> = { ...fromConfig };
+export function mergeRegisteredEntities<T>(
+  fromConfig: Record<string, T>,
+  registered: readonly RegisteredCollectionRow[],
+  toDesired: (
+    row: RegisteredCollectionRow & { slug: string; tableName: string }
+  ) => T
+): Record<string, T> {
+  const merged: Record<string, T> = { ...fromConfig };
 
   for (const row of registered) {
     if (!row?.slug || !row?.tableName) continue;
     if (merged[row.slug]) continue;
-
-    merged[row.slug] = {
-      slug: row.slug,
-      tableName: row.tableName,
-      fields: (row.fields ?? []) as DesiredCollection["fields"],
-      status: row.status === true,
-      // Carried so a localized Schema-Builder collection keeps translatable
-      // columns out of its main table; without it the diff re-adds columns
-      // that belong in the companion `_locales` table.
-      localized: row.localized === true,
-    };
+    merged[row.slug] = toDesired(
+      row as RegisteredCollectionRow & { slug: string; tableName: string }
+    );
   }
 
   return merged;
+}
+
+/** Collection-shaped merge: carries status and the i18n flag. */
+export function mergeRegisteredCollections(
+  fromConfig: Record<string, DesiredCollection>,
+  registered: readonly RegisteredCollectionRow[]
+): Record<string, DesiredCollection> {
+  return mergeRegisteredEntities(fromConfig, registered, row => ({
+    slug: row.slug,
+    tableName: row.tableName,
+    fields: (row.fields ?? []) as DesiredCollection["fields"],
+    status: row.status === true,
+    // Carried so a localized Schema-Builder collection keeps translatable
+    // columns out of its main table; without it the diff re-adds columns
+    // that belong in the companion `_locales` table.
+    localized: row.localized === true,
+  }));
 }
 
 /**
@@ -78,19 +94,46 @@ export function mergeRegisteredCollections(
  * that Schema-Builder collections may be flagged for drop on this pass, since
  * that is the consequence and it is not otherwise obvious from the output.
  */
+export async function mergeRegisteredSafely<T>(
+  fromConfig: Record<string, T>,
+  loadRegistered: () => Promise<readonly RegisteredCollectionRow[]>,
+  toDesired: (
+    row: RegisteredCollectionRow & { slug: string; tableName: string }
+  ) => T,
+  logger?: WarnLogger
+): Promise<Record<string, T>> {
+  try {
+    return mergeRegisteredEntities(
+      fromConfig,
+      await loadRegistered(),
+      toDesired
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger?.warn(
+      `Could not load registered entities (${message}). Entities created in ` +
+        `the Schema Builder may be flagged for drop this pass.`
+    );
+    return { ...fromConfig };
+  }
+}
+
+/** Collection-shaped {@link mergeRegisteredSafely}. */
 export async function mergeRegisteredCollectionsSafely(
   fromConfig: Record<string, DesiredCollection>,
   loadRegistered: () => Promise<readonly RegisteredCollectionRow[]>,
   logger?: WarnLogger
 ): Promise<Record<string, DesiredCollection>> {
-  try {
-    return mergeRegisteredCollections(fromConfig, await loadRegistered());
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger?.warn(
-      `Could not load registered collections (${message}). Collections ` +
-        `created in the Schema Builder may be flagged for drop this pass.`
-    );
-    return { ...fromConfig };
-  }
+  return mergeRegisteredSafely(
+    fromConfig,
+    loadRegistered,
+    row => ({
+      slug: row.slug,
+      tableName: row.tableName,
+      fields: (row.fields ?? []) as DesiredCollection["fields"],
+      status: row.status === true,
+      localized: row.localized === true,
+    }),
+    logger
+  );
 }
