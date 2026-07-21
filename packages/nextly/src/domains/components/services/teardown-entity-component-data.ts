@@ -25,8 +25,13 @@
  * @module domains/components/services/teardown-entity-component-data
  */
 
-import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  WhereClause,
+} from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors";
+import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_COMPONENT_NESTING_DEPTH. */
@@ -40,11 +45,13 @@ const ID_CHUNK_SIZE = 500;
 
 /** Minimal adapter surface this helper needs — matches DrizzleAdapter. */
 export interface TeardownComponentDataAdapter {
+  dialect: SupportedDialect;
   select<T = Record<string, unknown>>(
     table: string,
     options: { where?: WhereClause }
   ): Promise<T[]>;
   delete(table: string, where: WhereClause): Promise<number>;
+  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   tableExists(tableName: string): Promise<boolean>;
   listTables(): Promise<string[]>;
 }
@@ -66,9 +73,9 @@ export interface TeardownEntityComponentDataResult {
   /** Component tables that actually had rows removed. */
   tablesTouched: string[];
   /**
-   * Component tables present in the catalog that the ORM could not resolve, so their rows
-   * could not be swept. Returned rather than thrown: an unregistered leftover table must
-   * not block the delete, but callers should log it because it may still hold orphans.
+   * Component tables the ORM could not address, each verified to hold no rows for this
+   * entity before being skipped. A table that cannot be addressed AND holds rows fails the
+   * delete instead of appearing here.
    */
   skippedTables: string[];
 }
@@ -105,6 +112,49 @@ async function isResolvable(
     if (/not found in schema registry/i.test(String(error))) return false;
     throw error;
   }
+}
+
+/**
+ * Fails when an unaddressable component table still holds rows for `parentTable`.
+ *
+ * Counted with a parameterised statement rather than the query builder because the ORM
+ * cannot address this table — that is the condition being handled. Reads only; the rows
+ * are never deleted this way.
+ */
+async function assertNoRowsForParent(
+  adapter: TeardownComponentDataAdapter,
+  componentTable: string,
+  parentTable: string
+): Promise<void> {
+  const quoted = q(componentTable, adapter.dialect);
+  const parentColumn = q("_parent_table", adapter.dialect);
+  const placeholder = adapter.dialect === "postgresql" ? "$1" : "?";
+
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = await adapter.executeQuery<Record<string, unknown>>(
+      `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${parentColumn} = ${placeholder}`,
+      [parentTable]
+    );
+  } catch (error) {
+    // No `_parent_table` column means the table does not hold component instances at all,
+    // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
+    // leaves the question unanswered and must not be read as "empty".
+    if (/_parent_table/.test(String(error))) return;
+    throw error;
+  }
+
+  const count = Number(rows[0]?.n ?? 0);
+  if (count === 0) return;
+
+  throw NextlyError.internal({
+    logContext: {
+      reason: "component-table-unresolvable-with-rows",
+      componentTable,
+      parentTable,
+      rows: count,
+    },
+  });
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -153,6 +203,10 @@ export async function teardownEntityComponentData(
       // every parent rather than re-attempted on each iteration.
       if (skippedTables.has(componentTable)) continue;
       if (!(await isResolvable(adapter, componentTable))) {
+        // Skipping is only safe when the table holds nothing for this entity. If it does,
+        // the caller would drop the parent table and strand those rows while reporting a
+        // successful delete, so the delete fails instead and names the table.
+        await assertNoRowsForParent(adapter, componentTable, parentTable);
         skippedTables.add(componentTable);
         continue;
       }

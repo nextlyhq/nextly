@@ -17,12 +17,17 @@ import { teardownEntityComponentData } from "./teardown-entity-component-data";
 const UNREGISTERED =
   'Table "comp_ghost" not found in schema registry. Ensure setTableResolver() has been called during boot.';
 
-/** Adapter whose `select` fails with `error` for the named table only. */
-function makeAdapter(failingTable: string, error: unknown) {
+/**
+ * Adapter whose `select` fails with `error` for the named table only. `rowsForParent`
+ * drives the raw count used to decide whether skipping that table is safe.
+ */
+function makeAdapter(failingTable: string, error: unknown, rowsForParent = 0) {
   return {
+    dialect: "postgresql" as const,
     listTables: vi.fn().mockResolvedValue(["comp_hero", failingTable]),
     tableExists: vi.fn().mockResolvedValue(false),
     delete: vi.fn().mockResolvedValue(1),
+    executeQuery: vi.fn().mockResolvedValue([{ n: rowsForParent }]),
     select: vi.fn(async (table: string) => {
       if (table === failingTable) throw error;
       return [];
@@ -31,8 +36,8 @@ function makeAdapter(failingTable: string, error: unknown) {
 }
 
 describe("teardownEntityComponentData failure handling", () => {
-  it("skips a table with no registered schema and reports it", async () => {
-    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED));
+  it("skips a table with no registered schema when it holds no rows for this entity", async () => {
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 0);
 
     const result = await teardownEntityComponentData({
       adapter: adapter as never,
@@ -42,6 +47,19 @@ describe("teardownEntityComponentData failure handling", () => {
     expect(result.skippedTables).toEqual(["comp_ghost"]);
     // The resolvable table was still swept rather than abandoned alongside it.
     expect(adapter.select).toHaveBeenCalledWith("comp_hero", expect.anything());
+  });
+
+  it("fails the delete when an unaddressable table still holds rows for this entity", async () => {
+    // Skipping here would let the caller drop the parent table while those rows survive,
+    // and report success — the outcome this sweep exists to prevent.
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 4);
+
+    await expect(
+      teardownEntityComponentData({
+        adapter: adapter as never,
+        parentTable: "dc_posts",
+      })
+    ).rejects.toThrow();
   });
 
   it("rethrows a genuine database failure instead of reporting a clean sweep", async () => {

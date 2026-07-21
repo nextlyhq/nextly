@@ -18,7 +18,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { registerComponentSchemas } from "../../domains/components/services/register-component-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
@@ -176,6 +179,21 @@ export async function runPruneCommand(
   }
 
   try {
+    // The ORM resolves tables through a SchemaRegistry, and this command creates none of
+    // its own, so registry-table reads and the component sweep both need one. Static system
+    // tables first, then every component's `comp_` table, which the sweep deletes rows from.
+    const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+    const { dialect } = drizzleAdapter.getCapabilities();
+    const schemaRegistry = new SchemaRegistry(dialect);
+    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
+    drizzleAdapter.setTableResolver(schemaRegistry);
+    await registerComponentSchemas({
+      adapter: drizzleAdapter,
+      registry: schemaRegistry,
+      dialect,
+      logger,
+    });
+
     const registry = new CollectionRegistryService(
       adapter as unknown as DrizzleAdapter,
       logger

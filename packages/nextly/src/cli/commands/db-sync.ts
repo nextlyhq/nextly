@@ -62,6 +62,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { registerComponentSchemas } from "../../domains/components/services/register-component-schemas";
 import { describeError } from "../../errors/index";
 import {
   createContext,
@@ -237,6 +238,9 @@ export async function runDbSync(
   );
 
   let adapter: CLIDatabaseAdapter;
+  // Held beyond the connect block so component schemas can be added once the core tables
+  // are known to exist — `dynamic_components` has to be readable before it can be listed.
+  let schemaRegistry: SchemaRegistry;
   try {
     adapter = await createAdapter({
       dialect: dbValidation.dialect,
@@ -251,10 +255,10 @@ export async function runDbSync(
     // operations that query these tables.
     const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
       .dialect;
-    const earlyRegistry = new SchemaRegistry(dialect);
+    schemaRegistry = new SchemaRegistry(dialect);
     const staticSchemas = getDialectTables(dialect);
-    earlyRegistry.registerStaticSchemas(staticSchemas);
-    (adapter as unknown as DrizzleAdapter).setTableResolver(earlyRegistry);
+    schemaRegistry.registerStaticSchemas(staticSchemas);
+    (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
     logger.error(`Failed to connect to database: ${describeError(error)}`);
@@ -268,6 +272,18 @@ export async function runDbSync(
     // Uses drizzle-kit pushSchema() to create ALL tables from the Drizzle
     // schema definitions, guaranteeing they match 100%.
     await ensureCoreTables(adapter, options, context);
+
+    // Step 3.6: Register the runtime schema of every component in the database. The registry
+    // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
+    // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
+    // Reads from `dynamic_components` rather than the config so components already removed
+    // from code are still reachable.
+    await registerComponentSchemas({
+      adapter: adapter as unknown as DrizzleAdapter,
+      registry: schemaRegistry,
+      dialect: (adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+      logger,
+    });
 
     // Step 4-5.5: Sync collections, singles and components.
     //

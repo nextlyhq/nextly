@@ -237,6 +237,31 @@ for (const entry of DIALECTS) {
       expect(rows.map(r => r._parent)).toEqual(["keep1"]);
     });
 
+    it("fails the delete when an unregistered component table still holds this entity's rows", async () => {
+      // The dangerous shape: a real component table the ORM cannot address, holding rows
+      // for the entity being deleted. Skipping it would drop the parent table and strand
+      // them while reporting success, so the delete must fail instead.
+      const unregistered = `comp_u${tag}`;
+      const fields = [{ name: "heading", type: "text" }] as never;
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(unregistered)}`);
+      for (const stmt of splitStatements([
+        schemaService.generateMigrationSQL(unregistered, fields),
+      ])) {
+        await adapter.executeQuery(stmt);
+      }
+      // Deliberately NOT registered with the schema registry.
+      await insertInstance(unregistered, "u1", "p1", parent, "hero");
+
+      await expect(
+        teardownEntityComponentData({
+          adapter: adapter as never,
+          parentTable: parent,
+        })
+      ).rejects.toThrow();
+
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(unregistered)}`);
+    });
+
     it("skips a component table the ORM cannot resolve instead of blocking the delete", async () => {
       // A leftover `comp_` table with no registered runtime schema — the state an earlier
       // deleted component leaves behind. It must not make the whole delete fail.
