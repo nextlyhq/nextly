@@ -104,6 +104,12 @@ export interface GetSingleOptions {
  */
 export interface UpdateSingleOptions {
   /**
+   * Set when this write restores an earlier version, recording which one on the
+   * version it captures. Lineage cannot be inferred afterwards: a restore is an
+   * ordinary write that happens to reproduce an earlier state.
+   */
+  sourceVersionNo?: number;
+  /**
    * Locale for localized fields.
    * Reserved for future i18n support.
    */

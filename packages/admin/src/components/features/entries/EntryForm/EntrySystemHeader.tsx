@@ -26,6 +26,7 @@ import {
   RotateCcw,
   Trash2,
 } from "@admin/components/icons";
+import { useCan } from "@admin/hooks/useCan";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
@@ -180,6 +181,9 @@ export function EntrySystemHeader({
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Both collections and singles authorize a document write as `update-{slug}`.
+  const canUpdateDocument = useCan(`update-${collectionSlug}`);
 
   // Why: autofocus the title input on create so the cursor blinks ready for
   // typing. Skip in edit mode — focusing a populated title interrupts the
@@ -513,6 +517,12 @@ export function EntrySystemHeader({
                 }
           }
           fields={historyFields}
+          // Restore reuses the ordinary edit permission, so a caller who may
+          // only read history is not offered a write that would be refused.
+          canRestore={canUpdateDocument}
+          // The live document's status, which is what a restore changes — the
+          // selected version's own status describes the past.
+          liveStatus={effectiveStatus}
         />
       ) : null}
     </div>

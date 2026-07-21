@@ -91,7 +91,17 @@ export class VersionCaptureService {
     // the head of history and the snapshot matching live content survive.
     if (typeof input.maxPerDoc === "number") {
       const durable = await repo.listDurableForPrune(input.ref);
-      const staleIds = selectVersionsToPrune(durable, input.maxPerDoc);
+      // A restore's own capture additionally protects two versions. The one
+      // holding the content it just replaced — the one the editor is told they
+      // can go back to — is `versionNo - 1`: this insert took the next number,
+      // so the previous one was the head when the restore began. And the
+      // version restored FROM, which this row names as its source: pruning it
+      // in the same transaction would leave that lineage pointing at nothing.
+      const isRestore = typeof input.sourceVersionNo === "number";
+      const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
+        isRestore ? versionNo - 1 : null,
+        input.sourceVersionNo,
+      ]);
       if (staleIds.length > 0) {
         await repo.deleteByIds(staleIds);
       }

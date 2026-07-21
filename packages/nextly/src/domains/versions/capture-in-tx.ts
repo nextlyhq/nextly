@@ -44,6 +44,23 @@ export interface CaptureInTxArgs {
   createdBy?: string | null;
   /** Retention cap for this document, from the resolved versions config. */
   maxPerDoc?: number | false;
+  /**
+   * The locale this snapshot holds.
+   *
+   * A localized document's snapshot records exactly one locale's values, not
+   * all of them, so a version that does not say which locale it belongs to
+   * cannot be restored without guessing which language to write into. Null for
+   * an unlocalized document, where there is only one set of values.
+   */
+  locale?: string | null;
+  /**
+   * The version this write restored, when it was a restore.
+   *
+   * Lineage is recorded rather than inferred: a restore is an ordinary write
+   * that happens to reproduce an earlier state, and nothing about the resulting
+   * document distinguishes it from someone retyping the same content.
+   */
+  sourceVersionNo?: number | null;
 }
 
 /**
@@ -64,6 +81,8 @@ export async function captureInTx(
     status,
     snapshot,
     createdBy: args.createdBy ?? null,
+    locale: args.locale ?? null,
+    sourceVersionNo: args.sourceVersionNo ?? null,
     maxPerDoc: args.maxPerDoc,
   });
 }

@@ -73,6 +73,17 @@ function basePath(scope: VersionScope): string {
     : `/collections/${scope.slug}/entries/${scope.entryId}/versions`;
 }
 
+/** What a restore reports back. */
+export interface RestoreVersionResponse {
+  message: string;
+  restoredFrom: number;
+  /**
+   * Snapshot keys the current schema no longer accepts. A restore with a
+   * non-empty list succeeded but did not bring the document back in full.
+   */
+  droppedFields: string[];
+}
+
 export const versionApi = {
   list: (
     scope: VersionScope,
@@ -93,4 +104,18 @@ export const versionApi = {
 
   get: (scope: VersionScope, versionNo: number): Promise<VersionDetail> =>
     protectedApi.get<VersionDetail>(`${basePath(scope)}/${versionNo}`),
+
+  /**
+   * Put the document back to an earlier version. A write, not a read: the
+   * server resubmits the stored snapshot through the ordinary update path and
+   * records the result as a new version.
+   */
+  restore: (
+    scope: VersionScope,
+    versionNo: number
+  ): Promise<RestoreVersionResponse> =>
+    protectedApi.post<RestoreVersionResponse>(
+      `${basePath(scope)}/${versionNo}/restore`,
+      {}
+    ),
 };
