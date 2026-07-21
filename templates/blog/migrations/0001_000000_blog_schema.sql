@@ -216,15 +216,15 @@ FOREIGN KEY ("logo") REFERENCES "media"("id") ON DELETE SET NULL;
 -- Insert default documents for each single so they're accessible immediately
 INSERT INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
 VALUES (gen_random_uuid(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', now(), now())
-ON CONFLICT ("id") DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 INSERT INTO "single_navigation" ("id", "title", "slug", "status", "show_theme_toggle", "show_search_icon", "created_at", "updated_at")
 VALUES (gen_random_uuid(), 'Navigation', 'navigation', 'published', true, true, now(), now())
-ON CONFLICT ("id") DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 INSERT INTO "single_homepage" ("id", "title", "slug", "status", "hero_title", "hero_subtitle", "show_featured_post", "featured_section_title", "show_latest_posts", "latest_section_title", "latest_posts_count", "show_category_strip", "show_newsletter_cta", "newsletter_heading", "newsletter_subheading", "created_at", "updated_at")
 VALUES (gen_random_uuid(), 'Homepage', 'homepage', 'published', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', true, 'Featured', true, 'Latest', 3, true, true, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', now(), now())
-ON CONFLICT ("id") DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- ============================================
 -- DOWN: Rollback all changes
