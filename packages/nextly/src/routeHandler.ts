@@ -283,6 +283,21 @@ async function handleApiKeyRequest(
 }
 
 /**
+ * Services whose handlers own their auth and body parsing and therefore return
+ * before the shared dispatcher path. Kept beside those branches: a service
+ * added there without being added here silently loses cold-boot initialisation.
+ */
+const DIRECT_DISPATCH_SERVICES = new Set<string>([
+  "apiKeys",
+  "webhooks",
+  "generalSettings",
+  "imageSizes",
+  "dashboard",
+  "schema",
+  "email",
+]);
+
+/**
  * Route a parsed webhook operation to its handler.
  *
  * Mirrors the API-key dispatch: the handlers own their own auth and body
@@ -757,9 +772,15 @@ async function handleServiceRequest(
   // has initialised yet. Ordinary REST requests are saved by `getDispatcher()`
   // further down, but these branches return before reaching it, so an app that
   // cold-boots through `createDynamicHandlers({ config })` with no
-  // instrumentation would fail its first request to any of them. Initialising
-  // here covers every direct-dispatch branch and consumes no body.
-  await ensureServicesInitialized();
+  // instrumentation would fail its first request to any of them.
+  //
+  // Scoped to those services rather than run unconditionally: everything else
+  // passes through the authorization block below first, and initialising ahead
+  // of it would let an unauthenticated request connect the database and run
+  // startup work before being turned away with a 401.
+  if (service !== undefined && DIRECT_DISPATCH_SERVICES.has(service)) {
+    await ensureServicesInitialized();
+  }
 
   // ==================== API KEYS DIRECT DISPATCH ====================
   // API key handlers own their auth + body parsing. Intercepting here (before

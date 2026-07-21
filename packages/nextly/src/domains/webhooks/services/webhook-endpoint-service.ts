@@ -195,6 +195,34 @@ export class WebhookEndpointService extends BaseService {
    * it.
    */
   private async assertDeliverableUrl(url: string): Promise<void> {
+    // Credentials in the URL defeat every other protection here: the stored URL
+    // is returned to anyone who may read the endpoint, so `user:pass@host`
+    // would hand out the receiver's credential even though static header values
+    // are redacted. Rejected rather than stripped, because silently removing
+    // them would leave the operator with an endpoint that fails to authenticate
+    // and no indication why.
+    // A URL too malformed to parse is left to the validator below, which
+    // reports it as an unreachable target rather than as credentials.
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+    if (parsed && (parsed.username || parsed.password)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "url",
+            code: "url_credentials",
+            message:
+              "Remove the username and password from the URL. Use a static header for receiver authentication instead.",
+          },
+        ],
+        logContext: { reason: "webhook-url-userinfo" },
+      });
+    }
+
     try {
       await validateExternalUrl(url);
     } catch (err) {

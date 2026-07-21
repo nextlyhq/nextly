@@ -51,6 +51,16 @@ import {
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
+/**
+ * Applied to the secret response so it is never retained by a browser or a
+ * shared intermediary that caches authenticated GETs. Matches the header set
+ * the other secret-bearing reads in this package use.
+ */
+const PRIVATE_NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store",
+  Vary: "Cookie",
+} as const;
+
 async function getWebhookService(): Promise<WebhookEndpointService> {
   await getCachedNextly();
   return container.get<WebhookEndpointService>("webhookEndpointService");
@@ -276,6 +286,6 @@ export function revealWebhookSecret(
     const service = await getWebhookService();
     const secrets = await service.revealSecrets(id);
 
-    return respondData({ secrets });
+    return respondData({ secrets }, { headers: PRIVATE_NO_STORE_HEADERS });
   })(req);
 }

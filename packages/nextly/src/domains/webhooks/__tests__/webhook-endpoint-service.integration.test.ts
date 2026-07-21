@@ -254,6 +254,26 @@ describe("webhook endpoint management (real SQLite)", () => {
       await expect(create({ url })).rejects.toThrow(NextlyError);
     });
 
+    it.each([
+      ["a username and password", "https://user:pass@93.184.216.34/hook"],
+      ["a username alone", "https://user@93.184.216.34/hook"],
+    ])("refuses credentials in the URL: %s", async (_label, url) => {
+      // The stored URL is returned to anyone who may read the endpoint, so
+      // credentials here would leak the receiver's own credential even though
+      // static header values are redacted.
+      await expect(create({ url })).rejects.toThrow(NextlyError);
+    });
+
+    it("re-checks URL credentials on update", async () => {
+      const { endpoint } = await create();
+
+      await expect(
+        service.updateEndpoint(endpoint.id, {
+          url: "https://user:pass@93.184.216.34/hook",
+        })
+      ).rejects.toThrow(NextlyError);
+    });
+
     it("stores nothing when the URL is refused", async () => {
       await expect(create({ url: "https://10.0.0.5/hooks" })).rejects.toThrow();
       expect(await service.listEndpoints()).toHaveLength(0);

@@ -318,6 +318,21 @@ describe("revealWebhookSecret", () => {
     expect(json.secrets).toEqual(["whsec_a", "whsec_b"]);
   });
 
+  it("tells browsers and intermediaries not to store the response", async () => {
+    // An authenticated GET carrying a signing key must not be retained or
+    // replayed by a shared cache.
+    asSession();
+    withService({ revealSecrets: vi.fn().mockResolvedValue(["whsec_a"]) });
+
+    const res = await revealWebhookSecret(
+      new Request("http://x/api/webhooks/wh_1/secret"),
+      "wh_1"
+    );
+
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(res.headers.get("Vary")).toBe("Cookie");
+  });
+
   it("asks for update rather than read, so a read-only role cannot forge traffic", async () => {
     asSession();
     withService({ revealSecrets: vi.fn().mockResolvedValue([]) });
