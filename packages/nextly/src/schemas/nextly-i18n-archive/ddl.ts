@@ -8,6 +8,11 @@
  * via `getCoreSchema` + boot-apply. `id` is DB-generated (autoincrement / serial), so
  * archival `INSERT ... SELECT` never has to synthesize a key.
  *
+ * Every statement here MUST be safe to re-apply: the dispatchers run this before each
+ * localization disable with no error handling, so one non-idempotent statement breaks
+ * disabling permanently. `ddl-idempotency.integration.test.ts` applies it repeatedly on
+ * all three dialects to hold that.
+ *
  * @module schemas/nextly-i18n-archive/ddl
  */
 
@@ -30,6 +35,11 @@ export function getI18nArchiveDdl(dialect: Dialect): string[] {
         `CREATE INDEX IF NOT EXISTS "nextly_i18n_archive_lookup_idx" ON "nextly_i18n_archive" ("collection", "entry_id", "locale")`,
       ];
     case "mysql":
+      // MySQL has no `CREATE INDEX IF NOT EXISTS`, so a separate index statement raises
+      // ER_DUP_KEYNAME on every application after the first — and this DDL is re-applied
+      // before every localization disable. Declaring the index INLINE keeps the whole
+      // thing a single `CREATE TABLE IF NOT EXISTS`, which is a no-op once the table
+      // exists. Postgres and SQLite keep the separate statement; theirs is guarded.
       return [
         `CREATE TABLE IF NOT EXISTS \`nextly_i18n_archive\` (
   \`id\` BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -38,9 +48,9 @@ export function getI18nArchiveDdl(dialect: Dialect): string[] {
   \`locale\` VARCHAR(20) NOT NULL,
   \`field\` VARCHAR(191) NOT NULL,
   \`value\` LONGTEXT,
-  \`archived_at\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  \`archived_at\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY \`nextly_i18n_archive_lookup_idx\` (\`collection\`, \`entry_id\`, \`locale\`)
 )`,
-        `CREATE INDEX \`nextly_i18n_archive_lookup_idx\` ON \`nextly_i18n_archive\` (\`collection\`, \`entry_id\`, \`locale\`)`,
       ];
     case "sqlite":
       return [
