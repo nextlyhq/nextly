@@ -25,8 +25,9 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { and, eq, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { nextlyWebhooks as webhooksMysql } from "../../../schemas/webhooks/mysql";
 import { nextlyWebhooks as webhooksPg } from "../../../schemas/webhooks/postgres";
@@ -137,6 +138,24 @@ export class WebhookEndpointService extends BaseService {
   }
 
   /**
+   * Run a database call, turning a driver error into the canonical envelope.
+   *
+   * Every statement here can fail for reasons the caller should see as a typed
+   * error rather than a driver exception: `created_by` referencing a user that
+   * has since been removed, a constraint violation, a lost connection. Without
+   * this the raw driver `Error` escapes `packages/nextly`, where nothing above
+   * knows how to render it.
+   */
+  private async query<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof NextlyError) throw err;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+  }
+
+  /**
    * Reject a URL delivery could never safely call.
    *
    * Reuses the same validator the transport uses, so registration and delivery
@@ -221,7 +240,7 @@ export class WebhookEndpointService extends BaseService {
       updatedAt: now,
     };
 
-    await this.db.insert(this.table).values(row);
+    await this.query(() => this.db.insert(this.table).values(row));
     this.registry?.invalidate();
 
     return { endpoint: this.toSummary(row), secret };
@@ -229,20 +248,26 @@ export class WebhookEndpointService extends BaseService {
 
   /** Every registered endpoint, newest first. */
   async listEndpoints(): Promise<WebhookEndpointSummary[]> {
-    const rows = (await this.db
-      .select()
-      .from(this.table)
-      .orderBy(desc(this.table.createdAt))) as WebhookRow[];
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select()
+          .from(this.table)
+          .orderBy(desc(this.table.createdAt))) as WebhookRow[]
+    );
     return rows.map(row => this.toSummary(row));
   }
 
   /** One endpoint, or null when it does not exist. */
   async getEndpoint(id: string): Promise<WebhookEndpointSummary | null> {
-    const rows = (await this.db
-      .select()
-      .from(this.table)
-      .where(eq(this.table.id, id))
-      .limit(1)) as WebhookRow[];
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select()
+          .from(this.table)
+          .where(eq(this.table.id, id))
+          .limit(1)) as WebhookRow[]
+    );
     return rows[0] ? this.toSummary(rows[0]) : null;
   }
 
@@ -269,7 +294,9 @@ export class WebhookEndpointService extends BaseService {
     if (patch.enabled !== undefined) changes.enabled = patch.enabled;
     if (patch.headers !== undefined) changes.headers = patch.headers;
 
-    await this.db.update(this.table).set(changes).where(eq(this.table.id, id));
+    await this.query(() =>
+      this.db.update(this.table).set(changes).where(eq(this.table.id, id))
+    );
     // Invalidated for every field, not only `enabled`: the cached list carries
     // url, event types and headers too, and a stale copy would keep delivering
     // to the old target.
@@ -294,12 +321,21 @@ export class WebhookEndpointService extends BaseService {
     return this.updateEndpoint(id, { enabled });
   }
 
-  /** Remove an endpoint. Delivery rows are retained for their own retention. */
+  /**
+   * Remove an endpoint and, with it, its delivery history.
+   *
+   * `nextly_webhook_deliveries.webhook_id` cascades, so deleting an endpoint
+   * discards the record of what was sent to it rather than leaving that to
+   * retention. This is why disabling exists and is the reversible option:
+   * deletion is for an endpoint whose history is no longer wanted either.
+   */
   async deleteEndpoint(id: string): Promise<void> {
     const existing = await this.getEndpoint(id);
     if (!existing) throw this.notFound(id);
 
-    await this.db.delete(this.table).where(eq(this.table.id, id));
+    await this.query(() =>
+      this.db.delete(this.table).where(eq(this.table.id, id))
+    );
     this.registry?.invalidate();
   }
 
@@ -314,11 +350,14 @@ export class WebhookEndpointService extends BaseService {
    * a time, and a caller reconciling their configuration needs to see them all.
    */
   async revealSecrets(id: string): Promise<string[]> {
-    const rows = (await this.db
-      .select()
-      .from(this.table)
-      .where(and(eq(this.table.id, id)))
-      .limit(1)) as WebhookRow[];
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select()
+          .from(this.table)
+          .where(eq(this.table.id, id))
+          .limit(1)) as WebhookRow[]
+    );
 
     const row = rows[0];
     if (!row) throw this.notFound(id);

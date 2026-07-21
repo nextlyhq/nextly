@@ -154,6 +154,23 @@ describe("webhook endpoint management (real SQLite)", () => {
       await create();
       expect(registry.invalidations).toBe(1);
     });
+
+    it("reports a database failure as a NextlyError, not a driver error", async () => {
+      // created_by is a real foreign key, so attributing an endpoint to a user
+      // that no longer exists fails in the driver. Nothing above this layer
+      // knows how to render a raw driver exception, and it is not something a
+      // caller should ever see.
+      await expect(
+        service.createEndpoint(
+          {
+            name: "Orphaned",
+            url: "https://example.com/hooks",
+            eventTypes: EVENTS,
+          },
+          "user_that_does_not_exist"
+        )
+      ).rejects.toThrow(NextlyError);
+    });
   });
 
   describe("URL validation at registration", () => {
