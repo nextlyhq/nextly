@@ -58,7 +58,12 @@ export function tagComponentTypes(
 
   const tagged: Record<string, unknown> = { ...components };
   for (const [name, slug] of slugByField) {
-    if (name in tagged) tagged[name] = tagValue(tagged[name], slug);
+    // Own properties only. `in` also matches inherited ones, so a field named
+    // `constructor` or `__proto__` would be treated as captured and tagged
+    // when nothing of the sort was read back.
+    if (Object.prototype.hasOwnProperty.call(tagged, name)) {
+      tagged[name] = tagValue(tagged[name], slug);
+    }
   }
   return tagged;
 }

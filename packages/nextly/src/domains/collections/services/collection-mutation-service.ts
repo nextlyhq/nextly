@@ -2021,11 +2021,16 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 contentStatus: "published",
-                parts: {
-                  parentRow,
-                  components: snapshotComponents,
-                  manyToMany: snapshotM2M,
-                },
+                // Tagged like every other capture: a snapshot records which
+                // component its values came from, whichever path produced it.
+                parts: this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: snapshotComponents,
+                    manyToMany: snapshotM2M,
+                  },
+                  fields
+                ),
                 createdBy: params.user?.id ?? null,
                 // Left unlabelled deliberately. Publishing spans every locale,
                 // and this snapshot is the main row alone — on a migrated

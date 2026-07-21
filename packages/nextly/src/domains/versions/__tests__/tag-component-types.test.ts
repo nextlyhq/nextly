@@ -83,3 +83,29 @@ describe("tagComponentTypes", () => {
     expect(tagged.hero).toBeNull();
   });
 });
+
+describe("tagComponentTypes — inherited keys", () => {
+  it("does not tag a field name that only matches an inherited property", () => {
+    // `in` matches the prototype chain, so a field called `constructor` would
+    // be treated as captured and tagged when nothing was read back for it.
+    const fields = [
+      { name: "constructor", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const tagged = tagComponentTypes({}, fields);
+
+    expect(Object.prototype.hasOwnProperty.call(tagged, "constructor")).toBe(
+      false
+    );
+  });
+
+  it("still tags a field genuinely named that way when it was captured", () => {
+    const fields = [
+      { name: "constructor", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const tagged = tagComponentTypes({ constructor: { x: 1 } }, fields);
+
+    expect(tagged.constructor).toEqual({ x: 1, _componentType: "banner" });
+  });
+});
