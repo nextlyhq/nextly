@@ -56,7 +56,10 @@ function stringifyError(err: unknown): string {
   if (typeof err === "number" || typeof err === "boolean") return String(err);
   if (err === null) return "null";
   try {
-    return JSON.stringify(err);
+    // JSON.stringify returns undefined for undefined, functions and symbols,
+    // so it cannot be returned directly from a function declared to yield a
+    // string — `args.error` is optional and reaches here as undefined.
+    return JSON.stringify(err) ?? "unknown error";
   } catch {
     return "[unstringifiable error]";
   }

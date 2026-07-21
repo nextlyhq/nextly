@@ -106,11 +106,26 @@ export interface MarkFailedInput {
  */
 export const ERROR_MESSAGE_MAX_LEN = 1000;
 
-/** Clamp a message to the `error_message` column bound, marking any cut. */
-export function truncateErrorMessage(message: string): string {
-  return message.length > ERROR_MESSAGE_MAX_LEN
-    ? `${message.slice(0, ERROR_MESSAGE_MAX_LEN)}...`
-    : message;
+/** Marks a truncated message; its length is reserved from the budget. */
+const TRUNCATION_SUFFIX = "...";
+
+/**
+ * Clamp a message to the `error_message` column bound, marking any cut.
+ *
+ * The suffix counts against the budget. Appending it to a full-length slice
+ * would return more characters than the bound allows, which defeats the point:
+ * the write this guards could still overflow, and it would do so exactly when
+ * a failure is being recorded.
+ */
+export function truncateErrorMessage(message: string | undefined): string {
+  // Callers reach this from optional error fields, so an absent message is a
+  // real input rather than a type violation.
+  if (!message) return "";
+  if (message.length <= ERROR_MESSAGE_MAX_LEN) return message;
+  return (
+    message.slice(0, ERROR_MESSAGE_MAX_LEN - TRUNCATION_SUFFIX.length) +
+    TRUNCATION_SUFFIX
+  );
 }
 
 export class SchemaEventsRepository {
