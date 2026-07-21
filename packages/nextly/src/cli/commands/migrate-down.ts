@@ -23,6 +23,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -173,10 +174,7 @@ export async function migrateDownCore(
         try {
           await deps.execDown(p.downSql);
         } catch (err) {
-          await deps.recordFailed(
-            p.filename,
-            err instanceof Error ? err.message : String(err)
-          );
+          await deps.recordFailed(p.filename, describeError(err));
           throw err;
         }
         await deps.recordRolledBack(p.filename);
@@ -371,9 +369,7 @@ export function registerMigrateDownCommand(program: Command): void {
       try {
         await runMigrateDown(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

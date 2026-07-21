@@ -64,7 +64,7 @@ if (existsSync(envPath)) {
 async function main(): Promise<void> {
   const { createProgram } = await import("./program");
   const { createLogger } = await import("./utils/logger");
-  const { NextlyError } = await import("../errors/index");
+  const { NextlyError, describeError } = await import("../errors/index");
   const telemetry = await import("@nextlyhq/telemetry");
 
   const program = createProgram();
@@ -88,26 +88,16 @@ async function main(): Promise<void> {
       // Swallow.
     }
 
-    const debugMode =
-      process.env.DEBUG === "true" || process.env.DEBUG === "1";
+    const debugMode = process.env.DEBUG === "true" || process.env.DEBUG === "1";
 
     if (NextlyError.is(error)) {
-      // CLI is operator-facing — print publicMessage as the headline,
-      // then a one-line `[code] key=value …` summary from logContext for
-      // triage. cause.stack only under DEBUG=true per existing convention.
-      logger.error(error.publicMessage);
-      const ctxParts: string[] = [`[${String(error.code)}]`];
-      if (error.logContext) {
-        for (const [k, v] of Object.entries(error.logContext)) {
-          if (v === undefined) continue;
-          ctxParts.push(
-            `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`
-          );
-        }
-      }
-      if (ctxParts.length > 1) {
-        console.error(ctxParts.join(" "));
-      }
+      // CLI is operator-facing — print publicMessage as the headline, then the
+      // full description (code, cause chain, logContext) so the terminal
+      // carries what the wire deliberately withholds. cause.stack only under
+      // DEBUG=true per existing convention.
+      // describeError already leads with the public message, so printing it
+      // separately would say the same thing twice.
+      logger.error(describeError(error));
       if (debugMode && error.cause?.stack) {
         logger.newline();
         console.error(error.cause.stack);
@@ -120,8 +110,9 @@ async function main(): Promise<void> {
         process.exit(1);
       }
 
-      // Application error
-      logger.error(error.message);
+      // Application error. describeError adds any `cause` chain, which a bare
+      // `error.message` drops.
+      logger.error(describeError(error));
 
       // Show stack trace in debug mode
       if (debugMode) {
@@ -129,8 +120,9 @@ async function main(): Promise<void> {
         console.error(error.stack);
       }
     } else {
-      logger.error("An unexpected error occurred");
-      console.error(error);
+      // Non-Error throwables still get rendered rather than reported as an
+      // opaque "unexpected error".
+      logger.error(describeError(error));
     }
 
     process.exit(1);

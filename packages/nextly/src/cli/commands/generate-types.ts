@@ -38,6 +38,7 @@ import {
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { describeError } from "../../errors/index";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -144,9 +145,7 @@ export async function runGenerateTypes(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -191,9 +190,7 @@ export async function runGenerateTypes(
     logger.divider();
     logger.success(`Type generation completed in ${formatDuration(duration)}`);
   } catch (error) {
-    logger.error(
-      `Generation failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Generation failed: ${describeError(error)}`);
     process.exit(1);
   }
 }
@@ -598,9 +595,7 @@ export function registerGenerateTypesCommand(program: Command): void {
       try {
         await runGenerateTypes(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

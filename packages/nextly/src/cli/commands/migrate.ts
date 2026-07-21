@@ -52,6 +52,7 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { describeError } from "../../errors/index";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -171,9 +172,7 @@ export async function runMigrate(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(
-      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to load config: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -201,9 +200,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(
-      `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.error(`Failed to connect to database: ${describeError(error)}`);
     process.exit(1);
   }
 
@@ -277,7 +274,7 @@ export async function runMigrate(
           : `${formatCount(applied, "migration")} applied.`
       );
     } catch (err) {
-      logger.error(err instanceof Error ? err.message : String(err));
+      logger.error(describeError(err));
       process.exit(1);
     }
 
@@ -500,7 +497,7 @@ export async function runFileMigrations(args: {
         });
       } catch (err) {
         await repo.markFailed(id, {
-          errorMessage: err instanceof Error ? err.message : String(err),
+          errorMessage: describeError(err),
         });
         throw err;
       }
@@ -578,7 +575,7 @@ async function discoverMigrations(
       migrations.push(parsed);
     } catch (error) {
       logger.warn(
-        `Failed to parse migration file ${file}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to parse migration file ${file}: ${describeError(error)}`
       );
     }
   }
@@ -822,9 +819,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         await runMigrate(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });

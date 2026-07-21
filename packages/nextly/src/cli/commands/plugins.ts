@@ -21,6 +21,7 @@
 import type { Command } from "commander";
 
 import type { NextlyServiceConfig } from "../../di/register";
+import { describeError } from "../../errors/index";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
 import {
@@ -165,9 +166,7 @@ export function registerPluginsCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });
@@ -187,9 +186,7 @@ export function registerPluginsCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(
-          error instanceof Error ? error.message : String(error)
-        );
+        context.logger.error(describeError(error));
         process.exit(1);
       }
     });
