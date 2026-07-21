@@ -27,6 +27,7 @@ import {
 } from "../../../plugins/test-nextly";
 
 import { SYSTEM_PERMISSIONS } from "./permission-seed-service";
+import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 
 let current: TestNextly | undefined;
 
@@ -61,6 +62,20 @@ describe("system permission slugs", () => {
     );
 
     expect(mismatched).toEqual([]);
+  });
+
+  it("declares every seeded resource as a system resource", () => {
+    // `cleanupOrphanedPermissions()` treats an owner-less permission whose
+    // resource is not a system, collection, single or component resource as a
+    // content type that has been deleted, and removes it together with its role
+    // grants. A system permission missing from SYSTEM_RESOURCES therefore
+    // survives seeding and disappears on the next cleanup pass, taking every
+    // role's access to that surface with it.
+    const undeclared = SYSTEM_PERMISSIONS.map(p => p.resource).filter(
+      resource => !(SYSTEM_RESOURCES as readonly string[]).includes(resource)
+    );
+
+    expect(Array.from(new Set(undeclared))).toEqual([]);
   });
 
   it("seeds the api-keys update permission under the slug callers ask for", async () => {

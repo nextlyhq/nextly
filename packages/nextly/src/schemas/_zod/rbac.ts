@@ -15,6 +15,7 @@ export const SYSTEM_RESOURCES = [
   "email-providers",
   "email-templates",
   "api-keys",
+  "webhooks",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
