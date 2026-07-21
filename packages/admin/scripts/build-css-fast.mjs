@@ -31,7 +31,10 @@ import { fileURLToPath } from "url";
 import postcss from "postcss";
 import tailwindcss from "@tailwindcss/postcss";
 
-import { findUnscopedRules, scopeCss } from "./lib/css-scope.mjs";
+// Scoping lives in @nextlyhq/admin-css so this build and the plugin-facing
+// CLI share one implementation and cannot drift. The release build
+// (build-css.mjs) resolves it the same way.
+import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
