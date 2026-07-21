@@ -97,6 +97,46 @@ describe("version routes", () => {
     }
   );
 
+  it("parses restoring a collection entry version as a write", () => {
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "3", "restore"],
+      "POST"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "collections",
+      method: "restoreEntryVersion",
+      // The operation decides the permission: restoring writes the document,
+      // so it must resolve to update-{slug} rather than read-{slug}.
+      operation: "update",
+      routeParams: { collectionName: "posts", entryId: "e1", versionNo: "3" },
+    });
+  });
+
+  it("parses restoring a single's version as a write", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "2", "restore"],
+      "POST"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "singles",
+      method: "restoreSingleVersion",
+      operation: "update",
+      routeParams: { slug: "settings", versionNo: "2" },
+    });
+  });
+
+  it("does not restore on a GET", () => {
+    // A read must never reach a method that writes the document.
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "3", "restore"],
+      "GET"
+    );
+
+    expect(parsed.method).toBeUndefined();
+  });
+
   it("still matches the entry itself when no segments trail", () => {
     // The guard must not cost the entry routes their own paths.
     expect(

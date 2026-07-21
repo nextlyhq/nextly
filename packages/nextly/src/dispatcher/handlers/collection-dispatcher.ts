@@ -101,6 +101,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   getVersionForDocument,
+  restoreVersionForDocument,
   listVersionsForDocument,
   userFromParams,
 } from "./versions-methods";
@@ -164,6 +165,19 @@ export const COLLECTION_VERSION_METHODS: Record<
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
       });
       return respondList(result.items, result.meta);
+    },
+  },
+  restoreEntryVersion: {
+    execute: async (_svc, p) => {
+      const result = await restoreVersionForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        actor: readAuthenticatedActor(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondAction("Version restored.", result);
     },
   },
   getEntryVersion: {

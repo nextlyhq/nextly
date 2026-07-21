@@ -9,16 +9,19 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { listSpy, getSpy } = vi.hoisted(() => ({
+const { listSpy, getSpy, restoreSpy } = vi.hoisted(() => ({
   listSpy: vi.fn(),
   getSpy: vi.fn(),
+  restoreSpy: vi.fn(),
 }));
 
+// The API client is replaced so these tests drive query and mutation outcomes
+// directly — including a failing restore — without a network round trip.
 vi.mock("@admin/services/versionApi", () => ({
-  versionApi: { list: listSpy, get: getSpy },
+  versionApi: { list: listSpy, get: getSpy, restore: restoreSpy },
 }));
 
-import { useVersion, useVersions } from "../useVersions";
+import { useRestoreVersion, useVersion, useVersions } from "../useVersions";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 
@@ -145,5 +148,43 @@ describe("useVersion", () => {
     renderHook(() => useVersion({ scope, versionNo: null }), { wrapper });
 
     expect(getSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("useRestoreVersion", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * Mirrors the app's QueryProvider, which retries mutations twice. The shared
+   * wrapper disables retries, so testing against it would pass whether or not
+   * the hook opts out.
+   */
+  function retryingWrapper({ children }: { children: ReactNode }) {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: 2 },
+      },
+    });
+    return (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  }
+
+  it("never retries a failed restore", async () => {
+    // A restore is not idempotent: each attempt is a fresh write recording
+    // another version and another outbox event. The global mutation policy
+    // retries twice, so inheriting it would turn one dropped response into
+    // three restores of the same version.
+    restoreSpy.mockRejectedValue(new Error("network"));
+
+    const { result } = renderHook(() => useRestoreVersion({ scope }), {
+      wrapper: retryingWrapper,
+    });
+
+    result.current.mutate(3);
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
   });
 });

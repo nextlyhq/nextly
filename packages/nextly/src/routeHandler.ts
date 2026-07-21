@@ -435,6 +435,9 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
   "getEntryVersion",
+  // Restoring writes the document, so the route parser marks it an `update`
+  // operation and this resolves to the `update-{slug}` permission.
+  "restoreEntryVersion",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -444,6 +447,8 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
   "getSingleVersion",
+  // A write, authorized as an update of the document.
+  "restoreSingleVersion",
 ]);
 
 /**

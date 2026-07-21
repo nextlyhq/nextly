@@ -30,19 +30,30 @@ import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 
+// Set by e2e/playwright.config.ts for the suite's own server. Compared to
+// "1" rather than checked for presence so an empty value reads as off.
+const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
+
 export default defineConfig({
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",
       logoUrlDark: "/Nextly_Icon_Light.svg",
       logoText: "Nextly Playground",
-      // Exercised by e2e/tests/admin-branding.spec.ts. Branded colors were
-      // silently broken for as long as the harness only configured logos, so
-      // the harness now configures colors too.
-      colors: {
-        primary: "#6366f1",
-        accent: "#f59e0b",
-      },
+      // Branded colors only under the e2e suite, which sets this flag.
+      //
+      // The admin's identity is monochrome: --nx-primary is pure black in
+      // light and pure white in dark. Configuring a brand color overwrites
+      // that token and every token derived from it, so a contributor running
+      // the playground would see an admin no end user gets by default.
+      //
+      // The colors cannot simply be dropped either: they are the only thing
+      // that exercises the branding path, and it stayed silently broken for
+      // as long as the harness configured logos alone. Gating on the flag
+      // keeps the regression cover without repainting the daily dev surface.
+      ...(brandingColorsEnabled
+        ? { colors: { primary: "#6366f1", accent: "#f59e0b" } }
+        : {}),
     },
     devAutoLogin: {
       email: "dev@nextly.local",

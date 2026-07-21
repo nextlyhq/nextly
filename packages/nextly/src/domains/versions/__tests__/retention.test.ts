@@ -68,3 +68,52 @@ describe("selectVersionsToPrune", () => {
     expect(selectVersionsToPrune(input, 3)).toEqual(["a"]);
   });
 });
+
+describe("selectVersionsToPrune — protecting a restore's undo", () => {
+  const row = (versionNo: number, status = "draft") => ({
+    id: `v${versionNo}`,
+    versionNo,
+    status,
+  });
+
+  it("keeps the named version even when the cap would remove it", () => {
+    // A restore records the content it replaced and then tells the editor the
+    // change can be undone. At a small cap the very next pass would remove
+    // exactly that version, so the undo would be gone the moment it was
+    // promised.
+    const rows = [row(3), row(2), row(1)];
+
+    const pruned = selectVersionsToPrune(rows, 1, [2]);
+
+    expect(pruned).not.toContain("v2");
+    expect(pruned).toContain("v1");
+  });
+
+  it("keeps every named version, not just the first", () => {
+    // A restore protects two: the head it replaced, and the version it was
+    // made FROM — the new row records that one as its source, so pruning it
+    // leaves the lineage pointing at nothing.
+    const rows = [row(4), row(3), row(2), row(1)];
+
+    const pruned = selectVersionsToPrune(rows, 1, [3, 1]);
+
+    expect(pruned).not.toContain("v3");
+    expect(pruned).not.toContain("v1");
+    expect(pruned).toContain("v2");
+  });
+
+  it("ignores absent entries among the named versions", () => {
+    const rows = [row(3), row(2), row(1)];
+
+    expect(selectVersionsToPrune(rows, 1, [null, undefined])).toEqual([
+      "v2",
+      "v1",
+    ]);
+  });
+
+  it("prunes normally when no version is named", () => {
+    const rows = [row(3), row(2), row(1)];
+
+    expect(selectVersionsToPrune(rows, 1)).toEqual(["v2", "v1"]);
+  });
+});

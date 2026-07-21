@@ -789,7 +789,32 @@ function parseCollectionEntryVersionRoutes(
     !id ||
     subresource !== "entries" ||
     !subId ||
-    additionalParams[0] !== "versions" ||
+    additionalParams[0] !== "versions"
+  ) {
+    return null;
+  }
+
+  // `versions/{versionNo}/restore` is a write, and the only path here deeper
+  // than a version number.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[2] === "restore" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    routeParams.versionNo = additionalParams[1] ?? "";
+    return {
+      service: "collections",
+      // Restoring writes the document, so it is authorized as an update rather
+      // than as a read of its history.
+      operation: "update",
+      method: "restoreEntryVersion",
+      routeParams,
+    };
+  }
+
+  if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
     additionalParams.length > 2 ||
@@ -832,9 +857,30 @@ function parseSingleVersionRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  if (!id || subresource !== "versions") {
+    return null;
+  }
+
+  // `versions/{versionNo}/restore` is a write, and the only path here deeper
+  // than a version number.
   if (
-    !id ||
-    subresource !== "versions" ||
+    subId &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "restore" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = id;
+    routeParams.versionNo = subId;
+    return {
+      service: "singles",
+      // Restoring writes the document, so it is authorized as an update.
+      operation: "update",
+      method: "restoreSingleVersion",
+      routeParams,
+    };
+  }
+
+  if (
     // Only `versions` or `versions/{versionNo}`; a deeper path is not ours.
     additionalParams.length > 0 ||
     httpMethod !== "GET"
