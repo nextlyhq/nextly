@@ -261,16 +261,17 @@ function containsLocalizedField(
     );
     if (localized) return true;
 
-    // Inline children are declared by the same schema, so they inherit its
-    // switch.
+    // A container's own classification governs its value: a group or repeater
+    // is one JSON column on the main row, so its children are stored wherever
+    // it is and are not per-locale on their own account — the write path
+    // classifies top-level fields only, and a text child does not make the
+    // container translatable. The walk still descends, because a COMPONENT
+    // nested inside a container keeps its own per-locale rows; passing `false`
+    // stops the children being classified by the document's switch while
+    // leaving that check intact.
     const inline = inlineChildren(field);
     if (inline) {
-      return containsLocalizedField(
-        inline,
-        ownerLocalized,
-        componentSchemas,
-        seen
-      );
+      return containsLocalizedField(inline, false, componentSchemas, seen);
     }
 
     // A component can reference itself through a descendant, so a slug already
@@ -418,6 +419,18 @@ function retainsNothing(pruned: unknown): boolean {
 }
 
 /**
+ * Whether a stored component value represents "no instances".
+ *
+ * The component write paths read exactly these shapes as an instruction to
+ * delete the existing rows, so a snapshot holding one is a snapshot of a
+ * cleared field. It has to survive filtering: dropping it would leave the live
+ * components in place and report a restore that rolled nothing back.
+ */
+function isClearedComponentValue(value: unknown): boolean {
+  return value === null || (Array.isArray(value) && value.length === 0);
+}
+
+/**
  * Split a component value into the instances the schema still permits and the
  * ones it does not.
  *
@@ -518,7 +531,20 @@ export function buildRestorePayload(
       // entity level, and a version that names no locale carries the entity's.
       // Writing it would resolve to some locale and publish or retract that
       // language from state that was never its own.
-      if (context.localeUnknown && key === "status") {
+      // A localized entity keeps draft/published state per locale as well as at
+      // entity level, and a version that names no locale carries the entity's.
+      // Writing it would resolve to some locale and publish or retract that
+      // language from state that was never its own.
+      //
+      // Only when the DOCUMENT is localized. An unlocalized document reaches
+      // this branch too — its locale is unknown because it embeds a localized
+      // component — but its status is a shared main-row value that needs no
+      // locale, and holding it back would refuse a rollback it could apply.
+      if (
+        context.localeUnknown &&
+        context.documentLocalized !== false &&
+        key === "status"
+      ) {
         droppedFields.push(key);
         continue;
       }
@@ -572,6 +598,14 @@ export function buildRestorePayload(
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
     if (isComponentField || children.length > 0) {
+      // A cleared field is restored as-is. Filtering cannot distinguish it from
+      // a value that lost every instance, and the two need opposite outcomes:
+      // this one must reach the update path so the live rows are removed.
+      if (isComponentField && isClearedComponentValue(value)) {
+        payload[key] = value;
+        continue;
+      }
+
       const removed: string[] = [];
       const { kept, rejected } = partitionAllowedInstances(
         value,

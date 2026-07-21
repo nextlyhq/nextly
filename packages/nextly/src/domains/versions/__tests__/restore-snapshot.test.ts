@@ -829,3 +829,173 @@ describe("buildRestorePayload — per-locale content under an unlocalized parent
     expect(droppedFields).toEqual(["hero"]);
   });
 });
+
+describe("buildRestorePayload — rolling a field back to empty", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  const componentSchemas = componentSchemasOf({
+    banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+  });
+
+  it("restores a cleared single component so the live row is removed", () => {
+    // The component write paths read `null` as "delete the existing rows", so
+    // this is a snapshot of a field that was cleared. Dropping it would leave
+    // the live component in place and report a restore that rolled nothing
+    // back.
+    const single = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { hero: null },
+      single,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ hero: null });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("restores a cleared dynamic zone", () => {
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [] },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ blocks: [] });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("still drops a zone whose every instance was filtered out", () => {
+    // The opposite case, which looks identical after filtering: this value had
+    // instances and lost them all, so submitting the empty result would delete
+    // live content the snapshot never meant to clear.
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ _componentType: "carousel", id: "c1" }] },
+      zone,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toContain("blocks");
+  });
+});
+
+describe("buildRestorePayload — shared content under an unknown locale", () => {
+  it("restores a group whose children are text on a localized document", () => {
+    // A group is one JSON column on the main row, so it is shared unless the
+    // group field itself is localized. Classifying it by its text children
+    // would refuse content the write path applies without a locale.
+    const withGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "caption", type: "text" }],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { caption: "Shared" } },
+      withGroup,
+      {
+        hasStatus: true,
+        hasSlug: true,
+        hasTitle: true,
+        documentLocalized: true,
+        localeUnknown: true,
+      }
+    );
+
+    expect(payload).toEqual({ meta: { caption: "Shared" } });
+    expect(droppedFields).toEqual([]);
+  });
+
+  it("still holds back a group that contains a localized component", () => {
+    const withGroup = [
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "hero", type: "component", component: "banner" }],
+      },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf(
+      { banner: [{ name: "heading", type: "text" }] as FieldConfig[] },
+      ["banner"]
+    );
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { meta: { hero: { _componentType: "banner", heading: "Hallo" } } },
+      withGroup,
+      {
+        hasStatus: true,
+        hasSlug: true,
+        hasTitle: true,
+        componentSchemas,
+        documentLocalized: true,
+        localeUnknown: true,
+      }
+    );
+
+    expect(payload).toEqual({});
+    expect(droppedFields).toEqual(["meta"]);
+  });
+
+  it("keeps status when only an embedded component's locale is unknown", () => {
+    // The document is not localized, so its status is a shared main-row value
+    // that needs no locale. Holding it back would refuse a rollback that the
+    // write path could apply.
+    const withComponent = [
+      { name: "hero", type: "component", component: "banner" },
+    ] as FieldConfig[];
+
+    const componentSchemas = componentSchemasOf(
+      { banner: [{ name: "heading", type: "text" }] as FieldConfig[] },
+      ["banner"]
+    );
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { status: "draft", hero: { _componentType: "banner", heading: "Hi" } },
+      withComponent,
+      {
+        hasStatus: true,
+        hasSlug: true,
+        hasTitle: true,
+        componentSchemas,
+        documentLocalized: false,
+        localeUnknown: true,
+      }
+    );
+
+    expect(payload).toEqual({ status: "draft" });
+    expect(droppedFields).toEqual(["hero"]);
+  });
+
+  it("still holds back status on a localized document", () => {
+    const fields = [{ name: "views", type: "number" }] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { status: "published", views: 3 },
+      fields,
+      {
+        hasStatus: true,
+        hasSlug: true,
+        hasTitle: true,
+        documentLocalized: true,
+        localeUnknown: true,
+      }
+    );
+
+    expect(payload).toEqual({ views: 3 });
+    expect(droppedFields).toEqual(["status"]);
+  });
+});
