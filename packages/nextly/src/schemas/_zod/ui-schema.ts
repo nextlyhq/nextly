@@ -388,6 +388,17 @@ function entity(kind?: "collection" | "single" | "component") {
         }
         seen.add(f.name);
       }
+      // Components have no entries of their own — they are embedded in a
+      // collection or single, whose versioning covers them. Accepting the key
+      // here would persist a setting nothing reads and the Builder never
+      // offers.
+      if (kind === "component" && e.versions !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'versions' is not supported on components",
+          path: ["versions"],
+        });
+      }
       // `status` reserved as a field name only when the lifecycle column is on.
       if (e.status === true && e.fields.some(f => f.name === "status")) {
         ctx.addIssue({

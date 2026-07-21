@@ -306,9 +306,28 @@ export default function CollectionBuilderEditPage({
           setPreviewData(null);
           // Refresh the dirty baseline so the unsaved badge clears.
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
-          // Re-pin the settings snapshot too so a settings + fields save
-          // doesn't leave the badge lit afterward.
-          if (settings) setOriginalSettings(settings);
+
+          // The schema apply carries fields only, so a save that changed the
+          // settings as well would clear the dirty badge while the registry
+          // kept the old values. Persist them here, without `fields` so no
+          // second migration is generated for a schema already applied.
+          if (settings) {
+            updateCollection({
+              collectionName: slug,
+              updates: {
+                labels: {
+                  singular: settings.singularName,
+                  plural: settings.pluralName,
+                },
+                description: settings.description,
+                icon: settings.icon,
+                status: settings.status === true,
+                localized: settings.i18n === true,
+                versions: settings.versions === true,
+              },
+            });
+            setOriginalSettings(settings);
+          }
 
           // D-series: database mode also writes the committable ui-schema.json
           // so the entity has a migration record (matches code-first). A
@@ -343,7 +362,14 @@ export default function CollectionBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, settings, builder.fields]
+    [
+      slug,
+      startRestart,
+      stopRestart,
+      settings,
+      builder.fields,
+      updateCollection,
+    ]
   );
 
   // Save settings/labels/hooks (no schema changes path).

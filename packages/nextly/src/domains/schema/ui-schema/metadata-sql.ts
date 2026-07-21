@@ -12,9 +12,11 @@
  * the slug via the shared helpers. `id` is derived deterministically from the
  * slug so the committed SQL is byte-stable.
  *
- * KNOWN LIMITATION (v1): label-only edits produce no DDL operation, so no
- * migration is generated and the label change is not propagated until a schema
- * change co-occurs.
+ * KNOWN LIMITATION (v1): metadata-only edits produce no DDL operation, so no
+ * migration is generated and the change is not propagated until a schema
+ * change co-occurs. This covers labels, and equally the `status`, `localized`
+ * and `versions` flags: flipping one alone leaves the deployed registry row on
+ * its previous value until the next migration for that table.
  *
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
@@ -28,7 +30,7 @@ import {
   toPluralLabel,
   toSingularLabel,
 } from "../../../shared/lib/pluralization";
-import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 
@@ -61,17 +63,14 @@ function jsonLiteral(value: unknown, dialect: Dialect): string {
  * The `versions` column value for a manifest entity.
  *
  * The column holds the resolved config every runtime reader tests, so the
- * manifest's boolean is normalized here rather than stored raw. Unlike the
- * code-first sync this does NOT pass `status` to the resolver: `status: true`
- * aliases to a versioned config for back-compat, which would leave the
- * Builder's switch unable to turn versioning off on any entity that has
- * Draft/Published on.
+ * manifest's boolean is normalized through the same mapping the Builder's write
+ * paths use.
  */
 function versionsLiteral(
   versions: boolean | undefined,
   dialect: Dialect
 ): string {
-  const resolved = resolveVersionsConfig(versions);
+  const resolved = resolveBuilderVersions(versions);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 

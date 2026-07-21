@@ -155,6 +155,56 @@ describe("versions column", () => {
     });
   }
 
+  it("writes NULL for an explicit versions: false alongside status", () => {
+    // The pair matters: `status: true` aliases to a versioned config in the
+    // code-first resolver, so an explicit off has to win over the alias.
+    const explicit = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "posts",
+          status: true,
+          versions: false,
+          fields: [{ name: "t", type: "text" }],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const sql = buildCollectionMetadataUpsert(
+      explicit.collections[0],
+      "sqlite"
+    );
+    expect(sql).toContain('"versions"');
+    expect(sql).not.toContain('"enabled":true');
+  });
+
+  it("rejects versions on a component", () => {
+    // Components hold no entries of their own; their parent's versioning
+    // covers them, so the key would persist a setting nothing reads.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [],
+      singles: [],
+      components: [
+        { slug: "seo", versions: true, fields: [{ name: "t", type: "text" }] },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("stores the switch as history-only, not drafts", () => {
+    // The control records saves so they can be restored and says so; the
+    // code-first default of `true` would additionally turn drafts and autosave
+    // on, which the help text explicitly disclaims.
+    const sql = buildCollectionMetadataUpsert(
+      versioned.collections[0],
+      "sqlite"
+    );
+    expect(sql).toContain('"enabled":true');
+    expect(sql).toMatch(/"drafts":\{[^}]*"enabled":false/);
+  });
+
   it("does not enable versioning just because status is on", () => {
     // `status: true` aliases to a versioned config in the code-first resolver
     // for back-compat. Honouring that here would leave the Builder's switch

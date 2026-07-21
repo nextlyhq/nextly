@@ -241,7 +241,24 @@ export default function SingleBuilderEditPage({
           setShowSchemaDialog(false);
           setPreviewData(null);
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
-          if (settings) setOriginalSettings(settings);
+
+          // The schema apply carries fields only, so a save that changed the
+          // settings as well would clear the dirty badge while the registry
+          // kept the old values. Persist them here, without `fields` so no
+          // second migration is generated for a schema already applied.
+          if (settings) {
+            updateSingle({
+              slug,
+              updates: {
+                label: settings.singularName,
+                description: settings.description,
+                status: settings.status === true,
+                localized: settings.i18n === true,
+                versions: settings.versions === true,
+              },
+            });
+            setOriginalSettings(settings);
+          }
 
           // D-series: database mode also writes the committable ui-schema.json
           // so the single has a migration record. Non-fatal if it fails.
@@ -275,7 +292,7 @@ export default function SingleBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, settings, builder.fields]
+    [slug, startRestart, stopRestart, settings, builder.fields, updateSingle]
   );
 
   // No-schema-change path: persist labels/settings only.

@@ -59,7 +59,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
-import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
+import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -439,6 +439,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // i18n: Internationalization opt-in; persists to dynamic_singles.localized and
             // provisions the companion single_<slug>_locales table.
             localized?: boolean;
+            // Version history opt-in; persists to dynamic_singles.versions.
+            versions?: boolean;
           }
         | undefined;
 
@@ -575,6 +577,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         status: b.status === true,
         // i18n: persist the Internationalization flag so the single reads/writes per language.
         localized: isLocalized,
+        // Persist version history from the create payload; without it a Single
+        // created with the switch on is written unversioned and the switch
+        // reads as off the moment the editor loads.
+        versions: resolveBuilderVersions(b.versions),
         schemaHash,
         migrationStatus,
       });
@@ -876,7 +882,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // resolver: it aliases to a versioned config for back-compat, which would
       // stop the toggle from turning versioning off on a Draft/Published single.
       if (b.versions !== undefined) {
-        updateData.versions = resolveVersionsConfig(b.versions);
+        updateData.versions = resolveBuilderVersions(b.versions);
       }
       const wasLocalized = existing.localized === true;
       const isLocalized =

@@ -17,7 +17,7 @@ import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec"
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
-import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { resolveBuilderVersions } from "../../versions/builder-versions";
 
 import {
   DynamicCollectionRegistryService,
@@ -77,6 +77,8 @@ export interface CreateCollectionInput {
    * omitted from the main table and a companion `<table>_locales` table is created.
    */
   localized?: boolean;
+  /** Whether every save is recorded as a restorable version. */
+  versions?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -218,6 +220,10 @@ export class DynamicCollectionService extends BaseService {
       // i18n: persist the localized flag so the read/write path routes translatable
       // fields to the companion table and the admin shows per-language editing.
       localized: data.localized === true,
+      // Persist version history from the create payload; without it a
+      // collection created with the switch on is written unversioned and the
+      // switch reads as off the moment the editor loads.
+      versions: resolveBuilderVersions(data.versions),
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -392,7 +398,7 @@ export class DynamicCollectionService extends BaseService {
     // it aliases to a versioned config for back-compat, which would stop the
     // toggle from ever turning versioning off on a Draft/Published entity.
     if (updates.versions !== undefined) {
-      metadataUpdates.versions = resolveVersionsConfig(updates.versions);
+      metadataUpdates.versions = resolveBuilderVersions(updates.versions);
     }
 
     let migrationSQL: string | null = null;

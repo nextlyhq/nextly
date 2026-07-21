@@ -25,7 +25,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -212,7 +212,7 @@ export const PATCH = withErrorHandler(
     // stop the toggle from turning versioning off on a Draft/Published
     // collection.
     if (body.versions !== undefined) {
-      updateData.versions = resolveVersionsConfig(body.versions === true);
+      updateData.versions = resolveBuilderVersions(body.versions === true);
     }
 
     // Admin fields: support both nested admin object and flat top-level

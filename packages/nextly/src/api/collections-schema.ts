@@ -21,7 +21,7 @@ import { z } from "zod";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
@@ -277,7 +277,7 @@ export const POST = withErrorHandler(async (request: Request) => {
     localized: validated.localized === true,
     // Version history opt-in, normalized to the resolved config the column
     // holds and every runtime reader tests.
-    versions: resolveVersionsConfig(validated.versions),
+    versions: resolveBuilderVersions(validated.versions),
     schemaHash,
     hooks: validated.hooks,
   });
