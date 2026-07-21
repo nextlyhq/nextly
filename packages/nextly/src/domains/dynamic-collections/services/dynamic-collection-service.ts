@@ -154,6 +154,24 @@ export class DynamicCollectionService extends BaseService {
         ],
       });
     }
+    // Element shape matters too: the array is normalised with `f.name
+    // .toLowerCase()` below, before field validation runs, so an element
+    // without a string name throws the same untyped TypeError the checks
+    // above exist to prevent.
+    const malformed = data.fields.findIndex(
+      f => typeof (f as { name?: unknown })?.name !== "string"
+    );
+    if (malformed !== -1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields[${malformed}].name`,
+            code: "REQUIRED",
+            message: "Each field requires a name.",
+          },
+        ],
+      });
+    }
 
     const normalizedName = data.name.toLowerCase();
     const tableName = `dc_${normalizedName}`;
@@ -447,6 +465,37 @@ export class DynamicCollectionService extends BaseService {
     );
 
     if (updates.fields) {
+      // Same caller-controlled dereference as the create path: the update
+      // body arrives unvalidated and is normalised through `f.name
+      // .toLowerCase()` before field validation runs, so a field without a
+      // string name throws an untyped TypeError instead of reporting the
+      // client error it is.
+      if (!Array.isArray(updates.fields)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "REQUIRED",
+              message: "Fields must be an array.",
+            },
+          ],
+        });
+      }
+      const malformedUpdate = updates.fields.findIndex(
+        f => typeof (f as { name?: unknown })?.name !== "string"
+      );
+      if (malformedUpdate !== -1) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `fields[${malformedUpdate}].name`,
+              code: "REQUIRED",
+              message: "Each field requires a name.",
+            },
+          ],
+        });
+      }
+
       const normalizedFields = updates.fields.map(f => ({
         ...f,
         name: f.name.toLowerCase(),

@@ -56,6 +56,32 @@ describe("generateCollection request validation", () => {
     expect((err as NextlyError).statusCode).toBe(400);
   });
 
+  it("rejects a field element with no name, which is normalised before validation", async () => {
+    // `fields: [{}]` reaches `f.name.toLowerCase()` during normalisation,
+    // which runs before field validation — the same shape as the missing
+    // top-level name, one level down.
+    const err = await service()
+      .generateCollection({ name: "posts", fields: [{}] } as unknown as Input)
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).statusCode).toBe(400);
+    expect(err).not.toBeInstanceOf(TypeError);
+  });
+
+  it("reports which field element was malformed", async () => {
+    const err = await service()
+      .generateCollection({
+        name: "posts",
+        fields: [{ name: "ok" }, {}],
+      } as unknown as Input)
+      .catch((e: unknown) => e);
+
+    expect(JSON.stringify((err as NextlyError).publicData)).toContain(
+      "fields[1].name"
+    );
+  });
+
   it("rejects a body whose fields are not an array", async () => {
     const err = await service()
       .generateCollection({ name: "posts" } as unknown as Input)
