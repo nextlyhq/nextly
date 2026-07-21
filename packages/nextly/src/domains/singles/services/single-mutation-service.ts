@@ -55,6 +55,7 @@ import {
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { tagComponentTypes } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import type {
@@ -584,10 +585,6 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
-                        // Record each instance's component type — see the
-                        // collection snapshot for why an ordinary read omits it
-                        // and a snapshot cannot afford to.
-                        includeComponentType: true,
                         // Read as the locale the components were written at,
                         // with no fallback, so an embedded localized component
                         // records this language's text rather than another's
@@ -645,7 +642,12 @@ export class SingleMutationService extends BaseService {
                   (updatePayload as { status?: unknown }).status ??
                   companionStatus ??
                   (parentRow as { status?: unknown }).status,
-                parts: { parentRow, components },
+                // Tagged for the snapshot alone: the same component values
+                // feed the outbox event, whose payload is read shape.
+                parts: {
+                  parentRow,
+                  components: tagComponentTypes(components, fieldConfigs),
+                },
                 createdBy: options.user?.id ?? null,
                 // Labelled with a locale only when locale-specific state was
                 // actually captured. A localized Single routes every write

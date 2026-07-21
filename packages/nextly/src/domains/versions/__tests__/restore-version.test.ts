@@ -585,6 +585,23 @@ describe("restoreVersion", () => {
     });
   });
 
+  it("gives the read probe the document id it is keyed on", async () => {
+    // `id` is stripped from the payload as immutable, but a read rule keyed on
+    // the document would then run with none and hide fields the same caller can
+    // see in version history — making restore stricter than the endpoint the
+    // snapshot came from.
+    let seenId: unknown;
+    vi.mocked(applyFieldReadAccess).mockImplementation(
+      async ({ entry }: { entry: Record<string, unknown> }) => {
+        seenId = entry.id;
+      }
+    );
+
+    await restoreVersion(base);
+
+    expect(seenId).toBe("e1");
+  });
+
   it("refuses to restore when versioning has been turned off", async () => {
     // The write goes through the ordinary update, which captures a version only
     // while versioning is on. Restoring anyway would overwrite live content
