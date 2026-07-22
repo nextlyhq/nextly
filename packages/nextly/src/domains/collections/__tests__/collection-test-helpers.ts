@@ -140,6 +140,10 @@ export function createMockAdapter(db: MockRecord): MockRecord {
     delete: vi.fn().mockResolvedValue(undefined),
     selectOne: vi.fn().mockResolvedValue(null),
     select: vi.fn().mockResolvedValue([]),
+    // Raw SQL escape hatch used by the localized-write paths (companion table
+    // existence probe and per-locale `_status` reads). Empty by default; a
+    // localized test overrides it.
+    executeQuery: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -192,6 +196,9 @@ export function createMockFileManager(
 ): MockRecord {
   return {
     loadDynamicSchema: vi.fn().mockResolvedValue(schema),
+    // Non-localized by default: the write paths ask for a companion schema
+    // before splitting localized values, and `null` means "no companion".
+    loadCompanionSchema: vi.fn().mockResolvedValue(null),
   };
 }
 

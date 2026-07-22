@@ -29,3 +29,10 @@ on every collection write path, including single updates, batch updates,
 creating a document directly as published, and the publish-all-languages action.
 A caller with only update can still edit and save drafts, but can no longer make
 content public. Trusted server writes (overrideAccess) are unaffected.
+
+The check runs against the final status the write will store, so a beforeCreate
+or beforeUpdate hook that derives `status: "published"` still requires the
+permission, and it is scoped to the value actually written — a per-locale
+translation is gated on that locale's own published state, and a collection
+without the draft/published lifecycle never demands the permission for an
+ordinary field named `status`.
