@@ -79,7 +79,7 @@ export const _envSchema = z
       console.warn(
         "⚠️  CRON_SECRET is shorter than 32 characters and will NOT be accepted " +
           "as a webhook drain secret. Use a >= 32-char value (or NEXTLY_DRAIN_SECRET) " +
-          "if you rely on /api/webhooks/drain."
+          "if you rely on the webhooks drain route to authorize scheduled runs."
       );
     }
 

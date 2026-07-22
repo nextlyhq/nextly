@@ -24,6 +24,8 @@ import type { DeliverTransport } from "../deliver";
 import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { buildEnvelope } from "../envelope";
 import { recordEvent } from "../record-event";
+import type { ResolvedWebhookRetentionConfig } from "../retention-config";
+import type { RetentionGateStore } from "../retention-gate";
 import { runWebhookDrain } from "../drain-runner";
 
 process.env.DB_DIALECT = "sqlite";
@@ -133,6 +135,95 @@ describe("runWebhookDrain (real SQLite)", () => {
     expect(result.delivered).toBe(1);
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://example.com/wh1");
+  });
+
+  it("bounds one invocation to the batch and resumes on the next", async () => {
+    // A latency-bounded trigger (a cron tick) caps its work so a single request
+    // stays within its platform limit; the durable outbox lets the next tick
+    // finish the rest. Three due deliveries, a batch of two and a single round:
+    // exactly two are attempted now and the third waits.
+    await seedWebhook("wh1");
+    await seedEvent("evt_1");
+    await seedEvent("evt_2");
+    await seedEvent("evt_3");
+    const { transport, calls } = makeTransport(200);
+
+    const first = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: () => NOW,
+      decryptSecret: ct => ct,
+      maxRounds: 1,
+      deliverBatchSize: 2,
+    });
+
+    // The round fans every due event out, but delivery is capped at the batch.
+    expect(first.deliveriesCreated).toBe(3);
+    expect(first.attempted).toBe(2);
+    expect(calls).toHaveLength(2);
+
+    const second = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: () => NOW,
+      decryptSecret: ct => ct,
+      deliverBatchSize: 2,
+    });
+
+    // The next tick delivers the remaining one; nothing is lost or double-sent.
+    expect(second.delivered).toBe(1);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("runs the retention pass when a policy is supplied", async () => {
+    // The cron trigger is the only prune trigger a write-quiescent install has,
+    // so a supplied retention policy must reach the gate. A stub gate that
+    // declines the claim isolates this to "the drain consulted retention" — the
+    // prune effect itself is covered by the prune/gate/config suites.
+    await seedWebhook("wh1");
+    await seedEvent("evt_r");
+    const { transport } = makeTransport(200);
+
+    let claims = 0;
+    const gate: RetentionGateStore = {
+      claim: async () => {
+        claims += 1;
+        return false;
+      },
+    };
+    const policy: ResolvedWebhookRetentionConfig = {
+      eventsMaxAgeMs: 1,
+      auditEventsMaxAgeMs: 1,
+      deliveriesMaxAgeMs: 1,
+      batchSize: 50,
+      maxBatchesPerRun: 5,
+      intervalMs: 1000,
+    };
+
+    const result = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: () => NOW,
+      decryptSecret: ct => ct,
+      retention: { policy, prune: { adapter, now: () => NOW }, gate },
+    });
+
+    // The gate was consulted exactly once (after the queue quiesced); the
+    // declined claim leaves nothing pruned this call.
+    expect(claims).toBe(1);
+    expect(result.pruned).toEqual({ events: 0, deliveries: 0 });
+  });
+
+  it("skips retention when no policy is supplied", async () => {
+    // Without a policy the drain must not touch the gate at all.
+    await seedWebhook("wh1");
+    await seedEvent("evt_n");
+    const { transport } = makeTransport(200);
+
+    const result = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: () => NOW,
+      decryptSecret: ct => ct,
+    });
+
+    expect(result.pruned).toEqual({ events: 0, deliveries: 0 });
   });
 
   it("is a no-op when there are no endpoints", async () => {

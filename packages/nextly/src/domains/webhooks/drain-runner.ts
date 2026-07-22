@@ -40,6 +40,18 @@ export interface RunWebhookDrainOptions {
   now?: () => Date;
   /** Max fan-out/deliver rounds before returning. */
   maxRounds?: number;
+  /**
+   * Events fanned out per round. Lowering it (with `maxRounds`) is how a
+   * latency-bounded trigger — a serverless cron tick — caps the work one
+   * invocation does; the outbox is durable, so the next tick continues.
+   */
+  fanOutBatchSize?: number;
+  /**
+   * Deliveries attempted per round. Attempts run sequentially with a per-request
+   * timeout, so this is the main lever a cron trigger uses to keep a single tick
+   * within its platform's execution limit; unclaimed rows wait for the next tick.
+   */
+  deliverBatchSize?: number;
   /** Retention housekeeping, when the caller has a policy + gate to run it. */
   retention?: RunDrainDeps["retention"];
   /**
@@ -67,12 +79,14 @@ export function runWebhookDrain(
       // pass rather than the next cache expiry.
       loadEndpoints: () => registry.getEnabledEndpoints(),
       now: options?.now,
+      batchSize: options?.fanOutBatchSize,
     },
     deliver: {
       db: adapter,
       decryptSecret: options?.decryptSecret ?? decryptWebhookSecret,
       transport: options?.transport,
       now: options?.now,
+      batchSize: options?.deliverBatchSize,
     },
     maxRounds: options?.maxRounds,
     retention: options?.retention,

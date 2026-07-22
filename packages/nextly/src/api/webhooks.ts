@@ -37,6 +37,7 @@ import { container } from "../di";
 import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
 import {
   runWebhookDrain,
+  type RunWebhookDrainOptions,
   type WebhookDrainDatabase,
 } from "../domains/webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../domains/webhooks/endpoint-registry";
@@ -142,6 +143,20 @@ function denySessionOnly(
  */
 const MIN_DRAIN_SECRET_LENGTH = 32;
 
+/**
+ * Per-invocation work bounds for the cron/manual drain trigger. A scheduler tick
+ * runs inside a platform execution limit (Vercel Cron functions default to tens
+ * of seconds), so one request must NOT try to drain an unbounded backlog: it
+ * fans out and delivers a bounded slice and returns, and the next tick continues
+ * where this one left off (the outbox is durable and claims are leased). These
+ * cap the common case; a burst of slow/dead receivers is bounded further by the
+ * delivery lease, which frees a stuck row for a later tick. The per-request
+ * timeout is deliberately left at the engine default so a legitimately slow
+ * receiver is retried, not false-failed.
+ */
+const DRAIN_MAX_ROUNDS = 10;
+const DRAIN_DELIVER_BATCH = 25;
+
 /** The bearer token on the request, or null when there is no bearer header. */
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -229,8 +244,19 @@ export const drainWebhooks = withErrorHandler(
     const registry = container.get<WebhookEndpointRegistry>(
       "webhookEndpointRegistry"
     );
+    // Retention runs after delivery so a cron-only install still prunes its
+    // event/delivery ledger; `undefined` when the operator disabled retention,
+    // in which case the drain skips pruning entirely.
+    const retention = container.get<RunWebhookDrainOptions["retention"]>(
+      "webhookRetentionDeps"
+    );
 
-    const result = await runWebhookDrain(adapter, registry);
+    const result = await runWebhookDrain(adapter, registry, {
+      // Bound the work one scheduler tick performs; the next tick continues.
+      maxRounds: DRAIN_MAX_ROUNDS,
+      deliverBatchSize: DRAIN_DELIVER_BATCH,
+      retention,
+    });
     // A POST/GET trigger with fan-out + delivery side effects: return the
     // canonical mutation envelope with the drain summary as the item.
     return respondMutation("Webhook drain completed.", result);

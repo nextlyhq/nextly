@@ -12,10 +12,12 @@
  * expired.
  */
 
+import type { RunWebhookDrainOptions } from "../../domains/webhooks/drain-runner";
 import {
   WebhookEndpointRegistry,
   type WebhookEndpointReader,
 } from "../../domains/webhooks/endpoint-registry";
+import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
 import { container } from "../container";
@@ -60,5 +62,24 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   container.registerSingleton<WebhookDeliveryQueryService>(
     "webhookDeliveryQueryService",
     () => new WebhookDeliveryQueryService(adapter, logger)
+  );
+
+  // Retention deps the drain route runs after delivery. Content writes already
+  // offer a retention pass (register-collections.ts), but an install driven only
+  // by the cron drain never writes on that path, so the drain must be able to
+  // prune too. The gate is DB-backed, so this instance and the content-write
+  // runner's coordinate through the same persisted claim — the interval holds
+  // whichever fires first, and the other's pass is a no-op. `undefined` when the
+  // operator switched retention off (or no app config was supplied).
+  container.registerSingleton<RunWebhookDrainOptions["retention"]>(
+    "webhookRetentionDeps",
+    () =>
+      ctx.config.webhookRetention
+        ? {
+            policy: ctx.config.webhookRetention,
+            prune: { adapter, logger },
+            gate: new MetaRetentionGate(adapter),
+          }
+        : undefined
   );
 }

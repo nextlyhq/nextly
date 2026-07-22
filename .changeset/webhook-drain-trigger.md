@@ -22,10 +22,14 @@
 
 Fire due webhook deliveries with a drain trigger.
 
-Adds `/api/webhooks/drain` (GET or POST): one request fans out due events into
-deliveries and attempts them, so a scheduler (e.g. Vercel Cron, which triggers
-with a GET) can drive delivery and retries. Until now the delivery engine had no
-production trigger and the event outbox accumulated rows nothing sent.
+Adds a `webhooks/drain` route (GET or POST): one request fans out due events
+into deliveries and attempts them, so a scheduler (e.g. Vercel Cron, which
+triggers with a GET) can drive delivery and retries. Until now the delivery
+engine had no production trigger and the event outbox accumulated rows nothing
+sent. The route resolves under wherever you mount the Nextly catch-all handler;
+in the generated app templates that is `/admin/api`, so the scheduler should hit
+`/admin/api/webhooks/drain`. Each invocation does a bounded slice of work and the
+next tick continues, so it stays within a serverless execution limit.
 
 The route is authorized by a shared secret presented as a bearer token
 (constant-time compare) — either `NEXTLY_DRAIN_SECRET` or Vercel's `CRON_SECRET`
