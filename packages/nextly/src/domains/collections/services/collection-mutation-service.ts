@@ -36,6 +36,7 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { resolvePublishTransition } from "../../../lib/status-transition";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
@@ -1257,6 +1258,21 @@ export class CollectionMutationService extends BaseService {
         return accessDenied;
       }
 
+      // Creating a document directly as published is a publish, so it needs the
+      // publish permission on top of create. Previous status is null — nothing
+      // existed to publish from.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus: null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       // Get collection metadata to identify relation fields and hooks
       // Note: For create operations, we use the adapter directly with the table name,
       // so we don't need the Drizzle schema. The fields metadata from the collection
@@ -2009,6 +2025,20 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) return accessDenied;
 
+      // This method exists to publish every locale, so it is unconditionally a
+      // publish and needs the publish permission on top of update — checked
+      // directly rather than via a transition, since it publishes companion
+      // locales even when the main row is already published.
+      const publishDenied = await this.accessService.checkCollectionAccess(
+        params.collectionName,
+        "publish",
+        accessUser,
+        params.entryId,
+        existingEntry,
+        params.overrideAccess
+      );
+      if (publishDenied) return publishDenied;
+
       const hasMainStatus = "status" in schema;
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
@@ -2275,6 +2305,47 @@ export class CollectionMutationService extends BaseService {
     return denied === null;
   }
 
+  /**
+   * Additionally authorize a write that changes a document's published state.
+   *
+   * Publishing is an ordinary write that sets `status: "published"`, so the
+   * `update`/`create` gate a path already ran does not distinguish it. A move
+   * into published needs `publish`, a move out of it needs `unpublish`, and
+   * both are ON TOP of the write permission — editing and publishing are
+   * separate capabilities. A write that is not a transition returns `null` and
+   * nothing extra is required.
+   *
+   * Keyed on the main-row status, which decides whether the document is
+   * publicly visible at all. Per-locale companion `_status` transitions on a
+   * non-default locale are a separate, narrower case handled elsewhere.
+   */
+  private async checkStatusTransitionAccess(args: {
+    collectionName: string;
+    previousStatus: string | null;
+    nextStatus: unknown;
+    accessUser?: UserContext;
+    entryId?: string;
+    document?: Record<string, unknown>;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+  }): Promise<CollectionServiceResult | null> {
+    const operation = resolvePublishTransition(
+      args.previousStatus,
+      args.nextStatus
+    );
+    if (!operation) return null;
+
+    return this.accessService.checkCollectionAccess(
+      args.collectionName,
+      operation,
+      args.accessUser,
+      args.entryId,
+      args.document,
+      args.overrideAccess,
+      args.routeAuthorized
+    );
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
@@ -2347,6 +2418,26 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) {
         return accessDenied;
+      }
+
+      // A patch that moves the document into or out of published needs the
+      // publish/unpublish permission on top of update. Keyed on the loaded
+      // row's status against the incoming one.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus:
+          ((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser,
+        entryId: params.entryId,
+        document: existingEntry,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
       }
 
       // Get collection metadata to identify relation fields and hooks
@@ -3712,6 +3803,18 @@ export class CollectionMutationService extends BaseService {
         return accessDenied;
       }
 
+      // Creating directly as published needs the publish permission too.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus: null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser: params.user,
+        routeAuthorized: params.routeAuthorized,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -4103,6 +4206,23 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) {
         return accessDenied;
+      }
+
+      // A status transition inside this transactional update needs the
+      // publish/unpublish permission on top of update.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus:
+          ((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser: params.user,
+        entryId: params.entryId,
+        document: existingEntry,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
       }
 
       // Shared context between all hooks in this request
@@ -4685,6 +4805,21 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
+      // The bulk create worker inserts status like any other field. Creating
+      // directly as published needs the publish permission, the same as a
+      // single create — otherwise a batch create is a way around it.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus: null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       let currentData: Record<string, unknown> = { ...body };
 
       // Shared context between all hooks in this request
@@ -5121,6 +5256,27 @@ export class CollectionMutationService extends BaseService {
             data: null,
           };
         }
+      }
+
+      // The Direct-API batch worker writes status like any other field but ran
+      // no publish gate — the one path where a status transition could reach the
+      // database on `update` alone. Enforce it here against the loaded row, so a
+      // bulk update cannot publish what a single update could not.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        previousStatus:
+          ((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null,
+        nextStatus: (body as { status?: unknown }).status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        entryId,
+        document: existingEntry,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
       }
 
       let currentData: Record<string, unknown> = { ...body };

@@ -600,3 +600,126 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
   });
 });
+
+// ── Publish-lifecycle transition access ─────────────────────────────────────
+//
+// Publishing is an ordinary write that sets status: "published", so the update
+// gate does not distinguish it. A write that moves a document into or out of
+// published needs the publish/unpublish permission ON TOP of update.
+describe("publish-transition access control", () => {
+  // evaluateAccess is the gate this harness controls; allow update, deny the
+  // named lifecycle op, so only the transition check can fail.
+  const allowUpdateDeny = (op: "publish" | "unpublish") => {
+    const acs = createMockAccessControlService();
+    acs.evaluateAccess.mockImplementation((_rules, operation) =>
+      Promise.resolve(
+        operation === op
+          ? { allowed: false, reason: `Cannot ${op}` }
+          : { allowed: true }
+      )
+    );
+    return acs;
+  };
+
+  it("denies updateEntry that moves a draft to published without publish", async () => {
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { status: "published" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("denies unpublishing without the unpublish permission", async () => {
+    const acs = allowUpdateDeny("unpublish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "published" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { status: "draft" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("does not require publish for an edit that keeps status published", async () => {
+    // A caller with update but not publish can still edit a live document, as
+    // long as they are not changing whether it is published.
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "published" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { title: "Edited, still published", status: "published" }
+    );
+
+    // The transition check never fires (no move), so the publish denial is
+    // never consulted; the write proceeds past access control.
+    expect(result.statusCode).not.toBe(403);
+  });
+
+  it("does not require publish for a patch that omits status", async () => {
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { title: "Just a title" }
+    );
+
+    expect(result.statusCode).not.toBe(403);
+  });
+
+  it("denies creating a document directly as published without publish", async () => {
+    const acs = allowUpdateDeny("publish");
+    const { service } = buildService({ accessControlService: acs });
+
+    const result = await service.createEntry(
+      { collectionName: "posts", user: { id: "user-1" } },
+      { title: "New", status: "published" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("allows creating a draft without publish", async () => {
+    const acs = allowUpdateDeny("publish");
+    const { service } = buildService({ accessControlService: acs });
+
+    const result = await service.createEntry(
+      { collectionName: "posts", user: { id: "user-1" } },
+      { title: "New draft", status: "draft" }
+    );
+
+    expect(result.statusCode).not.toBe(403);
+  });
+
+  it("bypasses the transition check under overrideAccess", async () => {
+    // A trusted server write publishes without a publish permission, exactly as
+    // it updates without an update permission.
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        overrideAccess: true,
+      },
+      { status: "published" }
+    );
+
+    expect(result.statusCode).not.toBe(403);
+  });
+});
