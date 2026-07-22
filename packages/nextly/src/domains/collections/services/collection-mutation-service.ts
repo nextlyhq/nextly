@@ -2543,11 +2543,26 @@ export class CollectionMutationService extends BaseService {
     if (args.nextStatus === undefined) return null;
     let lockedStatus: string | null = null;
     if (!args.isCreate && args.entryId) {
-      await tx.lockRow(args.tableName, args.entryId);
-      const locked = await tx.selectOne<{ status?: unknown }>(args.tableName, {
-        where: this.whereEq("id", args.entryId),
-      });
-      lockedStatus = (locked?.status as string | undefined) ?? null;
+      // Read the committed status UNDER a row lock, in the SAME query that takes
+      // the lock. A separate plain read would, on MySQL's repeatable-read
+      // isolation, return this transaction's snapshot — established by the
+      // caller's earlier pre-lock fetch of the row — and so miss a concurrent
+      // writer's publish/unpublish committed since, leaving the TOCTOU window
+      // open on MySQL. A `FOR UPDATE` read always sees the latest committed row.
+      // SQLite has no `FOR UPDATE` and needs none: its transactions open with
+      // `BEGIN IMMEDIATE`, which serializes writers, so its committed read is
+      // already current. (Raw `tx.execute` is the same mechanism the UPDATE in
+      // this file uses, so the read runs on the transaction's own connection.)
+      const isMysql = this.dialect === "mysql";
+      const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+      const placeholder = this.dialect === "postgresql" ? "$1" : "?";
+      const forUpdate = this.dialect === "sqlite" ? "" : " FOR UPDATE";
+      const rows = await tx.execute<{ status?: unknown }>(
+        `SELECT ${quoteId("status")} FROM ${quoteId(args.tableName)} ` +
+          `WHERE ${quoteId("id")} = ${placeholder}${forUpdate}`,
+        [args.entryId]
+      );
+      lockedStatus = (rows[0]?.status as string | undefined) ?? null;
     }
     const op = resolvePublishTransition(lockedStatus, args.nextStatus);
     if (!op) return null;
