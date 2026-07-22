@@ -27,12 +27,19 @@
  * @module api/webhooks
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { z } from "zod";
 
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
+import {
+  runWebhookDrain,
+  type WebhookDrainDatabase,
+} from "../domains/webhooks/drain-runner";
+import type { WebhookEndpointRegistry } from "../domains/webhooks/endpoint-registry";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -42,6 +49,7 @@ import {
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
+import { env } from "../shared/lib/env";
 
 import { readJsonBody } from "./read-json-body";
 import {
@@ -126,6 +134,69 @@ function denySessionOnly(
     logContext: { reason: "session-only", action },
   });
 }
+
+/** The bearer token on the request, or null when there is no bearer header. */
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization");
+  if (!header) return null;
+  const [scheme, token] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && token ? token : null;
+}
+
+/**
+ * Constant-time string compare. Both sides are hashed to a fixed length first so
+ * `timingSafeEqual` never throws on a length mismatch and the comparison leaks
+ * neither the secret's length nor its content through timing.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a).digest();
+  const bh = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ah, bh);
+}
+
+/**
+ * Authorize a drain trigger. The cron path matches the shared drain secret
+ * presented as a bearer token (Vercel Cron sends `Authorization: Bearer
+ * <CRON_SECRET>`); constant-time so it leaks nothing. Anything else must be an
+ * authenticated caller able to manage webhooks — a non-matching bearer simply
+ * falls through to be tried as an API key by the permission check.
+ */
+async function authorizeDrain(request: Request): Promise<void> {
+  const secret = env.NEXTLY_DRAIN_SECRET;
+  const presented = bearerToken(request);
+  if (secret && presented && constantTimeEqual(presented, secret)) return;
+  const authResult = await requireWebhookPermission(request, "update");
+  if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+}
+
+/**
+ * Run one webhook drain: fan out due events into deliveries and attempt the due
+ * deliveries. Idempotent and safe to call repeatedly — a scheduler (e.g. Vercel
+ * Cron) POSTs here on an interval; retries are advanced on later calls.
+ *
+ * Auth: the shared `NEXTLY_DRAIN_SECRET` (bearer, constant-time) OR an
+ * authenticated admin/API-key caller with `update-webhooks`. Not session-only:
+ * a scheduler has no session.
+ *
+ * Response: the drain summary (rounds, events processed, deliveries created,
+ * attempted/delivered/retried/failed) via `respondData`.
+ */
+export const drainWebhooks = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    await authorizeDrain(request);
+
+    await getCachedNextly();
+    // The runtime adapter satisfies the fan-out + delivery database surfaces;
+    // resolve it as exactly that from the container.
+    const adapter = container.get<WebhookDrainDatabase>("adapter");
+    const registry = container.get<WebhookEndpointRegistry>(
+      "webhookEndpointRegistry"
+    );
+
+    const result = await runWebhookDrain(adapter, registry);
+    return respondData({ ...result });
+  }
+);
 
 /**
  * List every registered webhook endpoint.

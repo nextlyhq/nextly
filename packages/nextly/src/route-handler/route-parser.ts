@@ -1778,6 +1778,21 @@ function parseWebhookRoutes(
     };
   }
 
+  // POST /api/webhooks/drain → run one drain pass (cron or manual trigger).
+  // "drain" is a reserved operation path, not an endpoint id: endpoint ids are
+  // generated UUIDs and cannot collide with it, and no other route posts to an
+  // endpoint id.
+  if (id === "drain" && !subresource) {
+    if (httpMethod !== "POST") return null;
+    // No `operation`: the webhook handler dispatches on `method` and does its
+    // own authorization, and a drain is not one of the CRUD OperationTypes.
+    return {
+      service: "webhooks",
+      method: "drainWebhooks",
+      routeParams,
+    };
+  }
+
   if (id && subresource === "secret") {
     // GET /api/webhooks/:id/secret → reveal active signing secrets.
     // Its own path rather than a field on the document, so the route can

@@ -39,6 +39,11 @@ export const _envSchema = z
 
     // Nextly auth secret (required in production, min 32 chars)
     NEXTLY_SECRET: z.string().optional(),
+    // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
+    // drain route. Optional: when unset, the drain route can still be triggered
+    // by an authenticated admin/API-key call, but unattended cron triggering is
+    // disabled. Compared in constant time at the route.
+    NEXTLY_DRAIN_SECRET: z.string().optional(),
     // Additional allowed origins for CSRF validation (comma-separated)
     NEXTLY_ALLOWED_ORIGINS: z.string().optional(),
 
