@@ -85,6 +85,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Block until a backend is parked waiting on a lock for this table. Releasing the
+// gate only after Writer A is observably blocked on Writer B's row lock makes the
+// race deterministic: A has already taken its pre-lock read and is now waiting on
+// the FOR UPDATE, so it cannot instead observe B's committed change up front and
+// skip the under-lock path. Postgres-only, matching the single concurrency leg.
+async function waitForLockWaiter(adapter: TestAdapter): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const rows = await adapter.executeQuery<{ n: number }>(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE wait_event_type = 'Lock' AND query LIKE $1`,
+      [`%${TABLE}%`]
+    );
+    if ((rows[0]?.n ?? 0) > 0) return;
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for a lock waiter on ${TABLE}`);
+}
+
 const whereId = (id: string) => ({
   and: [{ column: "id", op: "=" as const, value: id }],
 });
@@ -173,8 +191,9 @@ for (const leg of LEGS) {
           [{ id, data: { status: "draft" } }]
         );
 
-        // Let A reach its lock and block behind B before B commits.
-        await sleep(500);
+        // Wait until A is observably parked on B's row lock (not a fixed sleep),
+        // so A has already read `draft` and is blocked before B commits.
+        await waitForLockWaiter(handle.adapter);
 
         gate.resolve();
         await bTx;
@@ -248,7 +267,11 @@ for (const leg of LEGS) {
           [{ id, data: { status: "published" } }]
         );
 
-        await sleep(500);
+        // Release the gate only once A is observably blocked on B's row lock, so
+        // A's pre-lock read has already seen the row and it is parked on the FOR
+        // UPDATE — it cannot instead observe the committed delete and skip the
+        // under-lock guard.
+        await waitForLockWaiter(handle.adapter);
 
         gate.resolve();
         await bTx;
