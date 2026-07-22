@@ -2,7 +2,6 @@ import { vi } from "vitest";
 
 import type { Logger } from "../../../services/shared";
 
- 
 type MockRecord = Record<string, any>;
 
 export function createSilentLogger(): Logger {
@@ -25,6 +24,8 @@ export function createSilentLogger(): Logger {
  * - delete() → undefined
  * - tableExists() → true
  * - executeQuery() → undefined
+ * - getDrizzle() → a stub whose `.delete().where()` resolves to `{ rowCount: 0 }`
+ * - listTables() → [] (no component tables for the embedded-component sweep to scan)
  *
  * Override any method via the `overrides` parameter.
  */
@@ -50,6 +51,17 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     tableExists: vi.fn().mockResolvedValue(true),
     executeQuery: vi.fn().mockResolvedValue(undefined),
     getDialect: vi.fn().mockReturnValue("postgresql"),
+    // Empty catalog by default, so the embedded-component sweep on entity delete finds
+    // no component tables to scan. Override with table names to exercise that path.
+    listTables: vi.fn().mockResolvedValue([]),
+    // Drizzle query-builder handle, used by the ORM-path writes the adapter methods above
+    // don't cover — currently the `nextly_i18n_archive` purge on entity delete. Resolves to
+    // a driver-shaped result so the caller's row-count read finds a number.
+    getDrizzle: vi.fn().mockReturnValue({
+      delete: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }),
     ...overrides,
   };
 }

@@ -853,7 +853,14 @@ ${allColumnDefs.join(",\n")}
         ? `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)};`
         : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`;
 
+    // The localized companion is excluded from the schema pipeline, so nothing else in a
+    // replayed migration would remove it. It carries an FK to `<main>.id` and therefore has
+    // to be dropped BEFORE the main table. IF EXISTS keeps this a no-op for collections that
+    // were never localized, and for the API delete path that already tore it down in-process.
+    const dropCompanionStatement = `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`;
+
     const migrationSQL = `-- Drop dynamic collection: ${collectionName}
+${dropCompanionStatement}
 ${dropStatement}`;
 
     return {

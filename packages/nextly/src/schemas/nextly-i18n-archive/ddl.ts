@@ -8,6 +8,11 @@
  * via `getCoreSchema` + boot-apply. `id` is DB-generated (autoincrement / serial), so
  * archival `INSERT ... SELECT` never has to synthesize a key.
  *
+ * Every statement here MUST be safe to re-apply: the dispatchers run this before each
+ * localization disable with no error handling, so one non-idempotent statement breaks
+ * disabling permanently. `ddl-idempotency.integration.test.ts` applies it repeatedly on
+ * all three dialects to hold that.
+ *
  * @module schemas/nextly-i18n-archive/ddl
  */
 

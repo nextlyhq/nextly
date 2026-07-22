@@ -14,7 +14,9 @@ import type { CollectionFileManager } from "../../../services/collection-file-ma
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
+import { teardownEntityComponentData } from "../../components/services/teardown-entity-component-data";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -807,6 +809,26 @@ export class CollectionMetadataService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
+
+      // Embedded component instances live in `comp_<slug>` tables keyed by a plain
+      // `_parent_table` string with no FK, so dropping this collection's table cascades
+      // nothing and would strand every instance. Sweep them (and any nested instances)
+      // before the drop.
+      await teardownEntityComponentData({
+        adapter: this.adapter,
+        parentTable: collection.tableName,
+      });
+
+      // Tear down the localization artifacts in-process, before the main table goes.
+      // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
+      // companion holds an FK to `<main>.id` so dropping the child first is safe in every
+      // environment, and the shared-archive purge is DML that no migration file should
+      // carry (the archive table is created lazily and may not exist).
+      await teardownEntityI18n({
+        adapter: this.adapter,
+        slug: params.collectionName,
+        tableName: collection.tableName,
+      });
 
       const dropArtifacts = this.collectionService.generateDropTableMigration(
         params.collectionName,
