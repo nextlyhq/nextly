@@ -47,11 +47,23 @@ export interface RunWebhookDrainOptions {
    */
   fanOutBatchSize?: number;
   /**
-   * Deliveries attempted per round. Attempts run sequentially with a per-request
-   * timeout, so this is the main lever a cron trigger uses to keep a single tick
-   * within its platform's execution limit; unclaimed rows wait for the next tick.
+   * Deliveries attempted per round before the next fan-out round. Unclaimed rows
+   * wait for the next tick.
    */
   deliverBatchSize?: number;
+  /**
+   * Wall-clock budget for the whole drain. The hard bound a latency-bounded
+   * trigger relies on: the drain returns within about this plus one in-flight
+   * request timeout even when receivers hang, so a serverless cron tick finishes
+   * before its platform kills it and the next tick continues.
+   */
+  maxDurationMs?: number;
+  /**
+   * Per-request delivery timeout. A cron trigger passes a shorter value than the
+   * engine default so a single hung receiver cannot stretch the pass past the
+   * budget by much.
+   */
+  requestTimeoutMs?: number;
   /** Retention housekeeping, when the caller has a policy + gate to run it. */
   retention?: RunDrainDeps["retention"];
   /**
@@ -87,8 +99,10 @@ export function runWebhookDrain(
       transport: options?.transport,
       now: options?.now,
       batchSize: options?.deliverBatchSize,
+      requestTimeoutMs: options?.requestTimeoutMs,
     },
     maxRounds: options?.maxRounds,
+    maxDurationMs: options?.maxDurationMs,
     retention: options?.retention,
   });
 }

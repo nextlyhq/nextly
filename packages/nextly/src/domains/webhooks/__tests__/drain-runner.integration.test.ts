@@ -173,6 +173,39 @@ describe("runWebhookDrain (real SQLite)", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("stops attempting new deliveries once the wall-clock budget is spent", async () => {
+    // The real bound for a serverless cron tick: with slow receivers the pass
+    // must stop mid-batch on a deadline, not run every claimed row to its
+    // timeout. A clock that only advances when the transport is called (each
+    // "receiver" eats 20s) plus a 25s budget means the second attempt pushes the
+    // clock past the deadline, so the third is never attempted.
+    await seedWebhook("wh1");
+    await seedEvent("evt_1");
+    await seedEvent("evt_2");
+    await seedEvent("evt_3");
+
+    let ms = NOW.getTime();
+    const clock = () => new Date(ms);
+    const calls: string[] = [];
+    const transport: DeliverTransport = async url => {
+      calls.push(url);
+      ms += 20_000;
+      return new Response("ok", { status: 200 });
+    };
+
+    const result = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: clock,
+      decryptSecret: ct => ct,
+      maxDurationMs: 25_000,
+    });
+
+    // All three fanned out, but only two were attempted before the deadline.
+    expect(result.deliveriesCreated).toBe(3);
+    expect(result.attempted).toBe(2);
+    expect(calls).toHaveLength(2);
+  });
+
   it("runs the retention pass when a policy is supplied", async () => {
     // The cron trigger is the only prune trigger a write-quiescent install has,
     // so a supplied retention policy must reach the gate. A stub gate that

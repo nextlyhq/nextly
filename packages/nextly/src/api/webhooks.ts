@@ -147,15 +147,22 @@ const MIN_DRAIN_SECRET_LENGTH = 32;
  * Per-invocation work bounds for the cron/manual drain trigger. A scheduler tick
  * runs inside a platform execution limit (Vercel Cron functions default to tens
  * of seconds), so one request must NOT try to drain an unbounded backlog: it
- * fans out and delivers a bounded slice and returns, and the next tick continues
- * where this one left off (the outbox is durable and claims are leased). These
- * cap the common case; a burst of slow/dead receivers is bounded further by the
- * delivery lease, which frees a stuck row for a later tick. The per-request
- * timeout is deliberately left at the engine default so a legitimately slow
- * receiver is retried, not false-failed.
+ * does a bounded slice and returns, and the next tick continues where this one
+ * left off (the outbox is durable and claims are leased).
+ *
+ * The wall-clock budget is the real bound: the drain stops attempting new
+ * deliveries once it is spent, so even a batch of hung receivers extends the
+ * pass by at most one in-flight request rather than `batch × rounds × timeout`.
+ * The drain also uses a shorter per-request timeout than the engine default —
+ * 10s matches common webhook-receiver expectations (e.g. GitHub) — so that one
+ * in-flight overrun stays small. Together they keep a tick within roughly
+ * `budget + 10s`, comfortably inside a typical serverless window; the round and
+ * batch caps are secondary limits on a healthy, fast backlog.
  */
 const DRAIN_MAX_ROUNDS = 10;
 const DRAIN_DELIVER_BATCH = 25;
+const DRAIN_MAX_DURATION_MS = 25_000;
+const DRAIN_REQUEST_TIMEOUT_MS = 10_000;
 
 /** The bearer token on the request, or null when there is no bearer header. */
 function bearerToken(request: Request): string | null {
@@ -253,8 +260,12 @@ export const drainWebhooks = withErrorHandler(
 
     const result = await runWebhookDrain(adapter, registry, {
       // Bound the work one scheduler tick performs; the next tick continues.
+      // maxDurationMs is the hard bound (stops mid-batch when receivers hang);
+      // the shorter timeout caps the single in-flight overrun past it.
       maxRounds: DRAIN_MAX_ROUNDS,
       deliverBatchSize: DRAIN_DELIVER_BATCH,
+      maxDurationMs: DRAIN_MAX_DURATION_MS,
+      requestTimeoutMs: DRAIN_REQUEST_TIMEOUT_MS,
       retention,
     });
     // A POST/GET trigger with fan-out + delivery side effects: return the
