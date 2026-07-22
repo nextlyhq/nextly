@@ -224,6 +224,8 @@ export class CollectionsHandler {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.entryService.canUpdateEntry(params);
   }
@@ -715,8 +717,18 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * delete grant, so the session super-admin bypass does not apply to it.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.deleteEntry(this.resolveUserParam(params));
+    return this.entryService.deleteEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
@@ -748,8 +760,18 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. Each per-id delete is judged on a scoped
+     * API key's OWN delete grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.bulkDeleteEntries(this.resolveUserParam(params));
+    return this.entryService.bulkDeleteEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**

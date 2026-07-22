@@ -381,7 +381,11 @@ export async function setVersionLabelForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    // The route authorized `update` against the key's scope; judge the label
+    // edit on the key's OWN grant so a super-admin-owned key does not skip
+    // stored owner/role update rules.
+    readAuthenticatedScope(args.params)
   );
 
   const versions = getService("versionsService");
