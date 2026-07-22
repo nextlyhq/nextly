@@ -627,6 +627,34 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The write locale's committed per-locale `_status`, read on the pooled
+   * connection (not a transaction handle).
+   *
+   * The status-transition gate runs before the write transaction opens, so it
+   * needs this locale's prior status without a `tx`. Mirrors
+   * {@link readCompanionStatus}: the companion `_locales` table is not in the
+   * Drizzle schema and its columns must not be camelCased, so raw SQL with
+   * dialect-aware quoting is used.
+   */
+  private async readCompanionStatusPooled(
+    companionTableName: string,
+    entryId: string,
+    locale: string
+  ): Promise<string | null> {
+    const isMysqlDialect = this.dialect === "mysql";
+    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
+    const placeholder = (i: number) =>
+      this.dialect === "postgresql" ? `$${i}` : "?";
+    const rows = await this.adapter.executeQuery<{ _status?: unknown }>(
+      `SELECT ${quote("_status")} FROM ${quote(companionTableName)} ` +
+        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
+      [entryId, locale]
+    );
+    const status = rows[0]?._status;
+    return typeof status === "string" ? status : null;
+  }
+
+  /**
    * The document parts a version records, with component types tagged.
    *
    * A separate shape from what the outbox carries: the same parts feed both,
@@ -1171,20 +1199,6 @@ export class CollectionMutationService extends BaseService {
         return accessDenied;
       }
 
-      // Creating a document directly as published is a publish, so it needs the
-      // publish permission on top of create. Previous status is null — nothing
-      // existed to publish from.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus: null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser,
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
       // Get collection metadata to identify relation fields and hooks
       // Note: For create operations, we use the adapter directly with the table name,
       // so we don't need the Drizzle schema. The fields metadata from the collection
@@ -1538,6 +1552,27 @@ export class CollectionMutationService extends BaseService {
       const entryData: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(rawEntryData)) {
         entryData[toSnakeCase(key)] = value;
+      }
+
+      // Authorize the published state this create will persist, judged on the
+      // post-hook `finalData` rather than the raw body: a beforeCreate/stored
+      // hook that derives `status: "published"`, or a status field the caller
+      // may not write (stripped by field-write-access above), must be gated on
+      // the value actually stored. A create has no prior status, so landing
+      // directly on published is a publish and needs `publish-<slug>` on top of
+      // create. Read before the locale split below removes `status` from the
+      // non-default-locale main payload.
+      const createTransitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        accessUser,
+        overrideAccess: params.overrideAccess,
+      });
+      if (createTransitionDenied) {
+        return createTransitionDenied;
       }
 
       // i18n M5: for a localized collection, pull translatable columns out of the main insert
@@ -2219,12 +2254,23 @@ export class CollectionMutationService extends BaseService {
    * separate capabilities. A write that is not a transition returns `null` and
    * nothing extra is required.
    *
-   * Keyed on the main-row status, which decides whether the document is
-   * publicly visible at all. Per-locale companion `_status` transitions on a
-   * non-default locale are a separate, narrower case handled elsewhere.
+   * `collectionHasStatus` is the draft/published lifecycle flag
+   * (`collection.status === true`), the same signal the read path filters on. It
+   * gates this check because a collection WITHOUT the lifecycle can still carry
+   * an ordinary user-defined field named `status`: setting that to "published"
+   * is a field edit, not a publish, and must not demand `publish-<slug>`.
+   *
+   * `nextStatus` is the FINAL status the write will persist — read after the
+   * before-hooks and field-write-access have run, not the raw request body — so
+   * a hook that derives `status: "published"` cannot let a caller publish
+   * without the permission. `previousStatus` is the main-row status, or, for a
+   * write targeting a non-default locale, that locale's companion `_status`,
+   * since a per-locale translation publishes through the companion row and not
+   * the main row.
    */
   private async checkStatusTransitionAccess(args: {
     collectionName: string;
+    collectionHasStatus: boolean;
     previousStatus: string | null;
     nextStatus: unknown;
     accessUser?: UserContext;
@@ -2232,6 +2278,10 @@ export class CollectionMutationService extends BaseService {
     document?: Record<string, unknown>;
     overrideAccess?: boolean;
   }): Promise<CollectionServiceResult | null> {
+    // No draft/published lifecycle → `status` is an ordinary field, not a
+    // publish signal, so there is no transition to authorize.
+    if (!args.collectionHasStatus) return null;
+
     const operation = resolvePublishTransition(
       args.previousStatus,
       args.nextStatus
@@ -2323,25 +2373,6 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) {
         return accessDenied;
-      }
-
-      // A patch that moves the document into or out of published needs the
-      // publish/unpublish permission on top of update. Keyed on the loaded
-      // row's status against the incoming one.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus:
-          ((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser,
-        entryId: params.entryId,
-        document: existingEntry,
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
       }
 
       // Get collection metadata to identify relation fields and hooks
@@ -2713,12 +2744,54 @@ export class CollectionMutationService extends BaseService {
       // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
       // keys) so they update the companion `_locales` row for the write's locale instead. `null` =
       // not localized / companion not migrated yet (values stay on main — dev path, unchanged).
+      // The status this write intends to persist, captured before the locale
+      // split below removes it from `finalData` for a non-default-locale write
+      // (it moves into the companion `_status`). Post-hook value, not the raw
+      // body — see the create path.
+      const intendedStatus = finalData.status;
+
       const localizedUpdate = await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
         params.locale,
         false
       );
+
+      // Authorize a change to the document's published state, on the value
+      // actually stored. A write targeting a non-default locale publishes the
+      // translation through that locale's companion `_status` and does not move
+      // the main row, so it is gated against the companion's prior status;
+      // otherwise the main row's status is the document's published state. When
+      // the collection has no draft/published lifecycle the gate no-ops.
+      // A trusted write bypasses the transition gate outright, so the companion
+      // read that only feeds it is skipped too.
+      const isNonDefaultLocaleStatusWrite =
+        !params.overrideAccess &&
+        localizedUpdate?.hasStatus === true &&
+        localizedUpdate.writeLocale !== this.localization?.defaultLocale;
+      const transitionPreviousStatus = isNonDefaultLocaleStatusWrite
+        ? await this.readCompanionStatusPooled(
+            localizedUpdate.companionTableName,
+            params.entryId,
+            localizedUpdate.writeLocale
+          )
+        : (((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null);
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus: transitionPreviousStatus,
+        nextStatus: intendedStatus,
+        accessUser,
+        entryId: params.entryId,
+        document: existingEntry,
+        overrideAccess: params.overrideAccess,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
 
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
@@ -3602,20 +3675,6 @@ export class CollectionMutationService extends BaseService {
         return accessDenied;
       }
 
-      // Creating directly as published needs the publish permission too.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus: null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        // A trusted server write creates-as-published without a publish
-        // permission, the same as the non-transactional create path.
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -3851,6 +3910,24 @@ export class CollectionMutationService extends BaseService {
         created_by: params.user?.id ?? null,
       };
 
+      // Authorize the published state this create will persist, on the post-hook
+      // `finalData`: a hook that derives `status: "published"`, or a status field
+      // the caller may not write, is judged on the value actually stored. A create
+      // has no prior status, so landing on published needs `publish-<slug>` on top
+      // of create; a trusted server write bypasses via overrideAccess.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
@@ -4007,26 +4084,6 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) {
         return accessDenied;
-      }
-
-      // A status transition inside this transactional update needs the
-      // publish/unpublish permission on top of update.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus:
-          ((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        entryId: params.entryId,
-        document: existingEntry,
-        // A trusted server write publishes without a publish permission, the
-        // same as the non-transactional paths.
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
       }
 
       // Shared context between all hooks in this request
@@ -4203,6 +4260,28 @@ export class CollectionMutationService extends BaseService {
 
       // Update using transaction context
       // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling
+      // Authorize a change to the document's published state on the post-hook
+      // `finalData`, keyed on the loaded row's status. Publishing or unpublishing
+      // needs `publish`/`unpublish` on top of update; a trusted server write
+      // bypasses via overrideAccess. No-ops when the collection has no lifecycle.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus:
+          ((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null,
+        nextStatus: finalData.status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        entryId: params.entryId,
+        document: existingEntry,
+        overrideAccess: params.overrideAccess,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       const [updated] = await tx.update<unknown>(
         tableName,
         {
@@ -4534,20 +4613,6 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      // The bulk create worker inserts status like any other field. Creating
-      // directly as published needs the publish permission, the same as a
-      // single create — otherwise a batch create is a way around it.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus: null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
       let currentData: Record<string, unknown> = { ...body };
 
       // Shared context between all hooks in this request
@@ -4774,6 +4839,24 @@ export class CollectionMutationService extends BaseService {
         created_by: params.user?.id ?? null,
       };
 
+      // The bulk create worker inserts status like any other field, so publishing
+      // through it needs `publish-<slug>` the same as a single create — otherwise
+      // batch create is a way around the gate. Judged on the post-hook `finalData`
+      // (hooks run unless skipped); a create has no prior status, and a trusted
+      // server write bypasses via overrideAccess.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
@@ -4986,26 +5069,6 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // The Direct-API batch worker writes status like any other field but ran
-      // no publish gate — the one path where a status transition could reach the
-      // database on `update` alone. Enforce it here against the loaded row, so a
-      // bulk update cannot publish what a single update could not.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        previousStatus:
-          ((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null,
-        nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        entryId,
-        document: existingEntry,
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
       let currentData: Record<string, unknown> = { ...body };
 
       // Shared context between all hooks in this request
@@ -5193,6 +5256,29 @@ export class CollectionMutationService extends BaseService {
 
       // Update using transaction context
       // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling
+      // The Direct-API batch worker writes status like any other field, so a
+      // status transition here needs `publish`/`unpublish` the same as a single
+      // update — a bulk update must not publish what a single update could not.
+      // Judged on the post-hook `finalData` against the loaded row; a trusted
+      // server write bypasses via overrideAccess.
+      const transitionDenied = await this.checkStatusTransitionAccess({
+        collectionName: params.collectionName,
+        collectionHasStatus:
+          (collection as { status?: boolean }).status === true,
+        previousStatus:
+          ((existingEntry as { status?: unknown }).status as
+            | string
+            | undefined) ?? null,
+        nextStatus: finalData.status,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        entryId,
+        document: existingEntry,
+        overrideAccess: params.overrideAccess,
+      });
+      if (transitionDenied) {
+        return transitionDenied;
+      }
+
       const [updated] = await tx.update<unknown>(
         tableName,
         {

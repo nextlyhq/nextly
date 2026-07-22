@@ -16,6 +16,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { normalizeLocalization } from "../../i18n/config/normalize";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 
 import {
   createMockSchema,
@@ -117,26 +119,30 @@ function buildService(overrides: {
   accessControlService?: ReturnType<typeof createMockAccessControlService>;
   rbacAccessControlService?: { checkAccess: ReturnType<typeof vi.fn> };
   collectionService?: ReturnType<typeof createMockCollectionService>;
+  hookRegistry?: ReturnType<typeof createMockHookRegistry>;
+  localization?: SanitizedLocalizationConfig;
 }) {
   const schema = createMockSchema();
   const selectData = { rows: [] as unknown[] };
   const mockDb = createMockDb(selectData);
   const mockAdapter = createMockAdapter(mockDb);
+  const fileManager = createMockFileManager(schema);
 
   const service = new CollectionEntryService(
     mockAdapter as never,
     silentLogger as never,
-    createMockFileManager(schema) as never,
+    fileManager as never,
     (overrides.collectionService ?? createMockCollectionService()) as never,
     createMockRelationshipService() as never,
-    createMockHookRegistry() as never,
+    (overrides.hookRegistry ?? createMockHookRegistry()) as never,
     (overrides.accessControlService ??
       createMockAccessControlService()) as never,
     createMockComponentDataService() as never,
-    overrides.rbacAccessControlService as never
+    overrides.rbacAccessControlService as never,
+    overrides.localization as never
   );
 
-  return { service, selectData, schema };
+  return { service, selectData, schema, adapter: mockAdapter, fileManager };
 }
 
 // ── Test suite ────────────────────────────────────────────────────────────
@@ -621,9 +627,18 @@ describe("publish-transition access control", () => {
     return acs;
   };
 
+  // The transition gate only runs when the collection has the draft/published
+  // lifecycle enabled (`collection.status === true`), the same flag the read
+  // path filters on. Every gated case below uses a lifecycle-enabled collection.
+  const lifecycle = () =>
+    createMockCollectionService(createMockCollection({ status: true }));
+
   it("denies updateEntry that moves a draft to published without publish", async () => {
     const acs = allowUpdateDeny("publish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
     selectData.rows = [createSampleEntry({ status: "draft" })];
 
     const result = await service.updateEntry(
@@ -637,7 +652,10 @@ describe("publish-transition access control", () => {
 
   it("denies unpublishing without the unpublish permission", async () => {
     const acs = allowUpdateDeny("unpublish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
     selectData.rows = [createSampleEntry({ status: "published" })];
 
     const result = await service.updateEntry(
@@ -653,7 +671,10 @@ describe("publish-transition access control", () => {
     // A caller with update but not publish can still edit a live document, as
     // long as they are not changing whether it is published.
     const acs = allowUpdateDeny("publish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
     selectData.rows = [createSampleEntry({ status: "published" })];
 
     const result = await service.updateEntry(
@@ -668,7 +689,10 @@ describe("publish-transition access control", () => {
 
   it("does not require publish for a patch that omits status", async () => {
     const acs = allowUpdateDeny("publish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
     selectData.rows = [createSampleEntry({ status: "draft" })];
 
     const result = await service.updateEntry(
@@ -679,9 +703,105 @@ describe("publish-transition access control", () => {
     expect(result.statusCode).not.toBe(403);
   });
 
+  it("does not gate a status field when the collection has no lifecycle", async () => {
+    // A collection WITHOUT the draft/published lifecycle can still carry an
+    // ordinary user field named `status`. Setting it to "published" is a field
+    // edit, not a publish, and must not demand the publish permission. The
+    // default mock collection has no `status: true` flag, so the gate no-ops.
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({ accessControlService: acs });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { status: "published" }
+    );
+
+    // The publish permission is never consulted when there is no lifecycle.
+    const publishConsulted = acs.evaluateAccess.mock.calls.some(
+      ([, operation]: [unknown, string]) => operation === "publish"
+    );
+    expect(publishConsulted).toBe(false);
+  });
+
+  it("gates a publish derived by a beforeUpdate hook, not just the body", async () => {
+    // Secure-by-result: the gate asks whether the write makes content public,
+    // judged on the FINAL data. A hook the caller cannot see derives
+    // status: "published" from a body that omits it; the publish permission is
+    // still required.
+    const acs = allowUpdateDeny("publish");
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.execute.mockImplementation((_phase: string, ctx: unknown) =>
+      Promise.resolve({
+        ...((ctx as { data?: Record<string, unknown> })?.data ?? {}),
+        status: "published",
+      })
+    );
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+      hookRegistry,
+    });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { title: "Body omits status" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("gates a per-locale translation against the companion status, not the main row", async () => {
+    // The hole this closes: the main row is already published, so keying the
+    // gate on the main status (published -> published) sees no transition and
+    // would let a caller with update-but-not-publish publish a still-draft
+    // translation. The gate must instead compare the write locale's companion
+    // `_status` (draft -> published = publish).
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData, adapter, fileManager } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+      localization: normalizeLocalization({
+        locales: ["en", "de"],
+        defaultLocale: "en",
+      }),
+    });
+    // Main row is published (its default-locale state).
+    selectData.rows = [createSampleEntry({ status: "published" })];
+    // A localized collection whose companion carries a per-locale `_status`.
+    fileManager.loadCompanionSchema.mockResolvedValue({
+      companionTableName: "posts_locales",
+      localizedFields: [{ name: "title", column: "title" }],
+      hasStatus: true,
+    });
+    // Companion table exists (the probe returns without throwing); the German
+    // companion `_status` is still draft.
+    adapter.executeQuery.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes("_status") ? [{ _status: "draft" }] : [])
+    );
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        user: { id: "user-1" },
+        locale: "de",
+      },
+      { title: "German translation", status: "published" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("denies creating a document directly as published without publish", async () => {
     const acs = allowUpdateDeny("publish");
-    const { service } = buildService({ accessControlService: acs });
+    const { service } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
 
     const result = await service.createEntry(
       { collectionName: "posts", user: { id: "user-1" } },
@@ -692,9 +812,38 @@ describe("publish-transition access control", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("gates a publish derived by a beforeCreate hook, not just the body", async () => {
+    // Same secure-by-result rule on create: a hook that derives published from a
+    // body omitting status still requires the publish permission.
+    const acs = allowUpdateDeny("publish");
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.execute.mockImplementation((_phase: string, ctx: unknown) =>
+      Promise.resolve({
+        ...((ctx as { data?: Record<string, unknown> })?.data ?? {}),
+        status: "published",
+      })
+    );
+    const { service } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+      hookRegistry,
+    });
+
+    const result = await service.createEntry(
+      { collectionName: "posts", user: { id: "user-1" } },
+      { title: "Body omits status" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("allows creating a draft without publish", async () => {
     const acs = allowUpdateDeny("publish");
-    const { service } = buildService({ accessControlService: acs });
+    const { service } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
 
     const result = await service.createEntry(
       { collectionName: "posts", user: { id: "user-1" } },
@@ -708,7 +857,10 @@ describe("publish-transition access control", () => {
     // A trusted server write publishes without a publish permission, exactly as
     // it updates without an update permission.
     const acs = allowUpdateDeny("publish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+    });
     selectData.rows = [createSampleEntry({ status: "draft" })];
 
     const result = await service.updateEntry(
@@ -737,6 +889,7 @@ describe("publish-transition access control", () => {
     acs.evaluateAccess.mockResolvedValue({ allowed: true });
     const { service, selectData } = buildService({
       accessControlService: acs,
+      collectionService: lifecycle(),
       rbacAccessControlService: rbac,
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
