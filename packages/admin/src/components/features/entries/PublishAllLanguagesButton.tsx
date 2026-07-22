@@ -13,6 +13,7 @@ import { Button } from "@nextlyhq/ui";
 import { Globe } from "lucide-react";
 
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { useEntryLocale } from "./EntryLocaleContext";
@@ -30,6 +31,11 @@ export function PublishAllLanguagesButton({
   const publishAll = usePublishAllLocales({
     collectionSlug: collectionSlug ?? "",
   });
+  // Publishing every language is a publish, so it owes the same permission the
+  // header Publish button does. Without this an author holding only
+  // `update-<slug>` could publish all languages from the sidebar, bypassing the
+  // header gate. Empty slug matches no permission, keeping the hook unconditional.
+  const canPublish = useCan(`publish-${collectionSlug ?? ""}`);
 
   if (
     !enabled ||
@@ -37,7 +43,8 @@ export function PublishAllLanguagesButton({
     !collectionLocalized ||
     !collectionSlug ||
     !entryId ||
-    locales.length < 2
+    locales.length < 2 ||
+    !canPublish
   ) {
     return null;
   }
