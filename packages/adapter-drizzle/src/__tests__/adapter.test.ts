@@ -318,5 +318,19 @@ describe("DrizzleAdapter", () => {
         )
       ).resolves.toBeDefined();
     });
+
+    it("rejects forUpdate on the pooled connection for SQLite too", async () => {
+      // On SQLite the lock IS the transaction (BEGIN IMMEDIATE), so a pooled
+      // forUpdate takes no lock at all — it must fail fast like the row-locking
+      // dialects rather than silently succeed with no serialization.
+      class SqliteLockAdapter extends LockAdapter {
+        override readonly dialect = "sqlite" as const;
+      }
+      const sqliteAdapter = new SqliteLockAdapter();
+      sqliteAdapter.setTableResolver({ getTable: () => ({}) } as never);
+      await expect(
+        sqliteAdapter.select("posts", { forUpdate: true })
+      ).rejects.toThrow(/forUpdate requires a transaction executor/);
+    });
   });
 });
