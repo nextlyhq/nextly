@@ -433,4 +433,55 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("judges a scoped API-key BULK publish on the key's own grant", async () => {
+    // A bulk update must not become a way around the single-write publish gate:
+    // the per-id `updateEntry` each row runs through has to see the key's scope,
+    // or an update-only key owned by a publisher could bulk-publish. A key
+    // scoped for `update-posts` only is refused; adding `publish-posts` allows.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const denied = await handler.bulkUpdateEntries({
+      collectionName: "posts",
+      ids: [id],
+      data: { status: "published" },
+      userId: "key-owner",
+      routeAuthorized: true,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts"],
+      },
+    });
+    // Partial-success shape: the row lands in failures with a 403, not successes.
+    expect(denied.successCount).toBe(0);
+    expect(denied.failures).toHaveLength(1);
+
+    const allowed = await handler.bulkUpdateEntries({
+      collectionName: "posts",
+      ids: [id],
+      data: { status: "published" },
+      userId: "key-owner",
+      routeAuthorized: true,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts", "publish-posts"],
+      },
+    });
+    expect(allowed.successCount).toBe(1);
+  });
 });

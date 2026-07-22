@@ -1291,6 +1291,10 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized `update` against the key's scope, never
+        // publish/unpublish — carry the scope so each per-id transition is
+        // judged on the key's OWN grants.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const message =
         result.failures.length === 0
@@ -1354,6 +1358,10 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized `update` against the key's scope, never
+          // publish/unpublish — carry the scope so the collection-level gate and
+          // each per-row transition are judged on the key's OWN grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         { limit: b.limit }
       );
@@ -1395,6 +1403,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // A duplicate is a create; carry the scope so a create-as-published is
+        // judged on the key's OWN publish grant, never the key owner's.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
