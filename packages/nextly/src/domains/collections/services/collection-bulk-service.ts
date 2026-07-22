@@ -966,6 +966,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Resolve the caller's publish authorization ONCE on the pooled connection
+    // before the shared transaction, so each worker enforces the create-as-
+    // published under its row without a permission read inside the transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser,
+        overrideAccess: params.overrideAccess,
+      });
+
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -986,7 +996,7 @@ export class CollectionBulkService extends BaseService {
               const createResult =
                 await this.mutationService.createSingleEntryInTransaction(
                   tx,
-                  params,
+                  { ...params, transitionAuth },
                   entryData,
                   skipHooks
                 );
@@ -1134,6 +1144,15 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Resolve the caller's publish authorization ONCE (pooled) before looping the
+    // workers, so each create-as-published is enforced without a permission read
+    // inside the caller's transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+      });
+
     // Process in batches for memory efficiency
     for (let i = 0; i < entries.length; i += batchSize) {
       const batch = entries.slice(i, Math.min(i + batchSize, entries.length));
@@ -1147,7 +1166,7 @@ export class CollectionBulkService extends BaseService {
           const createResult =
             await this.mutationService.createSingleEntryInTransaction(
               tx,
-              params,
+              { ...params, transitionAuth },
               entryData,
               skipHooks
             );
@@ -1275,6 +1294,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Resolve the caller's publish/unpublish authorization ONCE on the pooled
+    // connection before the shared transaction, so each worker enforces its
+    // transition under the row lock without a permission read inside the batch's
+    // transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+      });
+
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1295,7 +1324,7 @@ export class CollectionBulkService extends BaseService {
               const updateResult =
                 await this.mutationService.updateSingleEntryInTransaction(
                   tx,
-                  params,
+                  { ...params, transitionAuth },
                   id,
                   data,
                   skipHooks
@@ -1443,6 +1472,15 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Resolve the caller's publish/unpublish authorization ONCE (pooled) before
+    // looping the workers, so each transition is enforced under the row lock
+    // without a permission read inside the caller's transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+      });
+
     // Process in batches for memory efficiency
     for (let i = 0; i < entries.length; i += batchSize) {
       const batch = entries.slice(i, Math.min(i + batchSize, entries.length));
@@ -1456,7 +1494,7 @@ export class CollectionBulkService extends BaseService {
           const updateResult =
             await this.mutationService.updateSingleEntryInTransaction(
               tx,
-              params,
+              { ...params, transitionAuth },
               id,
               data,
               skipHooks
