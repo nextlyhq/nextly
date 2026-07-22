@@ -2355,6 +2355,12 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * update grant, so the session super-admin bypass does not apply to a
+     * super-admin-owned key when this gate authorizes a version-label edit.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName
@@ -2382,7 +2388,10 @@ export class CollectionMutationService extends BaseService {
       // Never overridden: this exists to APPLY the document's rules, so a
       // caller that could opt out of them would defeat the point.
       false,
-      params.routeAuthorized
+      params.routeAuthorized,
+      // A scoped API key is judged on its own update grant, so the session
+      // super-admin bypass does not apply to a super-admin-owned key here.
+      params.authenticatedScope
     );
     return denied === null;
   }
@@ -3809,6 +3818,12 @@ export class CollectionMutationService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * delete grant here, so the session super-admin bypass does not apply to a
+     * super-admin-owned key on the delete gate.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
@@ -3846,7 +3861,10 @@ export class CollectionMutationService extends BaseService {
         params.entryId,
         entry,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own delete grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;

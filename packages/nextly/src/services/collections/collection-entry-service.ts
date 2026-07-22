@@ -314,6 +314,8 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -374,7 +376,10 @@ export class CollectionEntryService extends BaseService {
     /** Who performed the delete, recorded on the outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.deleteEntry(params);
     await this.afterWriteIfRecorded(result);
@@ -436,7 +441,10 @@ export class CollectionEntryService extends BaseService {
     /** Who performed the delete, recorded on each entry's outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges each per-id delete on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
     await this.afterWriteIfRecorded(result);
