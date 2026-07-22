@@ -73,7 +73,9 @@ export const _envSchema = z
     // boundary rather than rejected here (it is a platform-wide variable and
     // must not fail app boot for deployments that don't use the drain). Warn so
     // an operator who set it FOR the drain gets a signal instead of silent 403s.
-    if (val.CRON_SECRET && val.CRON_SECRET.length < 32) {
+    // `!== undefined` (not truthiness) so an explicit empty string — which also
+    // fails the auth-boundary length gate — still produces the warning.
+    if (val.CRON_SECRET !== undefined && val.CRON_SECRET.length < 32) {
       console.warn(
         "⚠️  CRON_SECRET is shorter than 32 characters and will NOT be accepted " +
           "as a webhook drain secret. Use a >= 32-char value (or NEXTLY_DRAIN_SECRET) " +
