@@ -229,6 +229,25 @@ class StatusTransitionDeniedError extends NextlyError {
   }
 }
 
+/**
+ * A caller's publish/unpublish authorization for a collection, resolved ONCE on
+ * the pooled connection BEFORE a write transaction opens. Each field holds the
+ * 403 result to return if that op is attempted, or `null` when the op is allowed
+ * (or the collection has no lifecycle / the write is trusted).
+ *
+ * The transaction/batch write paths consult this under the row lock instead of
+ * reading permission storage inside the transaction: the permission a write can
+ * require is fully determined by the FINAL status it persists (only `"published"`
+ * can publish; any other explicit value can only unpublish a published row), so
+ * resolving both ops up front lets the in-transaction step classify the
+ * transition against the row-locked status and look up the answer with no DB read
+ * — closing both the TOCTOU window and the pooled-read-inside-a-transaction stall.
+ */
+export interface TransitionAuthorization {
+  publishDenied: CollectionServiceResult | null;
+  unpublishDenied: CollectionServiceResult | null;
+}
+
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -2434,6 +2453,100 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * Resolve the caller's publish AND unpublish authorization on the pooled
+   * connection, BEFORE a write transaction opens, so the transaction/batch write
+   * paths can enforce a transition against the row-locked status without reading
+   * permission storage inside the transaction (see {@link TransitionAuthorization}).
+   *
+   * Both ops are resolved because a batch is heterogeneous — one row may publish
+   * while another unpublishes — and the per-row op is only known under the lock.
+   * No-ops (returns all-allowed) for a trusted write or a collection with no
+   * draft/published lifecycle.
+   */
+  async resolveTransitionAuthorization(args: {
+    collectionName: string;
+    accessUser?: UserContext;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<TransitionAuthorization> {
+    if (args.overrideAccess) {
+      return { publishDenied: null, unpublishDenied: null };
+    }
+    const collection = await this.collectionService.getCollection(
+      args.collectionName
+    );
+    if ((collection as { status?: boolean }).status !== true) {
+      return { publishDenied: null, unpublishDenied: null };
+    }
+    // Resolve both concurrently; each is judged on the caller's own grant (a
+    // scoped API key on its scope), never route-authorized — the route attested
+    // update/create, never publish/unpublish.
+    const [publishDenied, unpublishDenied] = await Promise.all([
+      this.accessService.checkCollectionAccess(
+        args.collectionName,
+        "publish",
+        args.accessUser,
+        undefined,
+        undefined,
+        args.overrideAccess,
+        false,
+        args.authenticatedScope
+      ),
+      this.accessService.checkCollectionAccess(
+        args.collectionName,
+        "unpublish",
+        args.accessUser,
+        undefined,
+        undefined,
+        args.overrideAccess,
+        false,
+        args.authenticatedScope
+      ),
+    ]);
+    return { publishDenied, unpublishDenied };
+  }
+
+  /**
+   * Enforce a pre-resolved {@link TransitionAuthorization} against the status read
+   * UNDER the row lock, inside a caller-provided transaction. For an update it
+   * locks the row (the write below takes the same lock anyway) and re-reads the
+   * committed status, so a concurrent writer that changed the published state
+   * between the pre-transaction read and this lock is accounted for; classifying
+   * against that locked status, it returns the matching 403 if the transition is
+   * denied, or `null` when the write is allowed. A create has no prior row, so
+   * only a publish is possible and no lock/read is taken.
+   *
+   * Called immediately before the INSERT/UPDATE, so returning a denial leaves
+   * nothing written for this row — no rollback needed.
+   */
+  private async enforceTransitionUnderLock(
+    tx: TransactionContext,
+    args: {
+      tableName: string;
+      entryId?: string;
+      nextStatus: unknown;
+      isCreate: boolean;
+      auth: TransitionAuthorization;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    // No status named in the write: no transition, nothing to enforce.
+    if (args.nextStatus === undefined) return null;
+    let lockedStatus: string | null = null;
+    if (!args.isCreate && args.entryId) {
+      await tx.lockRow(args.tableName, args.entryId);
+      const locked = await tx.selectOne<{ status?: unknown }>(args.tableName, {
+        where: this.whereEq("id", args.entryId),
+      });
+      lockedStatus = (locked?.status as string | undefined) ?? null;
+    }
+    const op = resolvePublishTransition(lockedStatus, args.nextStatus);
+    if (!op) return null;
+    return op === "publish"
+      ? args.auth.publishDenied
+      : args.auth.unpublishDenied;
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
@@ -3986,6 +4099,11 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      // Publish/unpublish authorization resolved by the batch caller before this
+      // transaction opened, so the transition is enforced under the row lock with
+      // no permission read inside the transaction. Self-resolved (pooled) when a
+      // direct caller does not provide it.
+      transitionAuth?: TransitionAuthorization;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -4240,14 +4358,23 @@ export class CollectionMutationService extends BaseService {
       // the caller may not write, is judged on the value actually stored. A create
       // has no prior status, so landing on published needs `publish-<slug>` on top
       // of create; a trusted server write bypasses via overrideAccess.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        collectionHasStatus:
-          (collection as { status?: boolean }).status === true,
-        previousStatus: null,
+      //
+      // The permission is resolved OUTSIDE this transaction (pre-resolved by a
+      // batch caller, or here on the pooled connection before the insert), then
+      // enforced with no DB read inside the transaction — see
+      // resolveTransitionAuthorization / enforceTransitionUnderLock.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+        }));
+      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
+        tableName,
         nextStatus: finalData.status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
+        isCreate: true,
+        auth: transitionAuth,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -4357,6 +4484,11 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      // Publish/unpublish authorization resolved by the batch caller before this
+      // transaction opened, so the transition is enforced under the row lock with
+      // no permission read inside the transaction. Self-resolved (pooled) when a
+      // direct caller does not provide it.
+      transitionAuth?: TransitionAuthorization;
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
@@ -4586,22 +4718,28 @@ export class CollectionMutationService extends BaseService {
       // Update using transaction context
       // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling
       // Authorize a change to the document's published state on the post-hook
-      // `finalData`, keyed on the loaded row's status. Publishing or unpublishing
-      // needs `publish`/`unpublish` on top of update; a trusted server write
-      // bypasses via overrideAccess. No-ops when the collection has no lifecycle.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        collectionHasStatus:
-          (collection as { status?: boolean }).status === true,
-        previousStatus:
-          ((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null,
-        nextStatus: finalData.status,
-        accessUser: params.overrideAccess ? undefined : params.user,
+      // `finalData`. Publishing or unpublishing needs `publish`/`unpublish` on top
+      // of update; a trusted server write bypasses via overrideAccess. No-ops when
+      // the collection has no lifecycle.
+      //
+      // Classified against the status read UNDER the row lock (not the pre-lock
+      // `existingEntry`), using authorization resolved before this transaction, so
+      // a concurrent writer that changed the published state between the initial
+      // read and the write cannot slip a transition past the gate — and no
+      // permission read runs inside the transaction.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+        }));
+      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
+        tableName,
         entryId: params.entryId,
-        document: existingEntry,
-        overrideAccess: params.overrideAccess,
+        nextStatus: finalData.status,
+        isCreate: false,
+        auth: transitionAuth,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -4987,6 +5125,11 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      // Publish authorization resolved once by the batch caller before this
+      // shared transaction opened, so the create-as-published is enforced with no
+      // permission read inside the transaction. Self-resolved (pooled) when a
+      // direct caller does not provide it.
+      transitionAuth?: TransitionAuthorization;
     },
     body: Record<string, unknown>,
     skipHooks: boolean
@@ -5244,14 +5387,22 @@ export class CollectionMutationService extends BaseService {
       // batch create is a way around the gate. Judged on the post-hook `finalData`
       // (hooks run unless skipped); a create has no prior status, and a trusted
       // server write bypasses via overrideAccess.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        collectionHasStatus:
-          (collection as { status?: boolean }).status === true,
-        previousStatus: null,
+      //
+      // Authorization is resolved once by the batch caller before this shared
+      // transaction (or here on the pooled connection when called directly), so no
+      // permission read runs inside the transaction.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+        }));
+      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
+        tableName,
         nextStatus: finalData.status,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
+        isCreate: true,
+        auth: transitionAuth,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -5374,6 +5525,11 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      // Publish/unpublish authorization resolved once by the batch caller before
+      // this shared transaction opened, so the transition is enforced under the
+      // row lock with no permission read inside the transaction. Self-resolved
+      // (pooled) when a direct caller does not provide it.
+      transitionAuth?: TransitionAuthorization;
     },
     entryId: string,
     body: Record<string, unknown>,
@@ -5659,21 +5815,26 @@ export class CollectionMutationService extends BaseService {
       // The Direct-API batch worker writes status like any other field, so a
       // status transition here needs `publish`/`unpublish` the same as a single
       // update — a bulk update must not publish what a single update could not.
-      // Judged on the post-hook `finalData` against the loaded row; a trusted
-      // server write bypasses via overrideAccess.
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        collectionHasStatus:
-          (collection as { status?: boolean }).status === true,
-        previousStatus:
-          ((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null,
-        nextStatus: finalData.status,
-        accessUser: params.overrideAccess ? undefined : params.user,
+      // A trusted server write bypasses via overrideAccess.
+      //
+      // Classified against the status read UNDER the row lock (not the pre-lock
+      // `existingEntry`), using authorization resolved once by the batch caller
+      // before this shared transaction, so a concurrent writer cannot slip a
+      // transition past the gate and no permission read runs inside the batch's
+      // transaction.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+        }));
+      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
+        tableName,
         entryId,
-        document: existingEntry,
-        overrideAccess: params.overrideAccess,
+        nextStatus: finalData.status,
+        isCreate: false,
+        auth: transitionAuth,
       });
       if (transitionDenied) {
         return transitionDenied;
