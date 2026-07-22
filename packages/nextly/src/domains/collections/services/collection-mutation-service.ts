@@ -2487,7 +2487,21 @@ export class CollectionMutationService extends BaseService {
         where: this.whereEq("id", args.entryId),
         forUpdate: true,
       });
-      lockedStatus = (lockedRow?.status as string | undefined) ?? null;
+      if (!lockedRow) {
+        // The row was found by the caller's pre-lock read but is gone under the
+        // lock: a concurrent transaction deleted it in that window. There is no
+        // prior state to transition, so the update targets a missing row —
+        // return not-found rather than classifying the absent status as a
+        // `null -> published` publish (which would wrongly demand a publish grant
+        // for a row that no longer exists, or let the write silently no-op).
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+      lockedStatus = (lockedRow.status as string | undefined) ?? null;
     }
     const op = resolvePublishTransition(lockedStatus, args.nextStatus);
     if (!op) return null;
