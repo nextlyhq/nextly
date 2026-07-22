@@ -268,4 +268,55 @@ describe("DrizzleAdapter", () => {
       expect(result.current).toBeNull();
     });
   });
+
+  describe("forUpdate lock safety", () => {
+    // A SELECT ... FOR UPDATE row lock only holds for the life of a transaction.
+    // Requesting one on the pooled connection is silent false safety — the lock
+    // releases the instant the statement autocommits — so the adapter must reject
+    // it rather than let a caller believe a row is guarded when it is not.
+    class LockAdapter extends MockAdapter {
+      // Minimal Drizzle stub: the guard throws during query construction (before
+      // execution) in the rejection case, so select()/from() only need to be
+      // chainable; the resolve case awaits this same chainable stub.
+      override getDrizzle<U = unknown>(): U {
+        const chain: Record<string, unknown> = {};
+        const self = () => chain;
+        chain.select = self;
+        chain.from = self;
+        chain.where = self;
+        chain.orderBy = self;
+        chain.limit = self;
+        chain.offset = self;
+        chain.for = self;
+        return chain as U;
+      }
+    }
+
+    let lockAdapter: LockAdapter;
+
+    beforeEach(() => {
+      lockAdapter = new LockAdapter();
+      // Any non-null table object routes select() through the Drizzle query path,
+      // where the forUpdate handling lives.
+      lockAdapter.setTableResolver({ getTable: () => ({}) } as never);
+    });
+
+    it("rejects forUpdate on the pooled connection (no transaction executor)", async () => {
+      await expect(
+        lockAdapter.select("posts", { forUpdate: true })
+      ).rejects.toThrow(/forUpdate requires a transaction executor/);
+    });
+
+    it("allows forUpdate when a transaction executor is supplied", async () => {
+      // Same options, but with the transaction executor the lock is meaningful,
+      // so the guard passes and the query proceeds.
+      await expect(
+        lockAdapter.select(
+          "posts",
+          { forUpdate: true },
+          lockAdapter.getDrizzle()
+        )
+      ).resolves.toBeDefined();
+    });
+  });
 });
