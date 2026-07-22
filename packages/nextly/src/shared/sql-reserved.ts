@@ -58,20 +58,14 @@ export const RESERVED_SLUGS = [
   "roles",
   "permissions",
   "sessions",
-  // Every system resource. Permission identity is `action-resource`, so a
-  // same-named content type seeds the exact rows that resource's routes check:
-  // a `webhooks` type reaches the endpoint routes and signing secrets, a
-  // `settings` type the user-fields and component admin surfaces (gated on
-  // `{action, "settings"}`, not only `manage`), a `media` type the media
-  // routes. This mirrors `isReservedResourceSlug` (= `isSystemResource`) in
-  // schemas/_zod/rbac.ts, which the dynamic registries enforce; this leaf
-  // module stays import-free (see the header), so the names are repeated here
-  // for the code-first validators.
+  // Pre-existing route/table reservations. The permission-collision reservation
+  // for system-resource names (settings, api-keys, email-*, ...) is NOT kept
+  // here: this list is spread into the component reserved set too, and a
+  // component does not seed a permission under its own slug, so reserving those
+  // names for components would be a false positive. The collision check lives in
+  // the collection and single validators via `isReservedResourceSlug`
+  // (schemas/_zod/rbac.ts), which is scoped to those two entity kinds.
   "webhooks",
-  "api-keys",
-  "email-providers",
-  "email-templates",
-  "settings",
   "tokens",
   "media",
   "uploads",
