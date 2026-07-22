@@ -1053,4 +1053,42 @@ describe("publish-transition access control", () => {
       expect.objectContaining({ operation: "publish", resource: "posts" })
     );
   });
+
+  it("does not let a super-admin-owned key bypass a stored rule on a plain update", async () => {
+    // The primary update gate must also receive the API-key scope, so the
+    // session super-admin bypass does not apply to a scoped key on a non-status
+    // write — otherwise a super-admin-owned, update-only key would skip the
+    // collection's stored owner/role rules.
+    const acs = createMockAccessControlService();
+    acs.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "owner-only",
+    });
+    const rbac = {
+      checkAccess: vi.fn().mockResolvedValue(true),
+      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    };
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      rbacAccessControlService: rbac,
+    });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        // The key's resolved roles carry super-admin, but it is a scoped key.
+        user: { id: "admin-1", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts"],
+        },
+      },
+      { title: "no status change" }
+    );
+
+    // The stored rule ran and denied — the super-admin bypass did not fire.
+    expect(result.statusCode).toBe(403);
+  });
 });
