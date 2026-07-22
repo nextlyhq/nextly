@@ -254,7 +254,10 @@ describe("setVersionLabelForDocument — document-level update rules", () => {
       "collection",
       "posts",
       "e1",
-      expect.objectContaining({ id: "u1" })
+      expect.objectContaining({ id: "u1" }),
+      // The label gate now forwards the caller's authenticated scope so a scoped
+      // API key is judged on its own grant; this request carries no scope.
+      undefined
     );
   });
 
