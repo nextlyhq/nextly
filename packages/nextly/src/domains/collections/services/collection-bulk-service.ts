@@ -1559,6 +1559,11 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Whether any item appended an outbox event in the shared transaction. Read
+    // back onto the result only after the transaction commits (below), so a
+    // rollback — which undoes every delete and its event — never reports a
+    // durable event that isn't there.
+    let anyRecorded = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1580,6 +1585,9 @@ export class CollectionBulkService extends BaseService {
                   entryId,
                   skipHooks
                 );
+              // A committed item owes a delivery even if its afterDelete hook
+              // then threw (returned success:false).
+              if (deleteResult.eventRecorded) anyRecorded = true;
 
               if (deleteResult.success) {
                 result.successful++;
@@ -1622,6 +1630,9 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // The transaction committed (this line is skipped if it rejected), so any
+      // events it recorded are durable; surface that for the post-write drain.
+      result.eventRecorded = anyRecorded;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert

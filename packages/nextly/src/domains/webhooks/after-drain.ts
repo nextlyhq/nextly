@@ -156,7 +156,13 @@ export class WebhookFastDrainScheduler {
         // adds no latency to the write. With no subscriber there is nothing to
         // deliver, so skip the drain rather than fan out events that go nowhere.
         const enabled = await this.registry.getEnabledEndpointsFresh();
-        if (enabled.length === 0) break;
+        if (enabled.length === 0) {
+          // A write offered a drain while this read was in flight — possibly one
+          // that just enabled an endpoint this (now stale) read missed. Loop for
+          // a fresh read rather than dropping its requested drain.
+          if (this.rerunRequested) continue;
+          break;
+        }
         await runWebhookDrain(this.adapter, this.registry, this.drainOptions);
       } while (this.rerunRequested);
     } catch (err) {

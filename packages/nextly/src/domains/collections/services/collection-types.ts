@@ -125,6 +125,14 @@ export interface BatchOperationResult {
   ids: string[];
   /** Detailed error information for each failed entry */
   errors: Array<{ index: number; error: string }>;
+  /**
+   * Whether the committed batch appended any durable outbox event, independent
+   * of `successful`. A per-item delete can commit its row + event in the shared
+   * transaction and still be counted a failure when its afterDelete hook throws,
+   * so a batch where every committed item hit that path has `successful === 0`
+   * yet owes deliveries. Set only after the shared transaction commits.
+   */
+  eventRecorded?: boolean;
 }
 
 /**

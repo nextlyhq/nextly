@@ -5454,6 +5454,9 @@ export class CollectionMutationService extends BaseService {
     // recorded — a later failure (e.g. an afterDelete hook) is a per-item
     // side-effect issue, not an eventless delete, and must NOT roll the batch back.
     let deleteNeedsRollback = false;
+    // Set once the event is appended to the shared transaction; the batch caller
+    // reads it back and applies it only after the transaction commits.
+    let eventRecorded = false;
     try {
       // Get collection metadata early
       const collection = await this.collectionService.getCollection(
@@ -5669,6 +5672,7 @@ export class CollectionMutationService extends BaseService {
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;
+      eventRecorded = true;
 
       // Execute afterDelete hooks (unless skipped)
       if (!skipHooks) {
@@ -5706,6 +5710,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
       // Only a failure in the delete→event window propagates (to roll back an
@@ -5719,6 +5724,7 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        eventRecorded,
       };
     }
   }
