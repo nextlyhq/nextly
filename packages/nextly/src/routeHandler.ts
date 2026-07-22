@@ -66,6 +66,8 @@ import {
   updateWebhook,
   deleteWebhook,
   revealWebhookSecret,
+  listWebhookDeliveries,
+  getWebhookDelivery,
 } from "./api/webhooks";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -323,6 +325,10 @@ async function handleWebhookRequest(
       return deleteWebhook(req, id);
     case "revealWebhookSecret":
       return revealWebhookSecret(req, id);
+    case "listWebhookDeliveries":
+      return listWebhookDeliveries(req, id);
+    case "getWebhookDelivery":
+      return getWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
     default:
       return new Response(
         JSON.stringify({ error: "Unknown webhook operation" }),

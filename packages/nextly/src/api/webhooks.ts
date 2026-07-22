@@ -32,6 +32,8 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
+import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -65,6 +67,36 @@ async function getWebhookService(): Promise<WebhookEndpointService> {
   await getCachedNextly();
   return container.get<WebhookEndpointService>("webhookEndpointService");
 }
+
+async function getWebhookDeliveryService(): Promise<WebhookDeliveryQueryService> {
+  await getCachedNextly();
+  return container.get<WebhookDeliveryQueryService>(
+    "webhookDeliveryQueryService"
+  );
+}
+
+/** Delivery statuses a caller may filter on; matches the drain's vocabulary. */
+const DELIVERY_STATUSES = [
+  "pending",
+  "processing",
+  "delivered",
+  "retrying",
+  "failed",
+] as const;
+
+/**
+ * Query parameters for the delivery list. `page`/`limit` are coerced and
+ * bounded (a huge limit would let one request read the whole ledger); an
+ * unknown `status` is a client mistake rather than an empty result, so it is
+ * rejected. `eventType` is passed through — an unknown type simply matches
+ * nothing.
+ */
+const ListDeliveriesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).catch(1),
+  limit: z.coerce.number().int().min(1).max(100).catch(20),
+  status: z.enum(DELIVERY_STATUSES).optional(),
+  eventType: z.string().min(1).max(100).optional(),
+});
 
 /**
  * `update` is accepted for every action, matching how `api-keys` treats its
@@ -145,6 +177,82 @@ export function getWebhookById(req: Request, id: string): Promise<Response> {
     }
 
     return respondDoc(endpoint);
+  })(req);
+}
+
+/**
+ * List an endpoint's deliveries, newest first, with paging and optional
+ * status/event-type filters.
+ *
+ * Auth: session or API key + `read-webhooks` (or `update-webhooks`).
+ *
+ * Scoped by webhook id alone, so deliveries remain readable after an endpoint
+ * is retired (its history is kept deliberately). A delivery row carries no
+ * credential, so this is a plain read.
+ *
+ * Response: `{ items: WebhookDeliverySummary[], meta: PaginationMeta }`.
+ */
+export function listWebhookDeliveries(
+  req: Request,
+  webhookId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "read");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    const url = new URL(request.url);
+    const parsed = ListDeliveriesQuerySchema.safeParse({
+      page: url.searchParams.get("page") ?? undefined,
+      limit: url.searchParams.get("limit") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined,
+      eventType: url.searchParams.get("eventType") ?? undefined,
+    });
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const { page, limit, status, eventType } = parsed.data;
+
+    const service = await getWebhookDeliveryService();
+    const { items, total } = await service.listDeliveries(webhookId, {
+      page,
+      limit,
+      status,
+      eventType,
+    });
+
+    return respondList(
+      items,
+      offsetPaginationToMeta({ total, limit, offset: (page - 1) * limit })
+    );
+  })(req);
+}
+
+/**
+ * Fetch one delivery (with its attempt history and response snippet) for an
+ * endpoint.
+ *
+ * Auth: session or API key + `read-webhooks` (or `update-webhooks`).
+ *
+ * Response: bare `WebhookDeliveryDetail` via `respondDoc`. 404 when no delivery
+ * with this id belongs to this endpoint.
+ */
+export function getWebhookDelivery(
+  req: Request,
+  webhookId: string,
+  deliveryId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "read");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    const service = await getWebhookDeliveryService();
+    const delivery = await service.getDelivery(webhookId, deliveryId);
+
+    if (!delivery) {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    return respondDoc(delivery);
   })(req);
 }
 
