@@ -16,35 +16,26 @@ import { describe, it, expect, vi } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import {
-  RESERVED_RESOURCE_SLUGS,
+  SYSTEM_RESOURCES,
   isReservedResourceSlug,
 } from "../../../schemas/_zod/rbac";
 import { assertGlobalResourceSlugAvailable } from "../resource-slug-guard";
 
-describe("RESERVED_RESOURCE_SLUGS", () => {
-  it("reserves every system resource whose routes enforce CRUD actions", () => {
-    for (const slug of [
-      "webhooks",
-      "api-keys",
-      "email-providers",
-      "email-templates",
-      "users",
-      "roles",
-      "permissions",
-    ]) {
+describe("isReservedResourceSlug", () => {
+  it("reserves every system resource name", () => {
+    // Every system resource has a route enforcing a create/read/update/delete
+    // action that content seeding produces, so a same-named content type would
+    // mint a colliding permission row. `settings` and `media` are included:
+    // the user-fields/component routes accept `{action, "settings"}` and the
+    // media routes `{action, "media"}`, not only `manage`.
+    for (const slug of SYSTEM_RESOURCES) {
       expect(isReservedResourceSlug(slug)).toBe(true);
     }
   });
 
-  it("does not reserve settings or media, which stay usable as content", () => {
-    expect(isReservedResourceSlug("settings")).toBe(false);
-    expect(isReservedResourceSlug("media")).toBe(false);
-    expect(RESERVED_RESOURCE_SLUGS).not.toContain("settings");
-    expect(RESERVED_RESOURCE_SLUGS).not.toContain("media");
-  });
-
   it("does not reserve an ordinary content slug", () => {
     expect(isReservedResourceSlug("posts")).toBe(false);
+    expect(isReservedResourceSlug("products")).toBe(false);
   });
 });
 
@@ -70,11 +61,11 @@ describe("assertGlobalResourceSlugAvailable", () => {
     ).rejects.toThrow(NextlyError);
   });
 
-  it("allows settings and media", async () => {
+  it("rejects settings and media, which collide via their CRUD routes", async () => {
     for (const slug of ["settings", "media"]) {
       await expect(
         assertGlobalResourceSlugAvailable(adapterReturning(null), slug)
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(NextlyError);
     }
   });
 

@@ -48,41 +48,32 @@ export function isValidResource(
 }
 
 /**
- * System resources whose names must never be used as a collection, single or
- * component slug.
+ * Whether a slug may not be used for a collection or single, because it would
+ * collide with a system resource's permissions.
  *
- * Permission identity is `action-resource`, so a content type named `webhooks`
- * seeds `read-webhooks` / `update-webhooks` — the exact rows the webhook
- * endpoint routes check. A role granted the content type's permission would
- * then reach the system surface: read endpoint configuration, reveal signing
- * secrets, list API keys. Every slug-assignment path (create and rename, for
- * collections and singles alike) rejects these names.
+ * Permission identity is `action-resource`, so a content type named after a
+ * system resource seeds the exact rows that resource's routes check: a
+ * `webhooks` single seeds `read-webhooks` / `update-webhooks` and reaches the
+ * endpoint routes and their signing secrets; a `settings` single seeds
+ * `read-settings` / `update-settings` and reaches the user-fields and component
+ * admin surfaces (`routeHandler.ts` gates those on `{action, "settings"}`, not
+ * only `manage`); a `media` collection seeds `*-media` and reaches the media
+ * routes. Every system resource has at least one route enforcing a
+ * create/read/update/delete action that content seeding produces, so any system
+ * resource name is unsafe as a content slug.
  *
- * This is deliberately NARROWER than {@link SYSTEM_RESOURCES}. Two members are
- * excluded on purpose:
- * - `settings` — its system surface is gated only on `manage-settings`, and
- *   content seeding never produces the `manage` action, so a `settings`
- *   collection or single cannot reach it. It is also a common content model
- *   (site settings as a single).
- * - `media` — a plausible content concept, and its routes are not gated on the
- *   CRUD `*-media` permissions that content seeding would mint.
+ * Defined as "is a system resource" rather than a hand-maintained subset so a
+ * newly added system resource is protected automatically. Reserving a name that
+ * turned out to be manage-only would merely forbid a content type no one should
+ * create; leaving one out is a privilege-escalation.
  *
- * The set is exactly the resources whose routes enforce a create/read/update/
- * delete action that collection or single seeding also produces.
+ * Components are intentionally NOT covered: a component definition does not seed
+ * a permission under its own slug (the component admin routes are gated on the
+ * `settings`/`components` resource), so a component name cannot mint a colliding
+ * row and reserving it would only reject a harmless name.
  */
-export const RESERVED_RESOURCE_SLUGS = [
-  "users",
-  "roles",
-  "permissions",
-  "webhooks",
-  "api-keys",
-  "email-providers",
-  "email-templates",
-] as const;
-
-/** Whether a slug collides with a system resource's permissions. */
 export function isReservedResourceSlug(slug: string): boolean {
-  return (RESERVED_RESOURCE_SLUGS as readonly string[]).includes(slug);
+  return isSystemResource(slug);
 }
 
 export const RoleSchema = z.object({

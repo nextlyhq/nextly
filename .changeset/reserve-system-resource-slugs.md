@@ -20,8 +20,10 @@
 "@nextlyhq/ui": patch
 ---
 
-Collection, single and component slugs that collide with a system resource are refused.
+Collection and single slugs that collide with a system resource are refused.
 
-Permission identity is `action-resource`, so a content type sharing a system resource's name is granted the same permission rows the system routes check: a `webhooks` collection's `read-webhooks` reaches the endpoint routes and `update-webhooks` the signing secrets, and `api-keys`, `email-providers` and `email-templates` collide the same way. The reserved set is exactly the system resources whose routes enforce a create/read/update/delete action; `settings` and `media` are intentionally left usable as content, because the settings surface is gated on `manage` (which content never seeds) and media's routes are not gated on the CRUD permissions a content type would mint.
+Permission identity is `action-resource`, so a content type named after a system resource is granted the same permission rows that resource's routes check. A `webhooks` type reaches the endpoint routes and their signing secrets; a `settings` type reaches the user-fields and component admin surfaces (gated on `{action, "settings"}`, not only `manage`); a `media` type reaches the media routes. Every system resource has such a route, so any system-resource name — `users`, `roles`, `permissions`, `media`, `settings`, `email-providers`, `email-templates`, `api-keys`, `webhooks` — is now rejected as a collection or single slug.
 
-The check is enforced at every path that assigns or renames a slug — code-first validation, the shared collection/single registry guard, the Schema Builder's collection registry, and dynamic component registration — so it cannot be reached through a rename or a create path that skipped the others. An installation that already has content named one of these must rename it before upgrading.
+The check is enforced at every slug-assignment path: code-first validation, the shared collection/single registry guard (create and rename), the Schema Builder's collection registry, and the migration-snapshot boot path (which skips a reserved name rather than replaying it). Components are not restricted, because a component definition does not seed a permission under its own slug.
+
+An installation that already has a collection or single named one of these must rename it before upgrading.
