@@ -1198,6 +1198,10 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized `delete` against the key's scope; carry the scope
+        // so a super-admin-owned key's delete is judged on the key's OWN grant
+        // and does not skip stored owner/role delete rules.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1237,6 +1241,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // Carry the key's scope so each per-id delete is judged on the key's OWN
+        // grant, not the key owner's super-admin roles.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message

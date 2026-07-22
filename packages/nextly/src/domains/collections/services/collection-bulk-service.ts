@@ -319,6 +319,11 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. Forwarded to each per-id delete so a
+     * scoped API key is judged on its OWN delete grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     // Phase 4.5: result carries minimal `{id}` records for delete (the
     // entries are gone; no value in materializing more) and structured
@@ -340,6 +345,8 @@ export class CollectionBulkService extends BaseService {
               overrideAccess: params.overrideAccess,
               routeAuthorized: params.routeAuthorized,
               context: params.context,
+              // Judge the key's own delete grant per row.
+              authenticatedScope: params.authenticatedScope,
             });
 
             if (deleteResult.success) {
