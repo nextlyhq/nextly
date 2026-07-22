@@ -9,15 +9,21 @@ import {
 } from "../EntryLocaleContext";
 import { PublishAllLanguagesButton } from "../PublishAllLanguagesButton";
 
-const { useBranding, mutate } = vi.hoisted(() => ({
+const { useBranding, mutate, canFor } = vi.hoisted(() => ({
   useBranding: vi.fn(),
   mutate: vi.fn(),
+  canFor: vi.fn((_slug: string) => true),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
 }));
 vi.mock("@admin/hooks/queries/usePublishAllLocales", () => ({
   usePublishAllLocales: () => ({ mutate, isPending: false }),
+}));
+// Publishing every language is a publish; the caller holds the permission by
+// default so the render cases below stay about localization, not authorization.
+vi.mock("@admin/hooks/useCan", () => ({
+  useCan: (slug: string) => canFor(slug),
 }));
 
 const LOCALES = {
@@ -52,6 +58,8 @@ describe("PublishAllLanguagesButton", () => {
   beforeEach(() => {
     useBranding.mockReset();
     mutate.mockReset();
+    canFor.mockReset();
+    canFor.mockImplementation(() => true);
   });
 
   it("renders nothing when the collection has no status (drafts)", () => {
@@ -79,5 +87,23 @@ describe("PublishAllLanguagesButton", () => {
       screen.getByRole("button", { name: /publish all languages/i })
     );
     expect(mutate).toHaveBeenCalledWith("e1");
+  });
+
+  it("renders nothing for a caller without publish permission", () => {
+    // Otherwise an author holding only update-<slug> could publish every
+    // language from the sidebar, bypassing the header Publish gate.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    canFor.mockImplementation((slug: string) => slug !== "publish-pages");
+
+    const { container } = renderButton();
+
+    expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("checks the publish permission for this collection's slug", () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderButton();
+
+    expect(canFor).toHaveBeenCalledWith("publish-pages");
   });
 });

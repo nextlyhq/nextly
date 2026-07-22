@@ -11,6 +11,7 @@
 import { Button } from "@nextlyhq/ui";
 
 import { EyeOff, Send, Trash2, X } from "@admin/components/icons";
+import { useCan } from "@admin/hooks/useCan";
 
 import type { CollectionForColumns } from "./EntryTableColumns";
 
@@ -85,11 +86,21 @@ export function BulkActionBar({
   onClear,
   itemLabel = "entry",
 }: BulkActionBarProps) {
-  // Why: Publish / Unpublish are only meaningful for collections with the
-  // built-in Draft / Published lifecycle (`status: true`). Hide otherwise
-  // so non-status collections keep the existing minimal action set.
-  const showPublishActions =
-    collection?.status === true && !!onPublish && !!onUnpublish;
+  // Publishing is its own permission, distinct from editing, and gated per
+  // button rather than together: a user may hold one without the other. The
+  // slug is empty when there is no collection, which no permission matches, so
+  // the hook stays unconditional (a rule of hooks) and resolves to denied.
+  const canPublish = useCan(`publish-${collection?.slug ?? ""}`);
+  const canUnpublish = useCan(`unpublish-${collection?.slug ?? ""}`);
+
+  // Publish / Unpublish are only meaningful for collections with the built-in
+  // Draft / Published lifecycle (`status: true`), and only offered to a caller
+  // permitted to make the transition — matching the server, which refuses it
+  // otherwise. Each button is shown independently.
+  const showPublish = collection?.status === true && !!onPublish && canPublish;
+  const showUnpublish =
+    collection?.status === true && !!onUnpublish && canUnpublish;
+  const showPublishActions = showPublish || showUnpublish;
   // Pluralize the label. "entry" -> "entries", "category" -> "categories",
   // "collection" -> "collections", "user" -> "users". Already-plural labels
   // (ending in "s") pass through unchanged.
@@ -125,33 +136,36 @@ export function BulkActionBar({
         </Button>
 
         {/* Publish / Unpublish (only for collections with the built-in
-            Draft / Published lifecycle). Both buttons are always shown
-            together when status is enabled — bulk-toggling all selected
-            rows to one state is the natural UX for a workflow column. */}
+            Draft / Published lifecycle, and only the transitions this caller
+            is permitted to make). Each is shown on its own permission. */}
         {showPublishActions && (
           <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onUnpublish}
-              disabled={isPublishing}
-              className="gap-1.5"
-              aria-label="Unpublish selected"
-            >
-              <EyeOff className="h-4 w-4" />
-              Unpublish
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={onPublish}
-              disabled={isPublishing}
-              className="gap-1.5"
-              aria-label="Publish selected"
-            >
-              <Send className="h-4 w-4" />
-              Publish
-            </Button>
+            {showUnpublish && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onUnpublish}
+                disabled={isPublishing}
+                className="gap-1.5"
+                aria-label="Unpublish selected"
+              >
+                <EyeOff className="h-4 w-4" />
+                Unpublish
+              </Button>
+            )}
+            {showPublish && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onPublish}
+                disabled={isPublishing}
+                className="gap-1.5"
+                aria-label="Publish selected"
+              >
+                <Send className="h-4 w-4" />
+                Publish
+              </Button>
+            )}
           </>
         )}
 
