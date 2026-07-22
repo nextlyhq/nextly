@@ -39,6 +39,7 @@ import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { resolvePublishTransition } from "../../../lib/status-transition";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
+import type { CollectionAccessRules } from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
   CollectionRelationshipService,
@@ -246,6 +247,20 @@ class StatusTransitionDeniedError extends NextlyError {
 export interface TransitionAuthorization {
   publishDenied: CollectionServiceResult | null;
   unpublishDenied: CollectionServiceResult | null;
+  /**
+   * Pre-fetched inputs for the document-dependent (owner-only) publish/unpublish
+   * check, or `null` when none applies. The permission fields above cannot judge
+   * an owner-only rule up front because it needs the specific row (which is only
+   * known under the lock); this carries the rules + user so the in-transaction
+   * step can evaluate the owner against the row-locked document with no metadata
+   * or permission read. `null` for a trusted write, a super-admin session, or a
+   * collection without an owner-only transition rule — in which case the
+   * transaction path skips the document check entirely.
+   */
+  documentRule: {
+    accessRules: CollectionAccessRules;
+    user: UserContext | undefined;
+  } | null;
 }
 
 export class CollectionMutationService extends BaseService {
@@ -2480,13 +2495,13 @@ export class CollectionMutationService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<TransitionAuthorization> {
     if (args.overrideAccess) {
-      return { publishDenied: null, unpublishDenied: null };
+      return { publishDenied: null, unpublishDenied: null, documentRule: null };
     }
     const collection = await this.collectionService.getCollection(
       args.collectionName
     );
     if ((collection as { status?: boolean }).status !== true) {
-      return { publishDenied: null, unpublishDenied: null };
+      return { publishDenied: null, unpublishDenied: null, documentRule: null };
     }
     // Resolve both concurrently; each is judged on the caller's own grant (a
     // scoped API key on its scope), never route-authorized — the route attested
@@ -2513,7 +2528,16 @@ export class CollectionMutationService extends BaseService {
         args.authenticatedScope
       ),
     ]);
-    return { publishDenied, unpublishDenied };
+    // Owner-only publish/unpublish rules cannot be judged here because they need
+    // the specific row (only known under the lock). Pre-fetch the rules + user
+    // off the already-loaded collection so the in-transaction step evaluates the
+    // owner against the row-locked document with no further metadata read.
+    const documentRule = this.accessService.resolveTransitionDocumentRule(
+      collection as Record<string, unknown>,
+      args.accessUser,
+      args.authenticatedScope
+    );
+    return { publishDenied, unpublishDenied, documentRule };
   }
 
   /**
@@ -2542,26 +2566,45 @@ export class CollectionMutationService extends BaseService {
     // No status named in the write: no transition, nothing to enforce.
     if (args.nextStatus === undefined) return null;
     let lockedStatus: string | null = null;
+    let lockedRow: Record<string, unknown> | null = null;
     if (!args.isCreate && args.entryId) {
-      // Read the committed status UNDER a row lock, in the SAME query that takes
-      // the lock (`forUpdate`). A separate plain read would, on MySQL's
+      // Read the committed row UNDER a row lock, in the SAME query that takes the
+      // lock (`forUpdate`). A separate plain read would, on MySQL's
       // repeatable-read isolation, return this transaction's snapshot —
       // established by the caller's earlier pre-lock fetch of the row — and so
       // miss a concurrent writer's publish/unpublish committed since, leaving the
       // TOCTOU window open on MySQL. A `FOR UPDATE` read always sees the latest
       // committed row; SQLite skips the lock (BEGIN IMMEDIATE already serializes
-      // its writers) and its committed read is already current.
-      const locked = await tx.selectOne<{ status?: unknown }>(args.tableName, {
+      // its writers) and its committed read is already current. The full row (not
+      // just status) is read so an owner-only rule can be judged against the
+      // locked owner column below.
+      lockedRow = await tx.selectOne<Record<string, unknown>>(args.tableName, {
         where: this.whereEq("id", args.entryId),
         forUpdate: true,
       });
-      lockedStatus = (locked?.status as string | undefined) ?? null;
+      lockedStatus = (lockedRow?.status as string | undefined) ?? null;
     }
     const op = resolvePublishTransition(lockedStatus, args.nextStatus);
     if (!op) return null;
-    return op === "publish"
-      ? args.auth.publishDenied
-      : args.auth.unpublishDenied;
+    // Permission first (pre-resolved, no DB read): a caller lacking publish-<slug>
+    // / unpublish-<slug> is denied regardless of ownership.
+    const permissionDenied =
+      op === "publish" ? args.auth.publishDenied : args.auth.unpublishDenied;
+    if (permissionDenied) return permissionDenied;
+    // Then the document-dependent (owner-only) rule against the row-locked
+    // document. Pre-resolved rules + user are carried on `auth`, so this reads no
+    // metadata or permission storage inside the transaction. A create has no
+    // prior row (lockedRow null), and its owner is the creator, so owner-only
+    // allows — the check is skipped there.
+    if (args.auth.documentRule && lockedRow) {
+      return this.accessService.evaluateTransitionDocumentRule(
+        args.auth.documentRule.accessRules,
+        op,
+        args.auth.documentRule.user,
+        lockedRow
+      );
+    }
+    return null;
   }
 
   async updateEntry(
