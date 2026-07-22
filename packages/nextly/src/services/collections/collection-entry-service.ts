@@ -299,6 +299,8 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     entryId: string;
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }) {
@@ -329,6 +331,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return this.mutationService.deleteEntryInTransaction(tx, params);
@@ -355,6 +359,8 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     ids: string[];
     user?: UserContext;
+    /** Who performed the delete, recorded on each entry's outbox event. */
+    actor?: RequestActor;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
@@ -403,6 +409,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       where: WhereFilter;
       user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       context?: Record<string, unknown>;
     },
@@ -474,7 +482,12 @@ export class CollectionEntryService extends BaseService {
   }
 
   async deleteEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -485,7 +498,12 @@ export class CollectionEntryService extends BaseService {
 
   async deleteEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {

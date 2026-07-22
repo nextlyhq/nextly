@@ -303,6 +303,8 @@ export class CollectionBulkService extends BaseService {
     collectionName: string;
     ids: string[];
     user?: UserContext;
+    /** Who performed the delete, recorded on each entry's outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /** When true, the route middleware already ran the RBAC gate; forwarded to
@@ -328,6 +330,10 @@ export class CollectionBulkService extends BaseService {
               collectionName: params.collectionName,
               entryId,
               user: params.user,
+              // Forward the acting identity so each bulk-deleted entry's
+              // `entry.deleted` event is attributed to the API key/user that
+              // performed the bulk delete, not the key owner or system.
+              actor: params.actor,
               overrideAccess: params.overrideAccess,
               routeAuthorized: params.routeAuthorized,
               context: params.context,
@@ -670,6 +676,8 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       where: WhereFilter;
       user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** When true, the route middleware already ran the RBAC gate; stored
@@ -804,6 +812,9 @@ export class CollectionBulkService extends BaseService {
       collectionName: params.collectionName,
       ids,
       user: params.user,
+      // Carry the acting identity into the per-entry deletes so a where-clause
+      // bulk delete attributes its events like the id-based one.
+      actor: params.actor,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
@@ -1480,7 +1491,12 @@ export class CollectionBulkService extends BaseService {
    * ```
    */
   async deleteEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1565,7 +1581,15 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
-              // Handle unexpected errors during entry deletion
+              // A THROWN error (as opposed to a returned {success:false}) is
+              // unexpected and may have left a partial write in this SHARED
+              // transaction — e.g. the row was deleted but its entry.deleted
+              // outbox event failed to insert. A shared transaction cannot
+              // partially roll back, so committing would break the outbox
+              // guarantee (a delete with no event). Abort the whole batch rather
+              // than soft-failing this item and committing the rest. Expected
+              // per-item failures (access denied, not found) are RETURNED above,
+              // not thrown, so partial success is unaffected.
               result.failed++;
               result.errors.push({
                 index: entryIndex,
@@ -1575,30 +1599,43 @@ export class CollectionBulkService extends BaseService {
                     : "Unknown error occurred",
               });
 
-              if (stopOnError) {
-                throw error; // Re-throw to trigger transaction rollback
-              }
+              throw error; // Roll the whole batch back.
             }
           }
         }
       });
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
-      // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk delete rolled back due to stopOnError", {
+      // The shared transaction rolled back — either stopOnError tripped on a
+      // returned failure, or an unexpected error (e.g. a failed outbox insert
+      // after a row delete) aborted the batch. Every delete in the transaction
+      // was undone, so nothing committed: report ALL requested ids as failed
+      // (not just those processed before the abort) and surface the batch error,
+      // so a caller is not told 0 succeeded / 1 failed for a 3-id request.
+      const rolledBackCount = result.successful;
+      if (rolledBackCount > 0) {
+        this.logger.warn("Bulk delete rolled back", {
           collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
+          successfulBeforeRollback: rolledBackCount,
           error: error instanceof Error ? error.message : String(error),
         });
-        // Clear successful entries since they were rolled back
-        const rolledBackCount = result.successful;
-        result.successful = 0;
-        result.ids = [];
-        // Add rollback info to first error
-        if (result.errors.length > 0) {
-          result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
-        }
+      }
+      result.successful = 0;
+      result.ids = [];
+      result.failed = ids.length;
+      const batchError = error instanceof Error ? error.message : String(error);
+      const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
+      // Rebuild errors as exactly one entry per requested id, in index order.
+      // A `stopOnError` returned-failure pushes both the item error and a thrown
+      // wrapper for the same index, so dedupe (first wins) before filling the
+      // rolled-back ids that had no entry — otherwise `errors` would exceed
+      // `failed` and give a client duplicate detail for one id.
+      const byIndex = new Map<number, string>();
+      for (const e of result.errors) {
+        if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+      }
+      result.errors = [];
+      for (let i = 0; i < ids.length; i += 1) {
+        result.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
       }
     }
 
@@ -1645,7 +1682,12 @@ export class CollectionBulkService extends BaseService {
    */
   async deleteEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1722,6 +1764,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A THROWN error may have left a partial write in the CALLER'S
+          // transaction — e.g. a row deleted but its entry.deleted outbox event
+          // failed to insert. Propagate it so the caller's transaction rolls
+          // back rather than committing a delete with no event. Expected per-item
+          // failures are RETURNED above, not thrown, so partial success stands.
           result.failed++;
           result.errors.push({
             index: entryIndex,
@@ -1729,9 +1776,7 @@ export class CollectionBulkService extends BaseService {
               error instanceof Error ? error.message : "Unknown error occurred",
           });
 
-          if (stopOnError) {
-            throw error; // Caller's transaction will be rolled back
-          }
+          throw error; // Caller's transaction will be rolled back.
         }
       }
     }

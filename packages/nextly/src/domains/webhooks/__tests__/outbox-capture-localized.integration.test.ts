@@ -404,6 +404,38 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(envelopeOf(created!).data.status).toBe("published");
   });
 
+  it("carries the default locale's translatable values in the delete payload", async () => {
+    // Translatable fields live only in the companion table, so a delete snapshot
+    // built from the main row alone would omit `heading`. The event must merge
+    // the default locale's companion values, matching create/update.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English heading" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await h.deleteEntry({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted).toBeDefined();
+    const envelope = envelopeOf(deleted!);
+    expect(envelope.data.title).toBe("T");
+    // The localized field, sourced from the companion rather than absent.
+    expect(envelope.data.heading).toBe("English heading");
+    // The payload carries the default locale's values, so the event says so —
+    // otherwise a receiver cannot tell which translation it represents.
+    expect(envelope.resource).toMatchObject({ locale: "en" });
+  });
+
   it("reports the per-locale status the write committed, not the stale main-row status", async () => {
     const t = await boot();
     await migrate(t);
