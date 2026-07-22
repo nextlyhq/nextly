@@ -173,5 +173,14 @@ export const nextlyWebhookDeliveries = pgTable(
     // Retention scans terminal rows oldest-first; without this the prune would
     // sequentially scan the fastest-growing table in the system.
     index("nextly_webhook_deliveries_retention_idx").on(t.status, t.updatedAt),
+    // The admin delivery log lists one endpoint's deliveries newest-first,
+    // paged. This composite matches the (webhook_id, created_at DESC, id DESC)
+    // access pattern so a page reads an index range instead of sorting every
+    // row for the endpoint as its history grows.
+    index("nextly_webhook_deliveries_webhook_created_idx").on(
+      t.webhookId,
+      t.createdAt,
+      t.id
+    ),
   ]
 );

@@ -41,6 +41,7 @@ import {
   CreateWebhookSchema,
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
 
 import { readJsonBody } from "./read-json-body";
 import {
@@ -218,9 +219,12 @@ export function listWebhookDeliveries(
       eventType,
     });
 
+    // Opt this response out of timezone rewriting: a delivery's lastError and
+    // response snippet are opaque captured text that must survive verbatim.
     return respondList(
       items,
-      offsetPaginationToMeta({ total, limit, offset: (page - 1) * limit })
+      offsetPaginationToMeta({ total, limit, offset: (page - 1) * limit }),
+      { headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" } }
     );
   })(req);
 }
@@ -252,7 +256,11 @@ export function getWebhookDelivery(
       });
     }
 
-    return respondDoc(delivery);
+    // Opt out of timezone rewriting so the raw response snippet and attempt
+    // errors are returned exactly as the receiver sent them.
+    return respondDoc(delivery, {
+      headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+    });
   })(req);
 }
 

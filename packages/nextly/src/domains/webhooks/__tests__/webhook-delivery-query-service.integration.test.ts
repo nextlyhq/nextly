@@ -227,6 +227,8 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
         kind: "entry",
         collection: "posts",
         id: "p1",
+        // No locale on a non-localized event.
+        locale: null,
       });
       expect(delivered.status).toBe("delivered");
       expect(delivered.lastStatusCode).toBe(200);
@@ -239,6 +241,28 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
       expect(delivered.createdAt.toISOString()).toBe(
         "2026-07-18T00:00:01.000Z"
       );
+    });
+
+    it("surfaces the resource locale from the event payload", async () => {
+      await seedWebhook("wh1");
+      // locale lives only in the stored envelope, not a denormalized column;
+      // two locales of the same document must be distinguishable in the log.
+      await seedEvent("evt_de", "entry.updated", {
+        kind: "entry",
+        collection: "posts",
+        id: "p1",
+        locale: "de",
+      });
+      await seedDelivery("d_de", "wh1", "evt_de", {
+        status: "delivered",
+        createdAt: new Date("2026-07-18T00:00:05.000Z"),
+      });
+
+      const { items } = await service.listDeliveries("wh1", {
+        page: 1,
+        limit: 20,
+      });
+      expect(items[0].resource.locale).toBe("de");
     });
 
     it("filters by status", async () => {

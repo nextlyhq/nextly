@@ -13,6 +13,19 @@ export const MYSQL_DATE_TIME_REGEX =
 
 export const HAS_EXPLICIT_TIMEZONE_REGEX = /(?:Z|[+-]\d{2}:\d{2})$/i;
 
+/**
+ * Response header opting a JSON body out of server-side timezone normalization.
+ *
+ * `withTimezoneFormatting` rewrites any string that looks like a date, by value,
+ * not just known timestamp fields. Set this on a response whose body carries
+ * opaque captured text that must survive verbatim — a webhook delivery's raw
+ * response snippet, for example, which is a debugging record and could itself be
+ * a bare date string. Timestamps in such a response are returned in UTC for the
+ * client to localize. The header is internal and stripped before the response
+ * leaves the formatter.
+ */
+export const SKIP_TIMEZONE_FORMAT_HEADER = "x-nextly-skip-timezone-format";
+
 // Restrict normalization to known timestamp-like keys to avoid mutating
 // user content fields that merely look like dates.
 export const TIMESTAMP_KEY_REGEX =
@@ -296,6 +309,18 @@ export async function withTimezoneFormatting(
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
     return response;
+  }
+
+  // Opt-out: a handler marked this body as carrying opaque text that must not be
+  // rewritten. Strip the internal marker and return the body verbatim.
+  if (response.headers.get(SKIP_TIMEZONE_FORMAT_HEADER) === "1") {
+    const headers = new Headers(response.headers);
+    headers.delete(SKIP_TIMEZONE_FORMAT_HEADER);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   }
 
   // Keep error payloads untouched to avoid accidental message mutation.

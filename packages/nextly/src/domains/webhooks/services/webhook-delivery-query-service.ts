@@ -53,6 +53,12 @@ export interface WebhookDeliveryResource {
   kind: string;
   collection: string | null;
   id: string | null;
+  /**
+   * Which translation changed, for a localized resource. Two writes to the
+   * same document in different locales share kind/collection/id and are only
+   * told apart by this, so the log would otherwise collapse them.
+   */
+  locale: string | null;
 }
 
 /** One recorded attempt, as stored on the delivery row's `attempts` log. */
@@ -118,7 +124,23 @@ interface DeliveryJoinRow {
   resourceKind: string;
   resourceCollection: string | null;
   resourceId: string | null;
+  // The full stored envelope; only `resource.locale` (not a denormalized event
+  // column) is read from it.
+  payload: unknown;
   eventCreatedAt: Date;
+}
+
+/**
+ * Read `resource.locale` from a stored event envelope. `locale` lives only in
+ * the JSON payload (there is no denormalized event column for it), so a
+ * malformed or absent value reads as null rather than throwing.
+ */
+function localeFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const resource = (payload as { resource?: unknown }).resource;
+  if (!resource || typeof resource !== "object") return null;
+  const locale = (resource as { locale?: unknown }).locale;
+  return typeof locale === "string" ? locale : null;
 }
 
 export class WebhookDeliveryQueryService extends BaseService {
@@ -179,6 +201,7 @@ export class WebhookDeliveryQueryService extends BaseService {
       resourceKind: this.events.resourceKind,
       resourceCollection: this.events.resourceCollection,
       resourceId: this.events.resourceId,
+      payload: this.events.payload,
       eventCreatedAt: this.events.createdAt,
     };
   }
@@ -271,6 +294,7 @@ export class WebhookDeliveryQueryService extends BaseService {
         kind: row.resourceKind,
         collection: row.resourceCollection,
         id: row.resourceId,
+        locale: localeFromPayload(row.payload),
       },
       status: row.status as WebhookDeliveryStatus,
       attemptCount: row.attemptCount,
