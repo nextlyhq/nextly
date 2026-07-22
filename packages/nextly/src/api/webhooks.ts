@@ -135,6 +135,13 @@ function denySessionOnly(
   });
 }
 
+/**
+ * Minimum length for a secret that may authorize the drain trigger. Enforced at
+ * the auth boundary so a short platform-wide `CRON_SECRET` is ignored without
+ * failing app boot (see env.ts).
+ */
+const MIN_DRAIN_SECRET_LENGTH = 32;
+
 /** The bearer token on the request, or null when there is no bearer header. */
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -168,8 +175,19 @@ async function authorizeDrain(request: Request): Promise<void> {
     // NEXTLY_DRAIN_SECRET or Vercel Cron's CRON_SECRET (what Vercel actually
     // sends). Constant-time against each configured value. A bearer token is not
     // sent on a cross-site request, so this path is not CSRF-exposed.
+    //
+    // The entropy floor is enforced HERE, not only in the env schema, so a
+    // platform-wide CRON_SECRET that is too short to be a safe authorizer is
+    // ignored rather than accepted — and its length never blocks app boot for a
+    // deployment that doesn't use the drain.
     for (const secret of [env.NEXTLY_DRAIN_SECRET, env.CRON_SECRET]) {
-      if (secret && constantTimeEqual(presented, secret)) return;
+      if (
+        secret &&
+        secret.length >= MIN_DRAIN_SECRET_LENGTH &&
+        constantTimeEqual(presented, secret)
+      ) {
+        return;
+      }
     }
   }
   // GET is authorized ONLY by the shared bearer secret above. A GET can be
