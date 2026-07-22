@@ -293,7 +293,10 @@ export class CollectionMutationService extends BaseService {
        */
       locale?: string;
     }
-  ): Promise<Record<string, unknown>> {
+    // Returns the assembled document plus the locale that actually applied — set
+    // only when the collection is localized — so the caller tags `resource.locale`
+    // with the same locale the payload represents (and omits it otherwise).
+  ): Promise<{ document: Record<string, unknown>; locale?: string }> {
     const { collectionName, entryId, tableName, row, fields, locale } = args;
     const manyToManyFields = fields.filter(
       f => f.type === "relationship" && f.options?.relationType === "manyToMany"
@@ -305,16 +308,24 @@ export class CollectionMutationService extends BaseService {
     const merged: Record<string, unknown> = {
       ...convertTimestampsToCamelCase({ ...row }),
     };
+    let appliedLocale: string | undefined;
     if (locale && this.localization) {
-      Object.assign(
-        merged,
-        await this.readCompanionLocalizedValues(
-          tx,
-          collectionName,
-          entryId,
-          locale
-        )
-      );
+      // A companion schema means the collection is localized; only then does the
+      // locale disambiguate the payload, so only then is it recorded.
+      const companion =
+        await this.fileManager.loadCompanionSchema(collectionName);
+      if (companion) {
+        appliedLocale = locale;
+        Object.assign(
+          merged,
+          await this.readCompanionLocalizedValues(
+            tx,
+            collectionName,
+            entryId,
+            locale
+          )
+        );
+      }
     }
 
     const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
@@ -328,10 +339,13 @@ export class CollectionMutationService extends BaseService {
       tableName,
       fields,
       manyToManyFields,
-      locale
+      appliedLocale
     );
 
-    return assembleDocument({ parentRow, components, manyToMany });
+    return {
+      document: assembleDocument({ parentRow, components, manyToMany }),
+      locale: appliedLocale,
+    };
   }
 
   private transitionStatus(args: {
@@ -3499,14 +3513,15 @@ export class CollectionMutationService extends BaseService {
         // relations, in the read shape create/update events use. A localized
         // collection keeps translatable values in the companion, so overlay the
         // default locale's.
-        const deletedDocument = await this.buildDeletedDocument(tx, {
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          tableName,
-          row: currentRow as Record<string, unknown>,
-          fields: snapshotFields,
-          locale: this.localization?.defaultLocale,
-        });
+        const { document: deletedDocument, locale: deletedLocale } =
+          await this.buildDeletedDocument(tx, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            tableName,
+            row: currentRow as Record<string, unknown>,
+            fields: snapshotFields,
+            locale: this.localization?.defaultLocale,
+          });
 
         if (this.componentDataService) {
           await this.componentDataService.deleteComponentDataInTransaction(tx, {
@@ -3528,13 +3543,15 @@ export class CollectionMutationService extends BaseService {
 
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
-        // carries only `data`).
+        // carries only `data`). `locale` is set only for a localized collection,
+        // so a receiver knows which translation the payload represents.
         await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
             kind: "entry",
             collection: params.collectionName,
             id: params.entryId,
+            ...(deletedLocale ? { locale: deletedLocale } : {}),
           },
           data: deletedDocument,
           previous: null,
@@ -4465,14 +4482,15 @@ export class CollectionMutationService extends BaseService {
 
       // Assemble the removed document before the cascade removes its relations,
       // in the read shape create/update events use.
-      const deletedDocument = await this.buildDeletedDocument(tx, {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        tableName,
-        row: freshEntry,
-        fields: snapshotFields,
-        locale: this.localization?.defaultLocale,
-      });
+      const { document: deletedDocument, locale: deletedLocale } =
+        await this.buildDeletedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          tableName,
+          row: freshEntry,
+          fields: snapshotFields,
+          locale: this.localization?.defaultLocale,
+        });
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
@@ -4503,12 +4521,14 @@ export class CollectionMutationService extends BaseService {
       // through this helper (batch/cascade/internal) is observable too, in the
       // same shape as the single-delete path. Resolve component schemas on this
       // transaction's connection to avoid taking a second pooled connection.
+      // `locale` is set only for a localized collection.
       await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
           kind: "entry",
           collection: params.collectionName,
           id: params.entryId,
+          ...(deletedLocale ? { locale: deletedLocale } : {}),
         },
         data: deletedDocument,
         previous: null,
@@ -5553,14 +5573,15 @@ export class CollectionMutationService extends BaseService {
 
       // Assemble the removed document before the cascade removes its relations,
       // in the read shape create/update events use.
-      const deletedDocument = await this.buildDeletedDocument(tx, {
-        collectionName: params.collectionName,
-        entryId,
-        tableName,
-        row: freshEntry,
-        fields: snapshotFields,
-        locale: this.localization?.defaultLocale,
-      });
+      const { document: deletedDocument, locale: deletedLocale } =
+        await this.buildDeletedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId,
+          tableName,
+          row: freshEntry,
+          fields: snapshotFields,
+          locale: this.localization?.defaultLocale,
+        });
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
@@ -5590,13 +5611,15 @@ export class CollectionMutationService extends BaseService {
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
       // single-delete path. Resolve component schemas on this transaction's
-      // connection to avoid taking a second pooled connection.
+      // connection to avoid taking a second pooled connection. `locale` is set
+      // only for a localized collection.
       await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
           kind: "entry",
           collection: params.collectionName,
           id: entryId,
+          ...(deletedLocale ? { locale: deletedLocale } : {}),
         },
         data: deletedDocument,
         previous: null,

@@ -431,6 +431,9 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(envelope.data.title).toBe("T");
     // The localized field, sourced from the companion rather than absent.
     expect(envelope.data.heading).toBe("English heading");
+    // The payload carries the default locale's values, so the event says so —
+    // otherwise a receiver cannot tell which translation it represents.
+    expect(envelope.resource).toMatchObject({ locale: "en" });
   });
 
   it("reports the per-locale status the write committed, not the stale main-row status", async () => {

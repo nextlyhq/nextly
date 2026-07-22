@@ -1623,14 +1623,18 @@ export class CollectionBulkService extends BaseService {
       result.ids = [];
       result.failed = ids.length;
       const batchError = error instanceof Error ? error.message : String(error);
-      if (result.errors.length > 0) {
-        result.errors[0].error += ` (batch rolled back; ${rolledBackCount} earlier delete(s) undone)`;
-      } else {
-        result.errors.push({
-          index: 0,
-          error: `Batch rolled back: ${batchError}`,
-        });
+      const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
+      // Every requested id failed (the transaction was undone), but only the ids
+      // processed before the abort have per-index error detail. Add a rollback
+      // error for every remaining index so `failed` and `errors` agree and a
+      // caller relying on per-id detail still sees each rolled-back id.
+      const covered = new Set(result.errors.map(e => e.index));
+      for (let i = 0; i < ids.length; i += 1) {
+        if (!covered.has(i)) {
+          result.errors.push({ index: i, error: rollbackNote });
+        }
       }
+      result.errors.sort((a, b) => a.index - b.index);
     }
 
     this.logger.info("Bulk delete completed", {
