@@ -1576,7 +1576,15 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
-              // Handle unexpected errors during entry deletion
+              // A THROWN error (as opposed to a returned {success:false}) is
+              // unexpected and may have left a partial write in this SHARED
+              // transaction — e.g. the row was deleted but its entry.deleted
+              // outbox event failed to insert. A shared transaction cannot
+              // partially roll back, so committing would break the outbox
+              // guarantee (a delete with no event). Abort the whole batch rather
+              // than soft-failing this item and committing the rest. Expected
+              // per-item failures (access denied, not found) are RETURNED above,
+              // not thrown, so partial success is unaffected.
               result.failed++;
               result.errors.push({
                 index: entryIndex,
@@ -1586,18 +1594,18 @@ export class CollectionBulkService extends BaseService {
                     : "Unknown error occurred",
               });
 
-              if (stopOnError) {
-                throw error; // Re-throw to trigger transaction rollback
-              }
+              throw error; // Roll the whole batch back.
             }
           }
         }
       });
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
-      // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk delete rolled back due to stopOnError", {
+      // The shared transaction rolled back — either stopOnError tripped on a
+      // returned failure, or an unexpected error (e.g. a failed outbox insert
+      // after a row delete) aborted the batch. Every delete in the transaction
+      // was undone, so no item actually succeeded, regardless of stopOnError.
+      if (result.successful > 0) {
+        this.logger.warn("Bulk delete rolled back", {
           collectionName: params.collectionName,
           successfulBeforeRollback: result.successful,
           error: error instanceof Error ? error.message : String(error),
@@ -1733,6 +1741,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A THROWN error may have left a partial write in the CALLER'S
+          // transaction — e.g. a row deleted but its entry.deleted outbox event
+          // failed to insert. Propagate it so the caller's transaction rolls
+          // back rather than committing a delete with no event. Expected per-item
+          // failures are RETURNED above, not thrown, so partial success stands.
           result.failed++;
           result.errors.push({
             index: entryIndex,
@@ -1740,9 +1753,7 @@ export class CollectionBulkService extends BaseService {
               error instanceof Error ? error.message : "Unknown error occurred",
           });
 
-          if (stopOnError) {
-            throw error; // Caller's transaction will be rolled back
-          }
+          throw error; // Caller's transaction will be rolled back.
         }
       }
     }
