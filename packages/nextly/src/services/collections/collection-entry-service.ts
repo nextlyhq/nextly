@@ -299,6 +299,8 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     entryId: string;
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }) {

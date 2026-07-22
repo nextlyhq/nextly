@@ -317,6 +317,164 @@ describe("webhook outbox capture (integration)", () => {
     }
   });
 
+  it("records entry.deleted carrying the removed document, and the row is gone", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "doomed" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const result = await handler.deleteEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted).toBeDefined();
+    expect(deleted!.resourceKind).toBe("entry");
+    expect(deleted!.resourceCollection).toBe("posts");
+    expect(deleted!.resourceId).toBe(id);
+
+    const envelope = envelopeOf(deleted!);
+    // The removed document's final state ships as `data`; there is no
+    // post-delete state, so `previous` is null. The event is appended after the
+    // row delete in the same transaction, so its presence proves the delete
+    // committed.
+    expect(envelope.data.title).toBe("doomed");
+    expect(envelope.previous).toBeNull();
+  });
+
+  it("never ships a secret field in the delete payload", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "accounts",
+          fields: [text({ name: "title" }), password({ name: "secret" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "accounts", overrideAccess: true },
+      { title: "acct", secret: "SuperSecret123!" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "accounts",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    const envelope = envelopeOf(deleted!);
+    expect(envelope.data.title).toBe("acct");
+    expect(envelope.data).not.toHaveProperty("secret");
+    expect(JSON.stringify(envelope)).not.toContain("SuperSecret123!");
+  });
+
+  it("never ships a hidden component field in the delete payload", async () => {
+    // The delete payload is assembled with the same component population as the
+    // create/update events, so a field hidden inside a component must be stripped
+    // there too — otherwise a delete would leak what a create never did.
+    current = await createTestNextly({
+      components: [
+        defineComponent({
+          slug: "profile",
+          fields: [
+            text({ name: "heading" }),
+            text({ name: "internalNote", admin: { hidden: true } }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [
+            text({ name: "title" }),
+            component({ name: "profile", component: "profile" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      {
+        title: "page",
+        profile: { heading: "shown", internalNote: "CONFIDENTIAL_NOTE" },
+      }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    const envelope = envelopeOf(deleted!);
+    // The component's visible value is in the removed document...
+    expect((envelope.data.profile as { heading?: string })?.heading).toBe(
+      "shown"
+    );
+    // ...but the hidden one never leaves the system, even on delete.
+    expect(JSON.stringify(envelope)).not.toContain("CONFIDENTIAL_NOTE");
+  });
+
+  it("attributes the delete to the acting identity, including an API key", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "by key" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+      actor: { type: "apiKey", id: "key_del" },
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted!.actorType).toBe("apiKey");
+    expect(deleted!.actorId).toBe("key_del");
+    expect(envelopeOf(deleted!).actor).toEqual({
+      type: "apiKey",
+      id: "key_del",
+    });
+  });
+
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {
     // The outbox guarantee: an event must never outlive the change it describes,
     // or a webhook fires for something that never happened. Recording through the

@@ -265,6 +265,48 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * Assemble a removed entry as the read shape the create/update events carry —
+   * JSON container fields parsed, component subtrees and many-to-many id arrays
+   * populated, password and system-owner fields stripped — so a delete event
+   * reports the document in a shape consistent with every other event. Reads the
+   * relations on the delete transaction, so the caller MUST build this BEFORE the
+   * cascade delete removes them.
+   */
+  private async buildDeletedDocument(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      row: Record<string, unknown>;
+      fields: FieldDefinition[];
+    }
+  ): Promise<Record<string, unknown>> {
+    const { collectionName, entryId, tableName, row, fields } = args;
+    const manyToManyFields = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+
+    const parentRow = this.deserializeJsonFieldsForSnapshot(
+      convertTimestampsToCamelCase({ ...row }),
+      fields
+    );
+    stripPasswordFieldValues(parentRow, fields);
+    stripSystemOwnerField(parentRow);
+
+    const { components, manyToMany } = await this.buildFullSnapshotRelations(
+      tx,
+      entryId,
+      collectionName,
+      tableName,
+      fields,
+      manyToManyFields
+    );
+
+    return assembleDocument({ parentRow, components, manyToMany });
+  }
+
   private transitionStatus(args: {
     collection: string;
     id: unknown;
@@ -3282,6 +3324,8 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryId: string;
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /** When true, the route middleware already ran the RBAC gate; stored rules
@@ -3388,20 +3432,61 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
-      // Cascade delete component data before deleting the main entry
-      if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
-        await this.componentDataService.deleteComponentData({
-          parentId: params.entryId,
-          parentTable: tableName,
-          fields: collectionFields,
-        });
-      }
+      // The collection schema, viewed two ways: the component cascade takes
+      // FieldConfig, the outbox snapshot takes FieldDefinition. Both are the
+      // same underlying array off the loosely-typed collection.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+      // Resolved before the transaction opens: the expansion reads the component
+      // registry on the pooled connection (see the create/update paths).
+      const webhookFields = await this.webhookFieldTree(snapshotFields);
 
-      await this.db.delete(schema).where(eq(schema.id, params.entryId));
-      // .returning();
+      // Delete the entry, cascade its component subtrees, and append the
+      // `entry.deleted` event in one transaction so the event commits with the
+      // deletion (never recorded for a delete that rolls back) and a
+      // component-cascade failure rolls the whole thing back instead of leaving
+      // orphaned component rows.
+      await this.adapter.transaction(async tx => {
+        // Read the removed document before the cascade delete removes its
+        // relations, in the read shape create/update events use.
+        const deletedDocument = await this.buildDeletedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          tableName,
+          row: entry as Record<string, unknown>,
+          fields: snapshotFields,
+        });
+
+        if (this.componentDataService) {
+          await this.componentDataService.deleteComponentDataInTransaction(tx, {
+            parentId: params.entryId,
+            parentTable: tableName,
+            fields: collectionFields,
+          });
+        }
+
+        await tx.delete(tableName, this.whereEq("id", params.entryId));
+
+        // The removed document's final state ships as `data`; there is no
+        // post-delete state, so `previous` is null (mirroring create, which
+        // carries only `data`).
+        await recordMutationEvent(tx, {
+          type: "entry.deleted",
+          resource: {
+            kind: "entry",
+            collection: params.collectionName,
+            id: params.entryId,
+          },
+          data: deletedDocument,
+          previous: null,
+          fields: webhookFields,
+          actor: actorForWrite(params.actor, params.user),
+        });
+      });
 
       const deleted = entry;
 

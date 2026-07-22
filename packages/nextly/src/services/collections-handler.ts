@@ -664,6 +664,8 @@ export class CollectionsHandler {
     userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
