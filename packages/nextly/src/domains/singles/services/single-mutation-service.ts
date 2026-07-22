@@ -20,7 +20,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq } from "drizzle-orm";
+import { and, eq, type Column } from "drizzle-orm";
 
 import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -884,7 +884,7 @@ export class SingleMutationService extends BaseService {
     parentId: string,
     locale: string
   ): Promise<string | null> {
-    const table = companion.table as Record<string, unknown>;
+    const table = companion.table as Record<string, Column>;
     const drizzle = this.adapter.getDrizzle<{
       select: () => {
         from: (t: unknown) => {
@@ -895,12 +895,9 @@ export class SingleMutationService extends BaseService {
     const rows = (await drizzle
       .select()
       .from(companion.table)
-      .where(
-        and(
-          eq(table._parent as never, parentId),
-          eq(table._locale as never, locale)
-        )
-      )) as { _status?: unknown }[];
+      .where(and(eq(table._parent, parentId), eq(table._locale, locale)))) as {
+      _status?: unknown;
+    }[];
 
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
