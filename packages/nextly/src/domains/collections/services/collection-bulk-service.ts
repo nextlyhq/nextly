@@ -1603,21 +1603,28 @@ export class CollectionBulkService extends BaseService {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert
       // after a row delete) aborted the batch. Every delete in the transaction
-      // was undone, so no item actually succeeded, regardless of stopOnError.
-      if (result.successful > 0) {
+      // was undone, so nothing committed: report ALL requested ids as failed
+      // (not just those processed before the abort) and surface the batch error,
+      // so a caller is not told 0 succeeded / 1 failed for a 3-id request.
+      const rolledBackCount = result.successful;
+      if (rolledBackCount > 0) {
         this.logger.warn("Bulk delete rolled back", {
           collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
+          successfulBeforeRollback: rolledBackCount,
           error: error instanceof Error ? error.message : String(error),
         });
-        // Clear successful entries since they were rolled back
-        const rolledBackCount = result.successful;
-        result.successful = 0;
-        result.ids = [];
-        // Add rollback info to first error
-        if (result.errors.length > 0) {
-          result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
-        }
+      }
+      result.successful = 0;
+      result.ids = [];
+      result.failed = ids.length;
+      const batchError = error instanceof Error ? error.message : String(error);
+      if (result.errors.length > 0) {
+        result.errors[0].error += ` (batch rolled back; ${rolledBackCount} earlier delete(s) undone)`;
+      } else {
+        result.errors.push({
+          index: 0,
+          error: `Batch rolled back: ${batchError}`,
+        });
       }
     }
 
