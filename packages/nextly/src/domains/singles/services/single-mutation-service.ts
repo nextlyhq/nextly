@@ -374,34 +374,56 @@ export class SingleMutationService extends BaseService {
       const singleHasStatus =
         (singleMeta as { status?: boolean }).status === true;
       if (singleHasStatus && !options.overrideAccess) {
-        const isNonDefaultLocaleStatusWrite =
+        const finalStatus = (currentData as { status?: unknown }).status;
+        const isNonDefaultLocaleWrite =
           companion?.hasStatus === true &&
           writeLocale !== undefined &&
           writeLocale !== this.localization?.defaultLocale;
-        const finalStatus = (currentData as { status?: unknown }).status;
-        // The split persists a companion `_status` only for a string status;
-        // otherwise this locale's stored status is unchanged and there is no
-        // transition to authorize (and no reason to read the prior status).
-        const persistsCompanionStatus =
-          isNonDefaultLocaleStatusWrite && typeof finalStatus === "string";
-        const transitionNextStatus = isNonDefaultLocaleStatusWrite
-          ? persistsCompanionStatus
-            ? finalStatus
-            : undefined
+        // A write moves the published state in two places, and the gate must
+        // fire if EITHER makes a real transition:
+        //   - the MAIN row `status` (a default-locale or non-localized write; a
+        //     non-default-locale write leaves it untouched — the split strips it
+        //     from the main payload), and
+        //   - the write locale's companion `_status` (any localized write that
+        //     provides a string status, INCLUDING the default locale, whose
+        //     status also lands on the companion row). The split only persists a
+        //     companion `_status` for a string value.
+        // Checking the main row alone would let a default-locale write publish a
+        // still-draft companion `_status` while the main row is already published
+        // (reachable after per-locale status is added to existing content).
+        const mainNextStatus = isNonDefaultLocaleWrite
+          ? undefined
           : finalStatus;
-        const transitionPreviousStatus = persistsCompanionStatus
+        const writesCompanionStatus =
+          companion?.hasStatus === true && typeof finalStatus === "string";
+        const companionNextStatus = writesCompanionStatus
+          ? finalStatus
+          : undefined;
+        const mainPreviousStatus =
+          ((existingDoc as { status?: unknown }).status as
+            | string
+            | undefined) ?? null;
+        const companionPreviousStatus = writesCompanionStatus
           ? await this.readCompanionStatusPooled(
               companion,
               existingDoc.id,
-              writeLocale
+              writeLocale as string
             )
-          : (((existingDoc as { status?: unknown }).status as
-              | string
-              | undefined) ?? null);
-        const transitionOp = resolvePublishTransition(
-          transitionPreviousStatus,
-          transitionNextStatus
-        );
+          : null;
+        const mainOp =
+          mainNextStatus !== undefined
+            ? resolvePublishTransition(mainPreviousStatus, mainNextStatus)
+            : null;
+        const companionOp =
+          companionNextStatus !== undefined
+            ? resolvePublishTransition(
+                companionPreviousStatus,
+                companionNextStatus
+              )
+            : null;
+        // Both derive from the same final status, so they can only agree on the
+        // op (publish or unpublish) or be null — never conflict.
+        const transitionOp = mainOp ?? companionOp;
         if (transitionOp) {
           const transitionDenied = await checkSingleAccess({
             slug,

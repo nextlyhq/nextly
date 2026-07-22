@@ -120,4 +120,65 @@ describe("single publish enforcement — authorize before create (integration)",
     expect(row).not.toBeNull();
     expect(row?.status).toBe("draft");
   });
+
+  it("gates a default-locale companion publish when the main row is already published", async () => {
+    // For a localized Single the default locale's status also lands on the
+    // companion `_status`. When the main row is already published but the
+    // default-locale companion `_status` diverged to draft (reachable after
+    // per-locale status is added to existing content), a `?locale=<default>`
+    // publish moves the companion into published and must still require the
+    // publish permission — the gate cannot key on the main row alone.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "settings",
+          localized: true,
+          status: true,
+          access: { publish: () => false },
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const service =
+      current.getService<SingleEntryService>("singleEntryService");
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+    };
+
+    // Trusted create publishes the default locale: main row published, companion
+    // `en` `_status` published.
+    await service.update(
+      "settings",
+      { heading: "H", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    const mainRow = await current.adapter.selectOne<{ id: string }>(
+      "single_settings",
+      {}
+    );
+    const id = mainRow?.id as string;
+
+    // Manufacture the divergence: main stays published, companion `en` → draft.
+    await adapter.executeQuery(
+      `UPDATE "single_settings_locales" SET "_status" = 'draft' WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+    );
+
+    // A caller with update (route-attested) but not publish re-publishes the
+    // default locale. The companion draft -> published transition must be denied.
+    const denied = await service.update(
+      "settings",
+      { heading: "H2", status: "published" },
+      { user: { id: "u1" }, routeAuthorized: true, locale: "en" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // The companion `_status` was not moved to published.
+    const rows = (await adapter.executeQuery(
+      `SELECT "_status" FROM "single_settings_locales" WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+    )) as Array<{ _status: string }> | { rows?: Array<{ _status: string }> };
+    const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
+    expect(list[0]?._status).toBe("draft");
+  });
 });
