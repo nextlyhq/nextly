@@ -8,9 +8,10 @@
  * rows the webhook endpoint routes check. A role granted the content type's
  * permission would reach the system surface.
  *
- * `settings` and `media` are deliberately NOT reserved and are asserted here so
- * a future edit cannot quietly re-break the common `settings` single: the
- * settings surface is gated on `manage`, which content seeding never produces.
+ * `settings` and `media` are reserved too, and asserted here: their admin
+ * routes check `{action, "settings"}` and `{action, "media"}` for the CRUD
+ * actions content seeding produces, not only `manage`, so a same-named content
+ * type reaches them.
  */
 import { describe, it, expect, vi } from "vitest";
 
