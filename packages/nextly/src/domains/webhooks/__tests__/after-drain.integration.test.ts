@@ -27,8 +27,6 @@ import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { buildEnvelope } from "../envelope";
 import { recordEvent } from "../record-event";
 
-process.env.DB_DIALECT = "sqlite";
-
 const NOW = new Date("2026-07-19T12:00:00.000Z");
 const SECRET = `whsec_${Buffer.from("secretkey").toString("base64")}`;
 
@@ -153,9 +151,9 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
     expect(calls).toEqual(["https://example.com/wh1"]);
   });
 
-  it("does not schedule when no endpoint is enabled", async () => {
+  it("schedules a callback that delivers nothing when no endpoint is enabled", async () => {
     await seedEvent("evt_b");
-    const { transport } = makeTransport();
+    const { transport, calls } = makeTransport();
     const { after, scheduled } = captureAfter();
 
     const scheduler = new WebhookFastDrainScheduler(
@@ -168,7 +166,13 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
 
     await scheduler.offer();
 
-    expect(scheduled).toHaveLength(0);
+    // offer() registers the callback without reading the database — the write
+    // path is never delayed by a registry lookup.
+    expect(scheduled).toHaveLength(1);
+
+    // The gate runs inside the callback: with no subscriber it delivers nothing.
+    await scheduled[0]();
+    expect(calls).toHaveLength(0);
   });
 
   it("does not schedule when after() is unavailable (non-Next runtime)", async () => {
