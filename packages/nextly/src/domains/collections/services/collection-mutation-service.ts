@@ -714,25 +714,41 @@ export class CollectionMutationService extends BaseService {
    * connection (not a transaction handle).
    *
    * The status-transition gate runs before the write transaction opens, so it
-   * needs this locale's prior status without a `tx`. Mirrors
-   * {@link readCompanionStatus}: the companion `_locales` table is not in the
-   * Drizzle schema and its columns must not be camelCased, so raw SQL with
-   * dialect-aware quoting is used.
+   * needs this locale's prior status without a `tx`. The companion `_locales`
+   * table is a runtime Drizzle table object rather than part of the static
+   * schema, so its columns are reached off the object loaded by
+   * `loadCompanionSchema` — the same way `populateCompanionFields` queries it.
+   * `(_parent, _locale)` is the companion primary key, so the lookup returns at
+   * most one row.
    */
   private async readCompanionStatusPooled(
-    companionTableName: string,
+    collectionName: string,
     entryId: string,
     locale: string
   ): Promise<string | null> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await this.adapter.executeQuery<{ _status?: unknown }>(
-      `SELECT ${quote("_status")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
-      [entryId, locale]
-    );
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion?.hasStatus) return null;
+
+    const table = companion.table as Record<string, unknown>;
+    const rows = (await (
+      this.db as unknown as {
+        select: () => {
+          from: (t: unknown) => {
+            where: (c: unknown) => Promise<Record<string, unknown>[]>;
+          };
+        };
+      }
+    )
+      .select()
+      .from(companion.table)
+      .where(
+        and(
+          eq(table._parent as never, entryId),
+          eq(table._locale as never, locale)
+        )
+      )) as { _status?: unknown }[];
+
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
   }
@@ -2856,21 +2872,31 @@ export class CollectionMutationService extends BaseService {
         false
       );
 
-      // Authorize a change to the document's published state, on the value
-      // actually stored. A write targeting a non-default locale publishes the
-      // translation through that locale's companion `_status` and does not move
-      // the main row, so it is gated against the companion's prior status;
-      // otherwise the main row's status is the document's published state. When
-      // the collection has no draft/published lifecycle the gate no-ops.
-      // A trusted write bypasses the transition gate outright, so the companion
+      // Authorize a change to the document's published state, judged on the
+      // status this write will actually persist. A write targeting a non-default
+      // locale stores its status in that locale's companion `_status` and does
+      // not move the main row, so it is gated against the companion's prior
+      // status; a default-locale or non-localized write stores the status on the
+      // main row. The gate no-ops when the collection has no draft/published
+      // lifecycle. A trusted write bypasses the gate outright, so the companion
       // read that only feeds it is skipped too.
       const isNonDefaultLocaleStatusWrite =
         !params.overrideAccess &&
         localizedUpdate?.hasStatus === true &&
         localizedUpdate.writeLocale !== this.localization?.defaultLocale;
-      const transitionPreviousStatus = isNonDefaultLocaleStatusWrite
+      // The split only persists a companion `_status` when a string status was
+      // provided; a non-string or absent status leaves this locale's stored
+      // status unchanged, so there is no transition to authorize and no reason to
+      // read the prior companion status.
+      const persistsCompanionStatus =
+        isNonDefaultLocaleStatusWrite &&
+        typeof localizedUpdate.companionData._status === "string";
+      const transitionNextStatus = isNonDefaultLocaleStatusWrite
+        ? localizedUpdate.companionData._status
+        : intendedStatus;
+      const transitionPreviousStatus = persistsCompanionStatus
         ? await this.readCompanionStatusPooled(
-            localizedUpdate.companionTableName,
+            params.collectionName,
             params.entryId,
             localizedUpdate.writeLocale
           )
@@ -2882,7 +2908,7 @@ export class CollectionMutationService extends BaseService {
         collectionHasStatus:
           (collection as { status?: boolean }).status === true,
         previousStatus: transitionPreviousStatus,
-        nextStatus: intendedStatus,
+        nextStatus: transitionNextStatus,
         accessUser,
         entryId: params.entryId,
         document: existingEntry,

@@ -760,7 +760,7 @@ describe("publish-transition access control", () => {
     // translation. The gate must instead compare the write locale's companion
     // `_status` (draft -> published = publish).
     const acs = allowUpdateDeny("publish");
-    const { service, selectData, adapter, fileManager } = buildService({
+    const { service, selectData, fileManager } = buildService({
       accessControlService: acs,
       collectionService: lifecycle(),
       localization: normalizeLocalization({
@@ -768,19 +768,24 @@ describe("publish-transition access control", () => {
         defaultLocale: "en",
       }),
     });
-    // Main row is published (its default-locale state).
-    selectData.rows = [createSampleEntry({ status: "published" })];
-    // A localized collection whose companion carries a per-locale `_status`.
+    // The main-row read and the companion `_status` read both resolve to this
+    // row in the mock db, so it carries the main `status` (published) and the
+    // German companion `_status` (still draft) together.
+    selectData.rows = [
+      createSampleEntry({ status: "published", _status: "draft" }),
+    ];
+    // A localized collection whose companion carries a per-locale `_status`; the
+    // table object exposes the columns the pooled Drizzle read filters on.
     fileManager.loadCompanionSchema.mockResolvedValue({
       companionTableName: "posts_locales",
+      table: {
+        _parent: Symbol("_parent"),
+        _locale: Symbol("_locale"),
+        _status: Symbol("_status"),
+      },
       localizedFields: [{ name: "title", column: "title" }],
       hasStatus: true,
     });
-    // Companion table exists (the probe returns without throwing); the German
-    // companion `_status` is still draft.
-    adapter.executeQuery.mockImplementation((sql: string) =>
-      Promise.resolve(sql.includes("_status") ? [{ _status: "draft" }] : [])
-    );
 
     const result = await service.updateEntry(
       {
@@ -794,6 +799,61 @@ describe("publish-transition access control", () => {
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
+  });
+
+  it("does not treat a non-string status on a locale edit as an unpublish", async () => {
+    // A non-default-locale edit whose `status` is present but not a string (e.g.
+    // null) does not persist a companion `_status` — the split only writes a
+    // string — so this locale's stored status is unchanged and the edit must not
+    // be gated as an unpublish.
+    const acs = allowUpdateDeny("unpublish");
+    const { service, selectData, fileManager } = buildService({
+      accessControlService: acs,
+      // Lifecycle on, but no declared `status` field, so a non-string status is
+      // not rejected by validation before it reaches the transition gate.
+      collectionService: createMockCollectionService(
+        createMockCollection({
+          status: true,
+          schemaDefinition: {
+            fields: [{ name: "title", type: "text" }],
+            accessRules: undefined,
+            hooks: [],
+            search: undefined,
+          },
+          fields: [{ name: "title", type: "text" }],
+        })
+      ),
+      localization: normalizeLocalization({
+        locales: ["en", "de"],
+        defaultLocale: "en",
+      }),
+    });
+    // Main row and German companion are both published.
+    selectData.rows = [
+      createSampleEntry({ status: "published", _status: "published" }),
+    ];
+    fileManager.loadCompanionSchema.mockResolvedValue({
+      companionTableName: "posts_locales",
+      table: {
+        _parent: Symbol("_parent"),
+        _locale: Symbol("_locale"),
+        _status: Symbol("_status"),
+      },
+      localizedFields: [{ name: "title", column: "title" }],
+      hasStatus: true,
+    });
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        user: { id: "user-1" },
+        locale: "de",
+      },
+      { title: "just a translation edit", status: null }
+    );
+
+    expect(result.statusCode).not.toBe(403);
   });
 
   it("denies creating a document directly as published without publish", async () => {
