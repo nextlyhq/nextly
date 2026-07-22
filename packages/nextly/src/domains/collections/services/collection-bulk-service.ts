@@ -1491,7 +1491,12 @@ export class CollectionBulkService extends BaseService {
    * ```
    */
   async deleteEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1671,7 +1676,12 @@ export class CollectionBulkService extends BaseService {
    */
   async deleteEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
