@@ -4363,11 +4363,12 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    // Set once the row is actually removed. A failure AFTER this point (e.g. the
-    // outbox insert) has left this shared transaction with a delete but no event;
-    // the catch below re-throws instead of swallowing it into a soft failure, so
-    // the caller rolls back rather than committing an eventless delete.
-    let rowDeleted = false;
+    // True only in the window between the row delete and the outbox insert: a
+    // failure there has left this shared transaction with a delete but no event,
+    // so the catch re-throws to force a rollback. Cleared once the event is
+    // recorded — a later failure (e.g. an afterDelete hook) is a per-item
+    // side-effect issue, not an eventless delete, and must NOT roll the batch back.
+    let deleteNeedsRollback = false;
     try {
       // Get collection metadata and stored hooks
       const collection = await this.collectionService.getCollection(
@@ -4515,7 +4516,7 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
-      rowDeleted = true;
+      deleteNeedsRollback = true;
 
       // Append the outbox event in the same transaction so a delete performed
       // through this helper (batch/cascade/internal) is observable too, in the
@@ -4535,6 +4536,9 @@ export class CollectionMutationService extends BaseService {
         fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
         actor: actorForWrite(params.actor, params.user),
       });
+      // The event is recorded, so the delete + event are now consistent; a later
+      // failure no longer needs to force a rollback.
+      deleteNeedsRollback = false;
 
       // Execute afterDelete hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
@@ -4568,12 +4572,11 @@ export class CollectionMutationService extends BaseService {
         data: { deleted: true },
       };
     } catch (error: unknown) {
-      // A failure after the row was deleted leaves the transaction inconsistent
-      // (row gone, no event), so propagate it and let the caller roll back
-      // rather than reporting a soft per-item failure the loop would commit.
-      // Pre-delete failures stay soft: the row is untouched, so a returned
-      // failure is safe.
-      if (rowDeleted) throw error;
+      // Only a failure in the delete→event window propagates (to roll back an
+      // eventless delete). Pre-delete failures and post-event failures (e.g. an
+      // afterDelete hook) stay soft: the row is either untouched or already
+      // consistent with its event, so a returned failure is safe.
+      if (deleteNeedsRollback) throw error;
       return {
         success: false,
         statusCode: 500,
@@ -5409,11 +5412,12 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    // Set once the row is actually removed. A failure AFTER this point (e.g. the
-    // outbox insert) has left this shared transaction with a delete but no event;
-    // the catch below re-throws instead of swallowing it into a soft failure, so
-    // the caller rolls back rather than committing an eventless delete.
-    let rowDeleted = false;
+    // True only in the window between the row delete and the outbox insert: a
+    // failure there has left this shared transaction with a delete but no event,
+    // so the catch re-throws to force a rollback. Cleared once the event is
+    // recorded — a later failure (e.g. an afterDelete hook) is a per-item
+    // side-effect issue, not an eventless delete, and must NOT roll the batch back.
+    let deleteNeedsRollback = false;
     try {
       // Get collection metadata early
       const collection = await this.collectionService.getCollection(
@@ -5606,7 +5610,7 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
-      rowDeleted = true;
+      deleteNeedsRollback = true;
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
@@ -5626,6 +5630,9 @@ export class CollectionMutationService extends BaseService {
         fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
         actor: actorForWrite(params.actor, params.user),
       });
+      // The event is recorded, so the delete + event are now consistent; a later
+      // failure no longer needs to force a rollback.
+      deleteNeedsRollback = false;
 
       // Execute afterDelete hooks (unless skipped)
       if (!skipHooks) {
@@ -5665,12 +5672,11 @@ export class CollectionMutationService extends BaseService {
         data: { deleted: true },
       };
     } catch (error: unknown) {
-      // A failure after the row was deleted leaves the transaction inconsistent
-      // (row gone, no event), so propagate it and let the caller roll back
-      // rather than reporting a soft per-item failure the loop would commit.
-      // Pre-delete failures stay soft: the row is untouched, so a returned
-      // failure is safe.
-      if (rowDeleted) throw error;
+      // Only a failure in the delete→event window propagates (to roll back an
+      // eventless delete). Pre-delete failures and post-event failures (e.g. an
+      // afterDelete hook) stay soft: the row is either untouched or already
+      // consistent with its event, so a returned failure is safe.
+      if (deleteNeedsRollback) throw error;
       return {
         success: false,
         statusCode: 500,
