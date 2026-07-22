@@ -507,10 +507,42 @@ describe("webhook endpoint management (real SQLite)", () => {
 
       await service.deleteEndpoint(endpoint.id);
 
-      const rows = await adapter.executeQuery<{ status: string }>(
-        "SELECT status FROM nextly_webhook_deliveries WHERE id = 'dlv_q'"
+      const rows = await adapter.executeQuery<{
+        status: string;
+        last_error: string;
+      }>(
+        "SELECT status, last_error FROM nextly_webhook_deliveries WHERE id = 'dlv_q'"
       );
       expect(rows[0]?.status).toBe("failed");
+      // The retained history must say the endpoint was deleted, not merely
+      // disabled, so the audit trail is accurate in exactly the case this
+      // feature preserves.
+      expect(rows[0]?.last_error).toBe("webhook deleted");
+    });
+
+    it("clears the signing secret and static headers on delete", async () => {
+      // A retired endpoint never delivers again, so its receiver credentials
+      // are of no further use and should not linger. Attribution stays.
+      const { endpoint } = await create({
+        headers: { Authorization: "Bearer receiver-token" },
+      });
+
+      await service.deleteEndpoint(endpoint.id);
+
+      const rows = await adapter.executeQuery<{
+        secret_hash: string;
+        headers: string | null;
+        name: string;
+        url: string;
+      }>(
+        `SELECT secret_hash, headers, name, url FROM nextly_webhooks WHERE id = '${endpoint.id}'`
+      );
+      expect(String(rows[0]?.secret_hash)).not.toContain("receiver-token");
+      expect(rows[0]?.secret_hash).toBe("[]");
+      expect(rows[0]?.headers).toBeNull();
+      // Attribution the delivery history relies on is kept.
+      expect(rows[0]?.name).toBe("Orders");
+      expect(rows[0]?.url).toBe(PUBLIC_URL);
     });
 
     it("lets the same URL be registered again as a distinct live endpoint", async () => {
