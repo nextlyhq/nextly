@@ -216,6 +216,8 @@ describe("plugin extend → UI-Builder single + component parity", () => {
   it("materialises the plugin field onto a UI-Builder single", async () => {
     const adapter = await freshAdapter();
     handle = await createTestNextly({ adapter });
+    // "settings" is a reserved slug (system-resource permission-collision
+    // guard), so this suite uses "preferences".
     await seedBuilderSingle(adapter, {
       slug: "preferences",
       fields: [{ name: "body", type: "text", source: "ui" }],

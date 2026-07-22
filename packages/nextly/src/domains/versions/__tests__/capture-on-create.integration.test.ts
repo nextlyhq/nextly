@@ -121,6 +121,8 @@ describe("version capture on create (integration)", () => {
     // the live row is not left without any version.
     current = await createTestNextly({
       singles: [
+        // "settings" is a reserved slug (system-resource permission-collision
+        // guard), so this suite uses "preferences".
         defineSingle({
           slug: "preferences",
           versions: true,

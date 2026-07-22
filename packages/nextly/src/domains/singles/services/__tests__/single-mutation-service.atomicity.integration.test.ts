@@ -70,6 +70,8 @@ async function seedSettingsWithHero(): Promise<{
     slug: "hero",
     fields: [{ name: "heading", type: "text" }],
   });
+  // "settings" is a reserved slug (system-resource permission-collision
+  // guard), so this suite uses "preferences".
   await seedBuilderSingle(adapter, {
     slug: "preferences",
     fields: [

@@ -54,6 +54,8 @@ describe("version history through the dispatcher (integration)", () => {
   it("routes a Single's version list without needing an entry id in the URL", async () => {
     current = await createTestNextly({
       singles: [
+        // "settings" is a reserved slug (system-resource permission-collision
+        // guard), so this suite uses "preferences".
         defineSingle({
           slug: "preferences",
           versions: true,

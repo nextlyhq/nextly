@@ -58,13 +58,16 @@ export const RESERVED_SLUGS = [
   "roles",
   "permissions",
   "sessions",
-  // Pre-existing route/table reservations. The permission-collision reservation
-  // for system-resource names (settings, api-keys, email-*, ...) is NOT kept
-  // here: this list is spread into the component reserved set too, and a
-  // component does not seed a permission under its own slug, so reserving those
-  // names for components would be a false positive. The collision check lives in
-  // the collection and single validators via `isReservedResourceSlug`
-  // (schemas/_zod/rbac.ts), which is scoped to those two entity kinds.
+  // Pre-existing route/table reservations. Two of these (`webhooks`, `media`)
+  // are also system resources, but they are reserved here for the independent
+  // reason that a route/table already owns the name. The permission-collision
+  // reservation for the REMAINING system-resource names (settings, api-keys,
+  // email-providers, email-templates) is deliberately NOT added to this list:
+  // it is spread into the component reserved set too, and a component does not
+  // seed a permission under its own slug, so reserving those names for
+  // components would be a false positive. That collision check lives in the
+  // collection and single validators via `isReservedResourceSlug`
+  // (schemas/_zod/rbac.ts), scoped to those two entity kinds.
   "webhooks",
   "tokens",
   "media",
