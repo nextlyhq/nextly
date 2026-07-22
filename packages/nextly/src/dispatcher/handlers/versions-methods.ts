@@ -12,8 +12,13 @@
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertVersionDocumentReadable,
+  assertVersionDocumentUpdatable,
   redactSnapshotForUser,
 } from "../../api/versions-access";
+import {
+  canReadEntity,
+  type ReadAccessCaller,
+} from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
@@ -25,10 +30,6 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../../services/lib/permissions";
 import type { Params } from "../types";
 
 /** Page size when the caller does not ask for one. */
@@ -205,25 +206,208 @@ export async function getVersionForDocument(
 }
 
 /**
- * Whether the caller holds the coarse read permission for this entity.
+ * The resolved identity, as the shared read decision needs it.
  *
- * The dispatcher authorizes a restore as `update-{slug}`, so the `read-{slug}`
- * permission that guards history is never evaluated on this path. A caller with
- * update but not read could otherwise recover an unseen snapshot through the
- * write — reading history by writing it back.
- *
- * Document-level rules are a separate gate; this is only the coarse half.
+ * An API key's own scoped grants arrive on the params; a session caller has
+ * none there, and `canReadEntity` resolves theirs from the database.
  */
-async function hasHistoryReadPermission(
-  slug: string,
+function readAccessCallerFromParams(
+  p: Params,
   user: UserContext
-): Promise<boolean> {
-  const userId = user.id;
-  if (!userId) return false;
-  if (await isSuperAdmin(userId)) return true;
+): ReadAccessCaller {
+  const isApiKey = p._authenticatedActorType === "apiKey";
 
-  const permissions = await listEffectivePermissions(userId);
-  return permissions.includes(`${slug}:read`);
+  let permissions: string[] = [];
+  if (isApiKey && p._authenticatedPermissions) {
+    try {
+      const parsed: unknown = JSON.parse(String(p._authenticatedPermissions));
+      if (Array.isArray(parsed)) permissions = parsed as string[];
+    } catch {
+      // A corrupt value must not read as a broader grant than the key holds;
+      // an empty list denies, which is the safe direction.
+      permissions = [];
+    }
+  }
+
+  return {
+    userId: user.id,
+    authMethod: isApiKey ? "api-key" : "session",
+    permissions,
+    roles: user.roles ?? [],
+  };
+}
+
+/**
+ * Longest label a version may carry.
+ *
+ * No dialect caps the column — all three store `text` — so the bound has to be
+ * enforced here or not at all. A label renders inside a narrow history row, and
+ * 100 characters is generous for the naming people actually do ("before the
+ * redesign", "Q1 launch copy") while stopping a row becoming a paragraph.
+ */
+const MAX_LABEL_LENGTH = 100;
+
+/**
+ * Normalize a submitted label into what gets stored.
+ *
+ * Trims first, so "clear it" and "type three spaces" mean the same thing rather
+ * than leaving an invisible name behind. The client trims too, by this
+ * codebase's convention, but a REST API has callers that are not the client.
+ *
+ * `null` clears. Anything that is neither a string nor null is a malformed
+ * request rather than a clear, and is rejected instead of quietly wiping a name.
+ */
+/**
+ * What the request asks for: whether a label was named at all, and what it
+ * normalizes to.
+ *
+ * PATCH is a partial update, so an omitted key means "leave this alone" and
+ * only an explicit null clears. Collapsing the two would make `PATCH {}` erase
+ * a name nobody asked to remove.
+ */
+function readLabelFromBody(body: unknown): {
+  provided: boolean;
+  label: string | null;
+} {
+  const provided = typeof body === "object" && body !== null && "label" in body;
+
+  return {
+    provided,
+    label: provided ? normalizeLabel(body.label, "label") : null,
+  };
+}
+
+/**
+ * Reject a malformed label request before anything is looked up.
+ *
+ * Exported for the Singles handler, which resolves the live document id before
+ * it can call the core — a lookup that would otherwise make the same bad
+ * request answer 404 for an unmaterialized Single and 400 for a materialized
+ * one. The core validates again; this only moves the rejection earlier.
+ */
+export function assertLabelRequestValid(
+  versionNo: number,
+  body: unknown
+): void {
+  assertPositiveInteger(versionNo, "versionNo");
+  readLabelFromBody(body);
+}
+
+function normalizeLabel(value: unknown, path: string): string | null {
+  if (value === null) return null;
+
+  if (typeof value !== "string") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "INVALID_VALUE",
+          message: `${path} must be a string, or null to clear it.`,
+        },
+      ],
+    });
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  if (trimmed.length > MAX_LABEL_LENGTH) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "TOO_LONG",
+          message: `${path} must be ${MAX_LABEL_LENGTH} characters or fewer.`,
+        },
+      ],
+    });
+  }
+
+  return trimmed;
+}
+
+/**
+ * Name a version, or clear its name.
+ *
+ * Gated exactly like a restore, and for the same reason: a label is written
+ * onto history, so the caller must be allowed to see that history as well as to
+ * change the document. The route marks this an update, which is what earns the
+ * write permission; these two gates are the read half.
+ */
+export async function setVersionLabelForDocument(
+  args: VersionMethodArgs & {
+    versionNo: number;
+    /**
+     * The request body, not an extracted label. Whether the key is PRESENT is
+     * part of the request's meaning, and reading it here rather than at each
+     * dispatcher keeps that from being flattened on the way in — which is
+     * exactly how an omitted label became an instruction to clear one.
+     */
+    body: unknown;
+    params: Params;
+  }
+): Promise<VersionRow> {
+  assertPositiveInteger(args.versionNo, "versionNo");
+  const { provided, label } = readLabelFromBody(args.body);
+
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-label-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user
+  );
+
+  // Renaming a version edits a record of the document, so it owes the
+  // document's own update rules and not just the coarse `update-<slug>` the
+  // route earned. Applied even when the request turns out to write nothing:
+  // this is a write endpoint, and gating only the writing case would let the
+  // no-op be used to discover what the caller is allowed to change.
+  await assertVersionDocumentUpdatable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user
+  );
+
+  const versions = getService("versionsService");
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+
+  // Nothing was asked for, so nothing is written. The version is still read
+  // back, so the response shape is the same either way and a caller cannot
+  // tell a no-op from a rename by its status.
+  const row = provided
+    ? await versions.setLabel(ref, args.versionNo, label)
+    : await versions.get(ref, args.versionNo);
+
+  // The snapshot is not part of a label response: the caller asked to rename a
+  // version, not to read its content, and returning it here would bypass the
+  // redaction the version-detail endpoint applies.
+  const { snapshot: _snapshot, ...meta } = row;
+
+  // The same shape a history list returns, author included. Without this the
+  // renamed row comes back carrying only an author id, and an admin that
+  // renders the response directly would show the version losing its author the
+  // moment it is named.
+  const [withAuthor] = await attachVersionAuthors([meta]);
+  return withAuthor as unknown as VersionRow;
 }
 
 /**
@@ -237,9 +421,20 @@ async function hasHistoryReadPermission(
  * fails.
  */
 export async function restoreVersionForDocument(
-  args: VersionMethodArgs & { versionNo: number; actor?: RequestActor }
+  args: VersionMethodArgs & {
+    versionNo: number;
+    actor?: RequestActor;
+    /**
+     * The dispatch params, so the caller's identity is assembled here rather
+     * than at each dispatcher. Both entity kinds route through this function,
+     * and building it twice is how the two drift.
+     */
+    params: Params;
+  }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
-  if (!(await hasHistoryReadPermission(args.slug, args.user))) {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
     // "Not found" rather than "forbidden", matching the document gate below: a
     // distinct 403 would confirm the document exists to a caller not allowed to
     // know that.

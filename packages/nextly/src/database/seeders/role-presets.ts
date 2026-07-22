@@ -89,13 +89,16 @@ export const ROLE_PRESETS: RolePreset[] = [
     name: "Author",
     description: "Write content, but not publish or delete it",
     level: 30,
-    // The same reach as an editor, minus the two irreversible-in-public
-    // actions. `manage` is excluded because it is a superset we cannot see
-    // inside, which is exactly what an author should not hold.
+    // The same reach as an editor, minus the actions that change what the
+    // public sees. `unpublish` is excluded alongside `publish`: taking a live
+    // page down is as visible as putting one up, and an author who cannot
+    // publish but can unpublish is a strange half-authority. `manage` is
+    // excluded because it is a superset we cannot see inside, which is exactly
+    // what an author should not hold.
     grants: ({ action, resource }, { isSystem, isPlugin }) => {
       if (isPlugin) return false;
       if (isSystem && resource !== "media") return false;
-      return !["delete", "publish", "manage"].includes(action);
+      return !["delete", "publish", "unpublish", "manage"].includes(action);
     },
   },
   {

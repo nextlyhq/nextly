@@ -39,6 +39,7 @@
  * ```
  */
 
+import type { AccessOperation } from "../../../services/access/types";
 import {
   hasPermission,
   isSuperAdmin,
@@ -152,9 +153,10 @@ export class RBACAccessControlService {
 
     const codeAccess = params.codeAccess ?? this.getRegisteredAccess(resource);
 
-    const operationAccess = codeAccess?.[
-      operation as keyof (CollectionAccessControl | SingleAccessControl)
-    ];
+    const operationAccess =
+      codeAccess?.[
+        operation as keyof (CollectionAccessControl | SingleAccessControl)
+      ];
 
     if (operationAccess !== undefined) {
       if (typeof operationAccess === "boolean") {
@@ -194,7 +196,7 @@ export class RBACAccessControlService {
    */
   async buildContext(
     userId: string,
-    operation: "create" | "read" | "update" | "delete",
+    operation: AccessOperation,
     resource: string
   ): Promise<AccessControlContext> {
     const [roleSlugs, permissions] = await Promise.all([

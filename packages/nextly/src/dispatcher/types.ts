@@ -22,6 +22,7 @@ export type ServiceType =
   | "emailProviders"
   | "emailTemplates"
   | "apiKeys"
+  | "webhooks"
   | "generalSettings"
   | "imageSizes"
   | "dashboard"

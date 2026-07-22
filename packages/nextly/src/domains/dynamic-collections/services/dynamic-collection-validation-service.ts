@@ -72,7 +72,13 @@ export const SQL_KEYWORDS = [
   "cascade",
 ] as const;
 
-/** Reserved names for collections. */
+/**
+ * Reserved names for collections.
+ *
+ * Separate from `RESERVED_SLUGS`, which the code-first validator uses: a
+ * Builder-created collection never passes through that path, so a name has to
+ * be refused here as well to be refused at all.
+ */
 export const RESERVED_COLLECTION_NAMES = [
   "users",
   "roles",
@@ -80,6 +86,11 @@ export const RESERVED_COLLECTION_NAMES = [
   "sessions",
   "accounts",
   "dynamic_collections",
+  // Permission identity is action + resource, so a collection named `webhooks`
+  // would share the rows the webhook endpoint routes check: its `read-webhooks`
+  // would expose endpoint configuration and `update-webhooks` the signing
+  // secrets.
+  "webhooks",
 ] as const;
 
 /** Reserved field names (added automatically). */

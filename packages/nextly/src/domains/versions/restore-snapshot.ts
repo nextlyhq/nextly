@@ -126,10 +126,20 @@ function componentSlugs(field: FieldConfig): string[] {
   return slugs;
 }
 
-/** Component slugs a field currently permits, or null when it permits any. */
+/**
+ * Component slugs a field permits, or null when it is not a component field.
+ *
+ * Keyed on whether the field DECLARES a component key, not on how many slugs it
+ * names. A dynamic zone stripped back to `components: []` permits nothing —
+ * reading that as "permits anything" admits every stored instance to a save
+ * path that has no component to apply them to, so the restore reports success
+ * having quietly skipped the field.
+ */
 function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
-  const slugs = componentSlugs(field);
-  return slugs.length > 0 ? new Set(slugs) : null;
+  const one = (field as { component?: unknown }).component;
+  const many = (field as { components?: unknown }).components;
+  const declaresComponent = typeof one === "string" || Array.isArray(many);
+  return declaresComponent ? new Set(componentSlugs(field)) : null;
 }
 
 /**
@@ -329,14 +339,25 @@ function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
  * schema's fields rather than the value's keys — so a key removed from the
  * schema is neither rejected nor stripped. It would be written back into the
  * column and served again as though it were still part of the document.
+ *
+ * `storesType` says whether the write path reads `_componentType` back off this
+ * value. Only a dynamic zone does; a single-component field takes the component
+ * from the schema.
+ *
+ * `blocked` collects nested components the current schema refuses. They cannot
+ * simply be dropped from the value: the container is written whole, so a
+ * missing key erases what the live document holds. The caller withholds the
+ * entire field instead.
  */
 function pruneContainerValue(
   value: unknown,
   fields: FieldConfig[],
   componentSchemas: ComponentSchemas | undefined,
   removed: string[],
+  blocked: string[],
   path: string,
-  isComponentValue: boolean
+  isComponentValue: boolean,
+  storesType: boolean
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((row, i) =>
@@ -345,8 +366,10 @@ function pruneContainerValue(
         fields,
         componentSchemas,
         removed,
+        blocked,
         `${path}[${i}]`,
-        isComponentValue
+        isComponentValue,
+        storesType
       )
     );
   }
@@ -379,6 +402,13 @@ function pruneContainerValue(
     // a stale key that happens to be called `id` is exactly the kind of unknown
     // key this function exists to remove.
     if (isComponentValue && (key === "_componentType" || key === "id")) {
+      // The type marker exists to record what the snapshot captured, and it has
+      // already done its work above by selecting this row's schema. Carrying it
+      // into the payload is only safe where the write path consumes it, which
+      // is the dynamic zone alone. A single component nested in a group or
+      // repeater is written as part of that container's JSON, and a marker left
+      // inside would be stored verbatim and then served by ordinary reads.
+      if (key === "_componentType" && !storesType) continue;
       out[key] = child;
       continue;
     }
@@ -390,19 +420,59 @@ function pruneContainerValue(
     }
 
     const grandchildren = childrenOf(field, componentSchemas);
+
+    // A component nested in a container is checked against the components its
+    // field allows, exactly as a top-level one is. Without this the snapshot's
+    // recorded type is read only to pick a schema, so a value captured under a
+    // component the field has since stopped naming would be pruned against the
+    // new component and written into it wherever a field name overlaps.
+    //
+    // Only for a field that names components, and only for a value that holds
+    // instances. `kept: null` means nothing survived the check, which is not
+    // the same as a cleared field whose value is legitimately null.
+    const allowedHere = allowedComponentSlugs(field);
+    let kept = child;
+    if (allowedHere !== null && !isClearedComponentValue(child)) {
+      const partitioned = partitionAllowedInstances(
+        child,
+        allowedHere,
+        `${path}.${key}`,
+        fieldNamesMultipleComponents(field)
+      );
+      removed.push(...partitioned.rejected);
+      if (partitioned.kept === null) {
+        // Omitting the key is not a no-op here. The container is written as one
+        // JSON value, so a payload missing this key deletes whatever the live
+        // document holds for it. Report the container as unrestorable and let
+        // the caller hold the whole field back instead.
+        blocked.push(`${path}.${key}`);
+        continue;
+      }
+      kept = partitioned.kept;
+    }
+
+    if (grandchildren.length > 0) {
+      out[key] = pruneContainerValue(
+        kept,
+        grandchildren,
+        componentSchemas,
+        removed,
+        blocked,
+        `${path}.${key}`,
+        // A nested component's instances carry the same row metadata; a
+        // nested group's values do not.
+        componentSlugs(field).length > 0,
+        fieldNamesMultipleComponents(field)
+      );
+      continue;
+    }
+
+    // A component that resolves to no fields is never walked, so the marker has
+    // to come off here. A dynamic zone keeps its own, which the save path reads.
     out[key] =
-      grandchildren.length > 0
-        ? pruneContainerValue(
-            child,
-            grandchildren,
-            componentSchemas,
-            removed,
-            `${path}.${key}`,
-            // A nested component's instances carry the same row metadata; a
-            // nested group's values do not.
-            componentSlugs(field).length > 0
-          )
-        : child;
+      allowedHere !== null && !fieldNamesMultipleComponents(field)
+        ? withoutTypeMarker(kept)
+        : kept;
   }
 
   return out;
@@ -440,6 +510,25 @@ function retainsNothing(pruned: unknown): boolean {
  */
 function isClearedComponentValue(value: unknown): boolean {
   return value === null || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * A component value with the snapshot's type marker removed.
+ *
+ * For a value that is never walked field by field. A component whose schema
+ * declares nothing has no children to recurse into, so the marker would
+ * otherwise survive into the containing JSON column and be served by ordinary
+ * reads.
+ */
+function withoutTypeMarker(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutTypeMarker);
+  if (typeof value !== "object" || value === null) return value;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key !== "_componentType") out[key] = child;
+  }
+  return out;
 }
 
 /**
@@ -610,10 +699,18 @@ export function buildRestorePayload(
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
     if (isComponentField || children.length > 0) {
-      // A cleared field is restored as-is. Filtering cannot distinguish it from
-      // a value that lost every instance, and the two need opposite outcomes:
-      // this one must reach the update path so the live rows are removed.
+      // A cleared field is restored as-is, so the update path removes the live
+      // rows. Filtering cannot tell that from a value that lost every instance,
+      // and the two need opposite outcomes.
+      //
+      // Except when the field permits no component at all: the save path has no
+      // branch for an empty allowlist, so the clear would never be applied and
+      // the live rows would survive a restore that reported success.
       if (isComponentField && isClearedComponentValue(value)) {
+        if (allowed.size === 0) {
+          droppedFields.push(key);
+          continue;
+        }
         payload[key] = value;
         continue;
       }
@@ -643,14 +740,27 @@ export function buildRestorePayload(
         continue;
       }
 
+      const blocked: string[] = [];
       const pruned = pruneContainerValue(
         kept,
         children,
         componentSchemas,
         removed,
+        blocked,
         key,
-        isComponentField
+        isComponentField,
+        fieldNamesMultipleComponents(field)
       );
+
+      // A nested component the schema refuses takes the whole field with it.
+      // The container is written as one value, so submitting it without that
+      // key would delete the live nested content rather than leave it alone —
+      // turning a restore that cannot apply one component into one that
+      // destroys it.
+      if (blocked.length > 0) {
+        droppedFields.push(key, ...blocked);
+        continue;
+      }
 
       // Only a dynamic zone stores `_componentType`; a single-component field
       // is read back without one, so its instances cannot be checked against

@@ -263,6 +263,50 @@ export function excludeLockedTableStatements(
 }
 
 /**
+ * Lower-cased names of tables a statement set rebuilds.
+ *
+ * SQLite cannot alter most of a column in place, so drizzle-kit emits
+ * CREATE `__new_x` → INSERT SELECT → DROP `x` → RENAME `__new_x` TO `x`. The
+ * closing rename identifies the table, and only when it renames back to the
+ * name it replaced: `ALTER TABLE __new_g1 RENAME TO other` is not a rebuild
+ * of `g1` and must not be read as one.
+ *
+ * Shared rather than re-derived. The destructive scanner uses it to know
+ * which DROPs are part of a rebuild; the index restore uses it to know which
+ * tables lost their indexes to one. A second pattern that disagreed with this
+ * one would make the two answer differently about the same batch.
+ */
+export function rebuiltTableNames(statements: readonly string[]): Set<string> {
+  // The replacement table has to have been built in this same batch. A rename
+  // on its own proves only that something took the table's name: for
+  // `DROP TABLE posts; ALTER TABLE __new_posts RENAME TO posts` there is no
+  // create and no copy, so the rows are gone and the drop is a real one that
+  // the destructive guard must still refuse. Pairing the rename with its
+  // create is what makes this the rebuild it claims to be.
+  const created = new Set<string>();
+  for (const s of statements) {
+    const m = s.match(
+      /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (m) created.add((m[1] ?? "").toLowerCase());
+  }
+
+  const targets = new Set<string>();
+  for (const s of statements) {
+    const m = s.match(
+      // Optionally schema-qualified and/or quoted: `__new_x`, "__new_x",
+      // "main"."__new_x", main.__new_x.
+      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
+    );
+    if (!m) continue;
+    const from = (m[1] ?? "").toLowerCase();
+    const to = (m[2] ?? "").toLowerCase();
+    if (from === to && created.has(from)) targets.add(from);
+  }
+  return targets;
+}
+
+/**
  * v1 drizzle-kit INCLUDES destructive statements in sqlStatements (hints are
  * empty even for drops — observed on SQLite, Postgres and MySQL, 2026-07).
  * By the time the pipeline's Phase D runs, every user-approved destructive
@@ -305,20 +349,7 @@ export function findUnexpectedDestructiveStatements(
   const targetsManaged = (table: string): boolean =>
     managedTables === undefined || managedTables.has(table.toLowerCase());
 
-  const rebuildTargets = new Set<string>();
-  for (const s of statements) {
-    const m = s.match(
-      // Optionally schema-qualified and/or quoted: `__new_x`, "__new_x",
-      // "main"."__new_x", main.__new_x. The RENAME destination is captured
-      // too: a rebuild is only a rebuild when `__new_x` renames back to `x`
-      // itself — `ALTER TABLE __new_g1 RENAME TO other` must NOT exempt
-      // `DROP TABLE g1` from the guard.
-      /ALTER\s+TABLE\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?__new_([A-Za-z0-9_]+)[`"]?\s+RENAME\s+TO\s+(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
-    );
-    if (m && (m[1] ?? "").toLowerCase() === (m[2] ?? "").toLowerCase()) {
-      rebuildTargets.add((m[1] ?? "").toLowerCase());
-    }
-  }
+  const rebuildTargets = rebuiltTableNames(statements);
   const offenders: string[] = [];
   for (const s of statements) {
     const dropTable = s.match(

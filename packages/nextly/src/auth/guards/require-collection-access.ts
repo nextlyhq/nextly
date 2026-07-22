@@ -2,7 +2,13 @@ import type { AuthContext } from "../session/session-types";
 
 import { checkPermission } from "./require-permission";
 
-export type CollectionOperation = "create" | "read" | "update" | "delete";
+export type CollectionOperation =
+  | "create"
+  | "read"
+  | "update"
+  | "delete"
+  | "publish"
+  | "unpublish";
 
 export interface CollectionAccessDeps {
   /** Check a user's permission via RBAC service */

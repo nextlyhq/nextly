@@ -59,6 +59,7 @@ import type {
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -145,6 +146,7 @@ import {
   registerSingleServices,
   registerUserServices,
   registerVersionServices,
+  registerWebhookServices,
   type RegistrationContext,
 } from "./registrations";
 
@@ -291,6 +293,8 @@ export interface ServiceMap {
   permissionSeedService: PermissionSeedService;
   rbacAccessControlService: RBACAccessControlService;
   apiKeyService: ApiKeyService;
+  /** Webhook endpoint management, resolved by the webhooks REST handlers. */
+  webhookEndpointService: WebhookEndpointService;
   authService: AuthService;
   generalSettingsService: GeneralSettingsService;
   activityLogService: ActivityLogService;
@@ -739,6 +743,7 @@ export async function registerServices(
   registerMetaServices(ctx);
   registerSingleServices(ctx);
   registerVersionServices(ctx);
+  registerWebhookServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections

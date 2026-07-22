@@ -84,6 +84,12 @@ export interface RestoreVersionResponse {
   droppedFields: string[];
 }
 
+/** What a rename reports back: the version's metadata, without its snapshot. */
+export interface SetVersionLabelResponse {
+  message: string;
+  item: VersionMeta;
+}
+
 export const versionApi = {
   list: (
     scope: VersionScope,
@@ -117,5 +123,22 @@ export const versionApi = {
     protectedApi.post<RestoreVersionResponse>(
       `${basePath(scope)}/${versionNo}/restore`,
       {}
+    ),
+
+  /**
+   * Name a version, or clear its name with `null`.
+   *
+   * A PATCH on the version itself rather than a nested action, because it is
+   * idempotent: sending the same name twice leaves the same state. The server
+   * trims and bounds the value, so the client's own trim is a courtesy.
+   */
+  setLabel: (
+    scope: VersionScope,
+    versionNo: number,
+    label: string | null
+  ): Promise<SetVersionLabelResponse> =>
+    protectedApi.patch<SetVersionLabelResponse>(
+      `${basePath(scope)}/${versionNo}`,
+      { label }
     ),
 };

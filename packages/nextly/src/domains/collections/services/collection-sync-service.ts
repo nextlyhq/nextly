@@ -48,6 +48,8 @@ import {
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
+import { teardownEntityComponentData } from "../../components/services/teardown-entity-component-data";
+import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
@@ -692,6 +694,22 @@ export class CollectionSyncService extends BaseService {
       case "delete":
         for (const { slug, tableName } of removed) {
           try {
+            // Sweep the entity's dependent data BEFORE anything else. Embedded component
+            // instances point back by a plain string with no FK, and the `_locales`
+            // companion holds an FK to `<main>.id` — so the main drop below cascades
+            // nothing onto the former and is rejected by the latter on MySQL. Doing this
+            // first also means a failure leaves the registry row intact, so the orphan is
+            // detected again on the next sync instead of being silently lost.
+            await teardownEntityComponentData({
+              adapter: this.adapter,
+              parentTable: tableName,
+            });
+            await teardownEntityI18n({
+              adapter: this.adapter,
+              slug,
+              tableName,
+            });
+
             // Delete from registry directly via raw query to avoid
             // re-fetch issues with getCollection/updateCollection
             await this.adapter.delete(

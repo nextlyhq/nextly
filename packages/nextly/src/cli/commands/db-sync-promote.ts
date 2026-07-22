@@ -106,8 +106,9 @@ export async function runPromote(
   }
 
   // 6. Delete the UI record so there is no collision on next wrapper start.
-  // We do this via the registry's deleteCollection (which also cleans up
-  // permissions, data tables, etc. per existing logic).
+  // `deleteCollection` removes the registry row ONLY — it deliberately leaves the data
+  // table (and its `_locales` companion) in place, because promotion hands the same table
+  // over to the code-first definition. Dropping here would destroy the collection's content.
   await registry.deleteCollection(slug);
 
   logger.info(

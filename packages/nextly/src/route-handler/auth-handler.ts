@@ -53,7 +53,14 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
  * Storage is optional - if not configured, services will be initialized without it.
  * This allows collections/singles endpoints to work even when no storage plugin is set up.
  */
-async function ensureServicesInitialized(): Promise<void> {
+/**
+ * Exported so the direct-dispatch entry points in `routeHandler.ts` can boot DI
+ * before running. Those handlers resolve services through `getCachedNextly()`,
+ * which throws rather than initialising, and they return before the
+ * `getDispatcher()` call that would otherwise have done it. Calling this
+ * consumes no request body, so a handler that parses its own body still can.
+ */
+export async function ensureServicesInitialized(): Promise<void> {
   if (!isServicesRegistered()) {
     const nextlyConfig = _storedConfig;
 

@@ -110,3 +110,66 @@ describe("AccessControlService owner-only default field", () => {
     expect(notMine.allowed).toBe(false);
   });
 });
+
+// The publish lifecycle is a distinct access operation, evaluated against its
+// own stored rule. A caller allowed to update must not be assumed able to
+// publish, and vice versa — the two are keyed separately.
+describe("AccessControlService publish lifecycle operations", () => {
+  const service = new AccessControlService();
+  const rules: CollectionAccessRules = {
+    update: { type: "role-based", allowedRoles: ["author", "editor"] },
+    publish: { type: "role-based", allowedRoles: ["editor"] },
+    unpublish: { type: "role-based", allowedRoles: ["editor"] },
+  };
+
+  it("evaluates publish against the publish rule, not update", async () => {
+    // An author may update but not publish; the two rules diverge and the
+    // operation selects which one applies.
+    const author = { id: "u1", roles: ["author"] };
+
+    const canUpdate = await service.evaluateAccess(rules, "update", {
+      user: author,
+    });
+    const canPublish = await service.evaluateAccess(rules, "publish", {
+      user: author,
+    });
+
+    expect(canUpdate.allowed).toBe(true);
+    expect(canPublish.allowed).toBe(false);
+  });
+
+  it("allows publish for a role the publish rule names", async () => {
+    const editor = { id: "u2", roles: ["editor"] };
+
+    const result = await service.evaluateAccess(rules, "publish", {
+      user: editor,
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("evaluates unpublish against its own rule", async () => {
+    const author = { id: "u3", roles: ["author"] };
+
+    const result = await service.evaluateAccess(rules, "unpublish", {
+      user: author,
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  it("defaults an unspecified publish rule to public access", async () => {
+    // No publish rule means the stored layer does not gate it — RBAC's
+    // `publish-<slug>` permission remains the only gate, exactly as a missing
+    // update rule leaves update to RBAC.
+    const updateOnly: CollectionAccessRules = {
+      update: { type: "role-based", allowedRoles: ["editor"] },
+    };
+
+    const result = await service.evaluateAccess(updateOnly, "publish", {
+      user: { id: "u4", roles: ["nobody"] },
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+});

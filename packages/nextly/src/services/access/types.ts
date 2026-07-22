@@ -62,7 +62,13 @@ export type AccessRuleType =
  * const operation: AccessOperation = 'read';
  * ```
  */
-export type AccessOperation = "create" | "read" | "update" | "delete";
+export type AccessOperation =
+  | "create"
+  | "read"
+  | "update"
+  | "delete"
+  | "publish"
+  | "unpublish";
 
 /**
  * A storable access rule configuration.
@@ -211,6 +217,19 @@ export interface CollectionAccessRules {
    * If not specified, defaults to public access.
    */
   delete?: StoredAccessRule;
+
+  /**
+   * Access rule for making a document public (status → published).
+   * If not specified, defaults to public access, so the RBAC
+   * `publish-<slug>` permission is the only gate.
+   */
+  publish?: StoredAccessRule;
+
+  /**
+   * Access rule for taking a document down (status → out of published).
+   * If not specified, defaults to public access.
+   */
+  unpublish?: StoredAccessRule;
 }
 
 /**
@@ -297,12 +316,27 @@ export const ACCESS_RULE_TYPES: readonly AccessRuleType[] = [
  * }
  * ```
  */
-export const ACCESS_OPERATIONS: readonly AccessOperation[] = [
+export const ACCESS_OPERATIONS = [
   "create",
   "read",
   "update",
   "delete",
-] as const;
+  "publish",
+  "unpublish",
+] as const satisfies readonly AccessOperation[];
+
+// The runtime list must name every member of the type; a consumer that
+// enumerates it to build a matrix or validate an input would otherwise silently
+// omit an operation the type accepts. This fails to compile the moment
+// `AccessOperation` gains a value this array does not.
+type _UnlistedAccessOperation = Exclude<
+  AccessOperation,
+  (typeof ACCESS_OPERATIONS)[number]
+>;
+const _accessOperationsAreComplete: [_UnlistedAccessOperation] extends [never]
+  ? true
+  : never = true;
+void _accessOperationsAreComplete;
 
 /**
  * Default owner field for owner-only rules on COLLECTIONS.

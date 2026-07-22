@@ -1,10 +1,14 @@
 /**
- * Public read surface for content version history.
+ * Public surface for content version history.
  *
  * Wraps the repository so callers (HTTP routes, the admin, and plugins via
  * `ctx.services.versions`) never touch `nextly_versions` directly. Listing is
  * metadata-only by construction: snapshots are large and a history list never
  * needs them.
+ *
+ * Reads, plus the one thing about a stored version that is editable: its label.
+ * A snapshot itself is never rewritten — history is append-only, which is what
+ * makes a restore recoverable.
  *
  * @experimental The shape may change while versioning is in alpha.
  *
@@ -44,6 +48,24 @@ export class VersionsService {
     opts: VersionListOptions = {}
   ): Promise<VersionMeta[]> {
     return this.repo.listByDoc(ref, opts);
+  }
+
+  /**
+   * Name a version, or clear its name with `null`.
+   *
+   * The only mutation on a stored version. `get` runs first so an unknown
+   * version answers not-found rather than silently updating nothing — the
+   * repository's `UPDATE ... WHERE` matches no rows in that case and would
+   * otherwise report success.
+   */
+  async setLabel(
+    ref: VersionRef,
+    versionNo: number,
+    label: string | null
+  ): Promise<VersionRow> {
+    await this.get(ref, versionNo);
+    await this.repo.updateLabel(ref, versionNo, label);
+    return this.get(ref, versionNo);
   }
 
   /** One full version, including its snapshot. */

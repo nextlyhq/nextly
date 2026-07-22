@@ -92,6 +92,8 @@ export interface BuildDesiredTableOptions {
 interface CollectionIndexContext<F> {
   hasSlugColumn: boolean;
   hasCreatedAtColumn: boolean;
+  /** Collections carry an owner column; singles and components do not. */
+  hasCreatedByColumn?: boolean;
   /** Fields whose columns live in the companion `_locales` table. */
   localizedNames: ReadonlySet<string>;
   /**
@@ -129,6 +131,18 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       name: `idx_${tableName}_slug`,
       columns: ["slug"],
       unique: true,
+    });
+  }
+  if (context.hasCreatedByColumn) {
+    // Owner-scoped reads filter on created_by, and the collection service
+    // creates this index for every table that has the column. Recording it
+    // here is what lets a rebuilt table get it back: a SQLite rebuild drops
+    // every index the replacement table does not declare, and the restore
+    // replays only what the snapshot carries.
+    indexes.push({
+      name: `idx_${tableName}_created_by`,
+      columns: ["created_by"],
+      unique: false,
     });
   }
   if (context.hasCreatedAtColumn) {
@@ -215,6 +229,11 @@ export function buildDesiredTableFromFields(
       // Forward descriptor default so the classifier doesn't flag status as
       // `add_required_field_no_default` and require TTY confirmation.
       default: reserved.default,
+      // Forward the primary-key marker too. The diff exempts primary keys
+      // from the nullability comparison, and without this the exemption
+      // would cover core tables only — every Schema-Builder table would keep
+      // emitting the nullability change SQLite can never satisfy.
+      ...(reserved.primaryKey ? { primaryKey: true as const } : {}),
     });
   }
 
@@ -242,6 +261,7 @@ export function buildDesiredTableFromFields(
   const indexes = collectionIndexSpecs(tableName, fields, {
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
+    hasCreatedByColumn: columns.some(c => c.name === "created_by"),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -281,6 +301,9 @@ export function buildDesiredTableFromComponentFields(
       type: "text",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
@@ -318,6 +341,9 @@ export function buildDesiredTableFromComponentFields(
       type: "varchar(36)",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
@@ -356,6 +382,9 @@ export function buildDesiredTableFromComponentFields(
       type: "text",
       nullable: false,
       default: undefined,
+      // Component tables declare `id` as their primary key, so it takes
+      // the same nullability exemption as every other primary key.
+      primaryKey: true,
     });
     columns.push({
       name: "_parent_id",
@@ -460,13 +489,26 @@ export function buildDesiredTableFromComponentFields(
       columns: ["_parent_id", "_parent_table", "_parent_field"],
       unique: false,
     },
+    // The per-field rules are the same ones a collection gets, and they are
+    // taken from the shared helper rather than restated: a component table
+    // materialises `idx_<table>_<column>` for an indexed or single-relationship
+    // field and `uq_<table>_<column>` for a unique one, exactly as
+    // ComponentSchemaService creates them. Listing only the parent and
+    // created_at indexes here left the rest out of the snapshot, so a SQLite
+    // rebuild dropped them and nothing put them back — including the unique
+    // ones, which is a constraint silently disappearing, not just an index.
+    ...collectionIndexSpecs(tableName, fields, {
+      // Components have no slug column; created_at is present when the
+      // component carries timestamps.
+      hasSlugColumn: false,
+      hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
+      localizedNames,
+      columnNameFor: field =>
+        getColumnDescriptor(
+          field as unknown as Parameters<typeof getColumnDescriptor>[0],
+          dialect
+        )?.name ?? null,
+    }),
   ];
-  if (columns.some(c => c.name === "created_at")) {
-    indexes.push({
-      name: `idx_${tableName}_created_at`,
-      columns: ["created_at"],
-      unique: false,
-    });
-  }
   return { name: tableName, columns, indexes: dedupeIndexes(indexes) };
 }

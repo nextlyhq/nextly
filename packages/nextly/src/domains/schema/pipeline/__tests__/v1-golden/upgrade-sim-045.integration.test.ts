@@ -92,6 +92,14 @@ const POST_045_TABLES = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
   "nextly_versions",
+  // Absent from this list for as long as the upgrade did not actually create
+  // it: it was declared in getCoreSchema, which the diff reads, but missing
+  // from the dialect bundle, which the apply pushes, so it was proposed on
+  // every reconcile and emitted by none. Now that the bundle carries it the
+  // upgrade creates it like any other post-0.45 table — and the pass-2
+  // assertion below is what proves it then round-trips to silence rather than
+  // being re-proposed forever.
+  "nextly_i18n_archive",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

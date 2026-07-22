@@ -20,10 +20,13 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+
+import { teardownEntityComponentData } from "./teardown-entity-component-data";
 
 /**
  * A reference to a Component from a Collection, Single, or another Component.
@@ -394,8 +397,31 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     try {
-      // Drop the component's data table FIRST. If it fails, the registry entry
-      // stays intact so the error is surfaced with no partial-deletion state.
+      // Tear down the localization artifacts BEFORE the main table: the companion
+      // `_locales` table holds an FK to this table's `id`, so dropping the main table
+      // first would orphan it (Postgres CASCADE) or fail outright (MySQL). This also
+      // purges the component's rows from the shared `nextly_i18n_archive`.
+      // A component can host other components. Those nested instances point at THIS
+      // table via `_parent_table`, so dropping it below would strand them. Deletion is
+      // blocked while anything references this component, but nothing blocks the reverse
+      // direction, so the nested rows are this delete's responsibility.
+      await teardownEntityComponentData({
+        adapter: this.adapter,
+        parentTable: existing.tableName,
+      });
+
+      await teardownEntityI18n({
+        adapter: this.adapter,
+        slug,
+        tableName: existing.tableName,
+      });
+
+      // Drop the data table after its dependents, since both hold references into it.
+      // A failure here leaves the component present but its nested instances, companion
+      // table and archived translations already removed — the teardowns above are not
+      // reversible. A transaction would not close that window portably: MySQL commits
+      // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
+      // safe (every step is existence-guarded) and is the intended recovery.
       await this.dropComponentTable(existing.tableName);
 
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.

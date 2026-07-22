@@ -30,9 +30,11 @@ import {
 import { resolveSingleDocumentId } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -51,6 +53,7 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
+import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -64,7 +67,10 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { getI18nArchiveDdl } from "../../schemas/nextly-i18n-archive";
+import {
+  getI18nArchiveDdl,
+  getI18nArchiveIndexRepairDdl,
+} from "../../schemas/nextly-i18n-archive";
 import {
   isSuperAdmin,
   listEffectivePermissions,
@@ -94,8 +100,10 @@ import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  assertLabelRequestValid,
   getVersionForDocument,
   restoreVersionForDocument,
+  setVersionLabelForDocument,
   listVersionsForDocument,
   userFromParams,
 } from "./versions-methods";
@@ -266,6 +274,19 @@ async function reconcileSingleCompanion(args: {
     for (const stmt of getI18nArchiveDdl(dialect)) {
       await adapter.executeQuery(stmt);
     }
+    // MySQL's table DDL cannot restore an index the table is missing, and
+    // index-only drift produces no reconcile operations, so the repair runs
+    // here. Tolerated rather than checked first: attempting it and accepting
+    // "duplicate key name" is one round trip instead of two, and the same
+    // tolerance the schema executor already applies.
+    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
+    if (indexRepair) {
+      try {
+        await adapter.executeQuery(indexRepair);
+      } catch (err) {
+        if (!isIdempotencyError(err)) throw err;
+      }
+    }
   }
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
@@ -342,6 +363,7 @@ export const SINGLE_VERSION_METHODS: Record<
         user: userFromParams(p),
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
+        params: p,
       });
       return respondAction("Version restored.", result);
     },
@@ -358,6 +380,29 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  setSingleVersionLabel: {
+    execute: async (_svc, p, body) => {
+      const slug = String(p.slug ?? "");
+      // Validate before resolving anything. Otherwise the same malformed
+      // request answers 404 for an unmaterialized Single and 400 for a
+      // materialized one, and performs a lookup it was never going to use.
+      assertLabelRequestValid(Number(p.versionNo), body);
+      // The live id comes from the server, never the request: a Single has one
+      // document and a client-supplied id would be a way to reach another.
+      const entryId = await requireLiveSingleId(slug);
+      const row = await setVersionLabelForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        versionNo: Number(p.versionNo),
+        // See the collection handler: the body goes through whole.
+        body,
+        params: p,
+      });
+      return respondMutation("Version renamed.", row);
     },
   },
 };
@@ -765,20 +810,28 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const tableName = single.tableName;
       if (tableName && container.has("adapter")) {
         const adapter = container.get<DrizzleAdapter>("adapter");
-        try {
-          // Use dialect-appropriate quoting for the table name.
-          const dialect = adapter.dialect || "postgresql";
-          const quotedTableName =
-            dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
-          await adapter.executeQuery(`DROP TABLE IF EXISTS ${quotedTableName}`);
-        } catch (dropError) {
-          const message =
-            dropError instanceof Error ? dropError.message : String(dropError);
-          // Log but don't throw; continue to delete metadata even if table drop fails.
-          console.warn(
-            `[Singles] Failed to drop data table "${tableName}": ${message}`
-          );
-        }
+        // Embedded component instances point back at this table by a plain string with
+        // no FK, so the drop below cascades nothing and would strand them. Sweep first.
+        await teardownEntityComponentData({ adapter, parentTable: tableName });
+
+        // Remove the companion `_locales` table and this single's archive rows before
+        // the main table. The companion holds an FK to `<main>.id`, so it must go first
+        // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
+        await teardownEntityI18n({ adapter, slug, tableName });
+
+        // Use dialect-appropriate quoting for the table name.
+        const dialect = adapter.dialect || "postgresql";
+        const quotedTableName =
+          dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
+        // Postgres needs CASCADE to drop dependent objects: the companion's FK makes the
+        // main table an FK target, and a non-cascading drop of one raises. Failures
+        // propagate so a single that cannot be fully removed stays intact and retryable
+        // rather than losing its registry row while its tables survive.
+        const dropSql =
+          dialect === "postgresql"
+            ? `DROP TABLE IF EXISTS ${quotedTableName} CASCADE`
+            : `DROP TABLE IF EXISTS ${quotedTableName}`;
+        await adapter.executeQuery(dropSql);
       }
 
       // Delete the metadata from the dynamic_singles registry.

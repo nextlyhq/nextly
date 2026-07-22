@@ -193,3 +193,40 @@ describe("a marked permission", () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe("re-declaring a permission that was marked orphaned", () => {
+  it("clears the mark, so it returns to the menu", async () => {
+    // `listPermissions` hides orphans by default, and preset-role syncing reads
+    // that list. A permission left marked after its declaration came back
+    // exists, is declared, and is still ungrantable.
+    current = await bootWithCoreTables();
+    const seed = current.getService("permissionSeedService");
+
+    await seed.seedCustomPermissions([EXPORT_SUBMISSIONS]);
+    await seed.markOrphanedPermissions([]);
+    expect(await orphanedAtFor(current, "export-submissions")).not.toBeNull();
+
+    // The declaration returns — a plugin reinstalled, or a built-in seeder
+    // adopting a slug a plugin used to own.
+    await seed.seedCustomPermissions([EXPORT_SUBMISSIONS]);
+
+    expect(await orphanedAtFor(current, "export-submissions")).toBeNull();
+  });
+
+  it("makes it visible to the default permission listing again", async () => {
+    current = await bootWithCoreTables();
+    const seed = current.getService("permissionSeedService");
+    const permissions = permissionsOf(current);
+
+    await seed.seedCustomPermissions([EXPORT_SUBMISSIONS]);
+    await seed.markOrphanedPermissions([]);
+
+    const hidden = await permissions.listPermissions({ limit: 1000 });
+    expect(hidden.data.some(p => p.slug === "export-submissions")).toBe(false);
+
+    await seed.seedCustomPermissions([EXPORT_SUBMISSIONS]);
+
+    const shown = await permissions.listPermissions({ limit: 1000 });
+    expect(shown.data.some(p => p.slug === "export-submissions")).toBe(true);
+  });
+});

@@ -167,3 +167,79 @@ describe("version routes", () => {
     ).toBe("publishAllLocales");
   });
 });
+
+describe("version label routes", () => {
+  it("parses a PATCH on a collection entry's version", () => {
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "3"],
+      "PATCH"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "collections",
+      method: "setEntryVersionLabel",
+      routeParams: { collectionName: "posts", entryId: "e1", versionNo: "3" },
+    });
+  });
+
+  it("parses a PATCH on a single's version", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "3"],
+      "PATCH"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "singles",
+      method: "setSingleVersionLabel",
+      routeParams: { slug: "settings", versionNo: "3" },
+    });
+  });
+
+  it("authorizes a label as an update, not a read of history", () => {
+    // The operation drives the permission. Read would let anyone who can see a
+    // document rename its history.
+    for (const parsed of [
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "3"],
+        "PATCH"
+      ),
+      parseRestRoute(["singles", "settings", "versions", "3"], "PATCH"),
+    ]) {
+      expect(parsed?.operation).toBe("update");
+    }
+  });
+
+  // These assert the method is UNDEFINED rather than merely "not the label
+  // method". An unmatched route resolves to `{}`, but a path that silently
+  // matched some OTHER handler would satisfy a weaker assertion while
+  // dispatching somewhere unintended.
+  it("does not claim a PATCH on the version list itself", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions"],
+        "PATCH"
+      ).method
+    ).toBeUndefined();
+    expect(
+      parseRestRoute(["singles", "settings", "versions"], "PATCH").method
+    ).toBeUndefined();
+  });
+
+  it("does not claim a PATCH deeper than a version number", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "3", "label"],
+        "PATCH"
+      ).method
+    ).toBeUndefined();
+  });
+
+  it("leaves other methods on a version alone", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "3"],
+        "DELETE"
+      ).method
+    ).toBeUndefined();
+  });
+});

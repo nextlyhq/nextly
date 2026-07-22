@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
 /**
@@ -13,8 +14,14 @@ export const nextlyI18nArchive = sqliteTable(
     locale: text("locale").notNull(),
     field: text("field").notNull(),
     value: text("value"),
+    // `$defaultFn` alone fills the column only on inserts that go through
+    // Drizzle. The localization-disable path archives with a raw
+    // `INSERT ... SELECT` that names no `archived_at`, so the column needs a
+    // default the database itself applies — matching `getI18nArchiveDdl`,
+    // which has always created this table with `DEFAULT (unixepoch())`.
     archivedAt: integer("archived_at", { mode: "timestamp" })
       .notNull()
+      .default(sql`(unixepoch())`)
       .$defaultFn(() => new Date()),
   },
   t => [

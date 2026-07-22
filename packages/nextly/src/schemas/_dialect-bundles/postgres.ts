@@ -76,6 +76,11 @@ export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/pos
 // resolve `nextly_versions` (a managed core table) for runtime CRUD.
 export { nextlyVersionsPg as nextlyVersions } from "../versions/postgres";
 
+// Localization archive; in the bundle so freshPushSchema creates it. Being in
+// getCoreSchema alone only makes it diffable: the apply pushes this map, so a
+// table missing here is proposed on every reconcile and created by none.
+export { nextlyI18nArchive } from "../nextly-i18n-archive/postgres";
+
 // Webhook + event system tables. Must be in this flat bundle (not just
 // getCoreSchema) so freshPushSchema creates them on a fresh database.
 export {

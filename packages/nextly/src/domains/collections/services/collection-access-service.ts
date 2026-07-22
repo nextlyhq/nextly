@@ -111,12 +111,18 @@ export class CollectionAccessService extends BaseService {
     rules: CollectionAccessRules | undefined
   ): CollectionAccessRules | undefined {
     if (!rules) return rules;
-    const ops: (keyof CollectionAccessRules)[] = [
-      "create",
-      "read",
-      "update",
-      "delete",
-    ];
+    // Keyed off the interface so a new rule kind (publish, unpublish) cannot be
+    // added there and silently skipped here — leaving an owner-only rule of that
+    // kind with an unnormalized owner field, which then checks the wrong column.
+    const opFlags: Record<keyof CollectionAccessRules, true> = {
+      create: true,
+      read: true,
+      update: true,
+      delete: true,
+      publish: true,
+      unpublish: true,
+    };
+    const ops = Object.keys(opFlags) as (keyof CollectionAccessRules)[];
     let cloned: CollectionAccessRules | undefined;
     for (const op of ops) {
       const rule = rules[op];

@@ -15,4 +15,5 @@ export { registerMetaServices } from "./register-meta";
 export { registerSingleServices } from "./register-singles";
 export { registerUserServices } from "./register-users";
 export { registerVersionServices } from "./register-versions";
+export { registerWebhookServices } from "./register-webhooks";
 export type { RegistrationContext } from "./types";

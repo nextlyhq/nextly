@@ -5,6 +5,15 @@ export const IdSchema = z.string().min(1, "ID is required");
 /**
  * System resources that are always available regardless of dynamic collections.
  * These represent core Nextly entities that exist in every installation.
+ *
+ * This list is not only an allowlist: `cleanupOrphanedPermissions` deletes any
+ * owner-less permission whose resource is absent from here and is not a
+ * collection, single or component, together with its role grants. Seeded system
+ * permissions have no owner, so **every resource named in `SYSTEM_PERMISSIONS`
+ * must appear here** or its permissions survive seeding and vanish on the next
+ * cleanup pass, silently removing the access every non-super-admin role had to
+ * that surface. A test in `seed-system-permissions.integration.test.ts` enforces
+ * the pairing.
  */
 export const SYSTEM_RESOURCES = [
   "users",
@@ -15,6 +24,7 @@ export const SYSTEM_RESOURCES = [
   "email-providers",
   "email-templates",
   "api-keys",
+  "webhooks",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
@@ -121,11 +131,20 @@ export const DeleteRoleSchema = z.object({
   roleId: IdSchema,
 });
 
-// Actions: standard CRUD + "manage" for broad resource control
+// Actions: standard CRUD, the publish lifecycle, and "manage" for broad
+// resource control.
+//
+// `publish` and `unpublish` are separate rather than one verb: making content
+// live and taking it down are different responsibilities, and a role that may
+// withdraw a page in an emergency is not necessarily one that may put pages up.
+// Granting them together is a role decision, not something the model should
+// force. No action implies another — `roleSetHasPermission` matches the action
+// column exactly — so both must be granted explicitly.
 export const PermissionActionSchema = z.enum(
-  ["create", "read", "update", "delete", "manage"],
+  ["create", "read", "update", "delete", "publish", "unpublish", "manage"],
   {
-    message: "Action must be one of: create, read, update, delete, manage",
+    message:
+      "Action must be one of: create, read, update, delete, publish, unpublish, manage",
   }
 );
 

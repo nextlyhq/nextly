@@ -58,6 +58,12 @@ export const RESERVED_SLUGS = [
   "roles",
   "permissions",
   "sessions",
+  // Permission identity is action + resource, and webhook endpoint permissions
+  // are seeded against the `webhooks` resource. A collection with this slug
+  // would share those exact tuples, so a role granted the collection's
+  // `read-webhooks` would also be able to read endpoint configuration, and
+  // `update-webhooks` would reveal signing secrets.
+  "webhooks",
   "tokens",
   "media",
   "uploads",
