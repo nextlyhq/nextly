@@ -407,7 +407,20 @@ export const SINGLE_MIGRATION_STATUSES: readonly SingleMigrationStatus[] = [
  * }
  * ```
  */
-export const SINGLE_ACCESS_OPERATIONS: readonly (keyof SingleAccessRules)[] = [
+export const SINGLE_ACCESS_OPERATIONS = [
   "read",
   "update",
-] as const;
+  "publish",
+  "unpublish",
+] as const satisfies readonly (keyof SingleAccessRules)[];
+
+// Fails to compile if a rule key is added to `SingleAccessRules` without being
+// listed here, so the enumerable list can never fall behind the rule shape.
+type _UnlistedSingleOperation = Exclude<
+  keyof SingleAccessRules,
+  (typeof SINGLE_ACCESS_OPERATIONS)[number]
+>;
+const _singleOperationsAreComplete: [_UnlistedSingleOperation] extends [never]
+  ? true
+  : never = true;
+void _singleOperationsAreComplete;

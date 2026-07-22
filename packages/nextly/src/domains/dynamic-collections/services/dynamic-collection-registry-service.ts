@@ -56,6 +56,8 @@ export interface CollectionMetadata {
     read?: { type: string; allowedRoles?: string[] };
     update?: { type: string; allowedRoles?: string[] };
     delete?: { type: string; allowedRoles?: string[] };
+    publish?: { type: string; allowedRoles?: string[] };
+    unpublish?: { type: string; allowedRoles?: string[] };
   };
   hooks?: Record<string, unknown>[];
   createdBy?: string;

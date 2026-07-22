@@ -238,6 +238,8 @@ export const dynamicCollectionsSqlite = sqliteTable(
       read?: { type: string; allowedRoles?: string[] };
       update?: { type: string; allowedRoles?: string[] };
       delete?: { type: string; allowedRoles?: string[] };
+      publish?: { type: string; allowedRoles?: string[] };
+      unpublish?: { type: string; allowedRoles?: string[] };
     }>(),
 
     // --------------------------------------------------------
