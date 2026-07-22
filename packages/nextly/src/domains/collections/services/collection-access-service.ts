@@ -328,20 +328,32 @@ export class CollectionAccessService extends BaseService {
   }
 
   /**
-   * Pre-resolve whether a collection has a document-dependent (owner-only)
-   * publish/unpublish rule that must be judged against the specific row being
-   * transitioned. Runs on the pooled connection BEFORE a write transaction, so
-   * the in-transaction check needs no metadata read (mirrors the permission
+   * Whether a stored access rule's decision depends on the specific document —
+   * `owner-only` (compares the owner column) or `custom` (a function that may
+   * inspect `id`/`data`). These must be re-judged against the row-locked row, not
+   * the docless pre-resolve. `public`/`authenticated`/`role-based` are fully
+   * decided without a document, so they are excluded.
+   */
+  private isDocumentDependentRule(
+    rule: { type?: string } | undefined
+  ): boolean {
+    return rule?.type === "owner-only" || rule?.type === "custom";
+  }
+
+  /**
+   * Pre-resolve whether a collection has a document-dependent (owner-only or
+   * custom) publish/unpublish rule that must be judged against the specific row
+   * being transitioned. Runs on the pooled connection BEFORE a write transaction,
+   * so the in-transaction check needs no metadata read (mirrors the permission
    * pre-resolve used by the transaction/batch paths).
    *
    * Returns the already-fetched rules + user when such a rule applies, or null
    * when it does not: a super-admin SESSION bypasses stored rules — but NOT a
    * scoped API key it owns (matching {@link checkCollectionAccess}) — and a
-   * collection with no owner-only publish/unpublish rule has nothing
-   * document-dependent to enforce. Only owner-only inspects the row;
-   * role-based/authenticated/public rules are fully decided by the docless
-   * permission pre-resolve, so they are intentionally excluded here. The caller
-   * is responsible for skipping this on an `overrideAccess` write.
+   * collection with no document-dependent publish/unpublish rule has nothing to
+   * re-enforce. role-based/authenticated/public rules are fully decided by the
+   * docless permission pre-resolve, so they are intentionally excluded here. The
+   * caller is responsible for skipping this on an `overrideAccess` write.
    */
   resolveTransitionDocumentRule(
     collection: Record<string, unknown>,
@@ -358,22 +370,24 @@ export class CollectionAccessService extends BaseService {
     const accessRules = this.getAccessRules(collection);
     if (!accessRules) return null;
     const documentDependent =
-      accessRules.publish?.type === "owner-only" ||
-      accessRules.unpublish?.type === "owner-only";
+      this.isDocumentDependentRule(accessRules.publish) ||
+      this.isDocumentDependentRule(accessRules.unpublish);
     return documentDependent ? { accessRules, user } : null;
   }
 
   /**
-   * Evaluate the stored owner-only publish/unpublish rule for a transition
-   * against an ALREADY-FETCHED (row-locked) document, with no metadata or
-   * permission read — safe to call inside a transaction. Returns a 403 result
-   * when the rule denies (the actor is not the document's owner), or null when
-   * it allows or no owner-only rule governs the operation.
+   * Evaluate the stored document-dependent (owner-only or custom) publish/
+   * unpublish rule for a transition against an ALREADY-FETCHED (row-locked)
+   * document, with no metadata or permission read — safe to call inside a
+   * transaction. Returns a 403 result when the rule denies, or null when it
+   * allows or no document-dependent rule governs the operation.
    *
-   * This closes the gap where the docless permission pre-resolve lets an
-   * owner-only publish/unpublish through (owner checks defer without a document),
-   * so a caller who may update another user's row could otherwise batch-publish
-   * or unpublish it under the transaction.
+   * This closes the gap where the docless permission pre-resolve lets a
+   * document-dependent publish/unpublish through: owner checks defer without a
+   * document, and a custom rule is judged on empty `id`/`data`. So a caller who
+   * may update another user's row could otherwise batch-publish or unpublish it
+   * under the transaction. The row's own `id` is passed so a custom rule that
+   * keys off the document id sees the real value.
    */
   async evaluateTransitionDocumentRule<T = unknown>(
     accessRules: CollectionAccessRules,
@@ -381,14 +395,16 @@ export class CollectionAccessService extends BaseService {
     user: UserContext | undefined,
     document: Record<string, unknown>
   ): Promise<CollectionServiceResult<T> | null> {
-    if (accessRules[operation]?.type !== "owner-only") {
+    if (!this.isDocumentDependentRule(accessRules[operation])) {
       return null;
     }
+    const documentId =
+      typeof document.id === "string" ? document.id : undefined;
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
       operation,
       this.buildRequestContext(user),
-      undefined,
+      documentId,
       document,
       DEFAULT_OWNER_FIELD
     );
