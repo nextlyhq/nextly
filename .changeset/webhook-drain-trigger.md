@@ -22,14 +22,14 @@
 
 Fire due webhook deliveries with a drain trigger.
 
-Adds `POST /api/webhooks/drain`: one request fans out due events into deliveries
-and attempts them, so a scheduler (e.g. Vercel Cron) can drive delivery and
-retries. Until now the delivery engine had no production trigger and the event
-outbox accumulated rows nothing sent.
+Adds `/api/webhooks/drain` (GET or POST): one request fans out due events into
+deliveries and attempts them, so a scheduler (e.g. Vercel Cron, which triggers
+with a GET) can drive delivery and retries. Until now the delivery engine had no
+production trigger and the event outbox accumulated rows nothing sent.
 
-The route is authorized by a shared `NEXTLY_DRAIN_SECRET` presented as a bearer
-token (constant-time compare, matching how Vercel Cron sends `CRON_SECRET`) OR
-by an authenticated admin/API-key caller with `update-webhooks`. The endpoint
-registry is now a shared singleton, so a change made through the webhook admin
-API invalidates the same cache a running drain reads instead of waiting for a
-per-drain cache to expire.
+The route is authorized by a shared secret presented as a bearer token
+(constant-time compare) — either `NEXTLY_DRAIN_SECRET` or Vercel's `CRON_SECRET`
+— OR by an authenticated admin/API-key caller with `update-webhooks`. The
+endpoint registry is now a shared singleton, so a change made through the webhook
+admin API invalidates the same cache a running drain reads instead of waiting for
+a per-drain cache to expire.

@@ -47,6 +47,12 @@ export const _envSchema = z
     // and the empty string, which would silently disable the cron path — is
     // rejected at boot rather than accepted. Compared in constant time.
     NEXTLY_DRAIN_SECRET: z.string().min(32).optional(),
+    // Vercel Cron's convention: the platform sends the project's `CRON_SECRET`
+    // as the bearer token on scheduled invocations. Accepted as an alternative
+    // drain secret so the advertised Vercel Cron path works without duplicating
+    // the value into NEXTLY_DRAIN_SECRET. Vercel-managed, so not length-checked
+    // here.
+    CRON_SECRET: z.string().optional(),
     // Additional allowed origins for CSRF validation (comma-separated)
     NEXTLY_ALLOWED_ORIGINS: z.string().optional(),
 

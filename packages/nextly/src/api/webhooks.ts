@@ -162,9 +162,15 @@ function constantTimeEqual(a: string, b: string): boolean {
  * falls through to be tried as an API key by the permission check.
  */
 async function authorizeDrain(request: Request): Promise<void> {
-  const secret = env.NEXTLY_DRAIN_SECRET;
   const presented = bearerToken(request);
-  if (secret && presented && constantTimeEqual(presented, secret)) return;
+  if (presented) {
+    // A scheduler presents a shared secret as a bearer token — either Nextly's
+    // NEXTLY_DRAIN_SECRET or Vercel Cron's CRON_SECRET (what Vercel actually
+    // sends). Constant-time against each configured value.
+    for (const secret of [env.NEXTLY_DRAIN_SECRET, env.CRON_SECRET]) {
+      if (secret && constantTimeEqual(presented, secret)) return;
+    }
+  }
   const authResult = await requireWebhookPermission(request, "update");
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 }
@@ -172,14 +178,16 @@ async function authorizeDrain(request: Request): Promise<void> {
 /**
  * Run one webhook drain: fan out due events into deliveries and attempt the due
  * deliveries. Idempotent and safe to call repeatedly — a scheduler (e.g. Vercel
- * Cron) POSTs here on an interval; retries are advanced on later calls.
+ * Cron, which triggers with a GET) hits this on an interval; retries are
+ * advanced on later calls. Accepts GET or POST.
  *
- * Auth: the shared `NEXTLY_DRAIN_SECRET` (bearer, constant-time) OR an
- * authenticated admin/API-key caller with `update-webhooks`. Not session-only:
- * a scheduler has no session.
+ * Auth: a shared `NEXTLY_DRAIN_SECRET` or Vercel's `CRON_SECRET` (bearer,
+ * constant-time) OR an authenticated admin/API-key caller with
+ * `update-webhooks`. Not session-only: a scheduler has no session.
  *
- * Response: the drain summary (rounds, events processed, deliveries created,
- * attempted/delivered/retried/failed) via `respondData`.
+ * Response: the canonical mutation envelope `{ message, item }`, where `item` is
+ * the drain summary (rounds, events processed, deliveries created,
+ * attempted/delivered/retried/failed).
  */
 export const drainWebhooks = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -194,7 +202,9 @@ export const drainWebhooks = withErrorHandler(
     );
 
     const result = await runWebhookDrain(adapter, registry);
-    return respondData({ ...result });
+    // A POST/GET trigger with fan-out + delivery side effects: return the
+    // canonical mutation envelope with the drain summary as the item.
+    return respondMutation("Webhook drain completed.", result);
   }
 );
 
