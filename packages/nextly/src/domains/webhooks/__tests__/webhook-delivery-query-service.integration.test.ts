@@ -231,12 +231,14 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
       expect(delivered.status).toBe("delivered");
       expect(delivered.lastStatusCode).toBe(200);
       expect(delivered.lastLatencyMs).toBe(42);
-      // Timestamps come back as ISO-8601 UTC strings. Absolute values are not
-      // asserted here: a naive-datetime column round-trips through the runner's
-      // local timezone, so the exact instant is environment-dependent — the
-      // newest-first ordering above is what pins the createdAt semantics.
-      expect(delivered.eventCreatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
-      expect(delivered.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+      // Timestamps are raw Date values (the response layer serializes them). The
+      // exact instant must survive the round-trip regardless of the runner's
+      // timezone — a regression guard against re-introducing a timezone shift.
+      expect(delivered.eventCreatedAt).toBeInstanceOf(Date);
+      expect(delivered.createdAt).toBeInstanceOf(Date);
+      expect(delivered.createdAt.toISOString()).toBe(
+        "2026-07-18T00:00:01.000Z"
+      );
     });
 
     it("filters by status", async () => {
@@ -269,6 +271,38 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
       const second = await service.listDeliveries("wh1", { page: 2, limit: 2 });
       expect(second.total).toBe(3);
       expect(second.items.map(i => i.id)).toEqual(["d1"]);
+    });
+
+    it("pages stably when several deliveries share a created_at", async () => {
+      await seedWebhook("wh1");
+      // Four deliveries with the SAME created_at (each for a distinct event, so
+      // the unique (webhook,event) constraint is satisfied): only the id
+      // tiebreaker keeps paging from duplicating or skipping rows across page
+      // boundaries.
+      const tie = new Date("2026-07-18T00:00:00.000Z");
+      const ids = ["da", "db", "dc", "dd"];
+      for (const id of ids) {
+        await seedEvent(`evt_${id}`, "entry.updated", {
+          kind: "entry",
+          collection: "posts",
+          id,
+        });
+        await seedDelivery(id, "wh1", `evt_${id}`, {
+          status: "delivered",
+          createdAt: tie,
+        });
+      }
+
+      const seen: string[] = [];
+      for (let page = 1; page <= 4; page++) {
+        const { items } = await service.listDeliveries("wh1", {
+          page,
+          limit: 1,
+        });
+        seen.push(...items.map(i => i.id));
+      }
+      // Every delivery appears exactly once across the four single-row pages.
+      expect(seen.sort()).toEqual(["da", "db", "dc", "dd"]);
     });
 
     it("returns an empty page for an endpoint with no deliveries", async () => {

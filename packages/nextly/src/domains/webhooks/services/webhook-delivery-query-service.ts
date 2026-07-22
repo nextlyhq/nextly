@@ -76,11 +76,11 @@ export interface WebhookDeliverySummary {
   lastLatencyMs: number | null;
   lastError: string | null;
   /** When the next retry is due, or null when the delivery is terminal. */
-  nextAttemptAt: string | null;
+  nextAttemptAt: Date | null;
   /** When the underlying event was recorded (event row's created_at). */
-  eventCreatedAt: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
+  eventCreatedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 /** A single delivery with its full attempt history and response snippet. */
@@ -110,14 +110,14 @@ interface DeliveryJoinRow {
   lastError: string | null;
   lastResponseSnippet: string | null;
   attempts: unknown;
-  nextAttemptAt: unknown;
-  createdAt: unknown;
-  updatedAt: unknown;
+  nextAttemptAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
   eventType: string;
   resourceKind: string;
   resourceCollection: string | null;
   resourceId: string | null;
-  eventCreatedAt: unknown;
+  eventCreatedAt: Date;
 }
 
 export class WebhookDeliveryQueryService extends BaseService {
@@ -220,7 +220,10 @@ export class WebhookDeliveryQueryService extends BaseService {
         .from(this.deliveries)
         .innerJoin(this.events, eq(this.deliveries.eventId, this.events.id))
         .where(where)
-        .orderBy(desc(this.deliveries.createdAt))
+        // The id tiebreaker keeps offset paging stable when several deliveries
+        // share a created_at: without it, adjacent pages could duplicate or
+        // skip rows the database returns in an arbitrary order within a tie.
+        .orderBy(desc(this.deliveries.createdAt), desc(this.deliveries.id))
         .limit(opts.limit)
         .offset(offset)) as DeliveryJoinRow[];
 
@@ -273,10 +276,14 @@ export class WebhookDeliveryQueryService extends BaseService {
       lastStatusCode: row.lastStatusCode,
       lastLatencyMs: row.lastLatencyMs,
       lastError: row.lastError,
-      nextAttemptAt: this.normalizeDbTimestamp(row.nextAttemptAt),
-      eventCreatedAt: this.normalizeDbTimestamp(row.eventCreatedAt),
-      createdAt: this.normalizeDbTimestamp(row.createdAt),
-      updatedAt: this.normalizeDbTimestamp(row.updatedAt),
+      // Raw Date values, matching WebhookEndpointService.toSummary. The response
+      // layer serializes a Date to its correct ISO-8601 instant; running these
+      // through normalizeDbTimestamp would wrongly shift a SQLite epoch-based
+      // Date by the server's timezone (it un-offsets naive PG/MySQL Dates).
+      nextAttemptAt: row.nextAttemptAt,
+      eventCreatedAt: row.eventCreatedAt,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
   }
 
