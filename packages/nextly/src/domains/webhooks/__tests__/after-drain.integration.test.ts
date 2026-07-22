@@ -2,10 +2,12 @@
  * Integration test for `WebhookFastDrainScheduler` — the post-response drain
  * fast path.
  *
- * Proves the gate: it schedules a drain (through an injected `after()`) only when
- * `after()` is available AND an endpoint is enabled, and the scheduled work
- * actually fans out and delivers the seeded event. Uses an in-memory SQLite
- * database and a captured `after()` so the callback can be run deterministically.
+ * Proves the design: it registers a callback (through an injected `after()`)
+ * whenever `after()` is available, without reading the database in the write
+ * path; the subscriber gate runs inside that callback, and the scheduled work
+ * fans out and delivers the seeded event only when an endpoint is enabled. Uses
+ * an in-memory SQLite database and a captured `after()` so the callback can be
+ * run deterministically.
  */
 
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
@@ -139,7 +141,7 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
       drainOptions(transport)
     );
 
-    await scheduler.offer();
+    scheduler.offer();
 
     // The gate passed: exactly one drain was scheduled to run after the response.
     expect(scheduled).toHaveLength(1);
@@ -164,7 +166,7 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
       drainOptions(transport)
     );
 
-    await scheduler.offer();
+    scheduler.offer();
 
     // offer() registers the callback without reading the database — the write
     // path is never delayed by a registry lookup.
@@ -190,7 +192,7 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
       drainOptions(transport)
     );
 
-    await scheduler.offer();
+    scheduler.offer();
 
     // Even with an endpoint, nothing is scheduled through the (absent) after().
     expect(scheduled).toHaveLength(0);

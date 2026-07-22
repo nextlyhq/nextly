@@ -236,11 +236,13 @@ export class CollectionEntryService extends BaseService {
    * The drain fast path goes first so the `after()` callback is scheduled
    * promptly (it only runs post-response, so it adds no latency); the retention
    * pass follows. Both absorb their own failures, so this never turns a
-   * successful save into an error. Awaited for the reason `offerRetentionPass`
-   * documents: a detached promise may not survive a serverless response.
+   * successful save into an error. `offer()` is synchronous — it only registers
+   * the post-response callback, whose work `after()` owns — so it is not awaited;
+   * the retention pass is awaited for the reason `offerRetentionPass` documents:
+   * a detached promise may not survive a serverless response.
    */
   private async afterWrite(): Promise<void> {
-    await this.fastDrainScheduler?.offer();
+    this.fastDrainScheduler?.offer();
     await this.offerRetentionPass();
   }
 

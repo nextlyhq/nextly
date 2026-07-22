@@ -102,8 +102,12 @@ export class WebhookFastDrainScheduler {
    * must never turn a successful write into an error, and the scheduled drain is
    * always the backstop. It does NOT read the database: the subscriber check
    * happens inside the callback so the write path stays free of registry reads.
+   *
+   * Synchronous: it only registers the callback. The delivery work is owned by
+   * `after()` (which survives the response via `waitUntil`), so there is nothing
+   * for a caller to await.
    */
-  async offer(): Promise<void> {
+  offer(): void {
     if (this.cachedAfter === undefined) this.cachedAfter = this.loadAfter();
     const after = this.cachedAfter;
     // No `after()` (non-Next runtime, or Next < 15): the scheduled drain delivers.
