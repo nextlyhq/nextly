@@ -78,6 +78,10 @@ export const nextlyWebhooks = mysqlTable(
     updatedAt: datetime("updated_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Soft-delete marker; see the PostgreSQL definition. Deleting an endpoint
+    // stamps this instead of removing the row, so its delivery history and
+    // attribution survive. NULL means live.
+    deletedAt: datetime("deleted_at"),
   },
   t => [index("nextly_webhooks_enabled_idx").on(t.enabled)]
 );

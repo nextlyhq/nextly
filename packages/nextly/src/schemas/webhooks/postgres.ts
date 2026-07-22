@@ -110,6 +110,11 @@ export const nextlyWebhooks = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
+    // Soft-delete marker. Deleting an endpoint stamps this instead of removing
+    // the row, so its delivery history survives with its attribution intact
+    // (the delivery foreign key still resolves to a real endpoint). NULL means
+    // live; a timestamp means retired and hidden from every read.
+    deletedAt: timestamp("deleted_at", { withTimezone: false }),
   },
   t => [index("nextly_webhooks_enabled_idx").on(t.enabled)]
 );

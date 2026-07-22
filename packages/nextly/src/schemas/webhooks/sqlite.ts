@@ -75,6 +75,10 @@ export const nextlyWebhooks = sqliteTable(
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    // Soft-delete marker; see the PostgreSQL definition. Deleting an endpoint
+    // stamps this instead of removing the row, so its delivery history and
+    // attribution survive. NULL means live.
+    deletedAt: integer("deleted_at", { mode: "timestamp" }),
   },
   t => [index("nextly_webhooks_enabled_idx").on(t.enabled)]
 );

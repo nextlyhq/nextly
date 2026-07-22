@@ -150,7 +150,17 @@ export class WebhookEndpointRegistry {
   private async load(): Promise<WebhookEndpoint[]> {
     const rows = await this.reader.select<Record<string, unknown>>(
       "nextly_webhooks",
-      { where: { and: [{ column: "enabled", op: "=", value: true }] } }
+      {
+        where: {
+          and: [
+            { column: "enabled", op: "=", value: true },
+            // A retired endpoint is cleared to disabled on delete, so the
+            // enabled filter already excludes it; this makes the intent
+            // explicit and holds even if a row were re-enabled out of band.
+            { column: "deletedAt", op: "IS NULL", value: null },
+          ],
+        },
+      }
     );
     return rows.map(toEndpoint);
   }

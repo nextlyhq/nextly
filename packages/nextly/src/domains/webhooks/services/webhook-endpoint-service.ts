@@ -25,7 +25,7 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -121,6 +121,18 @@ interface WebhookRow {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * The subset of the Drizzle fluent API a write needs, so a `BaseService`
+ * transaction handle (typed `unknown`) can be narrowed without pulling in a
+ * dialect-specific driver type. Matches the `DrizzleTransactionLike` shape used
+ * elsewhere for the same reason.
+ */
+interface DrizzleWriteExecutor {
+  update(table: unknown): {
+    set(data: unknown): { where(condition: unknown): Promise<unknown> };
+  };
 }
 
 /** Replace every stored header value with the redaction placeholder. */
@@ -311,19 +323,30 @@ export class WebhookEndpointService extends BaseService {
         (await this.db
           .select()
           .from(this.table)
+          // Retired endpoints are kept for their delivery history but are not
+          // part of the live set, so they never appear in a list.
+          .where(isNull(this.table.deletedAt))
           .orderBy(desc(this.table.createdAt))) as WebhookRow[]
     );
     return rows.map(row => this.toSummary(row));
   }
 
-  /** One endpoint, or null when it does not exist. */
+  /**
+   * One endpoint, or null when there is no live endpoint with this id.
+   *
+   * A retired (soft-deleted) endpoint reads as null, the same as one that never
+   * existed: it is kept only for its delivery history and is not part of the
+   * manageable set. Callers cannot, and should not, tell the two apart. Every
+   * read here filters `deleted_at IS NULL` for that reason, and `updateEndpoint`
+   * relies on it to refuse edits to a retired row.
+   */
   async getEndpoint(id: string): Promise<WebhookEndpointSummary | null> {
     const rows = await this.query(
       async () =>
         (await this.db
           .select()
           .from(this.table)
-          .where(eq(this.table.id, id))
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
           .limit(1)) as WebhookRow[]
     );
     return rows[0] ? this.toSummary(rows[0]) : null;
@@ -361,8 +384,14 @@ export class WebhookEndpointService extends BaseService {
     this.registry?.invalidate();
 
     // Done here rather than in `setEnabled` so that disabling through a plain
-    // field update cannot skip it.
-    if (patch.enabled === false) await this.cancelQueuedDeliveries(id);
+    // field update cannot skip it. Not wrapped in a transaction with the update
+    // above: disabling leaves the endpoint visible, so a failed cancellation is
+    // simply retried by disabling again — unlike delete, which hides the row.
+    if (patch.enabled === false) {
+      await this.query(() =>
+        this.cancelQueuedDeliveries(this.db, id, "webhook disabled")
+      );
+    }
 
     const updated = await this.getEndpoint(id);
     if (!updated) throw this.notFound(id);
@@ -370,38 +399,45 @@ export class WebhookEndpointService extends BaseService {
   }
 
   /**
-   * End the deliveries still outstanding for an endpoint that was just
-   * disabled.
+   * End the deliveries still outstanding for an endpoint that was just disabled
+   * or retired.
    *
    * Delivery refuses a disabled endpoint when it attempts one, which covers a
-   * drain running during the disabled window. It does not cover the window
-   * itself: with no drain between disabling and re-enabling, those rows are
-   * still due and would go out in a burst afterwards, which is the opposite of
-   * what disabling promised.
+   * drain running during the window. It does not cover the window itself: with
+   * no drain between disabling and re-enabling, those rows are still due and
+   * would go out in a burst afterwards, which is the opposite of what disabling
+   * promised.
    *
    * They are ended rather than held for the same reason delivery ends them.
    * Sending events an operator switched off, hours late, is worse than not
    * sending them, and replaying is a separate deliberate act.
+   *
+   * The `executor` is either the shared connection or a transaction, so a delete
+   * can end the deliveries in the same transaction that retires the endpoint.
+   * The `reason` is recorded on each row so the retained history says why they
+   * stopped — "disabled" or "deleted" — rather than always "disabled".
    */
-  private async cancelQueuedDeliveries(webhookId: string): Promise<void> {
-    await this.query(() =>
-      this.db
-        .update(this.deliveries)
-        .set({
-          status: "failed",
-          nextAttemptAt: null,
-          lockedBy: null,
-          lockedUntil: null,
-          lastError: "webhook disabled",
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(this.deliveries.webhookId, webhookId),
-            inArray(this.deliveries.status, ["pending", "retrying"])
-          )
+  private cancelQueuedDeliveries(
+    executor: DrizzleWriteExecutor,
+    webhookId: string,
+    reason: string
+  ): Promise<unknown> {
+    return executor
+      .update(this.deliveries)
+      .set({
+        status: "failed",
+        nextAttemptAt: null,
+        lockedBy: null,
+        lockedUntil: null,
+        lastError: reason,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(this.deliveries.webhookId, webhookId),
+          inArray(this.deliveries.status, ["pending", "retrying"])
         )
-    );
+      );
   }
 
   /**
@@ -419,19 +455,49 @@ export class WebhookEndpointService extends BaseService {
   }
 
   /**
-   * Remove an endpoint and, with it, its delivery history.
+   * Retire an endpoint while keeping its delivery history.
    *
-   * `nextly_webhook_deliveries.webhook_id` cascades, so deleting an endpoint
-   * discards the record of what was sent to it rather than leaving that to
-   * retention. This is why disabling exists and is the reversible option:
-   * deletion is for an endpoint whose history is no longer wanted either.
+   * The row is soft-deleted rather than removed: it disappears from every read
+   * and stops receiving deliveries, but stays in the table so the delivery
+   * ledger keeps a real endpoint on the other end of its foreign key. "What did
+   * we send to that integration, and did it arrive?" is answerable after the
+   * endpoint is gone, which is exactly when it tends to be asked.
+   *
+   * Disabling remains the way to pause an endpoint you intend to bring back;
+   * this is for one you are finished with but whose record still matters. A row
+   * once retired is not resurrected — a later registration is a new endpoint.
    */
   async deleteEndpoint(id: string): Promise<void> {
     const existing = await this.getEndpoint(id);
     if (!existing) throw this.notFound(id);
 
+    const now = new Date();
+    // Retiring the endpoint and ending its deliveries happen in one transaction.
+    // The tombstone hides the row from every read, so a delete that stamped the
+    // tombstone but then failed to cancel would leave deliveries queued with no
+    // way to retry — a second delete returns not-found. One transaction makes it
+    // all-or-nothing: a failure rolls the tombstone back and the endpoint stays
+    // visible and retryable.
+    //
+    // The signing secrets and static headers are cleared. A retired endpoint
+    // never delivers again, so the receiver credentials they hold serve no
+    // purpose and should not linger; attribution (name, url, event types) is
+    // what the delivery history needs and is what is kept.
     await this.query(() =>
-      this.db.delete(this.table).where(eq(this.table.id, id))
+      this.withTransaction(async tx => {
+        const txDb = tx as DrizzleWriteExecutor;
+        await txDb
+          .update(this.table)
+          .set({
+            deletedAt: now,
+            enabled: false,
+            updatedAt: now,
+            secretHash: [],
+            headers: null,
+          })
+          .where(eq(this.table.id, id));
+        await this.cancelQueuedDeliveries(txDb, id, "webhook deleted");
+      })
     );
     this.registry?.invalidate();
   }
@@ -445,6 +511,9 @@ export class WebhookEndpointService extends BaseService {
    *
    * Returns every active secret because rotation keeps more than one alive at
    * a time, and a caller reconciling their configuration needs to see them all.
+   *
+   * A retired endpoint is not found here, like every other read: its secrets are
+   * also cleared on delete, so there would be nothing to return in any case.
    */
   async revealSecrets(id: string): Promise<string[]> {
     const rows = await this.query(
@@ -452,7 +521,7 @@ export class WebhookEndpointService extends BaseService {
         (await this.db
           .select()
           .from(this.table)
-          .where(eq(this.table.id, id))
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
           .limit(1)) as WebhookRow[]
     );
 
