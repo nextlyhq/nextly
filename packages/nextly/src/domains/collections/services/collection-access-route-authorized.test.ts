@@ -444,7 +444,7 @@ describe("getOwnerConstraint — scoped API key", () => {
       generateId: vi.fn(),
     };
     return new CollectionAccessService(
-      createMockAdapter(createMockDb()) as never,
+      createMockAdapter(createMockDb({ rows: [] })) as never,
       silentLogger as never,
       collectionService as never,
       accessControlService as never,
