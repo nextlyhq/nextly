@@ -36,6 +36,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -1749,6 +1750,13 @@ export class CollectionQueryService extends BaseService {
      * creator's. Owner-only and other document-level rules still apply.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant here, so a super-admin-owned key cannot read a row its scope
+     * excludes (used by duplicate, which reads the source before creating a
+     * copy). Undefined for session/system callers.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1761,7 +1769,10 @@ export class CollectionQueryService extends BaseService {
         params.entryId,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own read grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
