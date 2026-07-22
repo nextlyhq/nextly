@@ -349,14 +349,26 @@ export class PermissionSeedService extends BaseService {
   /**
    * Seed CRUD permissions for a single collection.
    *
-   * Creates 4 permissions: create, read, update, delete for the given slug.
+   * Creates 6 permissions: create, read, update, delete, publish, unpublish.
+   *
+   * Publishing is seeded for every collection, not only those with the
+   * draft/published lifecycle enabled. A collection can gain `status: true`
+   * later, and a permission that appears only once someone flips a flag is one
+   * nobody has granted at the moment it starts being enforced.
    *
    * @param collectionSlug - The collection slug (e.g., "posts", "products")
    */
   async seedCollectionPermissions(collectionSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(collectionSlug);
-    const actions = ["create", "read", "update", "delete"] as const;
+    const actions = [
+      "create",
+      "read",
+      "update",
+      "delete",
+      "publish",
+      "unpublish",
+    ] as const;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -392,14 +404,16 @@ export class PermissionSeedService extends BaseService {
    * Seed read/update permissions for a single (global document).
    *
    * Singles have no create/delete lifecycle — they are auto-created on first
-   * access and cannot be deleted. Only read and update permissions are generated.
+   * access and cannot be deleted. They DO have a publish lifecycle: a Single
+   * carries the same `status` column and is published today by an ordinary
+   * update, so it needs the same publish permissions a collection does.
    *
    * @param singleSlug - The single slug (e.g., "site-settings", "header")
    */
   async seedSinglePermissions(singleSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(singleSlug);
-    const actions = ["read", "update"] as const;
+    const actions = ["read", "update", "publish", "unpublish"] as const;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -435,8 +449,8 @@ export class PermissionSeedService extends BaseService {
    * Seed permissions for ALL dynamic collections.
    *
    * Reads all collection slugs from the `dynamic_collections` table
-   * (including plugin-registered collections) and seeds 4 CRUD permissions
-   * for each.
+   * (including plugin-registered collections) and seeds the six CRUD and
+   * publish-lifecycle permissions for each.
    */
   async seedAllCollectionPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
@@ -467,7 +481,7 @@ export class PermissionSeedService extends BaseService {
    * Seed permissions for ALL registered singles.
    *
    * Reads all single slugs from the `dynamic_singles` table and seeds
-   * read/update permissions for each.
+   * read, update, publish and unpublish permissions for each.
    */
   async seedAllSinglePermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
