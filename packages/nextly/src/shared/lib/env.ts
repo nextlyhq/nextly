@@ -42,8 +42,11 @@ export const _envSchema = z
     // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
     // drain route. Optional: when unset, the drain route can still be triggered
     // by an authenticated admin/API-key call, but unattended cron triggering is
-    // disabled. Compared in constant time at the route.
-    NEXTLY_DRAIN_SECRET: z.string().optional(),
+    // disabled. When set it must be >= 32 chars (like NEXTLY_SECRET): it
+    // independently authorizes a public trigger, so a short/guessable value —
+    // and the empty string, which would silently disable the cron path — is
+    // rejected at boot rather than accepted. Compared in constant time.
+    NEXTLY_DRAIN_SECRET: z.string().min(32).optional(),
     // Additional allowed origins for CSRF validation (comma-separated)
     NEXTLY_ALLOWED_ORIGINS: z.string().optional(),
 
