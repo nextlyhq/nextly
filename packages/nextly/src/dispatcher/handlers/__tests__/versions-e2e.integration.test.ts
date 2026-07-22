@@ -55,21 +55,24 @@ describe("version history through the dispatcher (integration)", () => {
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "preferences",
           versions: true,
           fields: [text({ name: "title" })],
         }),
       ],
     });
 
-    const parsed = parseRestRoute(["singles", "settings", "versions"], "GET");
+    const parsed = parseRestRoute(
+      ["singles", "preferences", "versions"],
+      "GET"
+    );
 
     // The id is resolved server-side from the live row, so the URL carries
     // only the slug.
     expect(parsed).toMatchObject({
       service: "singles",
       method: "listSingleVersions",
-      routeParams: { slug: "settings" },
+      routeParams: { slug: "preferences" },
     });
   });
 });

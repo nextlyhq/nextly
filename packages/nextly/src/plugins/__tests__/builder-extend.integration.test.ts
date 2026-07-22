@@ -217,21 +217,23 @@ describe("plugin extend → UI-Builder single + component parity", () => {
     const adapter = await freshAdapter();
     handle = await createTestNextly({ adapter });
     await seedBuilderSingle(adapter, {
-      slug: "settings",
+      slug: "preferences",
       fields: [{ name: "body", type: "text", source: "ui" }],
     });
     clearServices();
 
     handle = await createTestNextly({
       adapter,
-      plugins: [seoPlugin(["settings"])],
+      plugins: [seoPlugin(["preferences"])],
     });
 
-    expect(await columnsOf(adapter, "single_settings")).toContain("meta_title");
+    expect(await columnsOf(adapter, "single_preferences")).toContain(
+      "meta_title"
+    );
     const fields = await registryFieldsIn(
       adapter,
       "dynamic_singles",
-      "settings"
+      "preferences"
     );
     expect(fields.find(f => f.name === "meta_title")).toMatchObject({
       source: "plugin",

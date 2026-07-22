@@ -53,7 +53,7 @@ afterEach(async () => {
 });
 
 /**
- * Recipe: seed the `hero` component then the `settings` single (carrying a
+ * Recipe: seed the `hero` component then the `preferences` single (carrying a
  * component field that embeds `hero`) on a first boot, reset DI without
  * disconnecting the in-memory adapter, then reboot on the SAME adapter so
  * `singleEntryService` resolves the seeded single/component through the
@@ -71,7 +71,7 @@ async function seedSettingsWithHero(): Promise<{
     fields: [{ name: "heading", type: "text" }],
   });
   await seedBuilderSingle(adapter, {
-    slug: "settings",
+    slug: "preferences",
     fields: [
       { name: "headline", type: "text" },
       { name: "seo", type: "component", component: "hero" },
@@ -95,7 +95,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // update — the component table exists at this point, so this must
     // succeed before the failure is injected.
     const first = await singles.update(
-      "settings",
+      "preferences",
       { headline: "Original headline", seo: { heading: "Original SEO" } },
       { overrideAccess: true }
     );
@@ -106,7 +106,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     await adapter.executeQuery(`DROP TABLE "comp_hero"`);
 
     const second = await singles.update(
-      "settings",
+      "preferences",
       { headline: "Changed headline", seo: { heading: "Changed SEO" } },
       { overrideAccess: true }
     );
@@ -120,7 +120,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // both share one transaction, so the component failure rolls the
     // headline back too.
     const rows = await adapter.executeQuery<{ headline: string }>(
-      `SELECT headline FROM single_settings LIMIT 1`
+      `SELECT headline FROM single_preferences LIMIT 1`
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].headline).toBe("Original headline");
