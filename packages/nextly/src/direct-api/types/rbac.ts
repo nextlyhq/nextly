@@ -11,6 +11,7 @@ import type {
   ApiKeyTokenType,
   ExpiresIn,
 } from "../../domains/auth/services/api-key-service";
+import type { AccessOperation } from "../../services/access/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -349,7 +350,7 @@ export interface CheckAccessArgs {
    */
   resource: string;
   /** The operation to check */
-  operation: "create" | "read" | "update" | "delete";
+  operation: AccessOperation;
 }
 
 /**
@@ -360,14 +361,14 @@ export interface CheckAccessArgs {
  * surface it to the user immediately.
  */
 export type ApiKeyResult = ApiKeyMeta & {
-    /**
-     * The full raw key value (e.g., `"nx_live_..."`).
-     *
-     * Only present on `apiKeys.create()` responses.
-     * This is the only time the raw key is returned — store it safely.
-     */
-    key?: string;
-  };
+  /**
+   * The full raw key value (e.g., `"nx_live_..."`).
+   *
+   * Only present on `apiKeys.create()` responses.
+   * This is the only time the raw key is returned — store it safely.
+   */
+  key?: string;
+};
 
 /**
  * Arguments for listing API keys.
