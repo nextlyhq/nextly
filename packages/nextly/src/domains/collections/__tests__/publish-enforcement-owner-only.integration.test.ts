@@ -60,6 +60,34 @@ async function bootOwnerOnlyPosts(): Promise<TestNextly> {
 }
 
 describe("owner-only publish enforcement on batch paths (integration)", () => {
+  it("refuses a create that lands directly on published without an owner", async () => {
+    current = await bootOwnerOnlyPosts();
+    const entryService = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService();
+
+    // An anonymous create landing directly on `published`: the create itself is
+    // allowed, and the docless permission pre-resolve defers the owner-only
+    // publish rule — so the rule must be judged against the row this create will
+    // persist (no owner to satisfy) and refuse it, rather than being skipped for
+    // lack of a locked row.
+    const anonPublish = await entryService.createEntries(
+      { collectionName: "posts" },
+      [{ title: "x", status: "published" }]
+    );
+    expect(anonPublish.successful).toBe(0);
+    expect(anonPublish.failed).toBe(1);
+
+    // The owner creating their own published row satisfies owner-only (the
+    // creator is the owner), so it is allowed.
+    const ownerCreate = await entryService.createEntries(
+      { collectionName: "posts", user: { id: "author" } },
+      [{ title: "y", status: "published" }]
+    );
+    expect(ownerCreate.successful).toBe(1);
+    expect(ownerCreate.failed).toBe(0);
+  });
+
   it("refuses a batch UPDATE that publishes another user's rows", async () => {
     current = await bootOwnerOnlyPosts();
     const entryService = current
