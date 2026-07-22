@@ -1020,5 +1020,26 @@ describe("SingleEntryService", () => {
 
       expect(result.statusCode).not.toBe(403);
     });
+
+    it("undoes the auto-create when a first publish is denied", async () => {
+      // No row yet → the update auto-creates a default before the gate runs.
+      // When the publish transition is refused, that default must be removed so
+      // the 403 leaves no persisted (and, for a versioned single, historyless)
+      // document behind.
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      ctx.adapter.insert.mockResolvedValue({ id: "new-id" });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(ctx.adapter.delete).toHaveBeenCalledWith("single_site_settings", {
+        and: [{ column: "id", op: "=", value: "new-id" }],
+      });
+    });
   });
 });
