@@ -71,4 +71,72 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
     expect(allowed.success).toBe(true);
   });
+
+  it("evaluates a code-defined publish rule from defineCollection access", async () => {
+    // The `access.publish` rule is only expressible because CollectionAccessControl
+    // now declares `publish`; the runtime resolves it through the same access
+    // pipeline. A code-defined publish denial must block the transition.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { publish: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const denied = await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        userId: "user-1",
+        routeAuthorized: true,
+      },
+      { status: "published" }
+    );
+
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("does not demand publish for publish-all when the collection has no lifecycle", async () => {
+    // publishAllLocales must return its "nothing to publish" no-op before the
+    // publish permission check, so a caller with update but not publish is not
+    // 403'd for a call that changes nothing.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          // No `status` lifecycle. Update is granted (so the base check passes)
+          // but publish is not, so only the publish check could 403 here.
+          access: { update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const result = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      userId: "user-1",
+    });
+
+    expect(result.statusCode).not.toBe(403);
+  });
 });
