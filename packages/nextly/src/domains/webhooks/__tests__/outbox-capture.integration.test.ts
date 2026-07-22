@@ -20,6 +20,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { NextlyError } from "../../../errors";
+import type { CollectionService } from "../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { recordMutationEvent } from "../record-mutation-event";
 import type { WebhookEvent } from "../types";
@@ -511,6 +512,36 @@ describe("webhook outbox capture (integration)", () => {
       expect(row.actorType).toBe("apiKey");
       expect(row.actorId).toBe("key_bulk");
     }
+  });
+
+  it("emits entry.deleted from the transactional delete helper too", async () => {
+    // The batch/cascade delete paths go through the transactional helpers rather
+    // than the single-delete method, so they must record the event as well — a
+    // delete that removes rows silently is invisible to subscribers.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "tx-del" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const collectionService =
+      current.getService<CollectionService>("collectionService");
+    await current.adapter.transaction(async tx =>
+      collectionService.deleteEntryInTransaction(tx, "posts", id, {})
+    );
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted).toBeDefined();
+    expect(deleted!.resourceId).toBe(id);
+    expect(envelopeOf(deleted!).data.title).toBe("tx-del");
   });
 
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {

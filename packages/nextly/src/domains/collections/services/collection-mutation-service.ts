@@ -4337,6 +4337,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     try {
@@ -4421,11 +4423,28 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // The collection schema, two views: FieldConfig for the component cascade,
+      // FieldDefinition for the outbox snapshot.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+
+      // Assemble the removed document before the cascade removes its relations,
+      // in the read shape create/update events use.
+      const deletedDocument = await this.buildDeletedDocument(tx, {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        tableName,
+        row: entry,
+        fields: snapshotFields,
+        locale: this.localization?.defaultLocale,
+      });
+
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
         await this.componentDataService.deleteComponentDataInTransaction(tx, {
           parentId: params.entryId,
           parentTable: tableName,
@@ -4447,6 +4466,22 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+
+      // Append the outbox event in the same transaction so a delete performed
+      // through this helper (batch/cascade/internal) is observable too, in the
+      // same shape as the single-delete path.
+      await recordMutationEvent(tx, {
+        type: "entry.deleted",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: params.entryId,
+        },
+        data: deletedDocument,
+        previous: null,
+        fields: await this.webhookFieldTree(snapshotFields),
+        actor: actorForWrite(params.actor, params.user),
+      });
 
       // Execute afterDelete hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
@@ -5309,6 +5344,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
     },
     entryId: string,
     skipHooks: boolean
@@ -5440,11 +5477,28 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // The collection schema, two views: FieldConfig for the component cascade,
+      // FieldDefinition for the outbox snapshot.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+
+      // Assemble the removed document before the cascade removes its relations,
+      // in the read shape create/update events use.
+      const deletedDocument = await this.buildDeletedDocument(tx, {
+        collectionName: params.collectionName,
+        entryId,
+        tableName,
+        row: entry,
+        fields: snapshotFields,
+        locale: this.localization?.defaultLocale,
+      });
+
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
         await this.componentDataService.deleteComponentDataInTransaction(tx, {
           parentId: entryId,
           parentTable: tableName,
@@ -5466,6 +5520,22 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+
+      // Append the outbox event in the same transaction so a batch delete
+      // through this helper is observable too, in the same shape as the
+      // single-delete path.
+      await recordMutationEvent(tx, {
+        type: "entry.deleted",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: entryId,
+        },
+        data: deletedDocument,
+        previous: null,
+        fields: await this.webhookFieldTree(snapshotFields),
+        actor: actorForWrite(params.actor, params.user),
+      });
 
       // Execute afterDelete hooks (unless skipped)
       if (!skipHooks) {
