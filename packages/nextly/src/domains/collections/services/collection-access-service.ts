@@ -168,7 +168,15 @@ export class CollectionAccessService extends BaseService {
     // The caller's authenticated scope. For a scoped API key the RBAC gate
     // judges the key's OWN stamped grants rather than the owner's permissions
     // (see auth/authenticated-scope). Undefined for session/system callers.
-    authenticatedScope?: AuthenticatedScope
+    authenticatedScope?: AuthenticatedScope,
+    // Skip the stored-rule evaluation (owner-only/custom/role-based/...) and
+    // return after only the RBAC/permission gate. The transition pre-resolve uses
+    // this so a document-dependent stored rule (owner-only or custom) is NOT
+    // judged against an absent document here — a custom rule that denies on
+    // missing data would otherwise cache a denial that pre-empts the under-lock
+    // recheck. The rule is instead evaluated against the row-locked document via
+    // {@link evaluateTransitionDocumentRule}.
+    deferStoredRuleEval?: boolean
   ): Promise<CollectionServiceResult<T> | null> {
     // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
@@ -268,6 +276,14 @@ export class CollectionAccessService extends BaseService {
       }
     }
 
+    // The caller (transition pre-resolve) will evaluate the document-dependent
+    // stored rule against the row-locked document itself, so the docless
+    // evaluation here is skipped: the RBAC/permission gate above stands, but a
+    // custom rule is not run with an absent document.
+    if (deferStoredRuleEval) {
+      return null;
+    }
+
     try {
       // Get collection metadata to retrieve access rules
       const collection =
@@ -334,9 +350,7 @@ export class CollectionAccessService extends BaseService {
    * the docless pre-resolve. `public`/`authenticated`/`role-based` are fully
    * decided without a document, so they are excluded.
    */
-  private isDocumentDependentRule(
-    rule: { type?: string } | undefined
-  ): boolean {
+  isDocumentDependentRule(rule: { type?: string } | undefined): boolean {
     return rule?.type === "owner-only" || rule?.type === "custom";
   }
 

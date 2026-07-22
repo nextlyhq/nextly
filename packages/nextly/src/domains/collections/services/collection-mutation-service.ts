@@ -2503,6 +2503,21 @@ export class CollectionMutationService extends BaseService {
     if ((collection as { status?: boolean }).status !== true) {
       return { publishDenied: null, unpublishDenied: null, documentRule: null };
     }
+    // A document-dependent stored rule (owner-only or custom) must NOT be judged
+    // docless here: owner-only would defer anyway, but a custom rule that denies
+    // on absent `id`/`data` would cache a false denial that pre-empts the
+    // under-lock recheck. Skip the stored-rule eval for such ops (the RBAC/
+    // permission gate still runs) and evaluate the rule against the locked row
+    // below via `documentRule`.
+    const accessRules = this.accessService.getAccessRules(
+      collection as Record<string, unknown>
+    );
+    const deferPublish = this.accessService.isDocumentDependentRule(
+      accessRules?.publish
+    );
+    const deferUnpublish = this.accessService.isDocumentDependentRule(
+      accessRules?.unpublish
+    );
     // Resolve both concurrently; each is judged on the caller's own grant (a
     // scoped API key on its scope), never route-authorized — the route attested
     // update/create, never publish/unpublish.
@@ -2515,7 +2530,8 @@ export class CollectionMutationService extends BaseService {
         undefined,
         args.overrideAccess,
         false,
-        args.authenticatedScope
+        args.authenticatedScope,
+        deferPublish
       ),
       this.accessService.checkCollectionAccess(
         args.collectionName,
@@ -2525,13 +2541,14 @@ export class CollectionMutationService extends BaseService {
         undefined,
         args.overrideAccess,
         false,
-        args.authenticatedScope
+        args.authenticatedScope,
+        deferUnpublish
       ),
     ]);
-    // Owner-only publish/unpublish rules cannot be judged here because they need
-    // the specific row (only known under the lock). Pre-fetch the rules + user
-    // off the already-loaded collection so the in-transaction step evaluates the
-    // owner against the row-locked document with no further metadata read.
+    // Owner-only / custom publish/unpublish rules cannot be judged above because
+    // they need the specific row (only known under the lock). Pre-fetch the rules
+    // + user off the already-loaded collection so the in-transaction step
+    // evaluates them against the row-locked document with no further metadata read.
     const documentRule = this.accessService.resolveTransitionDocumentRule(
       collection as Record<string, unknown>,
       args.accessUser,
