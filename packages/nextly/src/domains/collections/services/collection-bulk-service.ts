@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -192,6 +193,12 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. A duplicate is a create, so a
+     * scoped API key that copies a published source into a published row is
+     * judged on the key's OWN publish grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
@@ -269,6 +276,8 @@ export class CollectionBulkService extends BaseService {
           actor: params.actor,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          // Judge the create-as-published on the key's own publish grant.
+          authenticatedScope: params.authenticatedScope,
         },
         duplicateData
       );
@@ -388,6 +397,13 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. Forwarded to each per-id `updateEntry`
+     * so a scoped API key's publish/unpublish transition is judged on the key's
+     * OWN grants — a bulk update must not become a way around the single-write
+     * gate for a key whose owner could publish but whose scope cannot.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
@@ -409,6 +425,8 @@ export class CollectionBulkService extends BaseService {
                 overrideAccess: params.overrideAccess,
                 routeAuthorized: params.routeAuthorized,
                 context: params.context,
+                // Judge the key's own publish/unpublish grant per row.
+                authenticatedScope: params.authenticatedScope,
               },
               params.data
             );
@@ -489,6 +507,11 @@ export class CollectionBulkService extends BaseService {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. Judges the collection-level gate and
+       * each per-row transition on a scoped API key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: BulkOperationOptions & {
       /**
@@ -514,7 +537,10 @@ export class CollectionBulkService extends BaseService {
       undefined,
       undefined,
       params.overrideAccess,
-      params.routeAuthorized
+      params.routeAuthorized,
+      // A scoped API key is judged on its own grants here too, so the session
+      // super-admin bypass does not apply to it on the collection-level gate.
+      params.authenticatedScope
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -632,6 +658,8 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
+      // Carry the key's scope into the per-id transition gate.
+      authenticatedScope: params.authenticatedScope,
     });
   }
 

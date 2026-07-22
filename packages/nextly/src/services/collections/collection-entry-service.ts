@@ -361,6 +361,8 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges the create-as-published on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
     await this.offerRetentionPass();
@@ -387,9 +389,12 @@ export class CollectionEntryService extends BaseService {
     data: Record<string, unknown>;
     user?: UserContext;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges each per-id transition on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
     await this.offerRetentionPass();
@@ -408,6 +413,8 @@ export class CollectionEntryService extends BaseService {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /** API-key scope; judges the collection gate + transitions on the key's own grant. */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
