@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.38",
+  "version": "0.0.2-alpha.39",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -49,7 +49,7 @@
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.38",
+    "nextly": "0.0.2-alpha.39",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
