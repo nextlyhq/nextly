@@ -30,7 +30,7 @@ function buildAccessService() {
   };
   const collectionService = createMockCollectionService();
   const service = new CollectionAccessService(
-    createMockAdapter(createMockDb()) as never,
+    createMockAdapter(createMockDb({ rows: [] })) as never,
     silentLogger as never,
     collectionService as never,
     accessControlService as never,
@@ -475,5 +475,99 @@ describe("getOwnerConstraint — scoped API key", () => {
     // The scope skips the super-admin bypass, so the owner-only rule still binds
     // the key to rows it owns.
     expect(constraint).toEqual({ field: "created_by", value: "user-1" });
+  });
+});
+
+describe("resolveTransitionDocumentRule — owner-only transition pre-resolve", () => {
+  const ownerOnlyPublish = {
+    accessRules: { publish: { type: "owner-only" } },
+  } as Record<string, unknown>;
+
+  it("returns the pre-fetched rules + user for an owner-only publish rule", () => {
+    const { service } = buildAccessService();
+    const resolved = service.resolveTransitionDocumentRule(
+      ownerOnlyPublish,
+      user
+    );
+    expect(resolved).not.toBeNull();
+    expect(resolved?.user).toBe(user);
+    expect(resolved?.accessRules.publish?.type).toBe("owner-only");
+  });
+
+  it("returns null for a super-admin SESSION (stored rules are bypassed)", () => {
+    const { service } = buildAccessService();
+    expect(
+      service.resolveTransitionDocumentRule(ownerOnlyPublish, superAdminUser)
+    ).toBeNull();
+  });
+
+  it("keeps the rule for a super-admin-owned scoped API key", () => {
+    const { service } = buildAccessService();
+    const resolved = service.resolveTransitionDocumentRule(
+      ownerOnlyPublish,
+      superAdminUser,
+      { actorType: "apiKey", permissions: ["publish-posts"] }
+    );
+    // The scope skips the super-admin bypass, so the owner-only rule still applies.
+    expect(resolved).not.toBeNull();
+  });
+
+  it("returns null when no owner-only publish/unpublish rule exists", () => {
+    const { service } = buildAccessService();
+    // An owner-only READ rule is document-dependent for reads but not for the
+    // publish/unpublish transition, so there is nothing to enforce under the lock.
+    expect(
+      service.resolveTransitionDocumentRule(
+        { accessRules: { read: { type: "owner-only" } } } as Record<
+          string,
+          unknown
+        >,
+        user
+      )
+    ).toBeNull();
+  });
+});
+
+describe("evaluateTransitionDocumentRule — owner-only against a locked row", () => {
+  it("returns null (skips) when the operation has no owner-only rule", async () => {
+    const { service, accessControlService } = buildAccessService();
+    const result = await service.evaluateTransitionDocumentRule(
+      { publish: { type: "role-based", allowedRoles: ["editor"] } },
+      "publish",
+      user,
+      { id: "doc-1", created_by: "someone-else" }
+    );
+    expect(result).toBeNull();
+    // A non-owner-only rule was already decided by the permission pre-resolve, so
+    // the document evaluator must not re-run it.
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
+  it("returns a 403 when the owner-only rule denies the locked document", async () => {
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "You can only modify your own documents",
+    });
+    const result = await service.evaluateTransitionDocumentRule(
+      { publish: { type: "owner-only" } },
+      "publish",
+      user,
+      { id: "doc-1", created_by: "someone-else" }
+    );
+    expect(result?.statusCode).toBe(403);
+    expect(result?.success).toBe(false);
+  });
+
+  it("returns null when the owner-only rule allows the locked document", async () => {
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    const result = await service.evaluateTransitionDocumentRule(
+      { publish: { type: "owner-only" } },
+      "publish",
+      user,
+      { id: "doc-1", created_by: "user-1" }
+    );
+    expect(result).toBeNull();
   });
 });
