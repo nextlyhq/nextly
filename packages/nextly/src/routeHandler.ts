@@ -59,6 +59,15 @@ import { readOrGenerateRequestId } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
+import {
+  listWebhooks,
+  getWebhookById,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  revealWebhookSecret,
+} from "./api/webhooks";
+import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
@@ -77,6 +86,7 @@ import {
   requiresAuthOnly,
   handleAuthRequest,
   getDispatcher,
+  ensureServicesInitialized,
   setHandlerConfig,
   getHandlerConfig,
 } from "./route-handler";
@@ -268,6 +278,54 @@ async function handleApiKeyRequest(
     default:
       return new Response(
         JSON.stringify({ error: "Unknown API key operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
+/**
+ * Services whose handlers own their auth and body parsing and therefore return
+ * before the shared dispatcher path. Kept beside those branches: a service
+ * added there without being added here silently loses cold-boot initialisation.
+ */
+const DIRECT_DISPATCH_SERVICES = new Set<string>([
+  "apiKeys",
+  "webhooks",
+  "generalSettings",
+  "imageSizes",
+  "dashboard",
+  "schema",
+  "email",
+]);
+
+/**
+ * Route a parsed webhook operation to its handler.
+ *
+ * Mirrors the API-key dispatch: the handlers own their own auth and body
+ * parsing, so this only maps the method name.
+ */
+async function handleWebhookRequest(
+  req: Request,
+  method: string,
+  routeParams: Record<string, string> | undefined
+): Promise<Response> {
+  const id = routeParams?.webhookId ?? "";
+  switch (method) {
+    case "listWebhooks":
+      return listWebhooks(req);
+    case "getWebhookById":
+      return getWebhookById(req, id);
+    case "createWebhook":
+      return createWebhook(req);
+    case "updateWebhook":
+      return updateWebhook(req, id);
+    case "deleteWebhook":
+      return deleteWebhook(req, id);
+    case "revealWebhookSecret":
+      return revealWebhookSecret(req, id);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown webhook operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
@@ -710,11 +768,48 @@ async function handleServiceRequest(
     );
   }
 
+  // The direct-dispatch handlers below resolve their own services through
+  // `getCachedNextly()`, which does not boot anything — it throws when nothing
+  // has initialised yet. Ordinary REST requests are saved by `getDispatcher()`
+  // further down, but these branches return before reaching it, so an app that
+  // cold-boots through `createDynamicHandlers({ config })` with no
+  // instrumentation would fail its first request to any of them.
+  //
+  // Scoped to those services rather than run unconditionally: everything else
+  // passes through the authorization block below first, and initialising ahead
+  // of it would let an unauthenticated request connect the database and run
+  // startup work before being turned away with a 401.
+  //
+  // Deferred again until the request at least presents a credential. Both
+  // credential sources are read without touching the container
+  // (`readAccessTokenCookie` is a cookie parse, `authorization` a header read),
+  // and a request carrying neither is refused by the handler's own auth without
+  // ever resolving a service — so booting for it would hand unauthenticated
+  // traffic a cold start it could not otherwise cause. A credential that turns
+  // out to be invalid still boots, which only costs the warm-up a valid request
+  // would have caused anyway.
+  if (
+    service !== undefined &&
+    DIRECT_DISPATCH_SERVICES.has(service) &&
+    (req.headers.get("authorization") !== null ||
+      readAccessTokenCookie(req) !== null)
+  ) {
+    await ensureServicesInitialized();
+  }
+
   // ==================== API KEYS DIRECT DISPATCH ====================
   // API key handlers own their auth + body parsing. Intercepting here (before
   // req.text() is called below) ensures the body stream is still available.
   if (service === "apiKeys") {
     return handleApiKeyRequest(req, method, routeParams);
+  }
+
+  // ==================== WEBHOOKS DIRECT DISPATCH ====================
+  // Same reasoning as API keys: the handlers own their auth + body parsing, so
+  // this must stay above the req.text() below or the body stream is consumed
+  // before they can read it.
+  if (service === "webhooks") {
+    return handleWebhookRequest(req, method, routeParams);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================

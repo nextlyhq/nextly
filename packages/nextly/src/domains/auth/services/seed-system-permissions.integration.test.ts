@@ -27,6 +27,9 @@ import {
 } from "../../../plugins/test-nextly";
 
 import { SYSTEM_PERMISSIONS } from "./permission-seed-service";
+import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
+import { RESERVED_SLUGS } from "../../../shared/sql-reserved";
+import { RESERVED_COLLECTION_NAMES } from "../../dynamic-collections/services/dynamic-collection-validation-service";
 
 let current: TestNextly | undefined;
 
@@ -61,6 +64,39 @@ describe("system permission slugs", () => {
     );
 
     expect(mismatched).toEqual([]);
+  });
+
+  it("declares every seeded resource as a system resource", () => {
+    // `cleanupOrphanedPermissions()` treats an owner-less permission whose
+    // resource is not a system, collection, single or component resource as a
+    // content type that has been deleted, and removes it together with its role
+    // grants. A system permission missing from SYSTEM_RESOURCES therefore
+    // survives seeding and disappears on the next cleanup pass, taking every
+    // role's access to that surface with it.
+    const undeclared = SYSTEM_PERMISSIONS.map(p => p.resource).filter(
+      resource => !(SYSTEM_RESOURCES as readonly string[]).includes(resource)
+    );
+
+    expect(Array.from(new Set(undeclared))).toEqual([]);
+  });
+
+  it("reserves the webhooks slug so a collection cannot share its permissions", () => {
+    // Permission identity is action + resource. A collection slugged `webhooks`
+    // would produce the same `read-webhooks` / `update-webhooks` rows these
+    // system permissions use, so a content role granted them could read
+    // endpoint configuration and reveal signing secrets.
+    expect((RESERVED_SLUGS as readonly string[]).includes("webhooks")).toBe(
+      true
+    );
+  });
+
+  it("reserves the webhooks name on the Builder path too", () => {
+    // Builder-created collections never reach the code-first validator, so
+    // RESERVED_SLUGS alone would leave the collision reachable through the
+    // Schema Builder.
+    expect(
+      (RESERVED_COLLECTION_NAMES as readonly string[]).includes("webhooks")
+    ).toBe(true);
   });
 
   it("seeds the api-keys update permission under the slug callers ask for", async () => {

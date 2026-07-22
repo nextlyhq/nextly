@@ -5,6 +5,15 @@ export const IdSchema = z.string().min(1, "ID is required");
 /**
  * System resources that are always available regardless of dynamic collections.
  * These represent core Nextly entities that exist in every installation.
+ *
+ * This list is not only an allowlist: `cleanupOrphanedPermissions` deletes any
+ * owner-less permission whose resource is absent from here and is not a
+ * collection, single or component, together with its role grants. Seeded system
+ * permissions have no owner, so **every resource named in `SYSTEM_PERMISSIONS`
+ * must appear here** or its permissions survive seeding and vanish on the next
+ * cleanup pass, silently removing the access every non-super-admin role had to
+ * that surface. A test in `seed-system-permissions.integration.test.ts` enforces
+ * the pairing.
  */
 export const SYSTEM_RESOURCES = [
   "users",
@@ -15,6 +24,7 @@ export const SYSTEM_RESOURCES = [
   "email-providers",
   "email-templates",
   "api-keys",
+  "webhooks",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];

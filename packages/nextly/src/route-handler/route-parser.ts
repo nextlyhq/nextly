@@ -1733,6 +1733,93 @@ function parseApiKeyRoutes(
   return null;
 }
 
+function parseWebhookRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing here nests further than one level, so any deeper path is not a
+  // route. Without this, `/webhooks/:id/secret/anything` would still match the
+  // secret branch and hand back active signing secrets.
+  if (subId || additionalParams.length > 0) return null;
+
+  if (id && subresource === "secret") {
+    // GET /api/webhooks/:id/secret → reveal active signing secrets.
+    // Its own path rather than a field on the document, so the route can
+    // require a stronger permission than an ordinary read.
+    if (httpMethod !== "GET") return null;
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "revealWebhookSecret",
+      routeParams,
+    };
+  }
+
+  // Anything else below the endpoint is not a route; falling through would
+  // match it as the endpoint itself.
+  if (subresource) return null;
+
+  if (!id && httpMethod === "GET") {
+    // GET /api/webhooks → list every registered endpoint
+    return {
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhooks",
+      routeParams,
+    };
+  }
+
+  if (!id && httpMethod === "POST") {
+    // POST /api/webhooks → register an endpoint (session-only)
+    return {
+      service: "webhooks",
+      operation: "create",
+      method: "createWebhook",
+      routeParams,
+    };
+  }
+
+  if (id && httpMethod === "GET") {
+    // GET /api/webhooks/:id → single endpoint, never carrying its secret
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "getWebhookById",
+      routeParams,
+    };
+  }
+
+  if (id && httpMethod === "PATCH") {
+    // PATCH /api/webhooks/:id → update, including enable/disable (session-only)
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "update",
+      method: "updateWebhook",
+      routeParams,
+    };
+  }
+
+  if (id && httpMethod === "DELETE") {
+    // DELETE /api/webhooks/:id → remove endpoint and its deliveries (session-only)
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "delete",
+      method: "deleteWebhook",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
 // ============================================================================
 // Dashboard Routes
 // ============================================================================
@@ -2051,6 +2138,19 @@ export function parseRestRoute(
   // Handle API Keys endpoints
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle Webhook endpoint management
+  if (resource === "webhooks") {
+    const result = parseWebhookRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

@@ -53,6 +53,7 @@ import {
   generateWebhookSecret,
   webhookSecretPrefix,
 } from "../secret";
+import { REDACTED_HEADER_VALUE } from "../types";
 import type { WebhookEventType } from "../types";
 
 /**
@@ -122,6 +123,16 @@ interface WebhookRow {
   updatedAt: Date;
 }
 
+/** Replace every stored header value with the redaction placeholder. */
+function redactHeaderValues(stored: unknown): Record<string, string> | null {
+  if (!stored || typeof stored !== "object") return null;
+  const redacted: Record<string, string> = {};
+  for (const name of Object.keys(stored)) {
+    redacted[name] = REDACTED_HEADER_VALUE;
+  }
+  return redacted;
+}
+
 export class WebhookEndpointService extends BaseService {
   private readonly table: WebhooksTable;
   /** Needed so disabling an endpoint can end the deliveries still queued for it. */
@@ -184,6 +195,34 @@ export class WebhookEndpointService extends BaseService {
    * it.
    */
   private async assertDeliverableUrl(url: string): Promise<void> {
+    // Credentials in the URL defeat every other protection here: the stored URL
+    // is returned to anyone who may read the endpoint, so `user:pass@host`
+    // would hand out the receiver's credential even though static header values
+    // are redacted. Rejected rather than stripped, because silently removing
+    // them would leave the operator with an endpoint that fails to authenticate
+    // and no indication why.
+    // A URL too malformed to parse is left to the validator below, which
+    // reports it as an unreachable target rather than as credentials.
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+    if (parsed && (parsed.username || parsed.password)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "url",
+            code: "url_credentials",
+            message:
+              "Remove the username and password from the URL. Use a static header for receiver authentication instead.",
+          },
+        ],
+        logContext: { reason: "webhook-url-userinfo" },
+      });
+    }
+
     try {
       await validateExternalUrl(url);
     } catch (err) {
@@ -215,10 +254,10 @@ export class WebhookEndpointService extends BaseService {
       eventTypes: (Array.isArray(row.eventTypes)
         ? row.eventTypes
         : []) as WebhookEventType[],
-      headers:
-        row.headers && typeof row.headers === "object"
-          ? (row.headers as Record<string, string>)
-          : null,
+      // Names are kept so an operator can see which headers are configured;
+      // values are not, because delivery sends them verbatim and they are
+      // routinely a credential for the receiver.
+      headers: redactHeaderValues(row.headers),
       secretPrefix: row.secretPrefix,
       createdBy: row.createdBy,
       createdAt: row.createdAt,
