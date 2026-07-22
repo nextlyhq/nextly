@@ -328,6 +328,80 @@ export class CollectionAccessService extends BaseService {
   }
 
   /**
+   * Pre-resolve whether a collection has a document-dependent (owner-only)
+   * publish/unpublish rule that must be judged against the specific row being
+   * transitioned. Runs on the pooled connection BEFORE a write transaction, so
+   * the in-transaction check needs no metadata read (mirrors the permission
+   * pre-resolve used by the transaction/batch paths).
+   *
+   * Returns the already-fetched rules + user when such a rule applies, or null
+   * when it does not: a super-admin SESSION bypasses stored rules — but NOT a
+   * scoped API key it owns (matching {@link checkCollectionAccess}) — and a
+   * collection with no owner-only publish/unpublish rule has nothing
+   * document-dependent to enforce. Only owner-only inspects the row;
+   * role-based/authenticated/public rules are fully decided by the docless
+   * permission pre-resolve, so they are intentionally excluded here. The caller
+   * is responsible for skipping this on an `overrideAccess` write.
+   */
+  resolveTransitionDocumentRule(
+    collection: Record<string, unknown>,
+    user: UserContext | undefined,
+    authenticatedScope?: AuthenticatedScope
+  ): {
+    accessRules: CollectionAccessRules;
+    user: UserContext | undefined;
+  } | null {
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && isSuperAdminContext(user)) {
+      return null;
+    }
+    const accessRules = this.getAccessRules(collection);
+    if (!accessRules) return null;
+    const documentDependent =
+      accessRules.publish?.type === "owner-only" ||
+      accessRules.unpublish?.type === "owner-only";
+    return documentDependent ? { accessRules, user } : null;
+  }
+
+  /**
+   * Evaluate the stored owner-only publish/unpublish rule for a transition
+   * against an ALREADY-FETCHED (row-locked) document, with no metadata or
+   * permission read — safe to call inside a transaction. Returns a 403 result
+   * when the rule denies (the actor is not the document's owner), or null when
+   * it allows or no owner-only rule governs the operation.
+   *
+   * This closes the gap where the docless permission pre-resolve lets an
+   * owner-only publish/unpublish through (owner checks defer without a document),
+   * so a caller who may update another user's row could otherwise batch-publish
+   * or unpublish it under the transaction.
+   */
+  async evaluateTransitionDocumentRule<T = unknown>(
+    accessRules: CollectionAccessRules,
+    operation: "publish" | "unpublish",
+    user: UserContext | undefined,
+    document: Record<string, unknown>
+  ): Promise<CollectionServiceResult<T> | null> {
+    if (accessRules[operation]?.type !== "owner-only") {
+      return null;
+    }
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      operation,
+      this.buildRequestContext(user),
+      undefined,
+      document,
+      DEFAULT_OWNER_FIELD
+    );
+    if (result.allowed) return null;
+    return {
+      success: false,
+      statusCode: 403,
+      message: result.reason || "Access denied",
+      data: null as unknown as T,
+    };
+  }
+
+  /**
    * Get access query constraint for read operations.
    *
    * For owner-only access rules on read operations, the AccessControlService
