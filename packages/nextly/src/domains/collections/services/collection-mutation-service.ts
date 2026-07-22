@@ -2778,7 +2778,13 @@ export class CollectionMutationService extends BaseService {
       // a concurrent writer that changed the published state between the
       // pre-transaction read and the lock cannot slip a transition past the gate.
       // No guard is needed for a trusted write, a collection with no lifecycle,
-      // or a write that persists no string status.
+      // or a write that names no status at all (`undefined` = leave it
+      // untouched). Any other explicitly-provided value IS a write to the
+      // status column — including a non-string one that a dialect coerces into
+      // the text column — so the guard must cover it too: `"published"` is the
+      // only value that can publish, and every other provided value can only
+      // move a published row OUT of published (an unpublish). Requiring a string
+      // here would let `status: 0`/`false` slip an unpublish past the gate.
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
       let transitionGuard: {
@@ -2788,7 +2794,7 @@ export class CollectionMutationService extends BaseService {
       if (
         collectionHasStatus &&
         !params.overrideAccess &&
-        typeof transitionNextStatus === "string"
+        transitionNextStatus !== undefined
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";

@@ -667,6 +667,41 @@ describe("publish-transition access control", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("denies a non-string status write that unpublishes without unpublish", async () => {
+    // A non-string status (e.g. 0 / false) written over a published row still
+    // moves it out of published on dialects that coerce the value into the text
+    // column. The unpublish permission must be required even though the value is
+    // not the string "published": the guard cannot key on
+    // `typeof status === "string"`, or `status: 0` slips an unpublish past it.
+    const acs = allowUpdateDeny("unpublish");
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      // Lifecycle on, but no declared `status` field so a non-string status is
+      // not rejected by validation before it reaches the transition gate.
+      collectionService: createMockCollectionService(
+        createMockCollection({
+          status: true,
+          schemaDefinition: {
+            fields: [{ name: "title", type: "text" }],
+            accessRules: undefined,
+            hooks: [],
+            search: undefined,
+          },
+          fields: [{ name: "title", type: "text" }],
+        })
+      ),
+    });
+    selectData.rows = [createSampleEntry({ status: "published" })];
+
+    const result = await service.updateEntry(
+      { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+      { title: "still here", status: 0 }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("does not require publish for an edit that keeps status published", async () => {
     // A caller with update but not publish can still edit a live document, as
     // long as they are not changing whether it is published.
