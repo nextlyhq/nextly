@@ -30,8 +30,10 @@ export function readAuthenticatedActor(p: Params): RequestActor | undefined {
  * For an API key the route stamps its OWN scoped grants on the params; a service
  * check (e.g. the publish/unpublish transition gate) must judge the key on those
  * rather than the owner's RBAC. A corrupt permissions value reads as an empty
- * list, which denies — the safe direction. Returns `undefined` for a non-API-key
- * caller so the check falls back to normal RBAC resolution.
+ * list, which denies — the safe direction. Missing or invalid actor metadata
+ * returns `undefined`; a non-API-key (e.g. session) caller receives a scope with
+ * an empty permission list, so the API-key branch is skipped and the check falls
+ * back to normal RBAC resolution.
  */
 export function readAuthenticatedScope(
   p: Params
