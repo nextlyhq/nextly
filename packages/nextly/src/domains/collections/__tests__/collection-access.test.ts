@@ -722,4 +722,39 @@ describe("publish-transition access control", () => {
 
     expect(result.statusCode).not.toBe(403);
   });
+  it("enforces publish via RBAC on a route-authorized REST write", async () => {
+    // The route authorizes a document PATCH as `update`, never as `publish`.
+    // So on the REST path (routeAuthorized) the publish permission must still
+    // be checked at the service — the route never checked it. RBAC allows
+    // update but denies publish; stored rules allow everything, so only the
+    // RBAC publish check can produce the denial.
+    const rbac = {
+      checkAccess: vi.fn((args: { operation: string }) =>
+        Promise.resolve(args.operation !== "publish")
+      ),
+    };
+    const acs = createMockAccessControlService();
+    acs.evaluateAccess.mockResolvedValue({ allowed: true });
+    const { service, selectData } = buildService({
+      accessControlService: acs,
+      rbacAccessControlService: rbac,
+    });
+    selectData.rows = [createSampleEntry({ status: "draft" })];
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        user: { id: "user-1" },
+        routeAuthorized: true,
+      },
+      { status: "published" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+    expect(rbac.checkAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "publish", resource: "posts" })
+    );
+  });
 });
