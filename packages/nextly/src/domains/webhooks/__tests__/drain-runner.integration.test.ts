@@ -173,6 +173,27 @@ describe("runWebhookDrain (real SQLite)", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("caps events fanned out per round to the fan-out batch", async () => {
+    // Fan-out is bounded too, so one cron tick doesn't turn a huge outbox into
+    // an unbounded burst of delivery-row inserts. Three due events, a fan-out
+    // batch of two, one round: only two are fanned out and the third waits.
+    await seedWebhook("wh1");
+    await seedEvent("evt_1");
+    await seedEvent("evt_2");
+    await seedEvent("evt_3");
+    const { transport } = makeTransport(200);
+
+    const result = await runWebhookDrain(adapter, registryOf(), {
+      transport,
+      now: () => NOW,
+      decryptSecret: ct => ct,
+      maxRounds: 1,
+      fanOutBatchSize: 2,
+    });
+
+    expect(result.deliveriesCreated).toBe(2);
+  });
+
   it("stops attempting new deliveries once the wall-clock budget is spent", async () => {
     // The real bound for a serverless cron tick: with slow receivers the pass
     // must stop mid-batch on a deadline, not run every claimed row to its

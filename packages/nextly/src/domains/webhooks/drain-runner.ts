@@ -27,10 +27,14 @@ import { decryptWebhookSecret } from "./secret";
  */
 export type WebhookDrainDatabase = FanOutDatabase & DeliverDatabase;
 
-/** The registry surface a drain reads: the enabled endpoints for this pass. */
+/**
+ * The registry surface a drain reads. Fan-out uses the FRESH read so a new
+ * subscriber committed by another process is never missed (a fanned-out event is
+ * never reconsidered).
+ */
 export type WebhookDrainRegistry = Pick<
   WebhookEndpointRegistry,
-  "getEnabledEndpoints"
+  "getEnabledEndpointsFresh"
 >;
 
 export interface RunWebhookDrainOptions {
@@ -87,9 +91,10 @@ export function runWebhookDrain(
   return runDrain({
     fanOut: {
       db: adapter,
-      // Reuse the shared registry so a CRUD change is reflected on the next
-      // pass rather than the next cache expiry.
-      loadEndpoints: () => registry.getEnabledEndpoints(),
+      // Read endpoints fresh each pass: fan-out commits an event as done
+      // permanently, so it must see an endpoint another process just created
+      // rather than a cached list that could drop the new subscriber for good.
+      loadEndpoints: () => registry.getEnabledEndpointsFresh(),
       now: options?.now,
       batchSize: options?.fanOutBatchSize,
     },

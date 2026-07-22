@@ -125,6 +125,26 @@ describe("WebhookEndpointRegistry", () => {
     expect((await stale).map(e => e.id)).toEqual(["v2"]);
   });
 
+  it("getEnabledEndpointsFresh bypasses a warm cache and reloads", async () => {
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader, { ttlMs: 60_000 });
+
+    const first = registry.getEnabledEndpoints();
+    reader.resolveNext([row("v1")]);
+    expect((await first).map(e => e.id)).toEqual(["v1"]);
+
+    // A warm cache within the TTL serves v1 again with no query.
+    await registry.getEnabledEndpoints();
+    expect(reader.calls).toBe(1);
+
+    // The fresh read reloads regardless, so fan-out sees a subscriber another
+    // process created before the TTL would have expired.
+    const fresh = registry.getEnabledEndpointsFresh();
+    expect(reader.calls).toBe(2);
+    reader.resolveNext([row("v1"), row("v2")]);
+    expect((await fresh).map(e => e.id)).toEqual(["v1", "v2"]);
+  });
+
   it("does not let a load that finishes after invalidate() repopulate the cache", async () => {
     const reader = new FakeReader();
     const registry = new WebhookEndpointRegistry(reader);

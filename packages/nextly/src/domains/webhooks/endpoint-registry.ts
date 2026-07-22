@@ -152,6 +152,20 @@ export class WebhookEndpointRegistry {
     this.generation++;
   }
 
+  /**
+   * Enabled endpoints read fresh from the database, bypassing the TTL cache.
+   *
+   * Fan-out uses this rather than {@link getEnabledEndpoints}: a fanned-out
+   * event is marked done permanently and never reconsidered, so serving a stale
+   * cross-process list — an endpoint another instance created within the TTL —
+   * would drop that new subscriber's deliveries forever. Correctness there beats
+   * saving a per-round query; delivery and other readers can still use the cache.
+   */
+  async getEnabledEndpointsFresh(): Promise<readonly WebhookEndpoint[]> {
+    this.invalidate();
+    return this.getEnabledEndpoints();
+  }
+
   private async load(): Promise<WebhookEndpoint[]> {
     const rows = await this.reader.select<Record<string, unknown>>(
       "nextly_webhooks",

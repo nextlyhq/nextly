@@ -31,6 +31,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import { z } from "zod";
 
+import { validateOrigin } from "../auth/csrf/validate";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -161,6 +162,11 @@ const MIN_DRAIN_SECRET_LENGTH = 32;
  */
 const DRAIN_MAX_ROUNDS = 10;
 const DRAIN_DELIVER_BATCH = 25;
+// Bound fan-out too, not just delivery: at the engine default (100) ten rounds
+// could fan out 1,000 events into 1,000 × endpoints delivery rows in one tick —
+// database work the delivery deadline does not cover. Keep it near the delivery
+// batch so a tick creates roughly what it can attempt; the rest waits.
+const DRAIN_FANOUT_BATCH = 50;
 const DRAIN_MAX_DURATION_MS = 25_000;
 const DRAIN_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -216,7 +222,9 @@ async function authorizeDrain(request: Request): Promise<void> {
   // driven by a cross-site top-level navigation, which carries the victim's
   // `SameSite=Lax` session cookie, so falling through to the session/API-key
   // path here would be a CSRF trigger. The session/API-key path (a manual admin
-  // drain) is therefore POST-only, where CSRF protection applies.
+  // drain) is therefore POST-only: a `SameSite=Lax` cookie is not sent on a
+  // cross-site POST, the same baseline the rest of the session-authenticated
+  // REST API relies on.
   if (request.method.toUpperCase() === "GET") {
     throw NextlyError.forbidden({
       logContext: { reason: "drain-get-requires-secret" },
@@ -224,6 +232,18 @@ async function authorizeDrain(request: Request): Promise<void> {
   }
   const authResult = await requireWebhookPermission(request, "update");
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+  // Defense in depth for the cookie path: on top of `SameSite=Lax`, require a
+  // same-origin `Origin`/`Referer` so a same-site or misconfigured browser
+  // context cannot forge this side-effecting trigger. API-key auth carries no
+  // ambient cookie and sends no browser Origin, so it is exempt.
+  if (
+    authResult.authMethod !== "api-key" &&
+    !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED)
+  ) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "drain-origin-mismatch" },
+    });
+  }
 }
 
 /**
@@ -263,6 +283,7 @@ export const drainWebhooks = withErrorHandler(
       // maxDurationMs is the hard bound (stops mid-batch when receivers hang);
       // the shorter timeout caps the single in-flight overrun past it.
       maxRounds: DRAIN_MAX_ROUNDS,
+      fanOutBatchSize: DRAIN_FANOUT_BATCH,
       deliverBatchSize: DRAIN_DELIVER_BATCH,
       maxDurationMs: DRAIN_MAX_DURATION_MS,
       requestTimeoutMs: DRAIN_REQUEST_TIMEOUT_MS,
