@@ -39,6 +39,7 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
@@ -93,7 +94,13 @@ export class CollectionEntryService extends BaseService {
      * service — the dispatcher-facing handler, `CollectionService`, and direct
      * callers alike — so this is the one place that covers them all.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner
+    private readonly retentionRunner?: WebhookRetentionRunner,
+    /**
+     * Kicks an immediate, bounded drain after a write (via Next `after()`), so
+     * the first delivery attempt does not wait for the next scheduled trigger.
+     * Wired at the same seam as `retentionRunner` for the same reason.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
   ) {
     super(adapter, logger);
 
@@ -223,6 +230,20 @@ export class CollectionEntryService extends BaseService {
     );
   }
 
+  /**
+   * The post-write side effects, run after every write that appends an event.
+   *
+   * The drain fast path goes first so the `after()` callback is scheduled
+   * promptly (it only runs post-response, so it adds no latency); the retention
+   * pass follows. Both absorb their own failures, so this never turns a
+   * successful save into an error. Awaited for the reason `offerRetentionPass`
+   * documents: a detached promise may not survive a serverless response.
+   */
+  private async afterWrite(): Promise<void> {
+    await this.fastDrainScheduler?.offer();
+    await this.offerRetentionPass();
+  }
+
   async createEntry(
     params: {
       collectionName: string;
@@ -238,7 +259,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.createEntry(params, body, depth);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -279,7 +300,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.updateEntry(params, body, depth);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -291,7 +312,7 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -305,7 +326,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }) {
     const result = await this.mutationService.deleteEntry(params);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -349,7 +370,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -365,7 +386,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -380,7 +401,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -400,7 +421,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -417,7 +438,7 @@ export class CollectionEntryService extends BaseService {
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -435,7 +456,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -463,7 +484,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
@@ -492,7 +513,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
     const result = await this.bulkService.deleteEntries(params, ids, options);
-    await this.offerRetentionPass();
+    await this.afterWrite();
     return result;
   }
 
