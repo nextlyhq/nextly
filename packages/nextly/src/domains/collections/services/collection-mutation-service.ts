@@ -1180,7 +1180,6 @@ export class CollectionMutationService extends BaseService {
         nextStatus: (body as { status?: unknown }).status,
         accessUser,
         overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -2232,7 +2231,6 @@ export class CollectionMutationService extends BaseService {
     entryId?: string;
     document?: Record<string, unknown>;
     overrideAccess?: boolean;
-    routeAuthorized?: boolean;
   }): Promise<CollectionServiceResult | null> {
     const operation = resolvePublishTransition(
       args.previousStatus,
@@ -2247,7 +2245,13 @@ export class CollectionMutationService extends BaseService {
       args.entryId,
       args.document,
       args.overrideAccess,
-      args.routeAuthorized
+      // NOT route-authorized, even on a REST write. `routeAuthorized` means the
+      // route middleware already ran this exact RBAC check — but the route
+      // authorizes a document PATCH as `update`, never as `publish`/`unpublish`,
+      // so for the transition operation that assertion does not hold. Passing it
+      // through would skip the RBAC check for the very permission this gate
+      // exists to enforce, letting any caller who may update also publish.
+      false
     );
   }
 
@@ -2335,7 +2339,6 @@ export class CollectionMutationService extends BaseService {
         entryId: params.entryId,
         document: existingEntry,
         overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -3605,7 +3608,6 @@ export class CollectionMutationService extends BaseService {
         previousStatus: null,
         nextStatus: (body as { status?: unknown }).status,
         accessUser: params.user,
-        routeAuthorized: params.routeAuthorized,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -4535,7 +4537,6 @@ export class CollectionMutationService extends BaseService {
         nextStatus: (body as { status?: unknown }).status,
         accessUser: params.overrideAccess ? undefined : params.user,
         overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -4994,7 +4995,6 @@ export class CollectionMutationService extends BaseService {
         entryId,
         document: existingEntry,
         overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
       });
       if (transitionDenied) {
         return transitionDenied;
