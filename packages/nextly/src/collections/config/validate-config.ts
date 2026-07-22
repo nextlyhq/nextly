@@ -25,6 +25,7 @@
  */
 
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -148,7 +149,17 @@ export interface ValidationResult {
 // they now live in shared/sql-reserved.ts and are re-exported above so the
 // public API surface for this file is unchanged.
 
-const RESERVED_SLUGS_SET: Set<string> = new Set<string>(RESERVED_SLUGS);
+// System-resource names are added on top of the base reserved slugs. A
+// collection named after a system resource would seed the same permission rows
+// that resource's routes check (a `settings` collection reaches the user-fields
+// and component admin surfaces, a `media` collection the media routes), so it is
+// rejected here — at config validation, before any migration or table is built.
+// The names are NOT in the shared base list, because that list also feeds the
+// component validator and a component does not seed a permission under its slug.
+const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
+  ...RESERVED_SLUGS,
+  ...SYSTEM_RESOURCES,
+]);
 
 // The owner column `created_by` is injected as a system column on every
 // collection table (both the snake_case name and its camelCase alias, which

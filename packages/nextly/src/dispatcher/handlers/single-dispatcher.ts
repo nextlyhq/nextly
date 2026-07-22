@@ -66,6 +66,7 @@ import { resolveBuilderVersions } from "../../domains/versions/builder-versions"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { getProductionNotifier } from "../../runtime/notifications/index";
+import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
   getI18nArchiveDdl,
@@ -509,6 +510,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         | undefined;
 
       if (!b?.slug) throw new Error("Single slug is required");
+      // Rejected before the DDL below runs: a reserved slug seeds the same
+      // permission rows a system resource's routes check, and checking only at
+      // registration (further down) would create `single_<slug>` and its locale
+      // companion first, leaving orphan tables when registration then refused it.
+      if (isReservedResourceSlug(b.slug)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "slug",
+              code: "reserved_slug",
+              message:
+                "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
+            },
+          ],
+          logContext: { reason: "system-resource-slug", slug: b.slug },
+        });
+      }
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");

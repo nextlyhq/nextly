@@ -35,6 +35,7 @@ import { dynamicSinglesPg } from "@nextly/schemas/dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
 
 import type { SingleAdminOptions } from "../../../config";
+import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 
 /**
@@ -419,6 +420,17 @@ export async function registerFromMigrations(
   // Step 3: Register each collection
   let collectionsRegistered = 0;
   for (const collection of collections) {
+    // A snapshot can carry a name that has since become reserved (a system
+    // resource). Registering it would recreate the permission collision the
+    // create/rename paths now refuse, so it is skipped rather than replayed.
+    // Skipped, not thrown: this runs at boot, and one stale snapshot entry must
+    // not take the whole application down.
+    if (isReservedResourceSlug(collection.slug)) {
+      logger.warn?.(
+        `[Migration Metadata] Skipping collection "${collection.slug}": the name is reserved by Nextly and must be renamed.`
+      );
+      continue;
+    }
     try {
       const inserted = await registerCollection(
         typedAdapter,
@@ -439,6 +451,14 @@ export async function registerFromMigrations(
   // Step 4: Register each single
   let singlesRegistered = 0;
   for (const single of singles) {
+    // Same as collections: a reserved name in a snapshot is skipped, not
+    // replayed, so it cannot recreate the permission collision.
+    if (isReservedResourceSlug(single.slug)) {
+      logger.warn?.(
+        `[Migration Metadata] Skipping single "${single.slug}": the name is reserved by Nextly and must be renamed.`
+      );
+      continue;
+    }
     try {
       const inserted = await registerSingle(typedAdapter, dialect, single);
       if (inserted) singlesRegistered++;

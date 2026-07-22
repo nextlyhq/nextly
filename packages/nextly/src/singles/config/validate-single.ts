@@ -23,6 +23,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -130,9 +131,18 @@ export interface SingleValidationResult {
 /**
  * Reserved Single slugs that cannot be used.
  *
- * Extends the base RESERVED_SLUGS with Single-specific reserved names.
+ * Extends the base RESERVED_SLUGS with every system-resource name. A single
+ * named after a system resource seeds `read-<name>` / `update-<name>`, the rows
+ * that resource's routes check (a `settings` single reaches the user-fields and
+ * component admin surfaces), so it is rejected here at config validation, before
+ * any migration or table is built. The system-resource names are added here
+ * rather than in the shared base list, which also feeds the component validator
+ * where they must not apply.
  */
-export const RESERVED_SINGLE_SLUGS = [...RESERVED_SLUGS] as const;
+export const RESERVED_SINGLE_SLUGS = [
+  ...RESERVED_SLUGS,
+  ...SYSTEM_RESOURCES,
+] as const;
 
 const RESERVED_SINGLE_SLUGS_SET: Set<string> = new Set<string>(
   RESERVED_SINGLE_SLUGS

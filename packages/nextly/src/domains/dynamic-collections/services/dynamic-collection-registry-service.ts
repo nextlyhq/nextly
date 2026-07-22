@@ -1,6 +1,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors";
+import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
@@ -110,6 +112,33 @@ export class DynamicCollectionRegistryService extends BaseService {
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug))
       .limit(1);
+
+    // True when this exact slug is already owned by the collection being
+    // updated (a no-op slug on a metadata/field/status change), as opposed to a
+    // create or a rename onto another collection's slug.
+    const ownedByCurrentCollection =
+      existingCollection.length > 0 &&
+      existingCollection[0]?.id === options?.currentCollectionId;
+
+    // A name that collides with a system resource's permissions may not be used
+    // as a Schema-Builder collection slug on create or rename. A collection that
+    // already owns this exact slug (created before the name became reserved) is
+    // grandfathered so its metadata stays editable — rejecting a no-op save
+    // would strand it. This mirrors `assertGlobalResourceSlugAvailable`, which
+    // this registry does not go through, so the check lives here as well.
+    if (isReservedResourceSlug(slug) && !ownedByCurrentCollection) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "slug",
+            code: "reserved_slug",
+            message:
+              "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
+          },
+        ],
+        logContext: { reason: "system-resource-slug", slug },
+      });
+    }
 
     if (
       existingCollection.length > 0 &&

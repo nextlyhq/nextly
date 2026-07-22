@@ -1,6 +1,7 @@
 import safeRegex from "safe-regex2";
 import { z } from "zod";
 
+import { isReservedResourceSlug } from "@nextly/schemas/_zod/rbac";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 /**
@@ -122,6 +123,13 @@ export const collectionNameSchema = z
       message: "Collection name is reserved",
     }
   )
+  // A name that collides with a system resource's permissions is rejected here,
+  // during name validation inside `generateCollection` — before the migration
+  // and table are built — so the Builder path cannot leave an orphan table when
+  // the registry guard later refuses the same name.
+  .refine((name: string) => !isReservedResourceSlug(name), {
+    message: "Collection name is reserved by Nextly",
+  })
   .refine(
     (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),
     {
