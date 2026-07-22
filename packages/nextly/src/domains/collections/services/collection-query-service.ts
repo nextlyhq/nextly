@@ -1821,7 +1821,10 @@ export class CollectionQueryService extends BaseService {
         params.collectionName,
         "read",
         accessUser,
-        params.overrideAccess
+        params.overrideAccess,
+        // Scope the owner filter too: a super-admin-owned key must still be
+        // bound by a `read: owner-only` rule, not treated as a session admin.
+        params.authenticatedScope
       );
 
       // Same 404-not-403 reasoning applies to Draft/Published — a public

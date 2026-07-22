@@ -425,3 +425,55 @@ describe("checkCollectionAccess — scoped API key", () => {
     expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("getOwnerConstraint — scoped API key", () => {
+  // getOwnerConstraint emits the owner predicate that a read/mutate folds into
+  // its WHERE clause. The session super-admin bypass lifts it — but a scoped API
+  // key owned by a super-admin must still obey a stored owner-only rule, so the
+  // predicate has to survive for the key even though the account is super-admin.
+  function buildWithOwnerOnlyRead() {
+    const accessControlService = createMockAccessControlService();
+    const rbac = {
+      checkAccess: vi.fn().mockResolvedValue(true),
+      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    };
+    const collectionService = {
+      getCollection: vi
+        .fn()
+        .mockResolvedValue({ accessRules: { read: { type: "owner-only" } } }),
+      generateId: vi.fn(),
+    };
+    return new CollectionAccessService(
+      createMockAdapter(createMockDb()) as never,
+      silentLogger as never,
+      collectionService as never,
+      accessControlService as never,
+      rbac as never
+    );
+  }
+
+  it("lifts the owner predicate for a session super-admin (no scope)", async () => {
+    const service = buildWithOwnerOnlyRead();
+    const constraint = await service.getOwnerConstraint(
+      "posts",
+      "read",
+      superAdminUser,
+      false
+    );
+    expect(constraint).toBeNull();
+  });
+
+  it("keeps the owner predicate for a super-admin-owned scoped API key", async () => {
+    const service = buildWithOwnerOnlyRead();
+    const constraint = await service.getOwnerConstraint(
+      "posts",
+      "read",
+      superAdminUser,
+      false,
+      { actorType: "apiKey", permissions: ["read-posts"] }
+    );
+    // The scope skips the super-admin bypass, so the owner-only rule still binds
+    // the key to rows it owns.
+    expect(constraint).toEqual({ field: "created_by", value: "user-1" });
+  });
+});
