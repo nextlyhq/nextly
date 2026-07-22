@@ -40,17 +40,28 @@ describe("resolvePublishTransition", () => {
     expect(resolvePublishTransition("draft", "archived")).toBeNull();
   });
 
-  it("is not a transition when the write sets no status", () => {
-    // A patch that omits status leaves the stored value untouched.
+  it("is not a transition when the write omits status", () => {
+    // Only an ABSENT (undefined) status leaves the stored value untouched.
     expect(resolvePublishTransition("published", undefined)).toBeNull();
     expect(resolvePublishTransition("draft", undefined)).toBeNull();
   });
 
-  it("is not a transition for a non-string status", () => {
-    // A malformed payload expresses no lifecycle move.
+  it("is not a move INTO published for a non-string status", () => {
+    // A coerced number/boolean can never equal "published", so from a draft it
+    // is not a publish.
     expect(resolvePublishTransition("draft", 1)).toBeNull();
     expect(resolvePublishTransition("draft", null)).toBeNull();
-    expect(resolvePublishTransition("published", {})).toBeNull();
+    expect(resolvePublishTransition("draft", false)).toBeNull();
+  });
+
+  it("treats an explicit non-published value over a published row as unpublish", () => {
+    // Some dialects coerce a JSON number/boolean into the text column, storing
+    // a value other than "published" — which removes the row from published
+    // reads. That must be gated as an unpublish, not slip through.
+    expect(resolvePublishTransition("published", 0)).toBe("unpublish");
+    expect(resolvePublishTransition("published", false)).toBe("unpublish");
+    expect(resolvePublishTransition("published", null)).toBe("unpublish");
+    expect(resolvePublishTransition("published", {})).toBe("unpublish");
   });
 
   it("treats an undefined previous status like an absent one", () => {

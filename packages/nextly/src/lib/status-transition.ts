@@ -27,21 +27,27 @@ export type PublishTransition = "publish" | "unpublish";
  * published is therefore a `publish`, because `null` is not `"published"`.
  *
  * The next status is read as `unknown` on purpose: a write carries whatever the
- * caller put in the body, and a payload that names no status (or a non-string
- * one) expresses no transition rather than a move to draft.
+ * caller put in the body. An ABSENT status (`undefined`) names no move and
+ * leaves the stored value untouched. But any other explicitly-provided value —
+ * including a non-string one, which some dialects coerce into the text column —
+ * IS a write to the status, so from a published row it counts as leaving
+ * published (an unpublish). Only `"published"` (a string) can be a move INTO
+ * published, since a non-string can never equal it.
  */
 export function resolvePublishTransition(
   previousStatus: string | null | undefined,
   nextStatus: unknown
 ): PublishTransition | null {
-  // A write that does not set a string status expresses no transition: an
-  // absent status leaves the stored value untouched, it does not move to draft.
-  if (typeof nextStatus !== "string") return null;
+  // Status not named in the write: no move.
+  if (nextStatus === undefined) return null;
 
   const wasPublished = previousStatus === "published";
+  // Only the exact string qualifies; a coerced number/boolean is not published.
   const willBePublished = nextStatus === "published";
 
   if (willBePublished && !wasPublished) return "publish";
+  // Any explicit non-published value written over a published row leaves it
+  // published — including a malformed non-string that would be coerced in.
   if (wasPublished && !willBePublished) return "unpublish";
   return null;
 }

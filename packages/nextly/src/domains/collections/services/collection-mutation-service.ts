@@ -3607,7 +3607,10 @@ export class CollectionMutationService extends BaseService {
         collectionName: params.collectionName,
         previousStatus: null,
         nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.user,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        // A trusted server write creates-as-published without a publish
+        // permission, the same as the non-transactional create path.
+        overrideAccess: params.overrideAccess,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -4015,9 +4018,12 @@ export class CollectionMutationService extends BaseService {
             | string
             | undefined) ?? null,
         nextStatus: (body as { status?: unknown }).status,
-        accessUser: params.user,
+        accessUser: params.overrideAccess ? undefined : params.user,
         entryId: params.entryId,
         document: existingEntry,
+        // A trusted server write publishes without a publish permission, the
+        // same as the non-transactional paths.
+        overrideAccess: params.overrideAccess,
       });
       if (transitionDenied) {
         return transitionDenied;
