@@ -63,6 +63,14 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     expect(denied.success).toBe(false);
     expect(denied.statusCode).toBe(403);
 
+    // The denial left nothing written: the persisted row is still draft, not a
+    // published row that merely returned an error after the write.
+    const [afterDenial] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterDenial?.status).toBe("draft");
+
     // A trusted (overrideAccess) publish still succeeds — the gate is not
     // blanket-denying, it is enforcing the missing permission.
     const allowed = await handler.updateEntry(
@@ -106,6 +114,13 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
 
     expect(denied.success).toBe(false);
     expect(denied.statusCode).toBe(403);
+
+    // The code-defined publish denial also left the row draft.
+    const [afterDenial] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterDenial?.status).toBe("draft");
   });
 
   it("does not demand publish for publish-all when the collection has no lifecycle", async () => {
@@ -137,7 +152,10 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       userId: "user-1",
     });
 
-    expect(result.statusCode).not.toBe(403);
+    // The no-lifecycle publish-all is a genuine no-op success, not merely "not
+    // 403" (which a 500 or a missing status would also satisfy).
+    expect(result.success).toBe(true);
+    expect(result.statusCode).toBe(200);
   });
 
   it("does not gate publish-all for a user field named status without lifecycle", async () => {
@@ -172,7 +190,10 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       userId: "user-1",
     });
 
-    expect(result.statusCode).not.toBe(403);
+    // The no-lifecycle publish-all is a genuine no-op success, not merely "not
+    // 403" (which a 500 or a missing status would also satisfy).
+    expect(result.success).toBe(true);
+    expect(result.statusCode).toBe(200);
   });
 
   it("gates a default-locale companion publish when the main row is already published", async () => {
