@@ -533,8 +533,19 @@ describe("webhook outbox capture (integration)", () => {
 
     const collectionService =
       current.getService<CollectionService>("collectionService");
+    // Pass an API-key actor through the public transactional wrapper: it must
+    // forward to the event rather than falling back to the key owner or system.
     await current.adapter.transaction(async tx =>
-      collectionService.deleteEntryInTransaction(tx, "posts", id, {})
+      collectionService.deleteEntryInTransaction(
+        tx,
+        "posts",
+        id,
+        {},
+        {
+          type: "apiKey",
+          id: "key_tx",
+        }
+      )
     );
 
     const rows = await events(current);
@@ -542,6 +553,8 @@ describe("webhook outbox capture (integration)", () => {
     expect(deleted).toBeDefined();
     expect(deleted!.resourceId).toBe(id);
     expect(envelopeOf(deleted!).data.title).toBe("tx-del");
+    expect(deleted!.actorType).toBe("apiKey");
+    expect(deleted!.actorId).toBe("key_tx");
   });
 
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {

@@ -56,6 +56,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 // MetadataServiceResult / CollectionServiceResult shapes (returned by
 // metadata/entry services for backward compatibility) into thrown
 // NextlyErrors at this boundary so callers see the new error model.
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -838,7 +839,13 @@ export class CollectionService extends BaseService {
     tx: TransactionContext,
     collectionName: string,
     entryId: string,
-    context: RequestContext
+    context: RequestContext,
+    /**
+     * Acting identity, forwarded to the recorded `entry.deleted` event so an
+     * API-key delete through this wrapper keeps key attribution. `RequestContext`
+     * carries only `user`, so the actor is passed alongside it.
+     */
+    actor?: RequestActor
   ): Promise<void> {
     this.logger.debug("Deleting entry in transaction", {
       collectionName,
@@ -849,6 +856,7 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       user: context.user,
+      actor,
     });
 
     if (!result.success) {
