@@ -62,7 +62,13 @@ export type AccessRuleType =
  * const operation: AccessOperation = 'read';
  * ```
  */
-export type AccessOperation = "create" | "read" | "update" | "delete";
+export type AccessOperation =
+  | "create"
+  | "read"
+  | "update"
+  | "delete"
+  | "publish"
+  | "unpublish";
 
 /**
  * A storable access rule configuration.
@@ -211,6 +217,19 @@ export interface CollectionAccessRules {
    * If not specified, defaults to public access.
    */
   delete?: StoredAccessRule;
+
+  /**
+   * Access rule for making a document public (status → published).
+   * If not specified, defaults to public access, so the RBAC
+   * `publish-<slug>` permission is the only gate.
+   */
+  publish?: StoredAccessRule;
+
+  /**
+   * Access rule for taking a document down (status → out of published).
+   * If not specified, defaults to public access.
+   */
+  unpublish?: StoredAccessRule;
 }
 
 /**

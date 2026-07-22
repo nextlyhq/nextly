@@ -59,8 +59,8 @@ export interface AccessControlContext {
   roles: string[];
   /** The user's effective permission slugs in 'resource:action' format */
   permissions: string[];
-  /** The CRUD operation being performed */
-  operation: "create" | "read" | "update" | "delete";
+  /** The operation being performed */
+  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish";
   /** The collection or single slug */
   collection: string;
 }
@@ -175,8 +175,8 @@ export interface SingleAccessControl {
 export interface CheckAccessParams {
   /** The authenticated user's ID (null for unauthenticated requests) */
   userId: string | null;
-  /** The CRUD operation being performed */
-  operation: "create" | "read" | "update" | "delete";
+  /** The operation being performed */
+  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish";
   /** The collection or single slug (used as the permission resource) */
   resource: string;
   /** Optional code-defined access control from defineCollection/defineSingle */

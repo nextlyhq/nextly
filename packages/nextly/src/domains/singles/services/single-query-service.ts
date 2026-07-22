@@ -148,7 +148,7 @@ export function buildSingleHookContext<T>(
  */
 export async function checkSingleAccess(params: {
   slug: string;
-  operation: "read" | "update";
+  operation: "read" | "update" | "publish" | "unpublish";
   user?: UserContext;
   overrideAccess?: boolean;
   routeAuthorized?: boolean;

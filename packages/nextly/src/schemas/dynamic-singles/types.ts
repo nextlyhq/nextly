@@ -111,6 +111,18 @@ export interface SingleAccessRules {
    * If not specified, defaults to public access.
    */
   update?: StoredAccessRule;
+
+  /**
+   * Access rule for making the Single public (status → published).
+   * If not specified, defaults to public access.
+   */
+  publish?: StoredAccessRule;
+
+  /**
+   * Access rule for taking the Single down (status → out of published).
+   * If not specified, defaults to public access.
+   */
+  unpublish?: StoredAccessRule;
 }
 
 // ============================================================
