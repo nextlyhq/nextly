@@ -306,13 +306,9 @@ export function normalizeTimestampsInPayload(
 export async function withTimezoneFormatting(
   response: Response
 ): Promise<Response> {
-  const contentType = response.headers.get("content-type") || "";
-  if (!contentType.toLowerCase().includes("application/json")) {
-    return response;
-  }
-
   // Opt-out: a handler marked this body as carrying opaque text that must not be
-  // rewritten. Strip the internal marker and return the body verbatim.
+  // rewritten. Checked first, before any early return, so the internal marker is
+  // always stripped and never reaches the client (even on a non-JSON body).
   if (response.headers.get(SKIP_TIMEZONE_FORMAT_HEADER) === "1") {
     const headers = new Headers(response.headers);
     headers.delete(SKIP_TIMEZONE_FORMAT_HEADER);
@@ -321,6 +317,11 @@ export async function withTimezoneFormatting(
       statusText: response.statusText,
       headers,
     });
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return response;
   }
 
   // Keep error payloads untouched to avoid accidental message mutation.
