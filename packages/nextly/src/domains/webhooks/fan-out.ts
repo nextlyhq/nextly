@@ -19,7 +19,7 @@
 
 import type { SelectOptions } from "@nextlyhq/adapter-drizzle/types";
 
-import { matchesFilter } from "./filter";
+import { matchesFilter, matchesSubscribedTypes } from "./filter";
 import type { WebhookEndpoint, WebhookEvent } from "./types";
 
 /** Default number of un-fanned events a single `fanOutDueEvents` call claims. */
@@ -48,7 +48,7 @@ export function selectDeliveryTargets(
   return endpoints.filter(
     e =>
       e.enabled &&
-      e.eventTypes.includes(envelope.type) &&
+      matchesSubscribedTypes(e.eventTypes, envelope.type) &&
       // Fail closed on an unparseable timestamp: never deliver an event we
       // can't place relative to the subscription cutoff. (The fan-out path
       // rejects such events upstream as poison; this guards direct callers.)

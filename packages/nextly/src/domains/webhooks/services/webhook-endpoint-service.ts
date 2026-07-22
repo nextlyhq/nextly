@@ -54,7 +54,7 @@ import {
   webhookSecretPrefix,
 } from "../secret";
 import { REDACTED_HEADER_VALUE } from "../types";
-import type { WebhookEventType } from "../types";
+import type { WebhookEventSubscription } from "../types";
 
 /**
  * An endpoint as any caller after creation sees it.
@@ -68,7 +68,7 @@ export interface WebhookEndpointSummary {
   name: string;
   url: string;
   enabled: boolean;
-  eventTypes: WebhookEventType[];
+  eventTypes: WebhookEventSubscription[];
   headers: Record<string, string> | null;
   secretPrefix: string;
   createdBy: string | null;
@@ -85,7 +85,7 @@ export interface CreatedWebhookEndpoint {
 export interface CreateWebhookEndpointInput {
   name: string;
   url: string;
-  eventTypes: WebhookEventType[];
+  eventTypes: WebhookEventSubscription[];
   enabled?: boolean;
   headers?: Record<string, string> | null;
 }
@@ -93,7 +93,7 @@ export interface CreateWebhookEndpointInput {
 export interface UpdateWebhookEndpointInput {
   name?: string;
   url?: string;
-  eventTypes?: WebhookEventType[];
+  eventTypes?: WebhookEventSubscription[];
   enabled?: boolean;
   headers?: Record<string, string> | null;
 }
@@ -265,7 +265,7 @@ export class WebhookEndpointService extends BaseService {
       enabled: row.enabled,
       eventTypes: (Array.isArray(row.eventTypes)
         ? row.eventTypes
-        : []) as WebhookEventType[],
+        : []) as WebhookEventSubscription[],
       // Names are kept so an operator can see which headers are configured;
       // values are not, because delivery sends them verbatim and they are
       // routinely a credential for the receiver.

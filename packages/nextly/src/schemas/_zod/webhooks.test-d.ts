@@ -9,16 +9,18 @@
  */
 import { expectTypeOf } from "vitest";
 
-import type { WebhookEventType } from "../../domains/webhooks/types";
+import type { WebhookEventSubscription } from "../../domains/webhooks/types";
 
 import type { CreateWebhookInput, UpdateWebhookInput } from "./webhooks";
 
+// The parsed subscription list preserves its literals — each entry is a
+// specific event type or the wildcard, never a widened `string`.
 expectTypeOf<CreateWebhookInput["eventTypes"]>().toEqualTypeOf<
-  WebhookEventType[]
+  WebhookEventSubscription[]
 >();
 
 expectTypeOf<UpdateWebhookInput["eventTypes"]>().toEqualTypeOf<
-  WebhookEventType[] | undefined
+  WebhookEventSubscription[] | undefined
 >();
 
 // Stated explicitly: this is the shape the widening cast produced, and it is

@@ -8,7 +8,30 @@
  * @module domains/webhooks/filter
  */
 
-import type { FilterSpec, WebhookEvent } from "./types";
+import { WEBHOOK_EVENT_WILDCARD } from "./types";
+import type {
+  FilterSpec,
+  WebhookEvent,
+  WebhookEventSubscription,
+  WebhookEventType,
+} from "./types";
+
+/**
+ * Whether an endpoint's subscription list accepts a concrete event type.
+ *
+ * The wildcard matches every type (including future ones); otherwise the type
+ * must be listed explicitly. Kept here with the other pure matching predicates
+ * so fan-out and any future caller share one definition.
+ */
+export function matchesSubscribedTypes(
+  subscriptions: readonly WebhookEventSubscription[],
+  type: WebhookEventType
+): boolean {
+  return (
+    subscriptions.includes(WEBHOOK_EVENT_WILDCARD) ||
+    subscriptions.includes(type)
+  );
+}
 
 /**
  * Whether `filter` accepts `envelope`.
