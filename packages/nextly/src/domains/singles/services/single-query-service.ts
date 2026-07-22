@@ -260,9 +260,10 @@ export async function checkSingleAccess(params: {
 
   // A scoped API key is authorized on its OWN stamped grants, not the key
   // owner's: the route only checked `update` against the key's scope, so this
-  // publish/unpublish re-check must consult the key's own permission list.
-  // `apiKeyScopeAllows` returns null for a non-API-key caller, falling through
-  // to the owner/session RBAC path below.
+  // publish/unpublish re-check must consult the key's own permission list AND
+  // the code-defined access rule against that scope. `apiKeyWriteAllowed`
+  // returns null for a non-API-key caller, falling through to the owner/session
+  // RBAC path below.
   const scopeDecision = await apiKeyWriteAllowed(
     authenticatedScope,
     operation,
