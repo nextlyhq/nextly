@@ -176,10 +176,15 @@ export class CollectionAccessService extends BaseService {
     }
 
     // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
-    // owner-only) so an admin can act on any record on every transport. Keyed
-    // on the authorized role set (see isSuperAdminContext), so a scoped API key
-    // cannot inherit its owner's super-admin bypass.
-    if (isSuperAdminContext(user)) {
+    // owner-only) so an admin can act on any record on every transport — EXCEPT
+    // via a scoped API key. The bypass belongs to the session path: a key is
+    // authoritative on its OWN stamped scope, never on the owner's roles, so a
+    // read/update-only key issued by an administrator is not equivalent to their
+    // full account (mirrors canReadEntity). Applying the bypass here would let a
+    // super-admin-owned, update-only key publish, recreating the very hole this
+    // scope check closes.
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && isSuperAdminContext(user)) {
       return null;
     }
 

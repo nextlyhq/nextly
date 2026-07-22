@@ -120,6 +120,31 @@ describe("restoreVersionForDocument — identity assembly", () => {
     });
   });
 
+  it("forwards the API-key scope to the write, so a restore-to-published is gated", async () => {
+    // A restore replays the snapshot through the update path; when it sets
+    // status published it hits the publish gate, which for a scoped key must
+    // judge the key's own grant. The scope must reach the write.
+    await restoreVersionForDocument(
+      argsFor({
+        ...baseParams,
+        _authenticatedActorType: "apiKey",
+        _authenticatedPermissions: JSON.stringify([
+          "read-posts",
+          "update-posts",
+        ]),
+      })
+    );
+
+    expect(restoreSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-posts", "update-posts"],
+        },
+      })
+    );
+  });
+
   it("treats a session caller as carrying no scoped permissions", async () => {
     // Their grants are resolved from the database by the decision itself;
     // forwarding an empty list keeps the two paths from being confused.
