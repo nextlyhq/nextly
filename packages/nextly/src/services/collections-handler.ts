@@ -7,6 +7,7 @@ import { getHookRegistry } from "@nextly/hooks/hook-registry";
 import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
@@ -167,6 +168,16 @@ export class CollectionsHandler {
       componentDataService.setRelationshipService(this.relationshipService);
     }
 
+    // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
+    // against. Without it `checkCollectionAccess` has no permission store, so a
+    // missing stored rule defaults to public — which for the publish gate means
+    // an authenticated caller who cleared the route's `update` check could
+    // publish without `publish-<slug>`. Resolved from the container (guarded so
+    // a minimal boot without RBAC still constructs).
+    const rbacAccessControlService = container.has("rbacAccessControlService")
+      ? container.get<RBACAccessControlService>("rbacAccessControlService")
+      : undefined;
+
     this.entryService = new CollectionEntryService(
       adapter,
       logger,
@@ -176,7 +187,7 @@ export class CollectionsHandler {
       hookRegistry,
       accessControlService,
       componentDataService,
-      undefined,
+      rbacAccessControlService,
       this.localization,
       retentionRunner,
       fastDrainScheduler
