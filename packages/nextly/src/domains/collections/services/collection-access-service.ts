@@ -16,7 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { RequestContext } from "@nextly/collections/fields/types/base";
 
 import {
-  apiKeyScopeAllows,
+  apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -210,7 +210,13 @@ export class CollectionAccessService extends BaseService {
     // returns null for a non-API-key caller, which falls through to RBAC.
     const scopeDecision =
       !routeAuthorized && user
-        ? apiKeyScopeAllows(authenticatedScope, operation, collectionName)
+        ? await apiKeyWriteAllowed(
+            authenticatedScope,
+            operation,
+            collectionName,
+            user,
+            this.rbacAccessControlService
+          )
         : null;
     if (!routeAuthorized && user && scopeDecision !== null) {
       if (!scopeDecision) {

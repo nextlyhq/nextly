@@ -1044,6 +1044,9 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized only `create` against an API key's scope; a
+          // create-as-published publish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         body as Record<string, unknown>
       );

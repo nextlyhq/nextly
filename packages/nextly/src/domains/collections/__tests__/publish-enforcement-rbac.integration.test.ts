@@ -314,4 +314,123 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
     expect(allowed.success).toBe(true);
   });
+
+  it("judges a scoped API-key create-as-published on the key's own grant", async () => {
+    // The create path also gates publish (creating directly as published). A key
+    // scoped for `create-posts` but not `publish-posts` cannot create a published
+    // entry; adding `publish-posts` allows it — regardless of the owner's grants.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const denied = await handler.createEntry(
+      {
+        collectionName: "posts",
+        userId: "key-owner",
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["create-posts"],
+        },
+      },
+      { title: "t", status: "published" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    const allowed = await handler.createEntry(
+      {
+        collectionName: "posts",
+        userId: "key-owner",
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["create-posts", "publish-posts"],
+        },
+      },
+      { title: "t2", status: "published" }
+    );
+    expect(allowed.success).toBe(true);
+  });
+
+  it("does not let a code-defined access.publish be bypassed by a scoped key", async () => {
+    // A scoped key holding `publish-posts` must still satisfy the collection's
+    // code-defined `access.publish` rule — the grant is not a bypass.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { publish: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const denied = await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        userId: "key-owner",
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts", "publish-posts"],
+        },
+      },
+      { status: "published" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("route-authorizes publish-all's update gate for a scoped key", async () => {
+    // publish-all runs a preliminary `update` gate before the publish check. For
+    // a REST API-key request the route already authorized `update` on the key's
+    // scope, so that gate must honor route authorization + the key scope rather
+    // than fall back to the owner's RBAC (which the key owner lacks here).
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const result = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      userId: "key-owner",
+      routeAuthorized: true,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts", "publish-posts"],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
 });

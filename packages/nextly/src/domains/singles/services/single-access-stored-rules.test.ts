@@ -25,6 +25,9 @@ function makeDeps() {
   const accessControlService = { evaluateAccess: vi.fn() };
   const rbacAccessControlService = {
     checkAccess: vi.fn().mockResolvedValue(true),
+    // No code-defined access by default; a scoped API key is judged on its
+    // permission grant alone unless a test registers a rule.
+    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
   return { accessControlService, rbacAccessControlService };
 }
@@ -268,6 +271,34 @@ describe("checkSingleAccess — scoped API key", () => {
 
     expect(result?.statusCode).toBe(403);
     expect(rbacAccessControlService.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    // The key HAS publish-site, but the Single's code-defined access.publish
+    // denies — the grant must not bypass it.
+    rbacAccessControlService.getRegisteredAccess.mockReturnValue({
+      publish: () => false,
+    });
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: rbacAccessControlService as never,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["publish-site"],
+      },
+      accessControlService: accessControlService as never,
+      accessRules: undefined,
+      logger: silentLogger,
+    });
+
+    expect(result?.statusCode).toBe(403);
   });
 
   it("allows a publish the key IS scoped for, even when the owner's RBAC denies", async () => {

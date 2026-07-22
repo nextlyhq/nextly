@@ -21,7 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import {
-  apiKeyScopeAllows,
+  apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -263,7 +263,13 @@ export async function checkSingleAccess(params: {
   // publish/unpublish re-check must consult the key's own permission list.
   // `apiKeyScopeAllows` returns null for a non-API-key caller, falling through
   // to the owner/session RBAC path below.
-  const scopeDecision = apiKeyScopeAllows(authenticatedScope, operation, slug);
+  const scopeDecision = await apiKeyWriteAllowed(
+    authenticatedScope,
+    operation,
+    slug,
+    user,
+    rbacAccessControlService
+  );
   if (scopeDecision !== null) {
     return scopeDecision
       ? null
