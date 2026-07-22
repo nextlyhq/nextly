@@ -107,11 +107,26 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string,
     options?: { currentCollectionId?: string }
   ): Promise<void> {
-    // A name that collides with a system resource's permissions may not be
-    // used as a Schema-Builder collection slug, on create or rename. This
-    // registry does not go through `assertGlobalResourceSlugAvailable`, so the
-    // check lives here as well.
-    if (isReservedResourceSlug(slug)) {
+    const existingCollection = await this.db
+      .select({ id: this.dynamicCollections.id })
+      .from(this.dynamicCollections)
+      .where(eq(this.dynamicCollections.slug, slug))
+      .limit(1);
+
+    // True when this exact slug is already owned by the collection being
+    // updated (a no-op slug on a metadata/field/status change), as opposed to a
+    // create or a rename onto another collection's slug.
+    const ownedByCurrentCollection =
+      existingCollection.length > 0 &&
+      existingCollection[0]?.id === options?.currentCollectionId;
+
+    // A name that collides with a system resource's permissions may not be used
+    // as a Schema-Builder collection slug on create or rename. A collection that
+    // already owns this exact slug (created before the name became reserved) is
+    // grandfathered so its metadata stays editable — rejecting a no-op save
+    // would strand it. This mirrors `assertGlobalResourceSlugAvailable`, which
+    // this registry does not go through, so the check lives here as well.
+    if (isReservedResourceSlug(slug) && !ownedByCurrentCollection) {
       throw NextlyError.validation({
         errors: [
           {
@@ -124,12 +139,6 @@ export class DynamicCollectionRegistryService extends BaseService {
         logContext: { reason: "system-resource-slug", slug },
       });
     }
-
-    const existingCollection = await this.db
-      .select({ id: this.dynamicCollections.id })
-      .from(this.dynamicCollections)
-      .where(eq(this.dynamicCollections.slug, slug))
-      .limit(1);
 
     if (
       existingCollection.length > 0 &&
