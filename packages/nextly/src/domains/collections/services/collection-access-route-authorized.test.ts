@@ -478,6 +478,53 @@ describe("getOwnerConstraint — scoped API key", () => {
   });
 });
 
+describe("checkCollectionAccess — deferStoredRuleEval", () => {
+  it("skips the docless stored-rule eval when deferred (no cached denial)", async () => {
+    const { service, accessControlService } = buildAccessService();
+    // A document-dependent rule (e.g. custom) that would deny on absent data.
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "custom denied on missing data",
+    });
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      user,
+      undefined,
+      undefined,
+      false, // overrideAccess
+      false, // routeAuthorized
+      undefined, // authenticatedScope
+      true // deferStoredRuleEval
+    );
+    // The RBAC gate still ran (mock allows); the stored rule is left for the
+    // under-lock recheck, so it is NOT evaluated docless here.
+    expect(result).toBeNull();
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
+  it("evaluates the stored rule when not deferred (denies)", async () => {
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "denied",
+    });
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      user,
+      undefined,
+      undefined,
+      false,
+      false,
+      undefined,
+      false // deferStoredRuleEval
+    );
+    expect(result?.statusCode).toBe(403);
+    expect(accessControlService.evaluateAccess).toHaveBeenCalled();
+  });
+});
+
 describe("resolveTransitionDocumentRule — owner-only transition pre-resolve", () => {
   const ownerOnlyPublish = {
     accessRules: { publish: { type: "owner-only" } },
