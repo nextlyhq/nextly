@@ -691,6 +691,15 @@ export abstract class DrizzleAdapter {
           query = query.offset(options.offset);
         }
 
+        // Row-lock the selected rows for the rest of the transaction and read the
+        // latest committed values (not the transaction's snapshot). SQLite has no
+        // FOR UPDATE and needs none (BEGIN IMMEDIATE serializes its writers), so
+        // it is skipped there. Requires an executor to be meaningful — a lock on
+        // the pooled connection would be released immediately.
+        if (options?.forUpdate && this.dialect !== "sqlite") {
+          query = query.for("update");
+        }
+
         return (await query) as T[];
       } catch (error) {
         throw this.handleQueryError(error, "select", table);
