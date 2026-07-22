@@ -257,11 +257,16 @@ export class CollectionMutationService extends BaseService {
    * inside a component and their values would ship in the event payload.
    */
   private async webhookFieldTree(
-    fields: readonly SensitiveFieldSource[]
+    fields: readonly SensitiveFieldSource[],
+    // Executor to resolve component schemas on. When called inside an open
+    // transaction, pass `tx.getDrizzle()`: resolving on the default pooled
+    // connection would take a second connection while the tx holds one and can
+    // starve a small pool. Omit it (the default) when no transaction is open.
+    executor?: unknown
   ): Promise<SensitiveFieldSource[]> {
     const dataService = this.componentDataService;
     return expandComponentFields(fields, async slug =>
-      dataService ? await dataService.getComponentFields(slug) : null
+      dataService ? await dataService.getComponentFields(slug, executor) : null
     );
   }
 
@@ -4432,13 +4437,34 @@ export class CollectionMutationService extends BaseService {
         collection.fields ||
         []) as FieldDefinition[];
 
+      // Lock and re-read the committed row before snapshotting it: `entry` above
+      // was read before the hooks ran, so a concurrent update could otherwise
+      // make the event describe values other than the row this delete removes.
+      // The adapter no-ops the lock where row locking is unavailable (SQLite,
+      // itself serialized).
+      await tx.lockRow(tableName, params.entryId);
+      const freshEntry = await tx.selectOne<Record<string, unknown>>(
+        tableName,
+        {
+          where: this.whereEq("id", params.entryId),
+        }
+      );
+      if (!freshEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+
       // Assemble the removed document before the cascade removes its relations,
       // in the read shape create/update events use.
       const deletedDocument = await this.buildDeletedDocument(tx, {
         collectionName: params.collectionName,
         entryId: params.entryId,
         tableName,
-        row: entry,
+        row: freshEntry,
         fields: snapshotFields,
         locale: this.localization?.defaultLocale,
       });
@@ -4469,7 +4495,8 @@ export class CollectionMutationService extends BaseService {
 
       // Append the outbox event in the same transaction so a delete performed
       // through this helper (batch/cascade/internal) is observable too, in the
-      // same shape as the single-delete path.
+      // same shape as the single-delete path. Resolve component schemas on this
+      // transaction's connection to avoid taking a second pooled connection.
       await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
@@ -4479,7 +4506,7 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTree(snapshotFields),
+        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
         actor: actorForWrite(params.actor, params.user),
       });
 
@@ -5486,13 +5513,34 @@ export class CollectionMutationService extends BaseService {
         collection.fields ||
         []) as FieldDefinition[];
 
+      // Lock and re-read the committed row before snapshotting it: `entry` above
+      // was read before the hooks ran, so a concurrent update could otherwise
+      // make the event describe values other than the row this delete removes.
+      // The adapter no-ops the lock where row locking is unavailable (SQLite,
+      // itself serialized).
+      await tx.lockRow(tableName, entryId);
+      const freshEntry = await tx.selectOne<Record<string, unknown>>(
+        tableName,
+        {
+          where: this.whereEq("id", entryId),
+        }
+      );
+      if (!freshEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: `Entry not found: ${entryId}`,
+          data: null,
+        };
+      }
+
       // Assemble the removed document before the cascade removes its relations,
       // in the read shape create/update events use.
       const deletedDocument = await this.buildDeletedDocument(tx, {
         collectionName: params.collectionName,
         entryId,
         tableName,
-        row: entry,
+        row: freshEntry,
         fields: snapshotFields,
         locale: this.localization?.defaultLocale,
       });
@@ -5523,7 +5571,8 @@ export class CollectionMutationService extends BaseService {
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
-      // single-delete path.
+      // single-delete path. Resolve component schemas on this transaction's
+      // connection to avoid taking a second pooled connection.
       await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
@@ -5533,7 +5582,7 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTree(snapshotFields),
+        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
         actor: actorForWrite(params.actor, params.user),
       });
 
