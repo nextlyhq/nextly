@@ -526,6 +526,19 @@ describe("resolveTransitionDocumentRule — owner-only transition pre-resolve", 
       )
     ).toBeNull();
   });
+
+  it("returns the rules for a custom publish rule (may inspect the document)", () => {
+    const { service } = buildAccessService();
+    const resolved = service.resolveTransitionDocumentRule(
+      {
+        accessRules: { publish: { type: "custom", functionPath: "./fn" } },
+      } as Record<string, unknown>,
+      user
+    );
+    // A custom rule can key off id/data, so it must be re-judged under the lock.
+    expect(resolved).not.toBeNull();
+    expect(resolved?.accessRules.publish?.type).toBe("custom");
+  });
 });
 
 describe("evaluateTransitionDocumentRule — owner-only against a locked row", () => {
@@ -569,5 +582,30 @@ describe("evaluateTransitionDocumentRule — owner-only against a locked row", (
       { id: "doc-1", created_by: "user-1" }
     );
     expect(result).toBeNull();
+  });
+
+  it("re-judges a custom rule against the locked row, forwarding its id", async () => {
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "custom denied",
+    });
+    const result = await service.evaluateTransitionDocumentRule(
+      { publish: { type: "custom", functionPath: "./fn" } },
+      "publish",
+      user,
+      { id: "doc-1", title: "hello" }
+    );
+    expect(result?.statusCode).toBe(403);
+    // The locked row's id and full data reach the custom evaluator, so a
+    // row-dependent rule sees the real document instead of the docless default.
+    expect(accessControlService.evaluateAccess).toHaveBeenCalledWith(
+      { publish: { type: "custom", functionPath: "./fn" } },
+      "publish",
+      expect.anything(),
+      "doc-1",
+      { id: "doc-1", title: "hello" },
+      expect.anything()
+    );
   });
 });
