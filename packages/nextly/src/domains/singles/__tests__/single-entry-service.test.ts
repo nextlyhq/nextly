@@ -888,4 +888,137 @@ describe("SingleEntryService", () => {
       expect(result.message).toBe("db exploded");
     });
   });
+
+  // ============================================================
+  // update() — publish-transition access
+  // ============================================================
+
+  describe("update — publish transition access", () => {
+    // A single with the draft/published lifecycle enabled. RBAC allows update
+    // but denies the named lifecycle op, so only the transition gate can fail.
+    const lifecycleCtx = (deny: "publish" | "unpublish") => {
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle(
+        "site-settings",
+        siteSettingsMeta({ status: true })
+      );
+      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
+        Promise.resolve(args.operation !== deny)
+      );
+      ctx.adapter.update.mockResolvedValue([
+        { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
+      ]);
+      return ctx;
+    };
+
+    it("denies a draft→published update without publish permission", async () => {
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("denies unpublishing without the unpublish permission", async () => {
+      const ctx = lifecycleCtx("unpublish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "published",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "draft" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("gates a publish derived by a beforeUpdate hook, not just the body", async () => {
+      // Secure-by-result: a hook the caller cannot see derives published from a
+      // body that omits status; the publish permission is still required.
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.hookRegistry.hasHooks.mockImplementation(
+        (phase: string) => phase === "beforeUpdate"
+      );
+      ctx.hookRegistry.execute.mockResolvedValue({ status: "published" });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "Body omits status" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("does not gate a status change when the single has no lifecycle", async () => {
+      // No `status: true` on the single → `status` is an ordinary field, so the
+      // publish permission is never consulted.
+      const ctx = createCtx({ withRbac: true });
+      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
+        Promise.resolve(args.operation !== "publish")
+      );
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.adapter.update.mockResolvedValue([
+        { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
+      ]);
+
+      await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      const publishConsulted = ctx.rbac.checkAccess.mock.calls.some(
+        ([args]: [{ operation: string }]) => args.operation === "publish"
+      );
+      expect(publishConsulted).toBe(false);
+    });
+
+    it("bypasses the transition gate under overrideAccess", async () => {
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { overrideAccess: true }
+      );
+
+      expect(result.statusCode).not.toBe(403);
+    });
+  });
 });

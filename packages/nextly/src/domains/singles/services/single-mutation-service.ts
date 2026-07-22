@@ -20,12 +20,14 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { and, eq } from "drizzle-orm";
 
 import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { resolvePublishTransition } from "../../../lib/status-transition";
 import { AccessControlService } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -347,6 +349,69 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
       });
+
+      // 6.35. Authorize a change to the single's published state, judged on the
+      // post-hook data. Publishing needs `publish-<slug>` and unpublishing
+      // `unpublish-<slug>`, on top of update — editing and publishing are
+      // separate capabilities, mirroring the collection write path. A write
+      // targeting a non-default locale publishes through that locale's companion
+      // `_status` (only when a string status was provided) and does not move the
+      // main row, so it is gated against the companion's prior status; a
+      // default-locale or non-localized write moves the main-row status. The gate
+      // no-ops when the single has no draft/published lifecycle, and a trusted
+      // write bypasses it (so the companion read that only feeds it is skipped).
+      const singleHasStatus =
+        (singleMeta as { status?: boolean }).status === true;
+      if (singleHasStatus && !options.overrideAccess) {
+        const isNonDefaultLocaleStatusWrite =
+          companion?.hasStatus === true &&
+          writeLocale !== undefined &&
+          writeLocale !== this.localization?.defaultLocale;
+        const finalStatus = (currentData as { status?: unknown }).status;
+        // The split persists a companion `_status` only for a string status;
+        // otherwise this locale's stored status is unchanged and there is no
+        // transition to authorize (and no reason to read the prior status).
+        const persistsCompanionStatus =
+          isNonDefaultLocaleStatusWrite && typeof finalStatus === "string";
+        const transitionNextStatus = isNonDefaultLocaleStatusWrite
+          ? persistsCompanionStatus
+            ? finalStatus
+            : undefined
+          : finalStatus;
+        const transitionPreviousStatus = persistsCompanionStatus
+          ? await this.readCompanionStatusPooled(
+              companion,
+              existingDoc.id,
+              writeLocale
+            )
+          : (((existingDoc as { status?: unknown }).status as
+              | string
+              | undefined) ?? null);
+        const transitionOp = resolvePublishTransition(
+          transitionPreviousStatus,
+          transitionNextStatus
+        );
+        if (transitionOp) {
+          const transitionDenied = await checkSingleAccess({
+            slug,
+            operation: transitionOp,
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            // NOT route-authorized: the route authorizes a Single write as
+            // `update`, never as `publish`/`unpublish`, so the RBAC check for the
+            // transition permission must actually run.
+            routeAuthorized: false,
+            rbacAccessControlService: this.rbacAccessControlService,
+            accessControlService: this.accessControlService,
+            accessRules: singleMeta.accessRules,
+            document: existingDoc ?? undefined,
+            logger: this.logger,
+          });
+          if (transitionDenied) {
+            return transitionDenied;
+          }
+        }
+      }
 
       // 6.4. Extract component field data (stored in separate comp_{slug}
       // tables) AFTER the access/hooks/validation pipeline above has seen
@@ -801,5 +866,43 @@ export class SingleMutationService extends BaseService {
       this.logger.error("Failed to update Single document", { slug, error });
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
+  }
+
+  /**
+   * The write locale's committed per-locale `_status`, read on the pooled
+   * connection for the publish-transition gate (which runs before the write
+   * transaction opens).
+   *
+   * The companion `_locales` table is a runtime Drizzle table object rather than
+   * part of the static schema, so its columns are reached off the object built
+   * by `buildCompanionSchema` — the same way `populateCompanionFields` queries
+   * it. `(_parent, _locale)` is the companion primary key, so the lookup returns
+   * at most one row.
+   */
+  private async readCompanionStatusPooled(
+    companion: { table: unknown },
+    parentId: string,
+    locale: string
+  ): Promise<string | null> {
+    const table = companion.table as Record<string, unknown>;
+    const drizzle = this.adapter.getDrizzle<{
+      select: () => {
+        from: (t: unknown) => {
+          where: (c: unknown) => Promise<Record<string, unknown>[]>;
+        };
+      };
+    }>();
+    const rows = (await drizzle
+      .select()
+      .from(companion.table)
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale)
+        )
+      )) as { _status?: unknown }[];
+
+    const status = rows[0]?._status;
+    return typeof status === "string" ? status : null;
   }
 }
