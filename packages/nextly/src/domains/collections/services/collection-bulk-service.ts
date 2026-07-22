@@ -88,7 +88,16 @@ function legacyEnvelopeToFailureFields(result: {
  */
 type PerItemOutcome<T> =
   | { kind: "success"; record: T }
-  | { kind: "failure"; failure: { id: string; code: string; message: string } };
+  | {
+      kind: "failure";
+      failure: { id: string; code: string; message: string };
+      /**
+       * Set when the item committed its row + outbox event but a post-commit
+       * hook then threw, so it is reported as a failure yet still owes a
+       * delivery. Aggregated into the batch result's `eventRecorded`.
+       */
+      eventRecorded?: boolean;
+    };
 
 /**
  * Build a canonical per-item failure entry from a thrown error.
@@ -148,6 +157,9 @@ function partitionOutcomes<T>(
       } else {
         result.failures.push(value.failure);
         result.failedCount++;
+        // A "failure" that still committed its outbox event (a post-commit hook
+        // threw) owes a delivery even though it is not a success.
+        if (value.eventRecorded) result.eventRecorded = true;
       }
     } else {
       // Per-item closure rejected unexpectedly. Defensive: report as
@@ -352,6 +364,9 @@ export class CollectionBulkService extends BaseService {
             return {
               kind: "failure",
               failure: { id: entryId, code, message },
+              // A delete that committed its row + event but failed a post-commit
+              // hook still owes a delivery.
+              eventRecorded: deleteResult.eventRecorded,
             };
           } catch (error: unknown) {
             // NextlyError thrown from below the boundary: preserve its code +
@@ -432,6 +447,9 @@ export class CollectionBulkService extends BaseService {
             return {
               kind: "failure",
               failure: { id: entryId, code, message },
+              // An update that committed its row + event but failed a post-commit
+              // hook still owes a delivery.
+              eventRecorded: updateResult.eventRecorded,
             };
           } catch (error: unknown) {
             return {

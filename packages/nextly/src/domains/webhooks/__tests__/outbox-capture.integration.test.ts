@@ -133,6 +133,49 @@ describe("webhook outbox capture (integration)", () => {
     expect(rows[0].type).toBe("entry.created");
   });
 
+  it("flags eventRecorded on a bulk result when a committed item's hook throws", async () => {
+    // A bulk delete runs each item through the per-item mutation, which commits
+    // the row + event and then runs afterDelete. A throwing hook makes that item
+    // a failure (successCount stays 0), but the event is durable — so the bulk
+    // result must still report eventRecorded, or the batch would skip the drain.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    current.hooks.register("afterDelete", "posts", () => {
+      throw new Error("afterDelete observer failed");
+    });
+
+    const result = await handler.bulkDeleteEntries({
+      collectionName: "posts",
+      ids: [id],
+      overrideAccess: true,
+    });
+
+    // The item is counted a failure, yet the delete + event committed.
+    expect(result.successCount).toBe(0);
+    expect(result.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows.map(r => r.type).sort()).toEqual([
+      "entry.created",
+      "entry.deleted",
+    ]);
+  });
+
   it("records the event for a versioned collection too (one assembly, both consumers)", async () => {
     current = await createTestNextly({
       collections: [

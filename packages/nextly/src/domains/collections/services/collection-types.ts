@@ -98,6 +98,15 @@ export interface BulkOperationResult<T = { id: string }> {
   successCount: number;
   /** Count of failed operations. */
   failedCount: number;
+  /**
+   * Whether any item appended a durable outbox event, independent of
+   * `successCount`. A per-item write can commit its row + event and still be
+   * counted a failure when a post-commit hook throws (it returns
+   * `success: false`), so a batch where every committed item hit that path has
+   * `successCount === 0` yet owes deliveries. Post-write side effects key off
+   * this so those events still get the immediate drain.
+   */
+  eventRecorded?: boolean;
 }
 
 /**

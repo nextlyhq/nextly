@@ -1821,10 +1821,11 @@ export class CollectionMutationService extends BaseService {
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
-        // The event commits with the entry; from here a post-commit hook failure
-        // must not hide that a delivery is owed.
-        eventRecorded = true;
       });
+      // Set only after the transaction resolves (this line is skipped if it
+      // rejected), so a commit failure never flags a durable event that isn't
+      // there; from here a post-commit hook failure must not hide the delivery.
+      eventRecorded = true;
 
       // Execute afterCreate hooks (code-registered)
       // Hooks run after database insert completes (for side effects)
@@ -2749,8 +2750,13 @@ export class CollectionMutationService extends BaseService {
       // by the per-locale status event below. Re-read inside each attempt (like
       // committedPreviousStatus) so a retry reports the true prior state.
       let localizedPreviousStatus: string | null = null;
+      // Reset at the start of each attempt and read back only after the retry
+      // resolves, so a rolled-back attempt (a version conflict) or a commit
+      // failure never flags a durable event that isn't there.
+      let recorded = false;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          recorded = false;
           const updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
@@ -3166,13 +3172,14 @@ export class CollectionMutationService extends BaseService {
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
-              // The event commits with the update; a later hook failure must not
-              // hide that a delivery is owed.
-              eventRecorded = true;
+              recorded = true;
             }
           }
         })
       );
+      // The transaction committed (skipped if the retry ultimately threw), so
+      // the event is durable; a later hook failure must not hide the delivery.
+      eventRecorded = recorded;
 
       // Fetch the updated entry to return it and use in hooks
       const [updated] = await this.db
@@ -3582,10 +3589,11 @@ export class CollectionMutationService extends BaseService {
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
-        // The delete + event commit together; a later hook failure must not
-        // hide that a delivery is owed.
-        eventRecorded = true;
       });
+      // Set only after the transaction resolves: `deletedRow` is true exactly
+      // when the delete + event committed, so a commit failure never flags a
+      // durable event that isn't there; a later hook failure must not hide it.
+      eventRecorded = deletedRow;
 
       // A concurrent delete removed the row first: report not-found rather than
       // a second success (and a duplicate event) for a deletion this call did
