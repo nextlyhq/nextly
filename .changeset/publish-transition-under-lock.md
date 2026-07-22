@@ -29,5 +29,7 @@ lock, so a concurrent writer could move the row into or out of published in that
 window and the write would slip the transition past the gate. Batch and
 transactional writes now resolve the caller's publish/unpublish authorization
 once before the transaction and enforce it against the status read under the row
-lock, closing the race. A scoped API key running a bulk update or duplicate is
-also judged on its own publish grant, matching the single-write path.
+lock, closing the race. A scoped API key is also judged on its own grant across
+the remaining write surfaces — bulk update, duplicate, delete, and version-label
+edits — so a super-admin-owned key cannot use those paths to bypass the key's
+scope or the collection's stored owner/role rules.
