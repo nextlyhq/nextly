@@ -392,10 +392,22 @@ export class CollectionAccessService extends BaseService {
     collectionName: string,
     operation: AccessOperation,
     user?: UserContext,
-    overrideAccess?: boolean
+    overrideAccess?: boolean,
+    // The caller's authenticated scope. A scoped API key is judged on its OWN
+    // grant, so the session super-admin bypass does not lift the owner predicate
+    // for a super-admin-owned key — mirrors checkCollectionAccess.
+    authenticatedScope?: AuthenticatedScope
   ): Promise<{ field: string; value: string } | null> {
-    // Super-admin bypasses the owner predicate on the transactional paths too.
-    if (overrideAccess || !user || isSuperAdminContext(user)) return null;
+    // Super-admin bypasses the owner predicate on the transactional paths too —
+    // EXCEPT via a scoped API key, which must still obey stored owner rules.
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (
+      overrideAccess ||
+      !user ||
+      (!isScopedApiKey && isSuperAdminContext(user))
+    ) {
+      return null;
+    }
 
     try {
       const collection =
