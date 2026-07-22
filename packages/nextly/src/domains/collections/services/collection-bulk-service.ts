@@ -230,6 +230,9 @@ export class CollectionBulkService extends BaseService {
         overrideAccess: params.overrideAccess,
         status: sourceStatus,
         context: params.context,
+        // Judge the source read on the key's OWN read grant: a create-scoped key
+        // that lacks read must not copy fields from a row it cannot see.
+        authenticatedScope: params.authenticatedScope,
       });
 
       if (!sourceResult.success || !sourceResult.data) {

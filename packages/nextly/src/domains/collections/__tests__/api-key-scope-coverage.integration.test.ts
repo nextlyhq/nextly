@@ -121,4 +121,53 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     });
     expect(sessionCanUpdate).toBe(true);
   });
+
+  it("judges the duplicate source read on the key's own read grant", async () => {
+    // A duplicate copies the source row's fields, so the source must be readable
+    // under the KEY's scope. A super-admin-owned key scoped for create but not
+    // read must not be able to copy from a row it cannot see.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const source = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "source" }
+    );
+    const sourceId = (source.data as { id: string }).id;
+
+    // create-only scope, no read: the source read is judged on the key and
+    // refused (the super-admin bypass is skipped because the scope reaches it).
+    const denied = await handler.duplicateEntry({
+      collectionName: "posts",
+      entryId: sourceId,
+      userId: "admin",
+      userRoles: ["super-admin"],
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["create-posts"],
+      },
+    });
+    expect(denied.success).toBe(false);
+
+    // Adding read to the scope lets the source read pass, and the create
+    // proceeds.
+    const allowed = await handler.duplicateEntry({
+      collectionName: "posts",
+      entryId: sourceId,
+      userId: "admin",
+      userRoles: ["super-admin"],
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["create-posts", "read-posts"],
+      },
+    });
+    expect(allowed.success).toBe(true);
+  });
 });
