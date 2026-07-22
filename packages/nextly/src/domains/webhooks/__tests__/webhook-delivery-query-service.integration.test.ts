@@ -301,8 +301,10 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
         });
         seen.push(...items.map(i => i.id));
       }
-      // Every delivery appears exactly once across the four single-row pages.
-      expect(seen.sort()).toEqual(["da", "db", "dc", "dd"]);
+      // Not just "each appears once": with a shared created_at the id DESC
+      // tiebreaker fixes the exact order, so assert the sequence to pin the
+      // (created_at DESC, id DESC) contract.
+      expect(seen).toEqual(["dd", "dc", "db", "da"]);
     });
 
     it("returns an empty page for an endpoint with no deliveries", async () => {

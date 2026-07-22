@@ -1,4 +1,5 @@
 import { container } from "../../di/container";
+import type { SupportedDialect } from "../../types/database";
 
 // ============================================================================
 // Global API Date/Time Formatting Constants
@@ -204,6 +205,51 @@ export function normalizeDbTimestamp(value: unknown): string | null {
 
   // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(value);
+}
+
+/**
+ * Recover the correct instant from a database timestamp `Date`, across dialects.
+ *
+ * SQLite stores timestamps as epoch integers, so its driver builds a `Date` that
+ * already holds the right instant — it is returned unchanged. Postgres
+ * (`timestamp without time zone`) and MySQL (`datetime`) are naive columns whose
+ * drivers construct a `Date` from the stored calendar fields in the server's
+ * local timezone; that `Date`'s UTC value is therefore shifted by the local
+ * offset. Its calendar fields are reinterpreted as UTC to recover the stored
+ * instant, so later JSON serialization emits the correct time on a non-UTC
+ * server instead of one shifted by the server's timezone.
+ *
+ * Unlike {@link normalizeDbTimestamp} (which assumes every `Date` is naive and
+ * always un-offsets), this is dialect-aware and safe for SQLite.
+ */
+export function dbTimestampToInstant(
+  value: Date,
+  dialect: SupportedDialect
+): Date;
+export function dbTimestampToInstant(
+  value: Date | null,
+  dialect: SupportedDialect
+): Date | null;
+export function dbTimestampToInstant(
+  value: Date | null,
+  dialect: SupportedDialect
+): Date | null {
+  if (value == null) return null;
+  if (Number.isNaN(value.getTime())) return null;
+  // SQLite's epoch-backed Date is already the correct instant.
+  if (dialect === "sqlite") return value;
+  // Postgres/MySQL naive Date: reinterpret its local calendar fields as UTC.
+  return new Date(
+    Date.UTC(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      value.getHours(),
+      value.getMinutes(),
+      value.getSeconds(),
+      value.getMilliseconds()
+    )
+  );
 }
 
 export function normalizeTimestampsInPayload(
