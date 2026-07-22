@@ -576,7 +576,11 @@ export class CollectionBulkService extends BaseService {
       params.collectionName,
       "update",
       params.user,
-      params.overrideAccess
+      params.overrideAccess,
+      // Scope the enumeration too: a super-admin-owned key on an owner-only
+      // collection must enumerate only its own rows, so the response ids, counts,
+      // and limit check never expose rows the owner constraint should hide.
+      params.authenticatedScope
     );
     const updateEnumerationWhere: WhereFilter = updateOwnerConstraint
       ? {
