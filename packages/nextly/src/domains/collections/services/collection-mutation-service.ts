@@ -2483,6 +2483,10 @@ export class CollectionMutationService extends BaseService {
       nextStatus: unknown;
       isCreate: boolean;
       auth: TransitionAuthorization;
+      // The row a create will persist (owner-stamped `created_by` + final
+      // status/data). A create has no prior row to lock, so a deferred
+      // owner-only/custom publish rule is judged against this instead.
+      createDocument?: Record<string, unknown>;
     }
   ): Promise<CollectionServiceResult | null> {
     // No status named in the write: no transition, nothing to enforce.
@@ -2527,17 +2531,21 @@ export class CollectionMutationService extends BaseService {
     const permissionDenied =
       op === "publish" ? args.auth.publishDenied : args.auth.unpublishDenied;
     if (permissionDenied) return permissionDenied;
-    // Then the document-dependent (owner-only) rule against the row-locked
-    // document. Pre-resolved rules + user are carried on `auth`, so this reads no
-    // metadata or permission storage inside the transaction. A create has no
-    // prior row (lockedRow null), and its owner is the creator, so owner-only
-    // allows — the check is skipped there.
-    if (args.auth.documentRule && lockedRow) {
+    // Then the document-dependent (owner-only/custom) rule. Pre-resolved rules +
+    // user are carried on `auth`, so this reads no metadata or permission storage
+    // inside the transaction. For an update it is judged against the row-locked
+    // document; for a create there is no prior row, so it is judged against the
+    // row this create will persist — a deferred owner-only/custom publish rule
+    // must still gate a create that lands directly on published (otherwise a
+    // public create + owner-only publish could anonymously publish, or a custom
+    // publish rule returning false would be skipped on creates).
+    const documentForRule = lockedRow ?? args.createDocument ?? null;
+    if (args.auth.documentRule && documentForRule) {
       return this.accessService.evaluateTransitionDocumentRule(
         args.auth.documentRule.accessRules,
         op,
         args.auth.documentRule.user,
-        lockedRow
+        documentForRule
       );
     }
     return null;
@@ -4271,6 +4279,7 @@ export class CollectionMutationService extends BaseService {
         nextStatus: finalData.status,
         isCreate: true,
         auth: transitionAuth,
+        createDocument: entryData,
       });
       if (transitionDenied) {
         return transitionDenied;
@@ -5224,6 +5233,7 @@ export class CollectionMutationService extends BaseService {
         nextStatus: finalData.status,
         isCreate: true,
         auth: transitionAuth,
+        createDocument: entryData,
       });
       if (transitionDenied) {
         return transitionDenied;
