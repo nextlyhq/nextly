@@ -50,6 +50,7 @@ import type { Operation, NextlySchemaSnapshot } from "./diff/types";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
 import {
+  excludeLockedTableStatements,
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
@@ -234,7 +235,6 @@ class DdlExecutionError extends Error {
 // withCapturedStdout. The non-additive enumeration on the fallback path
 // makes "why didn't the fast path trigger?" trivially answerable in support.
 function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
   if (process.env.DEBUG_SCHEMA !== "1") return;
   if (useFastPath) {
     console.debug(
@@ -372,6 +372,97 @@ export function computeJournalScope(
     return { kind: "collection", slug: uiTargetSlug };
   }
   return { kind: "global" };
+}
+
+// Table names owned by code-first config or a plugin (locked in the registry).
+//
+// Pure helper. Test seam: exported.
+export function lockedTableNames(desired: DesiredSchema): Set<string> {
+  const names = new Set<string>();
+  for (const entity of [
+    ...Object.values(desired.collections),
+    ...Object.values(desired.singles),
+    ...Object.values(desired.components),
+  ]) {
+    if (entity.locked && entity.tableName) names.add(entity.tableName);
+  }
+  return names;
+}
+
+// The table an operation targets, or null when it targets none. A rename is
+// judged by its source name — that is the table that already exists and whose
+// ownership therefore decides whether the rename is allowed.
+//
+// Pure helper. Test seam: exported.
+export function operationTargetTable(op: Operation): string | null {
+  switch (op.type) {
+    case "add_table":
+      return op.table.name;
+    case "drop_table":
+      return op.tableName;
+    case "rename_table":
+      return op.fromName;
+    case "add_column":
+    case "drop_column":
+    case "rename_column":
+    case "change_column_type":
+    case "change_column_nullable":
+    case "change_column_default":
+    case "add_index":
+    case "drop_index":
+      return op.tableName;
+    default: {
+      // Exhaustiveness check: a new Operation kind must be classified here.
+      const _exhaustive: never = op;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
+
+// A Schema Builder (UI) save must only change the entity being edited. Any
+// operation targeting a table owned by code-first config or a plugin is
+// dropped: those tables belong to `nextly.config.ts` and its migrations, and
+// reconciling their drift is db:sync's job. Without this, saving one UI
+// collection could silently ALTER (or drop) an unrelated code-first table that
+// merely disagreed with the live database.
+//
+// Pure helper. Test seam: exported.
+export function excludeLockedTableOps(
+  ops: Operation[],
+  desired: DesiredSchema
+): { kept: Operation[]; skipped: Operation[] } {
+  const locked = lockedTableNames(desired);
+  if (locked.size === 0) return { kept: ops, skipped: [] };
+
+  const kept: Operation[] = [];
+  const skipped: Operation[] = [];
+  for (const op of ops) {
+    const table = operationTargetTable(op);
+    if (table !== null && locked.has(table)) skipped.push(op);
+    else kept.push(op);
+  }
+  return { kept, skipped };
+}
+
+function logSkippedLockedOps(skipped: Operation[]): void {
+  if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
+  const tables = [
+    ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
+  ];
+  console.debug(
+    `[nextly] schema apply: skipped ${skipped.length} op(s) on code-first ` +
+      `table(s) not owned by this UI save: ${tables.join(", ")}`
+  );
+}
+
+function logSkippedLockedStatements(skipped: string[]): void {
+  if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
+  console.debug(
+    `[nextly] schema apply: dropped ${skipped.length} emitted statement(s) ` +
+      `targeting code-first table(s) not owned by this UI save: ` +
+      skipped.join("; ")
+  );
 }
 
 // F10 PR 3: bridge the two near-identical scope shapes (the journal-
@@ -617,12 +708,22 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const resolvedOps =
+      const allResolvedOps =
         this.testHooks._resolvedOpsOverride ??
         applyResolutionsToOperations(
           operations,
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
+
+      // A UI save owns only the entity being edited. Drop any operation that
+      // targets a code-first/plugin-owned table so the Schema Builder can never
+      // alter schema the user did not edit. Code-first applies (db:sync) are
+      // the authority for those tables and keep the full operation set.
+      const { kept: resolvedOps, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allResolvedOps, desired)
+          : { kept: allResolvedOps, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
@@ -817,7 +918,6 @@ export class PushSchemaPipeline {
                   dialect === "mysql" ? db : tx,
                   desiredTableNames
                 ),
-              // eslint-disable-next-line turbo/no-undeclared-env-vars
               process.env.DEBUG_SCHEMA === "1"
                 ? { debug: (msg: string) => console.debug(msg) }
                 : undefined
@@ -855,6 +955,12 @@ export class PushSchemaPipeline {
         //     emission the filter handles separately — keeps the
         //     destructive-on-managed guard independent of the filter. `safe`
         //     is still what actually executes.
+        //   - On a UI save, locked tables are removed from the managed set
+        //     rather than the scan being moved after the lock filter. Keeping
+        //     the scan on the raw output preserves the independence above; the
+        //     narrowing is sound because a locked table's statements are
+        //     dropped unconditionally and can never execute, so this apply is
+        //     not the thing that would be destroying them.
         // Rebuild blocks are only trusted for tables where OUR diff
         // approved a rebuild-justifying change — a rebuild on any other
         // table is the kit encoding a column drop we never approved
@@ -869,13 +975,31 @@ export class PushSchemaPipeline {
             )
             .map(op => op.tableName.toLowerCase())
         );
+        // Tables this apply is answerable for. On a UI save the locked ones are
+        // excluded: their statements are dropped below and never execute, so
+        // holding the apply to account for destructive DDL on them would let
+        // pre-existing drift in a code-first table block saving an unrelated
+        // builder-owned entity. Everything still executed stays in scope.
+        const lockedForThisApply =
+          source === "ui" ? lockedTableNames(desired) : new Set<string>();
         const managedTables = new Set(
-          desiredTableNames.map(t => t.toLowerCase())
+          desiredTableNames
+            .map(t => t.toLowerCase())
+            .filter(t => !lockedForThisApply.has(t))
         );
-        const safe = filterUnsafeStatements(
+        const unlocked = filterUnsafeStatements(
           emittedStatements,
           desiredTableNames
         );
+        // Op-level lock filtering covers what this pipeline decided to do, but
+        // drizzle-kit re-derives drift from the full desired schema, so on the
+        // kit path it can still emit DDL for a locked table. Scope reduction
+        // only narrows that on PostgreSQL — SQLite and MySQL ignore
+        // tablesFilter entirely — so the guarantee is enforced here, on the
+        // statements themselves, where it holds for every dialect.
+        const { kept: safe, skipped: skippedLockedStatements } =
+          excludeLockedTableStatements(unlocked, lockedForThisApply);
+        logSkippedLockedStatements(skippedLockedStatements);
         const unexpectedDestructive = findUnexpectedDestructiveStatements(
           emittedStatements,
           allowedRebuildTables,

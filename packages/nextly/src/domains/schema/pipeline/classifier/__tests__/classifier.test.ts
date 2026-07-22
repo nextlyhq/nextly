@@ -437,3 +437,51 @@ describe("RealClassifier — destructive_drop detection", () => {
     ]);
   });
 });
+
+// The widening rule decides whether a type change is safe; these cases pin what
+// the classifier does with that verdict end to end. A numeric-family move on
+// SQLite is lossless (shared affinity), so it must emit no type_change event —
+// otherwise the builder shows a data-loss confirmation for an edit that cannot
+// lose anything. A cross-family move genuinely can lose data and must still
+// warn, which is what stops the fix from silencing SQLite warnings wholesale.
+describe("RealClassifier — SQLite numeric type changes", () => {
+  it("does not warn when a SQLite column moves between numeric types", async () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "comp_address",
+      columnName: "unit_count",
+      fromType: "real",
+      toType: "integer",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "sqlite",
+    });
+    expect(result.events.some(e => e.kind === "type_change")).toBe(false);
+  });
+
+  it("still warns on a SQLite cross-family type change", async () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_posts",
+      columnName: "views",
+      fromType: "text",
+      toType: "integer",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "sqlite",
+    });
+    expect(result.events.some(e => e.kind === "type_change")).toBe(true);
+  });
+});

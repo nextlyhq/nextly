@@ -85,8 +85,8 @@ export interface SelectInputProps<
  * - Accessibility: proper ARIA from Radix UI
  * - Read-only and disabled states with visual feedback
  *
- * Note: This component handles single-value selects only.
- * For hasMany select fields, a separate MultiSelectInput would be needed.
+ * Note: This component handles single-value selects only. hasMany select
+ * fields are rendered by MultiSelectInput (see FieldRenderer).
  *
  * Note: This component renders only the select element.
  * Use FieldWrapper for labels, descriptions, and error display.

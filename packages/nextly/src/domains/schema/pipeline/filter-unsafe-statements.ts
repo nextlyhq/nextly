@@ -192,6 +192,77 @@ export function filterUnsafeStatements(
 }
 
 /**
+ * Statement patterns that name the table they act on directly. Used to decide
+ * which table a statement belongs to when filtering by ownership.
+ *
+ * Identifiers are captured as `[\w-]+` rather than `\w+`: a collection may
+ * declare a custom `dbName` containing hyphens, which the runtime and
+ * `resolveCollectionTableName` both keep verbatim. Capturing only up to the
+ * hyphen would yield a prefix that matches no locked table, so a statement
+ * against `dc_my-table` would slip through the ownership filter entirely.
+ */
+const STATEMENT_TABLE_PATTERNS: ReadonlyArray<RegExp> = [
+  /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^INSERT\s+INTO\s+(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\s+)?ON\s+(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i,
+];
+
+/**
+ * Resolve the table a statement acts on, or `null` when it can't be determined.
+ *
+ * SQLite rebuilds a table by building a `__new_<table>` twin and renaming it
+ * over the original, so a statement naming `__new_dc_posts` is really a
+ * statement about `dc_posts`. Stripping the prefix keeps every step of a
+ * rebuild block attributed to the same table — filtering only some of them
+ * would leave a half-applied rebuild behind.
+ */
+function statementTargetTable(stmt: string): string | null {
+  for (const re of STATEMENT_TABLE_PATTERNS) {
+    const m = stmt.match(re);
+    if (!m?.[1]) continue;
+    return m[1].toLowerCase().replace(/^__new_/, "");
+  }
+  return null;
+}
+
+/**
+ * Drop statements that would modify a table the caller does not own.
+ *
+ * A Schema Builder save must only ever touch the entity being edited. The
+ * pipeline already filters its own operations by lock, but drizzle-kit is
+ * handed the full desired schema and re-derives drift independently, so on
+ * dialects where the kit path runs (SQLite and MySQL always; PostgreSQL when
+ * the emitter can't fast-path) it can still emit DDL for a locked, code-first
+ * or plugin-owned table. This is the backstop that makes the guarantee hold on
+ * every dialect rather than only where scope reduction happens to apply.
+ *
+ * Statements whose table cannot be identified pass through: they are almost
+ * always schema-wide (sequences, enums) and blocking an unrecognized statement
+ * would break applies that are otherwise legitimate. The unsafe-statement
+ * filter remains the guard against destructive emissions.
+ */
+export function excludeLockedTableStatements(
+  statements: string[],
+  lockedTableNames: ReadonlySet<string>
+): { kept: string[]; skipped: string[] } {
+  if (lockedTableNames.size === 0) {
+    return { kept: statements, skipped: [] };
+  }
+  const locked = new Set([...lockedTableNames].map(t => t.toLowerCase()));
+
+  const kept: string[] = [];
+  const skipped: string[] = [];
+  for (const stmt of statements) {
+    const table = statementTargetTable(stmt);
+    if (table !== null && locked.has(table)) skipped.push(stmt);
+    else kept.push(stmt);
+  }
+  return { kept, skipped };
+}
+
+/**
  * Lower-cased names of tables a statement set rebuilds.
  *
  * SQLite cannot alter most of a column in place, so drizzle-kit emits

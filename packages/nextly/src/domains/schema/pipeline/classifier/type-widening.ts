@@ -58,6 +58,16 @@ const MYSQL_TEXT_RANK: Record<string, number> = {
   longtext: 4,
 };
 
+// SQLite declared types that all carry numeric storage (INTEGER, REAL or
+// NUMERIC affinity). Any precision/scale suffix is ignored — SQLite has no
+// fixed-precision decimal type.
+const SQLITE_NUMERIC_TYPE_RE =
+  /^(int|integer|tinyint|smallint|mediumint|bigint|real|float|double(\s+precision)?|numeric|decimal)$/;
+
+function isSqliteNumericType(type: string): boolean {
+  return SQLITE_NUMERIC_TYPE_RE.test(type.replace(/\(.*\)$/, "").trim());
+}
+
 function widensVarchar(from: string, to: string): boolean | null {
   const fm = VARCHAR_RE.exec(from);
   const tm = VARCHAR_RE.exec(to);
@@ -74,9 +84,14 @@ export function isWideningChange(
   const to = toType.toLowerCase().trim();
   if (from === to) return true;
 
-  // SQLite is storage-class only. Same storage class is widening (handled
-  // above by from===to); cross-class is destructive.
-  if (dialect === "sqlite") return false;
+  // SQLite is storage-class only and cannot ALTER a column's declared type in
+  // place. Moving between numeric declared types keeps the stored values —
+  // each value retains its storage class, and INTEGER affinity converts only
+  // when the conversion is lossless — so it must not raise a destructive
+  // warning. Cross-family changes (text -> integer, blob -> real) still do.
+  if (dialect === "sqlite") {
+    return isSqliteNumericType(from) && isSqliteNumericType(to);
+  }
 
   // varchar(N) -> varchar(M) widens when M >= N
   const vw = widensVarchar(from, to);
