@@ -407,6 +407,8 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       where: WhereFilter;
       user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
       overrideAccess?: boolean;
       context?: Record<string, unknown>;
     },

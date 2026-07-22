@@ -800,6 +800,8 @@ export class CollectionsHandler {
       where: WhereFilter;
       /** User context for access control */
       user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**
