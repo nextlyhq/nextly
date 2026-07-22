@@ -15,7 +15,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike } from "drizzle-orm";
+import { eq, ne, and, like, ilike, type Column } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -730,7 +730,7 @@ export class CollectionMutationService extends BaseService {
       await this.fileManager.loadCompanionSchema(collectionName);
     if (!companion?.hasStatus) return null;
 
-    const table = companion.table as Record<string, unknown>;
+    const table = companion.table as Record<string, Column>;
     const rows = (await (
       this.db as unknown as {
         select: () => {
@@ -742,12 +742,9 @@ export class CollectionMutationService extends BaseService {
     )
       .select()
       .from(companion.table)
-      .where(
-        and(
-          eq(table._parent as never, entryId),
-          eq(table._locale as never, locale)
-        )
-      )) as { _status?: unknown }[];
+      .where(and(eq(table._parent, entryId), eq(table._locale, locale)))) as {
+      _status?: unknown;
+    }[];
 
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
