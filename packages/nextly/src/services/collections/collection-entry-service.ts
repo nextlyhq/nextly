@@ -270,7 +270,7 @@ export class CollectionEntryService extends BaseService {
         ? result.success || result.eventRecorded === true
         : "successCount" in result
           ? result.successCount > 0 || result.eventRecorded === true
-          : result.successful > 0;
+          : result.successful > 0 || result.eventRecorded === true;
     if (recorded) await this.afterWrite();
   }
 
