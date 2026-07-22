@@ -189,9 +189,13 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // Super-admins bypass the stored rules on every transport, keyed on the
-  // authorized role set (never the account id).
-  if (isSuperAdminContext(user)) {
+  // Super-admins bypass the stored rules on every transport — EXCEPT via a
+  // scoped API key. The bypass belongs to the session path: a key is
+  // authoritative on its OWN stamped scope, never on the owner's roles, so a
+  // read/update-only key issued by an admin is not equivalent to their full
+  // account (mirrors canReadEntity). Otherwise a super-admin-owned, update-only
+  // key could publish.
+  if (authenticatedScope?.actorType !== "apiKey" && isSuperAdminContext(user)) {
     return null;
   }
 

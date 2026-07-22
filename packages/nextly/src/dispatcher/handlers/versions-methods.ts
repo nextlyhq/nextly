@@ -30,6 +30,7 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
 /** Page size when the caller does not ask for one. */
@@ -465,5 +466,8 @@ export async function restoreVersionForDocument(
     // Forwarded so an API-key restore is attributed to the key on the outbox
     // event rather than to the person who owns it.
     ...(args.actor ? { actor: args.actor } : {}),
+    // The publish gate a restore-to-published triggers must judge the key's own
+    // scope, not the owner's RBAC.
+    authenticatedScope: readAuthenticatedScope(args.params),
   });
 }

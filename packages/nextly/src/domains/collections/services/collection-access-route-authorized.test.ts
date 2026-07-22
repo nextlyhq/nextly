@@ -325,6 +325,25 @@ describe("checkCollectionAccess — scoped API key", () => {
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
+  it("does not let a super-admin-owned key bypass its scope for publish", async () => {
+    const { service } = buildAccessService();
+    // The key's resolved role set carries super-admin (from its owner), but the
+    // session super-admin bypass must NOT apply to a scoped key — otherwise an
+    // update-only key issued by an admin could publish.
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      { id: "admin-1", roles: ["super-admin"] },
+      "doc-1",
+      { id: "doc-1" },
+      false,
+      false,
+      { actorType: "apiKey", permissions: ["update-posts"] }
+    );
+
+    expect(result?.statusCode).toBe(403);
+  });
+
   it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
     const { service, rbac } = buildAccessService();
     // The key HAS publish-posts, but the collection's code-defined

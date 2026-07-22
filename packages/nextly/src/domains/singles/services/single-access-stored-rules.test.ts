@@ -273,6 +273,28 @@ describe("checkSingleAccess — scoped API key", () => {
     expect(rbacAccessControlService.checkAccess).not.toHaveBeenCalled();
   });
 
+  it("does not let a super-admin-owned key bypass its scope for publish", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      // The key's resolved role set carries super-admin, but a scoped key must
+      // not get the session super-admin bypass.
+      user: { id: "admin-1", roles: ["super-admin"] },
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: rbacAccessControlService as never,
+      authenticatedScope: { actorType: "apiKey", permissions: ["update-site"] },
+      accessControlService: accessControlService as never,
+      accessRules: undefined,
+      logger: silentLogger,
+    });
+
+    expect(result?.statusCode).toBe(403);
+  });
+
   it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
     const { accessControlService, rbacAccessControlService } = makeDeps();
     accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
