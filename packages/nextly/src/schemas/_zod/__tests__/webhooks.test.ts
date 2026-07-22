@@ -58,6 +58,22 @@ describe("CreateWebhookSchema", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("accepts the wildcard on its own (all-and-future subscription)", () => {
+    expect(
+      CreateWebhookSchema.safeParse({ ...valid, eventTypes: ["*"] }).success
+    ).toBe(true);
+  });
+
+  it("rejects the wildcard combined with specific types", () => {
+    // The wildcard already covers every type, so a mix is contradictory rather
+    // than additive; the UI offers all-or-select, never both.
+    const parsed = CreateWebhookSchema.safeParse({
+      ...valid,
+      eventTypes: ["*", "entry.created"],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   describe("headers delivery owns", () => {
     it.each([
       ["webhook-signature"],

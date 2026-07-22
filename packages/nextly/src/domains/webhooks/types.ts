@@ -52,8 +52,25 @@ export const WEBHOOK_EVENT_TYPES = [
  */
 export const REDACTED_HEADER_VALUE = "<redacted>";
 
+/**
+ * Wildcard subscription token. An endpoint subscribed to this receives every
+ * event type, including types added in future versions — so a "subscribe to
+ * all" endpoint keeps working as the catalog grows, without a config edit. It
+ * is a subscription concept only; the finer `FilterSpec` never uses it.
+ */
+export const WEBHOOK_EVENT_WILDCARD = "*";
+
 /** A canonical webhook event type. */
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+
+/**
+ * What an endpoint can subscribe to: a specific event type or the wildcard
+ * (all-and-future). Distinct from {@link WebhookEventType} because only the
+ * subscription list accepts the wildcard.
+ */
+export type WebhookEventSubscription =
+  | WebhookEventType
+  | typeof WEBHOOK_EVENT_WILDCARD;
 
 /** Resource families an event can be about. */
 export type WebhookResourceKind =
@@ -162,8 +179,8 @@ export interface WebhookEndpoint {
   name: string;
   url: string;
   enabled: boolean;
-  /** Subscribed event types. */
-  eventTypes: WebhookEventType[];
+  /** Subscribed event types, or the wildcard for all-and-future. */
+  eventTypes: WebhookEventSubscription[];
   /** Structured filter, or null for "match every subscribed type". */
   filter: FilterSpec | null;
   /** Static request headers merged into every delivery. */

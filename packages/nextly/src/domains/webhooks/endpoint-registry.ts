@@ -10,7 +10,12 @@
  * @module domains/webhooks/endpoint-registry
  */
 
-import type { FilterSpec, WebhookEndpoint, WebhookEventType } from "./types";
+import type {
+  FilterSpec,
+  WebhookEndpoint,
+  WebhookEventSubscription,
+  WebhookEventType,
+} from "./types";
 
 /**
  * Normalize a stored filter so a malformed value can't throw during matching.
@@ -61,7 +66,7 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
     url: row.url as string,
     enabled: Boolean(row.enabled),
     eventTypes: Array.isArray(row.eventTypes)
-      ? (row.eventTypes as WebhookEventType[])
+      ? (row.eventTypes as WebhookEventSubscription[])
       : [],
     filter: normalizeFilter(row.filter),
     headers: (row.headers as Record<string, string> | null) ?? null,
