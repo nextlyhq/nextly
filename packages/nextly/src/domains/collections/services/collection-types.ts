@@ -22,6 +22,16 @@ export interface CollectionServiceResult<T = unknown> {
    * canonical VALIDATION_ERROR envelope with field paths intact.
    */
   errors?: Array<{ path: string; code: string; message: string }>;
+  /**
+   * Whether this write appended a durable outbox event, independent of
+   * `success`. A create/update/delete records the event inside its transaction,
+   * then runs post-commit hooks: if one of those hooks throws, the write is
+   * already committed but `success` is reported `false`. Post-write side effects
+   * (the webhook fast-drain and retention pass) key off this flag, not `success`,
+   * so a committed-but-hook-failed write still gets its immediate delivery while
+   * a write that recorded nothing (validation/access failure) does not.
+   */
+  eventRecorded?: boolean;
 }
 
 /**

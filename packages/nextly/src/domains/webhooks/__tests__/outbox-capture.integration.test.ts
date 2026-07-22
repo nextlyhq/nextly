@@ -99,6 +99,40 @@ describe("webhook outbox capture (integration)", () => {
     });
   });
 
+  it("flags eventRecorded when the write commits but a post-commit hook throws", async () => {
+    // The event is appended inside the write transaction; afterCreate hooks run
+    // after it commits. A throwing hook surfaces success:false on an already
+    // committed write, so the result must still report `eventRecorded` — that is
+    // the signal the fast drain + retention key off, not `success`.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    current.hooks.register("afterCreate", "posts", () => {
+      throw new Error("afterCreate observer failed");
+    });
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+
+    // The hook failure is surfaced, but the entry + event committed.
+    expect(created.success).toBe(false);
+    expect(created.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("entry.created");
+  });
+
   it("records the event for a versioned collection too (one assembly, both consumers)", async () => {
     current = await createTestNextly({
       collections: [
