@@ -177,6 +177,32 @@ describe("WebhookFastDrainScheduler (real SQLite)", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("coalesces concurrent drains so an event is delivered once, not per write", async () => {
+    await seedWebhook("wh1");
+    await seedEvent("evt_d");
+    const { transport, calls } = makeTransport();
+    const { after, scheduled } = captureAfter();
+
+    const scheduler = new WebhookFastDrainScheduler(
+      adapter,
+      new WebhookEndpointRegistry(adapter),
+      undefined,
+      () => after,
+      drainOptions(transport)
+    );
+
+    // Two writes each schedule a drain callback.
+    scheduler.offer();
+    scheduler.offer();
+    expect(scheduled).toHaveLength(2);
+
+    // Run both callbacks concurrently: the second must fold into the first via
+    // the single-flight guard rather than run a racing drain, so the one seeded
+    // event is delivered exactly once.
+    await Promise.all([scheduled[0](), scheduled[1]()]);
+    expect(calls).toEqual(["https://example.com/wh1"]);
+  });
+
   it("does not schedule when after() is unavailable (non-Next runtime)", async () => {
     await seedWebhook("wh1");
     await seedEvent("evt_c");

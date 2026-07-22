@@ -76,13 +76,23 @@ const FAST_PATH_DRAIN_OPTIONS: RunWebhookDrainOptions = {
  * Schedules an immediate, bounded drain after a content write's response, when
  * the runtime supports `after()`. The subscriber check runs inside the scheduled
  * callback (after the response is sent), never in the write path, so a write is
- * never delayed by a registry read. Stateless beyond the resolved `after`
- * reference, so a single instance is shared across every write path.
+ * never delayed by a registry read. A single instance is shared across every
+ * write path; it holds only a single-flight flag so concurrent writes in one
+ * process coalesce into one drain instead of racing.
  */
 export class WebhookFastDrainScheduler {
   // Resolved once on first use; an instance field (not module scope) so a test
   // with its own injected loader is not shadowed by an earlier resolution.
   private cachedAfter: AfterFn | null | undefined;
+
+  // Single-flight: at most one fast drain runs in this process at a time. A write
+  // that lands while a drain is in flight sets `rerunRequested` so exactly one
+  // more pass runs when the current one finishes, instead of scheduling a second
+  // drain that would race the first over the same due deliveries. Cross-process
+  // races are separately bounded by the per-row delivery lease and the
+  // at-least-once + receiver-dedup contract (see deliver.ts).
+  private draining = false;
+  private rerunRequested = false;
 
   constructor(
     private readonly adapter: WebhookDrainDatabase,
@@ -108,16 +118,16 @@ export class WebhookFastDrainScheduler {
    * for a caller to await.
    */
   offer(): void {
-    if (this.cachedAfter === undefined) this.cachedAfter = this.loadAfter();
-    const after = this.cachedAfter;
-    // No `after()` (non-Next runtime, or Next < 15): the scheduled drain delivers.
-    if (!after) return;
-
     try {
+      if (this.cachedAfter === undefined) this.cachedAfter = this.loadAfter();
+      const after = this.cachedAfter;
+      // No `after()` (non-Next runtime, or Next < 15): the scheduled drain delivers.
+      if (!after) return;
       after(() => this.drainIfSubscribed());
     } catch {
-      // `after()` throws outside a request scope (build time, a CLI write). The
-      // scheduled drain handles it.
+      // Resolving the loader or registering the callback must never throw into
+      // the write path (e.g. `after()` throws outside a request scope: build
+      // time, a CLI write). The scheduled drain is the backstop.
     }
   }
 
@@ -126,21 +136,36 @@ export class WebhookFastDrainScheduler {
    * drain. Both the gate and fan-out read endpoints fresh, so a subscriber
    * another process just created is seen. Absorbs its own failures — this runs
    * after the response, so there is nothing to fail.
+   *
+   * Single-flight: if a drain is already running in this process, record that a
+   * trailing pass is wanted and return, so concurrent writes never launch racing
+   * drains. The running drain then loops once more, and because fan-out reads
+   * fresh each pass it picks up the events those trailing writes recorded.
    */
   private async drainIfSubscribed(): Promise<void> {
+    if (this.draining) {
+      this.rerunRequested = true;
+      return;
+    }
+    this.draining = true;
     try {
-      // Fresh read, not the TTL cache: a subscriber another process just created
-      // must be seen here, and this runs after the response so the read adds no
-      // latency to the write. With no subscriber there is nothing to deliver, so
-      // skip the drain rather than fan out events that would go nowhere.
-      const enabled = await this.registry.getEnabledEndpointsFresh();
-      if (enabled.length === 0) return;
-      await runWebhookDrain(this.adapter, this.registry, this.drainOptions);
+      do {
+        this.rerunRequested = false;
+        // Fresh read, not the TTL cache: a subscriber another process just
+        // created must be seen here, and this runs after the response so the read
+        // adds no latency to the write. With no subscriber there is nothing to
+        // deliver, so skip the drain rather than fan out events that go nowhere.
+        const enabled = await this.registry.getEnabledEndpointsFresh();
+        if (enabled.length === 0) break;
+        await runWebhookDrain(this.adapter, this.registry, this.drainOptions);
+      } while (this.rerunRequested);
     } catch (err) {
       this.logger?.warn?.(
         "webhook fast-path drain failed; the scheduled drain will retry",
         { error: err instanceof Error ? err.message : String(err) }
       );
+    } finally {
+      this.draining = false;
     }
   }
 }

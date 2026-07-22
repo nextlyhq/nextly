@@ -246,6 +246,30 @@ export class CollectionEntryService extends BaseService {
     await this.offerRetentionPass();
   }
 
+  /**
+   * Run the post-write side effects only when the mutation actually recorded a
+   * change (and therefore appended an outbox event). A rejected write — a
+   * validation or access failure surfaced as `success: false`, or a bulk/batch
+   * operation where every item failed — recorded nothing, so kicking the drain
+   * would deliver unrelated pending events for a write that changed nothing (and
+   * let a failed, possibly unauthorized attempt trigger outbound webhooks). The
+   * three result shapes report "recorded something" differently.
+   */
+  private async afterWriteIfRecorded(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult
+  ): Promise<void> {
+    const recorded =
+      "success" in result
+        ? result.success
+        : "successCount" in result
+          ? result.successCount > 0
+          : result.successful > 0;
+    if (recorded) await this.afterWrite();
+  }
+
   async createEntry(
     params: {
       collectionName: string;
@@ -261,7 +285,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.createEntry(params, body, depth);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -302,7 +326,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.updateEntry(params, body, depth);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -314,7 +338,7 @@ export class CollectionEntryService extends BaseService {
     overrideAccess?: boolean;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -328,7 +352,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }) {
     const result = await this.mutationService.deleteEntry(params);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -372,7 +396,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -388,7 +412,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -403,7 +427,7 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -423,7 +447,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -440,7 +464,7 @@ export class CollectionEntryService extends BaseService {
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -458,7 +482,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -486,7 +510,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
@@ -515,7 +539,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
     const result = await this.bulkService.deleteEntries(params, ids, options);
-    await this.afterWrite();
+    await this.afterWriteIfRecorded(result);
     return result;
   }
 
