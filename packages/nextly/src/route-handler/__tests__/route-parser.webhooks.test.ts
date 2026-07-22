@@ -143,6 +143,25 @@ describe("webhook routes", () => {
     ).toEqual({});
   });
 
+  it("parses the drain trigger on GET and POST", () => {
+    // Vercel Cron triggers with a GET; a manual/admin call may POST. Both must
+    // resolve to the drain, and with a truthy `operation` so the pre-dispatch
+    // guard (which rejects a falsy operation) lets it reach the handler.
+    for (const method of ["GET", "POST"] as const) {
+      expect(parseRestRoute(["webhooks", "drain"], method)).toMatchObject({
+        service: "webhooks",
+        operation: "single",
+        method: "drainWebhooks",
+      });
+    }
+  });
+
+  it("does not route a non-GET/POST method to the drain", () => {
+    for (const method of ["PATCH", "DELETE", "PUT"] as const) {
+      expect(parseRestRoute(["webhooks", "drain"], method)).toEqual({});
+    }
+  });
+
   it("does not route an unsupported method on the collection", () => {
     expect(parseRestRoute(["webhooks"], "DELETE")).toEqual({});
   });

@@ -25,6 +25,16 @@ export interface RunDrainDeps {
   /** Max fan-out/deliver rounds before returning. Defaults to 100. */
   maxRounds?: number;
   /**
+   * Wall-clock budget for the whole drain. Once exceeded the loop stops starting
+   * new rounds AND the delivery pass stops attempting new deliveries, so a
+   * scheduler tick returns within roughly `maxDurationMs` plus one in-flight
+   * request timeout even when receivers hang — instead of `batch × rounds ×
+   * timeout`. The durable outbox + delivery lease let the next tick continue.
+   * Unbounded when unset (the default; content-write-driven callers do not need
+   * it). Measured with the delivery clock so tests stay deterministic.
+   */
+  maxDurationMs?: number;
+  /**
    * Retention, when configured. The pass runs after delivery so it only ever
    * sees rows this drain has finished with, and it is gated so a frequently
    * invoked drain does not prune on every call.
@@ -57,6 +67,14 @@ export interface RunDrainResult {
  */
 export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
+  // The delivery clock, reused for the budget so the deadline and the delivery
+  // pass compare against the same time source (real in production, pinned in
+  // tests).
+  const now = deps.deliver.now ?? (() => new Date());
+  const deadline =
+    deps.maxDurationMs !== undefined
+      ? new Date(now().getTime() + deps.maxDurationMs)
+      : undefined;
   const result: RunDrainResult = {
     rounds: 0,
     eventsProcessed: 0,
@@ -70,7 +88,9 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
 
   for (let round = 0; round < maxRounds; round += 1) {
     const fan = await fanOutDueEvents(deps.fanOut);
-    const del = await deliverDueDeliveries(deps.deliver);
+    const del = await deliverDueDeliveries(
+      deadline ? { ...deps.deliver, deadline } : deps.deliver
+    );
 
     result.rounds += 1;
     result.eventsProcessed += fan.eventsProcessed;
@@ -83,6 +103,8 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // Nothing was fanned out and nothing was attempted this round → the queue is
     // drained of everything currently due; stop.
     if (fan.eventsProcessed === 0 && del.attempted === 0) break;
+    // Budget spent → stop before starting a new round; the next tick continues.
+    if (deadline && now() >= deadline) break;
   }
 
   // After the queue is quiet, not between rounds: pruning mid-drain would race

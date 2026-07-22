@@ -1778,6 +1778,26 @@ function parseWebhookRoutes(
     };
   }
 
+  // GET or POST /api/webhooks/drain → run one drain pass. "drain" is a reserved
+  // operation path, not an endpoint id: endpoint ids are generated UUIDs and
+  // cannot collide with it. GET is accepted because Vercel Cron triggers with a
+  // GET; the drain is idempotent, and the route is authorized regardless of
+  // method. Matched before the generic `GET /webhooks/:id` branch so `drain` is
+  // never treated as an endpoint id.
+  if (id === "drain" && !subresource) {
+    if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+    // A drain is not a CRUD OperationType, but the dispatch guard rejects a
+    // route with no operation before the direct-dispatch webhooks branch runs;
+    // a truthy value is required. The webhook handler dispatches on `method` and
+    // does its own authorization, so this value is otherwise unused.
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "drainWebhooks",
+      routeParams,
+    };
+  }
+
   if (id && subresource === "secret") {
     // GET /api/webhooks/:id/secret → reveal active signing secrets.
     // Its own path rather than a field on the document, so the route can
