@@ -1,4 +1,5 @@
 import { container } from "../../di/container";
+import type { SupportedDialect } from "../../types/database";
 
 // ============================================================================
 // Global API Date/Time Formatting Constants
@@ -11,6 +12,19 @@ export const MYSQL_DATE_TIME_REGEX =
   /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/;
 
 export const HAS_EXPLICIT_TIMEZONE_REGEX = /(?:Z|[+-]\d{2}:\d{2})$/i;
+
+/**
+ * Response header opting a JSON body out of server-side timezone normalization.
+ *
+ * `withTimezoneFormatting` rewrites any string that looks like a date, by value,
+ * not just known timestamp fields. Set this on a response whose body carries
+ * opaque captured text that must survive verbatim — a webhook delivery's raw
+ * response snippet, for example, which is a debugging record and could itself be
+ * a bare date string. Timestamps in such a response are returned in UTC for the
+ * client to localize. The header is internal and stripped before the response
+ * leaves the formatter.
+ */
+export const SKIP_TIMEZONE_FORMAT_HEADER = "x-nextly-skip-timezone-format";
 
 // Restrict normalization to known timestamp-like keys to avoid mutating
 // user content fields that merely look like dates.
@@ -206,6 +220,51 @@ export function normalizeDbTimestamp(value: unknown): string | null {
   return String(value);
 }
 
+/**
+ * Recover the correct instant from a database timestamp `Date`, across dialects.
+ *
+ * SQLite stores timestamps as epoch integers, so its driver builds a `Date` that
+ * already holds the right instant — it is returned unchanged. Postgres
+ * (`timestamp without time zone`) and MySQL (`datetime`) are naive columns whose
+ * drivers construct a `Date` from the stored calendar fields in the server's
+ * local timezone; that `Date`'s UTC value is therefore shifted by the local
+ * offset. Its calendar fields are reinterpreted as UTC to recover the stored
+ * instant, so later JSON serialization emits the correct time on a non-UTC
+ * server instead of one shifted by the server's timezone.
+ *
+ * Unlike {@link normalizeDbTimestamp} (which assumes every `Date` is naive and
+ * always un-offsets), this is dialect-aware and safe for SQLite.
+ */
+export function dbTimestampToInstant(
+  value: Date,
+  dialect: SupportedDialect
+): Date;
+export function dbTimestampToInstant(
+  value: Date | null,
+  dialect: SupportedDialect
+): Date | null;
+export function dbTimestampToInstant(
+  value: Date | null,
+  dialect: SupportedDialect
+): Date | null {
+  if (value == null) return null;
+  if (Number.isNaN(value.getTime())) return null;
+  // SQLite's epoch-backed Date is already the correct instant.
+  if (dialect === "sqlite") return value;
+  // Postgres/MySQL naive Date: reinterpret its local calendar fields as UTC.
+  return new Date(
+    Date.UTC(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      value.getHours(),
+      value.getMinutes(),
+      value.getSeconds(),
+      value.getMilliseconds()
+    )
+  );
+}
+
 export function normalizeTimestampsInPayload(
   value: unknown,
   timezone: string | null,
@@ -247,6 +306,19 @@ export function normalizeTimestampsInPayload(
 export async function withTimezoneFormatting(
   response: Response
 ): Promise<Response> {
+  // Opt-out: a handler marked this body as carrying opaque text that must not be
+  // rewritten. Checked first, before any early return, so the internal marker is
+  // always stripped and never reaches the client (even on a non-JSON body).
+  if (response.headers.get(SKIP_TIMEZONE_FORMAT_HEADER) === "1") {
+    const headers = new Headers(response.headers);
+    headers.delete(SKIP_TIMEZONE_FORMAT_HEADER);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
     return response;

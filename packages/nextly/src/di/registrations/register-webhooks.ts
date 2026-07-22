@@ -12,6 +12,7 @@
  * REST surface will not be seen by a running drain until its cache expires.
  */
 
+import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
 import { container } from "../container";
 
@@ -23,5 +24,11 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   container.registerSingleton<WebhookEndpointService>(
     "webhookEndpointService",
     () => new WebhookEndpointService(adapter, logger)
+  );
+
+  // Read-only surface for the admin delivery log; the drain owns every write.
+  container.registerSingleton<WebhookDeliveryQueryService>(
+    "webhookDeliveryQueryService",
+    () => new WebhookDeliveryQueryService(adapter, logger)
   );
 }
