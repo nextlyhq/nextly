@@ -193,5 +193,75 @@ for (const leg of LEGS) {
         await handle?.destroy();
       }
     });
+
+    it("returns not-found when the row is deleted under the lock", async () => {
+      const adapter = await connect(leg);
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [
+            defineCollection({
+              slug: SLUG,
+              status: true,
+              // The editor may update but never publish, so absent the fix a
+              // phantom `null -> published` classification would be refused with a
+              // publish denial rather than not-found.
+              access: {
+                create: () => true,
+                update: () => true,
+                read: () => true,
+                publish: () => false,
+              },
+              fields: [text({ name: "title" })],
+            }),
+          ],
+        });
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entryService = h.getEntryService() as CollectionEntryService;
+
+        const created = await h.createEntry(
+          { collectionName: SLUG, overrideAccess: true },
+          { title: "t", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const gate = deferred();
+        const bLocked = deferred();
+
+        // Writer B: lock and DELETE the row, then hold the transaction open until
+        // the gate — so it commits the delete only after A has read the row and is
+        // blocked on the same lock.
+        const bTx = handle.adapter.transaction(async tx => {
+          await tx.lockRow(TABLE, id);
+          await tx.delete(TABLE, whereId(id));
+          bLocked.resolve();
+          await gate.promise;
+        });
+
+        await bLocked.promise;
+
+        // Writer A: a batch update to `published`. Its plain existence read sees
+        // the still-committed row, then it blocks taking the row lock behind B.
+        const aResultP = entryService.updateEntries(
+          { collectionName: SLUG, user: { id: "editor" } },
+          [{ id, data: { status: "published" } }]
+        );
+
+        await sleep(500);
+
+        gate.resolve();
+        await bTx;
+
+        const aResult = await aResultP;
+        // The row vanished under the lock, so the write is not-found — not a
+        // publish denial for a `null -> published` transition on an absent row.
+        expect(aResult.successful).toBe(0);
+        expect(aResult.failed).toBe(1);
+        expect(aResult.errors[0]?.error ?? "").toMatch(/not found/i);
+      } finally {
+        await handle?.destroy();
+      }
+    });
   });
 }
