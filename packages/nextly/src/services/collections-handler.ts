@@ -782,8 +782,18 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. For a scoped API-key bulk update each
+     * per-id publish/unpublish transition is judged on the key's OWN grants.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
+    return this.entryService.bulkUpdateEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly (like updateEntry) so the API-key scope survives the
+      // field-by-field rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
@@ -813,6 +823,11 @@ export class CollectionsHandler {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. Judges the collection-level gate and
+       * each per-row transition on a scoped API key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: { limit?: number }
   ) {
@@ -820,7 +835,12 @@ export class CollectionsHandler {
     // bulkUpdateEntries so the query-based bulk update honors access control
     // and redaction instead of running as an anonymous caller.
     return this.entryService.bulkUpdateByQuery(
-      this.resolveUserParam(params),
+      {
+        ...this.resolveUserParam(params),
+        // Named explicitly so the API-key scope survives the field-by-field
+        // rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
+      },
       options
     );
   }
@@ -889,8 +909,18 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. A duplicate is a create, so a scoped
+     * API key copying a published source is judged on the key's OWN grant.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.duplicateEntry(this.resolveUserParam(params));
+    return this.entryService.duplicateEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
