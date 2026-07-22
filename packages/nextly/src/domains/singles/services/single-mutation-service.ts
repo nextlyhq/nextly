@@ -450,19 +450,11 @@ export class SingleMutationService extends BaseService {
         }
       }
 
-      // 6.36. Persist the auto-created default now that the write (including any
-      // publish transition) is authorized. Deferred to here so a refused first
-      // write never leaves a row behind. `existingDoc` becomes the committed row
-      // the update transaction below targets. In the update path the default is a
-      // plain insert (no v1 capture): the update transaction records the first
-      // version itself, so capturing here would double-version the first edit.
-      if (autoCreated && pendingAutoCreateValues) {
-        existingDoc = await this.adapter.insert<SingleDocument>(
-          singleMeta.tableName,
-          pendingAutoCreateValues,
-          { returning: "*" }
-        );
-      }
+      // The auto-created default is persisted INSIDE the update transaction
+      // below (not here), so the insert commits atomically with the update,
+      // component saves, companion upsert, and version capture — a failure in any
+      // of them rolls the default back instead of orphaning it, and a refused
+      // publish (handled above) still never inserts a row.
 
       // 6.4. Extract component field data (stored in separate comp_{slug}
       // tables) AFTER the access/hooks/validation pipeline above has seen
@@ -512,6 +504,37 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // First-write auto-create, committed atomically with the update. A
+            // failed update/component/companion/version write rolls the insert
+            // back rather than orphaning a default row, and no compensating
+            // delete is needed. Idempotent: a `beforeUpdate` hook that read the
+            // Single may already have auto-created the row (via `get`), and a
+            // version-conflict retry re-enters this closure — in both cases the
+            // existing row is reused instead of inserting a duplicate.
+            if (autoCreated && pendingAutoCreateValues) {
+              const committed = await tx.selectOne<SingleDocument>(
+                singleMeta.tableName,
+                {}
+              );
+              existingDoc =
+                committed ??
+                (await tx.insert<SingleDocument>(
+                  singleMeta.tableName,
+                  pendingAutoCreateValues,
+                  { returning: "*" }
+                ));
+            }
+            // Unreachable: the pre-transaction step always resolves `existingDoc`
+            // to a loaded or in-memory default, and the block above only replaces
+            // it with another row. Narrows the closure-captured value to non-null.
+            if (!existingDoc) {
+              throw NextlyError.internal({
+                logContext: {
+                  slug,
+                  reason: "single row missing after auto-create",
+                },
+              });
+            }
             // Build the payload inside the closure so a retried attempt after a
             // concurrent winner stamps a FRESH `updated_at`, rather than reusing
             // a timestamp created before the first attempt (which could commit an
