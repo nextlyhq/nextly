@@ -1977,20 +1977,6 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) return accessDenied;
 
-      // This method exists to publish every locale, so it is unconditionally a
-      // publish and needs the publish permission on top of update — checked
-      // directly rather than via a transition, since it publishes companion
-      // locales even when the main row is already published.
-      const publishDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "publish",
-        accessUser,
-        params.entryId,
-        existingEntry,
-        params.overrideAccess
-      );
-      if (publishDenied) return publishDenied;
-
       const hasMainStatus = "status" in schema;
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
@@ -2001,7 +1987,9 @@ export class CollectionMutationService extends BaseService {
         (await this.companionTableExists(companion.companionTableName));
 
       if (!hasMainStatus && !companionPublishable) {
-        // Nothing to publish — the collection has no status concept.
+        // Nothing to publish — the collection has no status concept. Returned
+        // before the publish permission check so a collection with no lifecycle
+        // does not demand `publish-<slug>` for a call that changes nothing.
         return {
           success: true,
           statusCode: 200,
@@ -2009,6 +1997,21 @@ export class CollectionMutationService extends BaseService {
           data: { id: params.entryId },
         };
       }
+
+      // This method exists to publish every locale, so it is unconditionally a
+      // publish and needs the publish permission on top of update — checked
+      // directly rather than via a transition, since it publishes companion
+      // locales even when the main row is already published. Runs only once
+      // there is actually something publishable.
+      const publishDenied = await this.accessService.checkCollectionAccess(
+        params.collectionName,
+        "publish",
+        accessUser,
+        params.entryId,
+        existingEntry,
+        params.overrideAccess
+      );
+      if (publishDenied) return publishDenied;
 
       const isMysql = this.dialect === "mysql";
       const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);

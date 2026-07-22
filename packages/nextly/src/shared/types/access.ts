@@ -134,6 +134,18 @@ export interface CollectionAccessControl {
   update?: AccessControlFunction | boolean;
   /** Access rule for deleting documents */
   delete?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving a document INTO published (publishing). Evaluated on
+   * top of `update`, so a caller must satisfy both to publish. Absent means the
+   * publish permission is resolved from DB grants alone (`publish-<slug>`).
+   */
+  publish?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving a document OUT of published (unpublishing). Evaluated
+   * on top of `update`. Absent means it is resolved from DB grants alone
+   * (`unpublish-<slug>`).
+   */
+  unpublish?: AccessControlFunction | boolean;
 }
 
 // ============================================================
