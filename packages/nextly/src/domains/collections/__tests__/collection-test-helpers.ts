@@ -144,6 +144,24 @@ export function createMockAdapter(db: MockRecord): MockRecord {
     // existence probe and per-locale `_status` reads). Empty by default; a
     // localized test overrides it.
     executeQuery: vi.fn().mockResolvedValue([]),
+    // The write paths run inside `adapter.transaction`. The tx exposes the
+    // handle the update path reads prior state through: `lockRow` (a no-op
+    // here), `getDrizzle` (returns the same mock db, so the locked pre-update
+    // row resolves to `selectData.rows`), and `execute` for the raw
+    // UPDATE/companion statements.
+    transaction: vi
+      .fn()
+      .mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          getDrizzle: () => db,
+          lockRow: vi.fn().mockResolvedValue(undefined),
+          execute: vi.fn().mockResolvedValue([]),
+          selectOne: vi.fn().mockResolvedValue(null),
+          insert: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue([{}]),
+          delete: vi.fn().mockResolvedValue(undefined),
+        })
+      ),
   };
 }
 

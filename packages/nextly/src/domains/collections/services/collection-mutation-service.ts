@@ -15,7 +15,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike, type Column } from "drizzle-orm";
+import { eq, ne, and, like, ilike } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -206,6 +206,26 @@ function stripImmutableSystemFields(
     if (!IMMUTABLE_SYSTEM_FIELDS.has(key)) out[key] = value;
   }
   return out;
+}
+
+/**
+ * Aborts (rolls back) a write transaction when a publish/unpublish transition is
+ * refused against the row-locked status. Extends {@link NextlyError} for the same
+ * reason {@link VersionConflictError} does — a bare `Error` is disallowed in this
+ * package — and is always caught inside the method (the 403 to return is read
+ * from an out-of-band variable, since the adapter wraps this on the way out), so
+ * it never reaches the API boundary.
+ */
+class StatusTransitionDeniedError extends NextlyError {
+  constructor() {
+    super({
+      code: "FORBIDDEN",
+      publicMessage:
+        "You do not have permission to change the published state.",
+      logMessage: "Publish transition denied against the row-locked status",
+    });
+    this.name = "StatusTransitionDeniedError";
+  }
 }
 
 export class CollectionMutationService extends BaseService {
@@ -622,47 +642,6 @@ export class CollectionMutationService extends BaseService {
         `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
       [entryId, locale]
     );
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
-  }
-
-  /**
-   * The write locale's committed per-locale `_status`, read on the pooled
-   * connection (not a transaction handle).
-   *
-   * The status-transition gate runs before the write transaction opens, so it
-   * needs this locale's prior status without a `tx`. The companion `_locales`
-   * table is a runtime Drizzle table object rather than part of the static
-   * schema, so its columns are reached off the object loaded by
-   * `loadCompanionSchema` — the same way `populateCompanionFields` queries it.
-   * `(_parent, _locale)` is the companion primary key, so the lookup returns at
-   * most one row.
-   */
-  private async readCompanionStatusPooled(
-    collectionName: string,
-    entryId: string,
-    locale: string
-  ): Promise<string | null> {
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
-    if (!companion?.hasStatus) return null;
-
-    const table = companion.table as Record<string, Column>;
-    const rows = (await (
-      this.db as unknown as {
-        select: () => {
-          from: (t: unknown) => {
-            where: (c: unknown) => Promise<Record<string, unknown>[]>;
-          };
-        };
-      }
-    )
-      .select()
-      .from(companion.table)
-      .where(and(eq(table._parent, entryId), eq(table._locale, locale)))) as {
-      _status?: unknown;
-    }[];
-
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
   }
@@ -2349,6 +2328,12 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Set when the in-transaction transition check refuses the write. Declared
+    // out here (not in `try`) so the catch can read it: the adapter wraps a
+    // thrown error in a DatabaseError (see VersionConflictError), so `instanceof`
+    // no longer identifies the sentinel after the throw, but this result stays
+    // correct regardless of how the error is wrapped.
+    let transitionDeniedResult: CollectionServiceResult | undefined;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -2773,50 +2758,52 @@ export class CollectionMutationService extends BaseService {
         false
       );
 
-      // Authorize a change to the document's published state, judged on the
-      // status this write will actually persist. A write targeting a non-default
-      // locale stores its status in that locale's companion `_status` and does
-      // not move the main row, so it is gated against the companion's prior
-      // status; a default-locale or non-localized write stores the status on the
-      // main row. The gate no-ops when the collection has no draft/published
-      // lifecycle. A trusted write bypasses the gate outright, so the companion
-      // read that only feeds it is skipped too.
+      // Whether this write targets a non-default locale's companion `_status`
+      // (which the in-transaction check below reads under the lock) rather than
+      // the main row. A trusted write skips the transition gate entirely.
       const isNonDefaultLocaleStatusWrite =
         !params.overrideAccess &&
         localizedUpdate?.hasStatus === true &&
         localizedUpdate.writeLocale !== this.localization?.defaultLocale;
-      // The split only persists a companion `_status` when a string status was
-      // provided; a non-string or absent status leaves this locale's stored
-      // status unchanged, so there is no transition to authorize and no reason to
-      // read the prior companion status.
-      const persistsCompanionStatus =
-        isNonDefaultLocaleStatusWrite &&
-        typeof localizedUpdate.companionData._status === "string";
+      // The status this write will persist: for a non-default locale it is the
+      // companion `_status` the split produced (a string only when one was
+      // provided), otherwise the main-row status.
       const transitionNextStatus = isNonDefaultLocaleStatusWrite
         ? localizedUpdate.companionData._status
         : intendedStatus;
-      const transitionPreviousStatus = persistsCompanionStatus
-        ? await this.readCompanionStatusPooled(
-            params.collectionName,
-            params.entryId,
-            localizedUpdate.writeLocale
-          )
-        : (((existingEntry as { status?: unknown }).status as
-            | string
-            | undefined) ?? null);
-      const transitionDenied = await this.checkStatusTransitionAccess({
-        collectionName: params.collectionName,
-        collectionHasStatus:
-          (collection as { status?: boolean }).status === true,
-        previousStatus: transitionPreviousStatus,
-        nextStatus: transitionNextStatus,
-        accessUser,
-        entryId: params.entryId,
-        document: existingEntry,
-        overrideAccess: params.overrideAccess,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
+      // Resolve the one publish permission this write could require — keyed on
+      // the status it will persist — BEFORE the transaction opens, so the RBAC
+      // read stays off this transaction's connection. The decision is cached and
+      // enforced against the ROW-LOCKED status inside the transaction (below), so
+      // a concurrent writer that changed the published state between the
+      // pre-transaction read and the lock cannot slip a transition past the gate.
+      // No guard is needed for a trusted write, a collection with no lifecycle,
+      // or a write that persists no string status.
+      const collectionHasStatus =
+        (collection as { status?: boolean }).status === true;
+      let transitionGuard: {
+        op: "publish" | "unpublish";
+        denied: CollectionServiceResult;
+      } | null = null;
+      if (
+        collectionHasStatus &&
+        !params.overrideAccess &&
+        typeof transitionNextStatus === "string"
+      ) {
+        const transitionOp =
+          transitionNextStatus === "published" ? "publish" : "unpublish";
+        const denied = await this.accessService.checkCollectionAccess(
+          params.collectionName,
+          transitionOp,
+          accessUser,
+          params.entryId,
+          existingEntry,
+          params.overrideAccess,
+          // Never route-authorized: the route authorizes the write as `update`,
+          // never as `publish`/`unpublish`, so the RBAC check must run.
+          false
+        );
+        if (denied) transitionGuard = { op: transitionOp, denied };
       }
 
       // Wrap main update and component data save in a transaction so that
@@ -2959,6 +2946,30 @@ export class CollectionMutationService extends BaseService {
               components: previousComponents,
               manyToMany: previousM2M,
             });
+          }
+
+          // TOCTOU-safe authorization: classify the transition against the
+          // status just read UNDER THE ROW LOCK (`preUpdateRow` /
+          // `committedLocaleStatus`), not the pre-transaction read, and enforce
+          // the permission resolved before the transaction. A concurrent writer
+          // that changed the published state between the pre-transaction read
+          // and this lock is therefore accounted for. Runs before the UPDATE, so
+          // throwing rolls the transaction back with nothing written.
+          if (transitionGuard) {
+            const lockedPreviousStatus = isNonDefaultLocaleStatusWrite
+              ? committedLocaleStatus
+              : (((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null);
+            if (
+              resolvePublishTransition(
+                lockedPreviousStatus,
+                transitionNextStatus
+              ) === transitionGuard.op
+            ) {
+              transitionDeniedResult = transitionGuard.denied;
+              throw new StatusTransitionDeniedError();
+            }
           }
 
           // Dialect-aware identifier quoting and placeholder syntax.
@@ -3450,6 +3461,13 @@ export class CollectionMutationService extends BaseService {
         data: responseEntry,
       };
     } catch (error: unknown) {
+      // A publish-transition refused against the row-locked status aborts the
+      // write; return the 403 the pre-transaction guard resolved, not a 500.
+      // Read from the out-of-band result rather than `instanceof`: the adapter
+      // wraps the thrown sentinel in a DatabaseError before it reaches here.
+      if (transitionDeniedResult) {
+        return transitionDeniedResult;
+      }
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
