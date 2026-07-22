@@ -1935,6 +1935,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: responseEntry,
+        eventRecorded,
       };
     } catch (error: unknown) {
       // Legacy per-kind override messages ("Duplicate value: ...",
@@ -3194,6 +3195,9 @@ export class CollectionMutationService extends BaseService {
           statusCode: 404,
           message: "Entry not found",
           data: null,
+          // The event may already be durable (the row vanished only after the
+          // update committed), so still signal a delivery is owed.
+          eventRecorded,
         };
       }
 
@@ -3362,6 +3366,9 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: responseEntry,
+        // Reflects whether this update actually recorded an event (a no-op
+        // update commits without one), so a no-op does not kick the drain.
+        eventRecorded,
       };
     } catch (error: unknown) {
       // See createEntry's catch — legacy override messages are dropped in
@@ -3648,6 +3655,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
       return {

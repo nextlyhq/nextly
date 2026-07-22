@@ -253,11 +253,14 @@ export class CollectionEntryService extends BaseService {
    * operation where every item failed — recorded nothing, so kicking the drain
    * would deliver unrelated pending events for a write that changed nothing (and
    * let a failed, possibly unauthorized attempt trigger outbound webhooks). The
-   * three result shapes report "recorded something" differently. `success` /
-   * `successCount` are not sufficient on their own: create/update/delete commit
-   * the event then run post-commit hooks, so a hook failure returns
-   * `success: false` (and, for a bulk item, counts as a failure) on a write that
-   * DID record — the `eventRecorded` flag on each shape covers that case.
+   * three result shapes report "recorded something" differently. `success` is
+   * not a reliable proxy in either direction: a create/update/delete can commit
+   * the event and then return `success: false` when a post-commit hook throws,
+   * and a `publishAllLocales` no-op (or a no-op update) returns `success: true`
+   * having recorded nothing. So a single write keys off the explicit
+   * `eventRecorded` flag, which every event-writing path sets. Bulk/batch results
+   * carry the same flag for their committed-but-hook-failed items on top of the
+   * success count.
    */
   private async afterWriteIfRecorded(
     result:
@@ -267,7 +270,7 @@ export class CollectionEntryService extends BaseService {
   ): Promise<void> {
     const recorded =
       "success" in result
-        ? result.success || result.eventRecorded === true
+        ? result.eventRecorded === true
         : "successCount" in result
           ? result.successCount > 0 || result.eventRecorded === true
           : result.successful > 0 || result.eventRecorded === true;
