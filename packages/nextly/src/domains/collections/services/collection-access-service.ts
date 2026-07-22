@@ -206,8 +206,10 @@ export class CollectionAccessService extends BaseService {
     // For a scoped API key the gate judges the key's OWN stamped grants, not the
     // owner's DB permissions: the route only authorized the write as `update`,
     // so this publish/unpublish re-check must consult the key's scope or an
-    // update-only key owned by a publisher could publish. `apiKeyScopeAllows`
-    // returns null for a non-API-key caller, which falls through to RBAC.
+    // update-only key owned by a publisher could publish. `apiKeyWriteAllowed`
+    // evaluates both the key's permission grant AND the code-defined access rule
+    // against that scope, and returns null for a non-API-key caller, which falls
+    // through to RBAC.
     const scopeDecision =
       !routeAuthorized && user
         ? await apiKeyWriteAllowed(
