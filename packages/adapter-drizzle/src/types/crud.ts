@@ -42,6 +42,18 @@ export interface SelectOptions {
 
   /** Return distinct rows only */
   distinct?: boolean;
+
+  /**
+   * Take a `FOR UPDATE` row lock on the selected rows for the rest of the
+   * transaction, and read the latest committed values rather than the
+   * transaction's snapshot. Use for read-modify-write sequences that must not
+   * interleave (e.g. re-reading a status under the lock the write will take).
+   *
+   * Requires a transaction executor. No-ops on SQLite, which has no `FOR UPDATE`
+   * and needs none — its transactions open with `BEGIN IMMEDIATE`, already
+   * serializing writers.
+   */
+  forUpdate?: boolean;
 }
 
 /**
