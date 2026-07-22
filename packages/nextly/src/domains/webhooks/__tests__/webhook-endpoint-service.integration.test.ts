@@ -426,18 +426,115 @@ describe("webhook endpoint management (real SQLite)", () => {
       expect(reenabled.enabled).toBe(true);
     });
 
-    it("deleting removes it and drops the cache", async () => {
+    it("deleting hides the endpoint from every read and drops the cache", async () => {
       const { endpoint } = await create();
       registry.invalidations = 0;
 
       await service.deleteEndpoint(endpoint.id);
 
       expect(await service.getEndpoint(endpoint.id)).toBeNull();
+      expect(await service.listEndpoints()).toHaveLength(0);
+      await expect(service.revealSecrets(endpoint.id)).rejects.toThrow(
+        NextlyError
+      );
       expect(registry.invalidations).toBe(1);
+    });
+
+    it("keeps the row and its delivery history rather than removing them", async () => {
+      // The point of the soft delete: the ledger of what was sent survives with
+      // a real endpoint still on the other end of its foreign key.
+      const { endpoint } = await create();
+      await adapter.insert("nextly_events", {
+        id: "evt_hist",
+        type: "entry.updated",
+        resource_kind: "entry",
+        resource_id: "p1",
+        collection: "posts",
+        payload: { id: "p1" },
+        created_at: new Date(0),
+      });
+      await adapter.insert("nextly_webhook_deliveries", {
+        id: "dlv_hist",
+        webhook_id: endpoint.id,
+        event_id: "evt_hist",
+        status: "delivered",
+        attempt_count: 1,
+        next_attempt_at: null,
+        locked_by: null,
+        locked_until: null,
+        created_at: new Date(0),
+        updated_at: new Date(0),
+      });
+
+      await service.deleteEndpoint(endpoint.id);
+
+      const webhookRows = await adapter.executeQuery<{ deleted_at: number }>(
+        `SELECT deleted_at FROM nextly_webhooks WHERE id = '${endpoint.id}'`
+      );
+      expect(webhookRows).toHaveLength(1);
+      expect(webhookRows[0]?.deleted_at).not.toBeNull();
+
+      const deliveryRows = await adapter.executeQuery(
+        "SELECT id FROM nextly_webhook_deliveries WHERE id = 'dlv_hist'"
+      );
+      expect(deliveryRows).toHaveLength(1);
+    });
+
+    it("ends deliveries still queued for the endpoint on delete", async () => {
+      // Retiring an endpoint must stop it POSTing, the same way disabling does.
+      const { endpoint } = await create();
+      await adapter.insert("nextly_events", {
+        id: "evt_q",
+        type: "entry.updated",
+        resource_kind: "entry",
+        resource_id: "p1",
+        collection: "posts",
+        payload: { id: "p1" },
+        created_at: new Date(0),
+      });
+      await adapter.insert("nextly_webhook_deliveries", {
+        id: "dlv_q",
+        webhook_id: endpoint.id,
+        event_id: "evt_q",
+        status: "pending",
+        attempt_count: 0,
+        next_attempt_at: new Date(0),
+        locked_by: null,
+        locked_until: null,
+        created_at: new Date(0),
+        updated_at: new Date(0),
+      });
+
+      await service.deleteEndpoint(endpoint.id);
+
+      const rows = await adapter.executeQuery<{ status: string }>(
+        "SELECT status FROM nextly_webhook_deliveries WHERE id = 'dlv_q'"
+      );
+      expect(rows[0]?.status).toBe("failed");
+    });
+
+    it("lets the same URL be registered again as a distinct live endpoint", async () => {
+      // A retired endpoint is not resurrected; re-registering makes a new one.
+      const first = await create();
+      await service.deleteEndpoint(first.endpoint.id);
+
+      const second = await create();
+
+      expect(second.endpoint.id).not.toBe(first.endpoint.id);
+      expect(await service.getEndpoint(second.endpoint.id)).not.toBeNull();
+      expect(await service.listEndpoints()).toHaveLength(1);
     });
 
     it("reports deleting an unknown endpoint as not found", async () => {
       await expect(service.deleteEndpoint("missing")).rejects.toThrow(
+        NextlyError
+      );
+    });
+
+    it("reports deleting an already-retired endpoint as not found", async () => {
+      const { endpoint } = await create();
+      await service.deleteEndpoint(endpoint.id);
+      await expect(service.deleteEndpoint(endpoint.id)).rejects.toThrow(
         NextlyError
       );
     });

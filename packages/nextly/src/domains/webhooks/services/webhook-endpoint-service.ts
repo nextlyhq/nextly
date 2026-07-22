@@ -25,7 +25,7 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -311,6 +311,9 @@ export class WebhookEndpointService extends BaseService {
         (await this.db
           .select()
           .from(this.table)
+          // Retired endpoints are kept for their delivery history but are not
+          // part of the live set, so they never appear in a list.
+          .where(isNull(this.table.deletedAt))
           .orderBy(desc(this.table.createdAt))) as WebhookRow[]
     );
     return rows.map(row => this.toSummary(row));
@@ -323,7 +326,7 @@ export class WebhookEndpointService extends BaseService {
         (await this.db
           .select()
           .from(this.table)
-          .where(eq(this.table.id, id))
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
           .limit(1)) as WebhookRow[]
     );
     return rows[0] ? this.toSummary(rows[0]) : null;
@@ -419,20 +422,34 @@ export class WebhookEndpointService extends BaseService {
   }
 
   /**
-   * Remove an endpoint and, with it, its delivery history.
+   * Retire an endpoint while keeping its delivery history.
    *
-   * `nextly_webhook_deliveries.webhook_id` cascades, so deleting an endpoint
-   * discards the record of what was sent to it rather than leaving that to
-   * retention. This is why disabling exists and is the reversible option:
-   * deletion is for an endpoint whose history is no longer wanted either.
+   * The row is soft-deleted rather than removed: it disappears from every read
+   * and stops receiving deliveries, but stays in the table so the delivery
+   * ledger keeps a real endpoint on the other end of its foreign key. "What did
+   * we send to that integration, and did it arrive?" is answerable after the
+   * endpoint is gone, which is exactly when it tends to be asked.
+   *
+   * Disabling remains the way to pause an endpoint you intend to bring back;
+   * this is for one you are finished with but whose record still matters. A row
+   * once retired is not resurrected — a later registration is a new endpoint.
    */
   async deleteEndpoint(id: string): Promise<void> {
     const existing = await this.getEndpoint(id);
     if (!existing) throw this.notFound(id);
 
+    const now = new Date();
+    // Soft delete: the row is retired, not removed, so its delivery history
+    // survives with a real endpoint still on the other end of the foreign key.
+    // `enabled` is cleared as well so fan-out drops it immediately, and the
+    // outstanding deliveries are ended for the same reason disabling ends them.
     await this.query(() =>
-      this.db.delete(this.table).where(eq(this.table.id, id))
+      this.db
+        .update(this.table)
+        .set({ deletedAt: now, enabled: false, updatedAt: now })
+        .where(eq(this.table.id, id))
     );
+    await this.cancelQueuedDeliveries(id);
     this.registry?.invalidate();
   }
 
@@ -452,7 +469,7 @@ export class WebhookEndpointService extends BaseService {
         (await this.db
           .select()
           .from(this.table)
-          .where(eq(this.table.id, id))
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
           .limit(1)) as WebhookRow[]
     );
 
