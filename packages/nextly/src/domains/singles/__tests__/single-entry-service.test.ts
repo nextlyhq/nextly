@@ -976,8 +976,17 @@ describe("SingleEntryService", () => {
 
     it("does not gate a status change when the single has no lifecycle", async () => {
       // No `status: true` on the single → `status` is an ordinary field, so the
-      // publish permission is never consulted.
+      // publish permission is never consulted. The single must be registered
+      // (with `status` as a plain field) so update() reaches the gate instead of
+      // short-circuiting on a 404 registry miss, which would make the assertion
+      // vacuous.
       const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle(
+        "site-settings",
+        siteSettingsMeta({
+          fields: [textField("siteName"), textField("status")],
+        })
+      );
       ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
         Promise.resolve(args.operation !== "publish")
       );
@@ -991,12 +1000,15 @@ describe("SingleEntryService", () => {
         { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
       ]);
 
-      await ctx.service.update(
+      const result = await ctx.service.update(
         "site-settings",
         { status: "published" },
         { user: { id: "u1" } }
       );
 
+      // The write reaches and passes the gate (no lifecycle to enforce), rather
+      // than 404-ing on an unregistered single.
+      expect(result.success).toBe(true);
       const publishConsulted = ctx.rbac.checkAccess.mock.calls.some(
         ([args]: [{ operation: string }]) => args.operation === "publish"
       );
