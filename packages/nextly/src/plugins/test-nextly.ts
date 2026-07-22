@@ -10,6 +10,8 @@
  * @module plugins/test-nextly
  */
 
+import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { ComponentConfig } from "../components/config/types";
 import { createAdapter } from "../database/factory";
@@ -29,6 +31,7 @@ import {
   clearCachedSnapshot,
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
+import type { CollectionAccessRules } from "../services/access";
 import type { Logger } from "../services/shared";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
@@ -55,6 +58,15 @@ export interface CreateTestNextlyOptions {
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
   logger?: Logger;
+  /**
+   * Stored per-collection access rules (`accessRules`) keyed by slug. Code-first
+   * `defineCollection` carries only code `access` functions, so an integration
+   * test that needs a STORED rule (for example an owner-only publish rule) sets
+   * it here. After boot the rule is written to the collection's
+   * `dynamic_collections` row exactly as the Schema Builder would persist it, so
+   * the access path surfaces it through `getCollection`.
+   */
+  collectionAccessRules?: Record<string, CollectionAccessRules>;
 }
 
 export interface TestNextly {
@@ -153,6 +165,21 @@ export async function createTestNextly(
   // Physical tables for code-first + plugin-contributed collections are created
   // non-interactively by the runtime auto-sync during registerServices (the
   // applyDesiredSchema add_table fast-path), so no harness-side DDL is needed.
+
+  // Persist any stored access rules onto the already-synced collection rows. The
+  // access path reads `accessRules` off the collection metadata (getCollection),
+  // which is uncached, so writing the row after boot is enough for it to surface
+  // — no separate cache invalidation is needed.
+  if (opts.collectionAccessRules) {
+    for (const [slug, accessRules] of Object.entries(
+      opts.collectionAccessRules
+    )) {
+      const where: WhereClause = {
+        and: [{ column: "slug", op: "=", value: slug }],
+      };
+      await adapter.update("dynamic_collections", { accessRules }, where);
+    }
+  }
 
   return {
     nextly: getNextly(),
