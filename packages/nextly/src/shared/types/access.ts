@@ -175,6 +175,18 @@ export interface SingleAccessControl {
   read?: AccessControlFunction | boolean;
   /** Access rule for updating the single document */
   update?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving the single INTO published (publishing). Evaluated on
+   * top of `update`. Absent means it is resolved from DB grants alone
+   * (`publish-<slug>`).
+   */
+  publish?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving the single OUT of published (unpublishing). Evaluated
+   * on top of `update`. Absent means it is resolved from DB grants alone
+   * (`unpublish-<slug>`).
+   */
+  unpublish?: AccessControlFunction | boolean;
 }
 
 // ============================================================

@@ -201,11 +201,17 @@ export class SingleMutationService extends BaseService {
       }
 
       // 2. Ensure document exists (auto-create if it did not yet exist).
+      // Tracked so a later publish-transition denial can undo this insert: the
+      // transition gate runs after hooks (it needs the post-hook status), so a
+      // refused first publish must not leave the default row persisted — and for
+      // a versioned single, a live document with no captured history.
+      let autoCreated = false;
       if (!existingDoc) {
         this.logger.info("Auto-creating Single document before update", {
           slug,
         });
         existingDoc = await this.queryService.createDefaultDocument(singleMeta);
+        autoCreated = true;
       }
 
       // Deserialize for hook context
@@ -408,6 +414,13 @@ export class SingleMutationService extends BaseService {
             logger: this.logger,
           });
           if (transitionDenied) {
+            // Undo the auto-create so a refused first publish leaves no
+            // persisted (and, for a versioned single, historyless) document.
+            if (autoCreated) {
+              await this.adapter.delete(singleMeta.tableName, {
+                and: [{ column: "id", op: "=", value: existingDoc.id }],
+              });
+            }
             return transitionDenied;
           }
         }
