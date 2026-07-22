@@ -836,6 +836,54 @@ describe("publish-transition access control", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("gates a default-locale publish against the companion status even when the main row is already published", async () => {
+    // For a localized collection the default locale's status also lands on the
+    // companion `_status` row. If the main row is already published but the
+    // default locale's companion `_status` is not (a state reachable after a
+    // reconcile that added `_status` under a published entry), a
+    // `?locale=<default>` publish moves the companion into published. Keying the
+    // gate on the main row alone sees published -> published and would miss it;
+    // the gate must also classify the companion `_status` transition.
+    const acs = allowUpdateDeny("publish");
+    const { service, selectData, fileManager } = buildService({
+      accessControlService: acs,
+      collectionService: lifecycle(),
+      localization: normalizeLocalization({
+        locales: ["en", "de"],
+        defaultLocale: "en",
+      }),
+    });
+    // Main row already published; the companion `_status` for the default locale
+    // resolves to null in this harness (row absent / not yet published for this
+    // locale), which is still a publish of the default locale's content.
+    selectData.rows = [createSampleEntry({ status: "published" })];
+    fileManager.loadCompanionSchema.mockResolvedValue({
+      companionTableName: "posts_locales",
+      table: {
+        _parent: Symbol("_parent"),
+        _locale: Symbol("_locale"),
+        _status: Symbol("_status"),
+      },
+      localizedFields: [{ name: "title", column: "title" }],
+      hasStatus: true,
+    });
+
+    const result = await service.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: "entry-1",
+        user: { id: "user-1" },
+        // The default locale — the write updates the main row AND the default
+        // locale's companion `_status`.
+        locale: "en",
+      },
+      { title: "default-locale edit", status: "published" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("does not treat a non-string status on a locale edit as an unpublish", async () => {
     // A non-default-locale edit whose `status` is present but not a string (e.g.
     // null) does not persist a companion `_status` — the split only writes a

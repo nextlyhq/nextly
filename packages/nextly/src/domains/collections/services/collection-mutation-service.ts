@@ -2970,17 +2970,38 @@ export class CollectionMutationService extends BaseService {
           // and this lock is therefore accounted for. Runs before the UPDATE, so
           // throwing rolls the transaction back with nothing written.
           if (transitionGuard) {
-            const lockedPreviousStatus = isNonDefaultLocaleStatusWrite
-              ? committedLocaleStatus
-              : (((preUpdateRow as { status?: unknown } | undefined)?.status as
-                  | string
-                  | undefined) ?? null);
-            if (
+            // A write can move the published state in two places, and the guard
+            // must fire if EITHER makes the transition it denies:
+            //   - the MAIN row `status` (a non-localized or default-locale write;
+            //     a non-default-locale write leaves it untouched — its status was
+            //     stripped from the main payload), and
+            //   - the write locale's companion `_status` (any localized write that
+            //     provides a status, INCLUDING the default locale, whose status
+            //     lands on the companion row too).
+            // Checking only the main row would let a default-locale write publish
+            // a still-draft companion `_status` while the main row is already
+            // published (a state reachable after a reconcile that added the
+            // companion `_status` as draft under a published entry).
+            const lockedMainStatus =
+              ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null;
+            const mainNextStatus = isNonDefaultLocaleStatusWrite
+              ? undefined
+              : intendedStatus;
+            const companionNextStatus = localizedUpdate?.companionData
+              ?._status as string | undefined;
+            const firesOnMainRow =
+              mainNextStatus !== undefined &&
+              resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
+                transitionGuard.op;
+            const firesOnCompanion =
+              companionNextStatus !== undefined &&
               resolvePublishTransition(
-                lockedPreviousStatus,
-                transitionNextStatus
-              ) === transitionGuard.op
-            ) {
+                committedLocaleStatus,
+                companionNextStatus
+              ) === transitionGuard.op;
+            if (firesOnMainRow || firesOnCompanion) {
               transitionDeniedResult = transitionGuard.denied;
               throw new StatusTransitionDeniedError();
             }

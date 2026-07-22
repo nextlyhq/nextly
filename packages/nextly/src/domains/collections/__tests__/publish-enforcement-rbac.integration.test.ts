@@ -174,4 +174,67 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
 
     expect(result.statusCode).not.toBe(403);
   });
+
+  it("gates a default-locale companion publish when the main row is already published", async () => {
+    // For a localized collection the default locale's status also lands on the
+    // companion `_status`. When the main row is already published but the
+    // default-locale companion `_status` diverged to draft (a state reachable
+    // after a reconcile), a `?locale=<default>` publish moves the companion into
+    // published and must still require the publish permission — the guard cannot
+    // key on the main row alone (published -> published).
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "docs",
+          localized: true,
+          status: true,
+          access: { publish: () => false },
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+    };
+
+    // Trusted create publishes the default-locale entry: main row published,
+    // companion `en` `_status` published.
+    const created = await handler.createEntry(
+      { collectionName: "docs", overrideAccess: true, locale: "en" },
+      { heading: "H", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Manufacture the divergence: main stays published, companion `en` drops to
+    // draft (the post-reconcile state the guard has to defend).
+    await adapter.executeQuery(
+      `UPDATE "dc_docs_locales" SET "_status" = 'draft' WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+    );
+
+    // A caller with update (route-attested) but not publish re-publishes the
+    // default locale. The companion draft -> published transition must be denied.
+    const denied = await handler.updateEntry(
+      {
+        collectionName: "docs",
+        entryId: id,
+        userId: "user-no-publish",
+        routeAuthorized: true,
+        locale: "en",
+      },
+      { heading: "H2", status: "published" }
+    );
+
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // The companion `_status` was not moved to published.
+    const rows = (await adapter.executeQuery(
+      `SELECT "_status" FROM "dc_docs_locales" WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+    )) as Array<{ _status: string }> | { rows?: Array<{ _status: string }> };
+    const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
+    expect(list[0]?._status).toBe("draft");
+  });
 });
