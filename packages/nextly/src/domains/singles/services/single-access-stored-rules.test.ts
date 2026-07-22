@@ -241,3 +241,79 @@ describe("checkSingleAccess — stored rule enforcement", () => {
     expect(rbacAccessControlService.checkAccess).not.toHaveBeenCalled();
   });
 });
+
+describe("checkSingleAccess — scoped API key", () => {
+  // The publish/unpublish transition gate runs NOT route-authorized (the route
+  // attested only `update`). For a scoped API key it judges the key's OWN
+  // stamped grants, not the key owner's RBAC.
+  const apiKeyOwner = { id: "publisher-1", roles: ["editor"] };
+
+  it("denies a publish the key is not scoped for, even when the owner's RBAC allows", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    rbacAccessControlService.checkAccess.mockResolvedValue(true); // owner can publish
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: rbacAccessControlService as never,
+      authenticatedScope: { actorType: "apiKey", permissions: ["update-site"] },
+      accessControlService: accessControlService as never,
+      accessRules: undefined,
+      logger: silentLogger,
+    });
+
+    expect(result?.statusCode).toBe(403);
+    expect(rbacAccessControlService.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("allows a publish the key IS scoped for, even when the owner's RBAC denies", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    rbacAccessControlService.checkAccess.mockResolvedValue(false); // owner cannot publish
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: rbacAccessControlService as never,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-site", "publish-site"],
+      },
+      accessControlService: accessControlService as never,
+      accessRules: undefined,
+      logger: silentLogger,
+    });
+
+    expect(result).toBeNull();
+    expect(rbacAccessControlService.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the owner's RBAC for a session caller (no api-key scope)", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    rbacAccessControlService.checkAccess.mockResolvedValue(false);
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: rbacAccessControlService as never,
+      authenticatedScope: { actorType: "user", permissions: [] },
+      accessControlService: accessControlService as never,
+      accessRules: undefined,
+      logger: silentLogger,
+    });
+
+    expect(result?.statusCode).toBe(403);
+    expect(rbacAccessControlService.checkAccess).toHaveBeenCalledTimes(1);
+  });
+});

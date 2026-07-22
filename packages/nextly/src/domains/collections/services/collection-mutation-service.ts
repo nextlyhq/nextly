@@ -22,6 +22,7 @@ import { eq, ne, and, like, ilike } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -1925,6 +1926,9 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    // A scoped API key is judged on its own `publish-<slug>` grant, not the key
+    // owner's — the route authorized this POST only as `update`.
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1998,7 +2002,12 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         existingEntry,
-        params.overrideAccess
+        params.overrideAccess,
+        // Not route-authorized as publish: the POST was authorized as `update`,
+        // so the publish permission is checked here.
+        false,
+        // Judge a scoped API key on its own `publish-<slug>` grant.
+        params.authenticatedScope
       );
       if (publishDenied) return publishDenied;
 
@@ -2332,6 +2341,10 @@ export class CollectionMutationService extends BaseService {
        * restore is an ordinary write that happens to reproduce an earlier state.
        */
       sourceVersionNo?: number;
+      // The caller's authenticated scope. For a scoped API-key REST write the
+      // publish/unpublish transition gate judges the key's OWN grants, since the
+      // route only authorized `update` against the key's scope.
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -2815,7 +2828,11 @@ export class CollectionMutationService extends BaseService {
           params.overrideAccess,
           // Never route-authorized: the route authorizes the write as `update`,
           // never as `publish`/`unpublish`, so the RBAC check must run.
-          false
+          false,
+          // A scoped API key is judged on its OWN publish/unpublish grant here,
+          // not the key owner's — the route only checked `update` against the
+          // key's scope.
+          params.authenticatedScope
         );
         if (denied) transitionGuard = { op: transitionOp, denied };
       }

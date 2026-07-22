@@ -237,4 +237,60 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
     expect(list[0]?._status).toBe("draft");
   });
+
+  it("judges a scoped API-key publish on the key's own grant, not the owner's", async () => {
+    // End-to-end threading: the dispatcher stamps the key's scoped permissions,
+    // the handler forwards them, and the transition gate judges the key rather
+    // than the key owner. A key scoped for update but not publish is refused; a
+    // key scoped for publish is allowed — regardless of the owner's grants.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Key scoped for `update-posts` only → publish denied.
+    const denied = await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        userId: "key-owner",
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts"],
+        },
+      },
+      { status: "published" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // Same owner, key scoped WITH `publish-posts` → allowed.
+    const allowed = await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        userId: "key-owner",
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts", "publish-posts"],
+        },
+      },
+      { status: "published" }
+    );
+    expect(allowed.success).toBe(true);
+  });
 });

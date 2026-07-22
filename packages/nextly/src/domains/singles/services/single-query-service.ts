@@ -20,6 +20,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
@@ -153,6 +157,9 @@ export async function checkSingleAccess(params: {
   overrideAccess?: boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  // The caller's authenticated scope. A scoped API key is judged on its OWN
+  // stamped grants for the publish/unpublish transition, not the owner's RBAC.
+  authenticatedScope?: AuthenticatedScope;
   /** Evaluator for the Single's stored access rules. */
   accessControlService?: AccessControlService;
   /** The Single's stored access rules (from the registry metadata). */
@@ -171,6 +178,7 @@ export async function checkSingleAccess(params: {
     overrideAccess,
     routeAuthorized,
     rbacAccessControlService,
+    authenticatedScope,
     accessControlService,
     accessRules,
     document,
@@ -246,7 +254,27 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  if (!rbacAccessControlService || !user) {
+  if (!user) {
+    return null;
+  }
+
+  // A scoped API key is authorized on its OWN stamped grants, not the key
+  // owner's: the route only checked `update` against the key's scope, so this
+  // publish/unpublish re-check must consult the key's own permission list.
+  // `apiKeyScopeAllows` returns null for a non-API-key caller, falling through
+  // to the owner/session RBAC path below.
+  const scopeDecision = apiKeyScopeAllows(authenticatedScope, operation, slug);
+  if (scopeDecision !== null) {
+    return scopeDecision
+      ? null
+      : {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+        };
+  }
+
+  if (!rbacAccessControlService) {
     return null;
   }
 
