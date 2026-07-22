@@ -166,10 +166,21 @@ async function authorizeDrain(request: Request): Promise<void> {
   if (presented) {
     // A scheduler presents a shared secret as a bearer token — either Nextly's
     // NEXTLY_DRAIN_SECRET or Vercel Cron's CRON_SECRET (what Vercel actually
-    // sends). Constant-time against each configured value.
+    // sends). Constant-time against each configured value. A bearer token is not
+    // sent on a cross-site request, so this path is not CSRF-exposed.
     for (const secret of [env.NEXTLY_DRAIN_SECRET, env.CRON_SECRET]) {
       if (secret && constantTimeEqual(presented, secret)) return;
     }
+  }
+  // GET is authorized ONLY by the shared bearer secret above. A GET can be
+  // driven by a cross-site top-level navigation, which carries the victim's
+  // `SameSite=Lax` session cookie, so falling through to the session/API-key
+  // path here would be a CSRF trigger. The session/API-key path (a manual admin
+  // drain) is therefore POST-only, where CSRF protection applies.
+  if (request.method.toUpperCase() === "GET") {
+    throw NextlyError.forbidden({
+      logContext: { reason: "drain-get-requires-secret" },
+    });
   }
   const authResult = await requireWebhookPermission(request, "update");
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
