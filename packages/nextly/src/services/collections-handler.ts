@@ -4,6 +4,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
@@ -624,6 +625,11 @@ export class CollectionsHandler {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write, the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>
   ) {
@@ -638,6 +644,9 @@ export class CollectionsHandler {
         // a silently dropped lineage marker would leave a restore
         // indistinguishable from an ordinary edit.
         sourceVersionNo: params.sourceVersionNo,
+        // The API-key scope gates the publish transition; naming it explicitly
+        // (like sourceVersionNo) keeps it from being silently dropped.
+        authenticatedScope: params.authenticatedScope,
       },
       body,
       params.depth
@@ -665,6 +674,8 @@ export class CollectionsHandler {
      * re-check. Never inferred from a userId.
      */
     routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }

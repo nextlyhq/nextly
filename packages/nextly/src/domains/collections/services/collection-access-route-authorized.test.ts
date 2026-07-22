@@ -290,3 +290,75 @@ describe("getAccessRules normalizes collection owner fields", () => {
     expect(rules?.read?.ownerField).toBeUndefined();
   });
 });
+
+describe("checkCollectionAccess — scoped API key", () => {
+  // The publish/unpublish transition gate runs NOT route-authorized (the route
+  // only attested `update`). For a scoped API key it must judge the key's OWN
+  // stamped grants, never the key owner's RBAC — otherwise an update-only key
+  // owned by a publisher could publish.
+  const apiKeyOwner = { id: "publisher-1", roles: ["editor"] };
+
+  it("denies a publish the key is not scoped for, even when the owner's RBAC allows", async () => {
+    const { service, rbac } = buildAccessService();
+    // The OWNER can publish...
+    rbac.checkAccess.mockResolvedValue(true);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      apiKeyOwner,
+      "doc-1",
+      { id: "doc-1" },
+      false, // overrideAccess
+      false, // routeAuthorized (transition check)
+      // ...but the KEY is scoped for update only.
+      { actorType: "apiKey", permissions: ["update-posts"] }
+    );
+
+    expect(result?.statusCode).toBe(403);
+    // The owner's RBAC is never consulted for a scoped key.
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("allows a publish the key IS scoped for, even when the owner's RBAC denies", async () => {
+    const { service, rbac } = buildAccessService();
+    // The OWNER cannot publish...
+    rbac.checkAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      apiKeyOwner,
+      "doc-1",
+      { id: "doc-1" },
+      false,
+      false,
+      // ...but the KEY carries the publish grant.
+      { actorType: "apiKey", permissions: ["update-posts", "publish-posts"] }
+    );
+
+    expect(result).toBeNull();
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the owner's RBAC for a session caller (no api-key scope)", async () => {
+    const { service, rbac } = buildAccessService();
+    rbac.checkAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      apiKeyOwner,
+      "doc-1",
+      { id: "doc-1" },
+      false,
+      false,
+      // A session caller carries a scope with actorType "user" (or none), so the
+      // owner/session RBAC decides.
+      { actorType: "user", permissions: [] }
+    );
+
+    expect(result?.statusCode).toBe(403);
+    expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
+  });
+});

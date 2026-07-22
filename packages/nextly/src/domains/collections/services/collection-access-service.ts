@@ -15,6 +15,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestContext } from "@nextly/collections/fields/types/base";
 
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type {
   AccessControlService,
@@ -160,7 +164,11 @@ export class CollectionAccessService extends BaseService {
     documentId?: string,
     document?: Record<string, unknown>,
     overrideAccess?: boolean,
-    routeAuthorized?: boolean
+    routeAuthorized?: boolean,
+    // The caller's authenticated scope. For a scoped API key the RBAC gate
+    // judges the key's OWN stamped grants rather than the owner's permissions
+    // (see auth/authenticated-scope). Undefined for session/system callers.
+    authenticatedScope?: AuthenticatedScope
   ): Promise<CollectionServiceResult<T> | null> {
     // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
@@ -194,7 +202,26 @@ export class CollectionAccessService extends BaseService {
     // permissions. Skipped when routeAuthorized, because the route middleware
     // (requireCollectionAccess) already performed this exact check; the stored
     // rules below still run.
-    if (!routeAuthorized && this.rbacAccessControlService && user) {
+    //
+    // For a scoped API key the gate judges the key's OWN stamped grants, not the
+    // owner's DB permissions: the route only authorized the write as `update`,
+    // so this publish/unpublish re-check must consult the key's scope or an
+    // update-only key owned by a publisher could publish. `apiKeyScopeAllows`
+    // returns null for a non-API-key caller, which falls through to RBAC.
+    const scopeDecision =
+      !routeAuthorized && user
+        ? apiKeyScopeAllows(authenticatedScope, operation, collectionName)
+        : null;
+    if (!routeAuthorized && user && scopeDecision !== null) {
+      if (!scopeDecision) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+          data: null as unknown as T,
+        };
+      }
+    } else if (!routeAuthorized && this.rbacAccessControlService && user) {
       try {
         const allowed = await this.rbacAccessControlService.checkAccess({
           userId: user.id,
