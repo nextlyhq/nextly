@@ -8,11 +8,26 @@
  *
  */
 import { useForm, FormProvider } from "react-hook-form";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
 import { EntrySystemHeader } from "../EntrySystemHeader";
+
+// The Publish and Unpublish affordances are permission-gated. The matrix cases
+// below are about lifecycle state, not authorization, so the caller holds every
+// permission by default; the gating cases override this per test.
+const { canFor } = vi.hoisted(() => ({
+  canFor: vi.fn((_slug: string) => true),
+}));
+vi.mock("@admin/hooks/useCan", () => ({
+  useCan: (slug: string) => canFor(slug),
+}));
+
+beforeEach(() => {
+  canFor.mockReset();
+  canFor.mockImplementation(() => true);
+});
 
 interface HarnessProps {
   mode: "create" | "edit";
@@ -141,5 +156,63 @@ describe("EntrySystemHeader — button matrix", () => {
     expect(
       screen.queryByRole("button", { name: /^unpublish$/i })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("EntrySystemHeader — publish permission gating", () => {
+  it("hides Publish for a caller without publish-<slug>, keeping Save Draft", () => {
+    // An author who may edit but not publish: the primary action for them is
+    // to save a draft, and the server would refuse a publish anyway.
+    canFor.mockImplementation((slug: string) => slug !== "publish-posts");
+
+    render(<Harness mode="edit" entry={{ id: "1", status: "draft" }} />);
+
+    expect(
+      screen.getByRole("button", { name: /^save draft$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^publish$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Publish in create mode without the permission", () => {
+    // Create-as-published requires publish; without it the author creates a
+    // draft only.
+    canFor.mockImplementation((slug: string) => slug !== "publish-posts");
+
+    render(<Harness mode="create" />);
+
+    expect(
+      screen.getByRole("button", { name: /^save draft$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^publish$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Unpublish for a caller without unpublish-<slug>", () => {
+    // Editing published content: they may save changes but not take it down.
+    canFor.mockImplementation((slug: string) => slug !== "unpublish-posts");
+
+    render(
+      <Harness mode="edit" entry={{ id: "1", status: "published" }} isDirty />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /^save changes$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^unpublish$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("still shows Publish when the permission is held", () => {
+    canFor.mockImplementation(() => true);
+
+    render(<Harness mode="edit" entry={{ id: "1", status: "draft" }} />);
+
+    expect(
+      screen.getByRole("button", { name: /^publish$/i })
+    ).toBeInTheDocument();
   });
 });

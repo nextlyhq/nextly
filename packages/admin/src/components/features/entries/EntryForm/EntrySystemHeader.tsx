@@ -185,6 +185,14 @@ export function EntrySystemHeader({
   // Both collections and singles authorize a document write as `update-{slug}`.
   const canUpdateDocument = useCan(`update-${collectionSlug}`);
 
+  // Publishing is its own permission, distinct from editing. Without it the
+  // Publish affordance is hidden — matching the server, which refuses a write
+  // that moves a document into `published` from a caller lacking it. An author
+  // keeps Save Draft and stops there. Unpublish is gated separately, since
+  // taking content down is a different responsibility from putting it up.
+  const canPublishDocument = useCan(`publish-${collectionSlug}`);
+  const canUnpublishDocument = useCan(`unpublish-${collectionSlug}`);
+
   // Why: autofocus the title input on create so the cursor blinks ready for
   // typing. Skip in edit mode — focusing a populated title interrupts the
   // user's reading flow.
@@ -319,16 +327,18 @@ export function EntrySystemHeader({
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save changes
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSubmitting}
-              onClick={() => setUnpublishOpen(true)}
-              data-status="unpublish"
-            >
-              <EyeOff className="h-3.5 w-3.5" />
-              Unpublish
-            </Button>
+            {canUnpublishDocument && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmitting}
+                onClick={() => setUnpublishOpen(true)}
+                data-status="unpublish"
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+                Unpublish
+              </Button>
+            )}
           </>
         ) : hasStatus ? (
           <>
@@ -343,20 +353,22 @@ export function EntrySystemHeader({
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save Draft
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSubmitting || isInvalid}
-              onClick={onPublish}
-              data-status="published"
-            >
-              {isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Globe className="h-3.5 w-3.5" />
-              )}
-              Publish
-            </Button>
+            {canPublishDocument && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmitting || isInvalid}
+                onClick={onPublish}
+                data-status="published"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" />
+                )}
+                Publish
+              </Button>
+            )}
           </>
         ) : (
           <Button

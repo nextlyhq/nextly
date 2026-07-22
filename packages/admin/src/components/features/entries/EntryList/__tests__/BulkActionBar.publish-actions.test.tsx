@@ -12,12 +12,27 @@
  *    publish actions stay hidden — the bar never half-renders.
  */
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
 import { BulkActionBar } from "../BulkActionBar";
 import type { CollectionForColumns } from "../EntryTableColumns";
+
+// The bulk Publish / Unpublish buttons are permission-gated. These cases pin
+// the status-and-callback contract, so the caller holds both permissions by
+// default; the gating cases below deny them per test.
+const { canFor } = vi.hoisted(() => ({
+  canFor: vi.fn((_slug: string) => true),
+}));
+vi.mock("@admin/hooks/useCan", () => ({
+  useCan: (slug: string) => canFor(slug),
+}));
+
+beforeEach(() => {
+  canFor.mockReset();
+  canFor.mockImplementation(() => true);
+});
 
 const baseCollection: CollectionForColumns = {
   slug: "posts",
@@ -136,10 +151,10 @@ describe("BulkActionBar — Publish / Unpublish actions", () => {
     ).toBeDisabled();
   });
 
-  it("hides Publish + Unpublish if either callback is missing (defensive)", () => {
-    // Why: the bar treats both as a pair — exposing only one would imply a
-    // half-baked admin wiring. The publish actions stay hidden until both
-    // are connected.
+  it("hides only the action whose callback is missing", () => {
+    // Publish and Unpublish are now independent — a caller may hold one
+    // permission without the other — so a missing callback hides its own
+    // button rather than both. Here Unpublish is unwired; Publish remains.
     render(
       <BulkActionBar
         selectedCount={2}
@@ -152,10 +167,83 @@ describe("BulkActionBar — Publish / Unpublish actions", () => {
     );
 
     expect(
+      screen.getByRole("button", { name: /^publish selected$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /unpublish selected/i })
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("BulkActionBar — publish permission gating", () => {
+  it("hides Publish for a caller without publish-<slug>", () => {
+    canFor.mockImplementation((slug: string) => slug !== "publish-posts");
+
+    render(
+      <BulkActionBar
+        selectedCount={3}
+        collection={statusCollection}
+        onDelete={vi.fn()}
+        onPublish={vi.fn()}
+        onUnpublish={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /^publish selected$/i })
+    ).not.toBeInTheDocument();
+    // Unpublish is a separate permission and is still held here.
+    expect(
+      screen.getByRole("button", { name: /unpublish selected/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides Unpublish for a caller without unpublish-<slug>", () => {
+    canFor.mockImplementation((slug: string) => slug !== "unpublish-posts");
+
+    render(
+      <BulkActionBar
+        selectedCount={3}
+        collection={statusCollection}
+        onDelete={vi.fn()}
+        onPublish={vi.fn()}
+        onUnpublish={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /^publish selected$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /unpublish selected/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides both when the caller holds neither permission", () => {
+    canFor.mockImplementation(() => false);
+
+    render(
+      <BulkActionBar
+        selectedCount={3}
+        collection={statusCollection}
+        onDelete={vi.fn()}
+        onPublish={vi.fn()}
+        onUnpublish={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+
+    expect(
       screen.queryByRole("button", { name: /^publish selected$/i })
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /unpublish selected/i })
     ).not.toBeInTheDocument();
+    // Delete stays — it is a different permission surface, unchanged here.
+    expect(
+      screen.getByRole("button", { name: /delete selected/i })
+    ).toBeInTheDocument();
   });
 });
