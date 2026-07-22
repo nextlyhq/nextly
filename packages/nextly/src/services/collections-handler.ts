@@ -489,6 +489,11 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>
   ) {
@@ -497,6 +502,9 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        // Named explicitly (like updateEntry) so the API-key scope survives the
+        // field-by-field rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
       },
       body,
       params.depth

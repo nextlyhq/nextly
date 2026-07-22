@@ -234,6 +234,11 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -295,6 +300,11 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher: the route already authorized this POST as
+     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+     */
+    routeAuthorized?: boolean;
     /** API-key scope; gates the unconditional publish check. */
     authenticatedScope?: AuthenticatedScope;
   }) {

@@ -22,7 +22,12 @@ import {
 
 function buildAccessService() {
   const accessControlService = createMockAccessControlService();
-  const rbac = { checkAccess: vi.fn().mockResolvedValue(true) };
+  const rbac = {
+    checkAccess: vi.fn().mockResolvedValue(true),
+    // No code-defined access by default: a scoped API key is judged on its
+    // permission grant alone unless a test registers a rule.
+    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+  };
   const collectionService = createMockCollectionService();
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb()) as never,
@@ -318,6 +323,45 @@ describe("checkCollectionAccess — scoped API key", () => {
     expect(result?.statusCode).toBe(403);
     // The owner's RBAC is never consulted for a scoped key.
     expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
+    const { service, rbac } = buildAccessService();
+    // The key HAS publish-posts, but the collection's code-defined
+    // `access.publish` denies. The grant must not bypass that rule (which
+    // `rbac.checkAccess` — the path the API-key branch replaces — would have run).
+    rbac.getRegisteredAccess.mockReturnValue({ publish: () => false });
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      apiKeyOwner,
+      "doc-1",
+      { id: "doc-1" },
+      false,
+      false,
+      { actorType: "apiKey", permissions: ["publish-posts"] }
+    );
+
+    expect(result?.statusCode).toBe(403);
+  });
+
+  it("allows a scoped key with the grant when the code-defined rule allows", async () => {
+    const { service, rbac } = buildAccessService();
+    rbac.getRegisteredAccess.mockReturnValue({ publish: () => true });
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "publish",
+      apiKeyOwner,
+      "doc-1",
+      { id: "doc-1" },
+      false,
+      false,
+      { actorType: "apiKey", permissions: ["publish-posts"] }
+    );
+
+    expect(result).toBeNull();
   });
 
   it("allows a publish the key IS scoped for, even when the owner's RBAC denies", async () => {
