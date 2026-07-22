@@ -1033,14 +1033,14 @@ describe("SingleEntryService", () => {
       expect(result.statusCode).not.toBe(403);
     });
 
-    it("undoes the auto-create when a first publish is denied", async () => {
-      // No row yet → the update auto-creates a default before the gate runs.
-      // When the publish transition is refused, that default must be removed so
-      // the 403 leaves no persisted (and, for a versioned single, historyless)
-      // document behind.
+    it("never persists the default when a first publish is denied", async () => {
+      // No row yet → the update builds a default in memory before the gate runs
+      // but does not insert it. When the publish transition is refused, that
+      // default must never be persisted, so the 403 leaves no document behind
+      // (and, for a versioned single, no historyless row) and there is no row a
+      // rollback delete could destroy out from under a concurrent writer.
       const ctx = lifecycleCtx("publish");
       ctx.adapter.selectOne.mockResolvedValue(null);
-      ctx.adapter.insert.mockResolvedValue({ id: "new-id" });
 
       const result = await ctx.service.update(
         "site-settings",
@@ -1049,9 +1049,33 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.statusCode).toBe(403);
-      expect(ctx.adapter.delete).toHaveBeenCalledWith("single_site_settings", {
-        and: [{ column: "id", op: "=", value: "new-id" }],
+      // The default was never inserted, so there is nothing to roll back.
+      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+    });
+
+    it("persists the default and publishes when a first publish is allowed", async () => {
+      // The mirror of the denial case: when the publish IS authorized, the
+      // deferred default is inserted and the write proceeds, so a legitimate
+      // first-time publish is not blocked by the authorize-before-create change.
+      const ctx = lifecycleCtx("unpublish"); // deny unpublish, allow publish
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      ctx.adapter.insert.mockResolvedValue({
+        id: "new-id",
+        siteName: "S",
+        updated_at: "2026-01-01T00:00:00.000Z",
       });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(true);
+      // The default row was persisted (once), only after authorization.
+      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
   });
 });

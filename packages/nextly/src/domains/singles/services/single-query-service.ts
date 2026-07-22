@@ -667,10 +667,20 @@ export class SingleQueryService extends BaseService {
    * history; the mutation path does NOT, because its subsequent update records
    * the first version itself (opting in there would double-version a first edit).
    */
-  async createDefaultDocument(
-    singleMeta: DynamicSingleRecord,
-    options?: { captureInitialVersion?: boolean }
-  ): Promise<SingleDocument> {
+  /**
+   * Build the default document for a Single in memory, WITHOUT inserting it.
+   *
+   * Returns both the document (system columns + resolved field defaults) and the
+   * snake_cased row ready for an insert. The write path uses this to run its
+   * hook/validation/authorization pipeline against a would-be default before
+   * committing it, so a first write that is refused (for example a publish
+   * without the publish permission) never persists a row it would then have to
+   * delete — a delete that could clobber a concurrent writer's row.
+   */
+  buildDefaultDocument(singleMeta: DynamicSingleRecord): {
+    document: SingleDocument;
+    insertValues: Record<string, unknown>;
+  } {
     const now = new Date();
     const id = crypto.randomUUID();
 
@@ -718,6 +728,20 @@ export class SingleQueryService extends BaseService {
       string,
       unknown
     >;
+
+    return {
+      document: defaults as SingleDocument,
+      insertValues: snakeCaseDefaults,
+    };
+  }
+
+  async createDefaultDocument(
+    singleMeta: DynamicSingleRecord,
+    options?: { captureInitialVersion?: boolean }
+  ): Promise<SingleDocument> {
+    const { insertValues: snakeCaseDefaults } =
+      this.buildDefaultDocument(singleMeta);
+    const id = snakeCaseDefaults.id as string;
 
     const versionsConfig = singleMeta.versions;
     const shouldCapture =
