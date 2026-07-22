@@ -1077,5 +1077,34 @@ describe("SingleEntryService", () => {
       expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
       expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
+
+    it("reuses a row a hook auto-created instead of inserting a duplicate", async () => {
+      // A beforeUpdate hook that reads the Single via get() can auto-create the
+      // row while `autoCreated` still reflects the earlier null read. The
+      // deferred insert (now inside the update transaction) re-checks for a row
+      // and reuses it, so the write does not leave two rows for the Single.
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      // Pre-transaction read finds no row (so autoCreated); the in-transaction
+      // read finds the row a hook created in the meantime.
+      ctx.adapter.selectOne.mockResolvedValueOnce(null).mockResolvedValue({
+        id: "hook-created",
+        siteName: "S",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.adapter.update.mockResolvedValue([
+        { id: "hook-created", siteName: "S2", updated_at: "2026-02-01" },
+      ]);
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "S2" },
+        { overrideAccess: true }
+      );
+
+      expect(result.success).toBe(true);
+      // No duplicate insert — the existing (hook-created) row was reused.
+      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
   });
 });
