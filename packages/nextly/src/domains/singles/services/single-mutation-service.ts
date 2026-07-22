@@ -200,17 +200,22 @@ export class SingleMutationService extends BaseService {
         return accessDenied;
       }
 
-      // 2. Ensure document exists (auto-create if it did not yet exist).
-      // Tracked so a later publish-transition denial can undo this insert: the
-      // transition gate runs after hooks (it needs the post-hook status), so a
-      // refused first publish must not leave the default row persisted — and for
-      // a versioned single, a live document with no captured history.
+      // 2. Resolve the document to write against. When the Single has never been
+      // written, build its default in memory but DO NOT persist it yet. The
+      // publish-transition gate below runs after hooks (it needs the post-hook
+      // status), and a first write refused there must not leave a row behind —
+      // one a concurrent writer could have populated and that a rollback delete
+      // would then destroy. The default is inserted only once the write
+      // (including any publish) is authorized.
       let autoCreated = false;
+      let pendingAutoCreateValues: Record<string, unknown> | null = null;
       if (!existingDoc) {
-        this.logger.info("Auto-creating Single document before update", {
+        this.logger.info("Preparing default Single document before update", {
           slug,
         });
-        existingDoc = await this.queryService.createDefaultDocument(singleMeta);
+        const built = this.queryService.buildDefaultDocument(singleMeta);
+        existingDoc = built.document;
+        pendingAutoCreateValues = built.insertValues;
         autoCreated = true;
       }
 
@@ -414,16 +419,27 @@ export class SingleMutationService extends BaseService {
             logger: this.logger,
           });
           if (transitionDenied) {
-            // Undo the auto-create so a refused first publish leaves no
-            // persisted (and, for a versioned single, historyless) document.
-            if (autoCreated) {
-              await this.adapter.delete(singleMeta.tableName, {
-                and: [{ column: "id", op: "=", value: existingDoc.id }],
-              });
-            }
+            // Nothing is persisted yet — the default is inserted only after this
+            // gate passes (below) — so a refused first publish simply returns
+            // with no row to undo, and cannot race a concurrent writer's row into
+            // a rollback delete.
             return transitionDenied;
           }
         }
+      }
+
+      // 6.36. Persist the auto-created default now that the write (including any
+      // publish transition) is authorized. Deferred to here so a refused first
+      // write never leaves a row behind. `existingDoc` becomes the committed row
+      // the update transaction below targets. In the update path the default is a
+      // plain insert (no v1 capture): the update transaction records the first
+      // version itself, so capturing here would double-version the first edit.
+      if (autoCreated && pendingAutoCreateValues) {
+        existingDoc = await this.adapter.insert<SingleDocument>(
+          singleMeta.tableName,
+          pendingAutoCreateValues,
+          { returning: "*" }
+        );
       }
 
       // 6.4. Extract component field data (stored in separate comp_{slug}
