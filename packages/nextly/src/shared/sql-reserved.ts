@@ -58,12 +58,19 @@ export const RESERVED_SLUGS = [
   "roles",
   "permissions",
   "sessions",
-  // Permission identity is action + resource, and webhook endpoint permissions
-  // are seeded against the `webhooks` resource. A collection with this slug
-  // would share those exact tuples, so a role granted the collection's
-  // `read-webhooks` would also be able to read endpoint configuration, and
-  // `update-webhooks` would reveal signing secrets.
+  // System resources whose permissions a same-named content type would collide
+  // with (permission identity is `action-resource`): a `webhooks` collection's
+  // `read-webhooks` would reach the endpoint routes, `update-webhooks` the
+  // signing secrets, and `read-api-keys` the API keys. This mirrors the curated
+  // `RESERVED_RESOURCE_SLUGS` in schemas/_zod/rbac.ts, which the dynamic
+  // registries enforce; this leaf module stays import-free (see the header), so
+  // the names are repeated here for the code-first validators. `settings` is
+  // deliberately absent — its surface is gated on `manage`, which content
+  // seeding never produces, so it stays usable as a content model.
   "webhooks",
+  "api-keys",
+  "email-providers",
+  "email-templates",
   "tokens",
   "media",
   "uploads",

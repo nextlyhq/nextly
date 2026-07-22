@@ -47,6 +47,44 @@ export function isValidResource(
   return isSystemResource(resource) || knownCollectionSlugs.includes(resource);
 }
 
+/**
+ * System resources whose names must never be used as a collection, single or
+ * component slug.
+ *
+ * Permission identity is `action-resource`, so a content type named `webhooks`
+ * seeds `read-webhooks` / `update-webhooks` — the exact rows the webhook
+ * endpoint routes check. A role granted the content type's permission would
+ * then reach the system surface: read endpoint configuration, reveal signing
+ * secrets, list API keys. Every slug-assignment path (create and rename, for
+ * collections and singles alike) rejects these names.
+ *
+ * This is deliberately NARROWER than {@link SYSTEM_RESOURCES}. Two members are
+ * excluded on purpose:
+ * - `settings` — its system surface is gated only on `manage-settings`, and
+ *   content seeding never produces the `manage` action, so a `settings`
+ *   collection or single cannot reach it. It is also a common content model
+ *   (site settings as a single).
+ * - `media` — a plausible content concept, and its routes are not gated on the
+ *   CRUD `*-media` permissions that content seeding would mint.
+ *
+ * The set is exactly the resources whose routes enforce a create/read/update/
+ * delete action that collection or single seeding also produces.
+ */
+export const RESERVED_RESOURCE_SLUGS = [
+  "users",
+  "roles",
+  "permissions",
+  "webhooks",
+  "api-keys",
+  "email-providers",
+  "email-templates",
+] as const;
+
+/** Whether a slug collides with a system resource's permissions. */
+export function isReservedResourceSlug(slug: string): boolean {
+  return (RESERVED_RESOURCE_SLUGS as readonly string[]).includes(slug);
+}
+
 export const RoleSchema = z.object({
   id: IdSchema,
   name: z

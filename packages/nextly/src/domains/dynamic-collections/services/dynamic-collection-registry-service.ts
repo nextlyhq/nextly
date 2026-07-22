@@ -1,6 +1,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors";
+import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
@@ -105,6 +107,24 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string,
     options?: { currentCollectionId?: string }
   ): Promise<void> {
+    // A name that collides with a system resource's permissions may not be
+    // used as a Schema-Builder collection slug, on create or rename. This
+    // registry does not go through `assertGlobalResourceSlugAvailable`, so the
+    // check lives here as well.
+    if (isReservedResourceSlug(slug)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "slug",
+            code: "reserved_slug",
+            message:
+              "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
+          },
+        ],
+        logContext: { reason: "system-resource-slug", slug },
+      });
+    }
+
     const existingCollection = await this.db
       .select({ id: this.dynamicCollections.id })
       .from(this.dynamicCollections)

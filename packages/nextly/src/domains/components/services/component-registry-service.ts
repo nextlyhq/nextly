@@ -8,6 +8,7 @@ import { toDbError } from "../../../database/errors";
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
 // `logContext` so operators retain full diagnostic context.
 import { NextlyError } from "../../../errors";
+import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type {
   DynamicComponentInsert,
   DynamicComponentRecord,
@@ -162,10 +163,36 @@ export class ComponentRegistryService extends BaseRegistryService<
    * @throws NextlyError(DUPLICATE) if a Component with the same slug already exists.
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
+  /**
+   * Reject a slug that collides with a system resource's permissions.
+   *
+   * Components never reach `assertGlobalResourceSlugAvailable` (it has no
+   * component type), and the dynamic component path does not consult the
+   * code-first reserved list, so the check lives here for both the plain and
+   * in-transaction registration paths. A `webhooks` component would seed
+   * `read-webhooks` / `update-webhooks` — the rows the endpoint routes check.
+   */
+  private assertSlugNotReservedResource(slug: string): void {
+    if (!isReservedResourceSlug(slug)) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "slug",
+          code: "reserved_slug",
+          message:
+            "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
+        },
+      ],
+      logContext: { reason: "system-resource-slug", slug },
+    });
+  }
+
   async registerComponent(
     data: DynamicComponentInsert
   ): Promise<DynamicComponentRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
+
+    this.assertSlugNotReservedResource(data.slug);
 
     const existing = await this.getComponentBySlug(data.slug);
     if (existing) {
@@ -227,6 +254,8 @@ export class ComponentRegistryService extends BaseRegistryService<
     tx: TransactionContext,
     data: DynamicComponentInsert
   ): Promise<DynamicComponentRecord> {
+    this.assertSlugNotReservedResource(data.slug);
+
     const existing = await tx.selectOne<DynamicComponentRecord>(
       this.registryTableName,
       {

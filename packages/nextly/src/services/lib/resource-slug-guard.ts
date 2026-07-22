@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../errors";
+import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 
 type ResourceType = "collection" | "single";
 
@@ -54,13 +55,36 @@ export async function assertGlobalResourceSlugAvailable(
   options?: SlugGuardOptions
 ): Promise<void> {
   const owner = await findSlugOwner(adapter, slug);
+
+  const isSameResource =
+    owner != null &&
+    owner.resourceType === options?.currentResourceType &&
+    owner.id === options?.currentResourceId;
+
+  // A name that collides with a system resource's permissions may not be taken
+  // as a slug on any path — create or rename, collection or single. Checked
+  // before the uniqueness lookup because a system resource is not a dynamic
+  // collection or single, so it would otherwise read as "available". A resource
+  // that somehow already holds such a slug (created before the name became
+  // reserved) may keep it: rejecting a no-op save would strand it with no way
+  // to edit anything else.
+  if (isReservedResourceSlug(slug) && !isSameResource) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "slug",
+          code: "reserved_slug",
+          message:
+            "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
+        },
+      ],
+      logContext: { reason: "system-resource-slug", slug },
+    });
+  }
+
   if (!owner) {
     return;
   }
-
-  const isSameResource =
-    owner.resourceType === options?.currentResourceType &&
-    owner.id === options?.currentResourceId;
 
   if (isSameResource) {
     return;
