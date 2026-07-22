@@ -139,4 +139,39 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
 
     expect(result.statusCode).not.toBe(403);
   });
+
+  it("does not gate publish-all for a user field named status without lifecycle", async () => {
+    // A collection without the draft/published lifecycle can still declare an
+    // ordinary field named `status`. Its presence puts a `status` column in the
+    // schema, but there is nothing to publish, so publish-all must no-op rather
+    // than demand the publish permission. Gating on the lifecycle flag
+    // (collection.status === true), not the mere existence of a `status` column,
+    // is what makes this pass.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          // No lifecycle. `status` here is an ordinary user field, so the schema
+          // carries a `status` column even though nothing is publishable.
+          access: { update: () => true },
+          fields: [text({ name: "title" }), text({ name: "status" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "anything" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const result = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      userId: "user-1",
+    });
+
+    expect(result.statusCode).not.toBe(403);
+  });
 });

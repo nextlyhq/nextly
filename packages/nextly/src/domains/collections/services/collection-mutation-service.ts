@@ -1956,7 +1956,17 @@ export class CollectionMutationService extends BaseService {
       );
       if (accessDenied) return accessDenied;
 
-      const hasMainStatus = "status" in schema;
+      // The draft/published lifecycle flag on the collection config, NOT the
+      // mere presence of a `status` column: a collection that defines an
+      // ordinary user field named `status` has the column but no lifecycle, so
+      // it is not publishable and must not demand the publish permission here.
+      // Resolved through the collection so a custom tableName/dbName override is
+      // honored below, matching every other mutation.
+      const publishCollection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const hasMainStatus =
+        (publishCollection as { status?: boolean }).status === true;
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
@@ -1995,12 +2005,10 @@ export class CollectionMutationService extends BaseService {
       const isMysql = this.dialect === "mysql";
       const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
       const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
-      // Resolve through the collection so a custom tableName/dbName override is
-      // honored, matching every other mutation; getTableName would hardcode the
-      // default dc_<slug> and target the wrong table for a renamed collection.
-      const publishCollection = await this.collectionService.getCollection(
-        params.collectionName
-      );
+      // `publishCollection` (loaded above for the lifecycle flag) also resolves a
+      // custom tableName/dbName override, matching every other mutation;
+      // getTableName would hardcode the default dc_<slug> and target the wrong
+      // table for a renamed collection.
       const tableName = this.resolveTableName(
         publishCollection,
         params.collectionName
