@@ -482,6 +482,7 @@ export class PermissionService extends BaseService {
         slug: permissions.slug,
         permissionGroup: permissions.permissionGroup,
         danger: permissions.danger,
+        orphanedAt: permissions.orphanedAt,
       })
       .from(permissions)
       .where(
@@ -510,7 +511,19 @@ export class PermissionService extends BaseService {
         slug?: string;
         permissionGroup?: string | null;
         danger?: boolean;
+        orphanedAt?: Date | null;
       } = {};
+
+      // Ensuring a permission IS the declaration, so a row that was retired
+      // rejoins the menu. Without this, a permission whose declaration went
+      // away and later came back stays marked: `listPermissions` filters
+      // orphans out by default, so preset-role syncing and the permission
+      // matrix would both skip a permission that exists and is declared.
+      const currentlyOrphaned =
+        (existing as { orphanedAt?: unknown }).orphanedAt != null;
+      if (currentlyOrphaned) {
+        patch.orphanedAt = null;
+      }
 
       const currentOwner =
         (existing as { owner?: string | null }).owner ?? null;

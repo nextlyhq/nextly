@@ -26,20 +26,11 @@ import {
   type ApiPermissionEntry,
 } from "@admin/services/realPermissionsApi";
 
+import { SYSTEM_ORDER, SYSTEM_RESOURCES } from "./system-resources";
+
 //============================================================
 // Constants
 //============================================================
-
-/** Resources that are built-in to Nextly (not dynamic collections). */
-const SYSTEM_RESOURCES = new Set([
-  "users",
-  "roles",
-  "permissions",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-]);
 
 const ACTION_BADGE_VARIANT: Record<
   string,
@@ -83,15 +74,7 @@ function groupPermissionsByResource(
   }
 
   // Sort: system resources first (in a stable order), then collection resources alphabetically
-  const systemOrder = [
-    "users",
-    "roles",
-    "permissions",
-    "media",
-    "settings",
-    "email-providers",
-    "email-templates",
-  ];
+  const systemOrder = SYSTEM_ORDER;
 
   const systemGroups: ResourceGroup[] = [];
   const collectionGroups: ResourceGroup[] = [];

@@ -70,6 +70,11 @@ import {
 } from "../../i18n/resolve-locale";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  resolveComponentFieldMap,
+  tagComponentTypes,
+  tagNestedComponentTypes,
+} from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -618,6 +623,51 @@ export class CollectionMutationService extends BaseService {
     );
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
+  }
+
+  /**
+   * The document parts a version records, with component types tagged.
+   *
+   * A separate shape from what the outbox carries: the same parts feed both,
+   * and the marker belongs only to the snapshot.
+   */
+  private async snapshotPartsFor(
+    parts: {
+      parentRow: Record<string, unknown>;
+      components: Record<string, unknown>;
+      manyToMany: Record<string, string[]>;
+    },
+    fields: FieldDefinition[],
+    tx: { getDrizzle<T = unknown>(): T }
+  ) {
+    const schema = fields as unknown as FieldConfig[];
+
+    // A component embedded in another component is tagged too, which needs the
+    // inner component's own schema. The data service already exposes that
+    // lookup; resolving the whole set once keeps the walk itself synchronous.
+    //
+    // Read on the transaction's own connection. The registry lookup would
+    // otherwise take a second pooled connection while this write transaction
+    // still holds one, which stalls against a small pool.
+    const componentFields = this.componentDataService
+      ? await resolveComponentFieldMap(schema, slug =>
+          this.componentDataService!.getComponentFields(slug, tx.getDrizzle())
+        )
+      : new Map<string, FieldConfig[]>();
+    const resolve = (slug: string) => componentFields.get(slug);
+
+    return {
+      ...parts,
+      components: tagComponentTypes(parts.components, schema, resolve),
+      // A component declared inside a group or repeater rides in that
+      // container's JSON on the parent row rather than appearing as its own
+      // key, so it has to be reached through the row.
+      parentRow: tagNestedComponentTypes(
+        parts.parentRow,
+        schema,
+        resolve
+      ) as Record<string, unknown>,
+    };
   }
 
   private async buildFullSnapshotRelations(
@@ -1646,7 +1696,9 @@ export class CollectionMutationService extends BaseService {
               typeof createCompanionStatus === "string"
                 ? createCompanionStatus
                 : (entry as { status?: unknown }).status,
-            parts: documentParts,
+            // Tagged for the snapshot alone: `documentParts` is also what the
+            // outbox event below carries, and that payload is read shape.
+            parts: await this.snapshotPartsFor(documentParts, fields, tx),
             createdBy: params.user?.id ?? null,
             // Set only when localized values were actually routed, for the
             // same reason the update path is careful about it.
@@ -1995,11 +2047,17 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 contentStatus: "published",
-                parts: {
-                  parentRow,
-                  components: snapshotComponents,
-                  manyToMany: snapshotM2M,
-                },
+                // Tagged like every other capture: a snapshot records which
+                // component its values came from, whichever path produced it.
+                parts: await this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: snapshotComponents,
+                    manyToMany: snapshotM2M,
+                  },
+                  fields,
+                  tx
+                ),
                 createdBy: params.user?.id ?? null,
                 // Left unlabelled deliberately. Publishing spans every locale,
                 // and this snapshot is the main row alone — on a migrated
@@ -2073,6 +2131,53 @@ export class CollectionMutationService extends BaseService {
         data: null,
       };
     }
+  }
+
+  /**
+   * Whether this user may update the entry, decided without writing anything.
+   *
+   * The same load-then-check `updateEntry` performs, so it sees the
+   * collection's stored per-document rules — owner-only and role-based — which
+   * coarse RBAC does not express. For callers that write something OTHER than
+   * the document and must still be held to the document's update rules;
+   * version history is one. Sharing this path rather than restating the
+   * decision elsewhere is what stops the gate drifting from the writer.
+   */
+  async canUpdateEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    routeAuthorized?: boolean;
+  }): Promise<boolean> {
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+
+    // Loaded because owner-only rules compare against the stored row; without
+    // it those rules cannot be evaluated at all.
+    const [existingEntry] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+
+    // A document that is not there cannot be updated. Answered as a refusal so
+    // the caller treats missing and forbidden identically, rather than letting
+    // the difference between them be probed.
+    if (!existingEntry) return false;
+
+    const denied = await this.accessService.checkCollectionAccess(
+      params.collectionName,
+      "update",
+      params.user,
+      params.entryId,
+      existingEntry,
+      // Never overridden: this exists to APPLY the document's rules, so a
+      // caller that could opt out of them would defeat the point.
+      false,
+      params.routeAuthorized
+    );
+    return denied === null;
   }
 
   async updateEntry(
@@ -2920,7 +3025,8 @@ export class CollectionMutationService extends BaseService {
                     (updatePayload as { status?: unknown }).status ??
                     effectiveLocaleStatus ??
                     (currentParent as { status?: unknown }).status,
-                  parts: documentParts,
+                  // See the create path: tagged for the snapshot only.
+                  parts: await this.snapshotPartsFor(documentParts, fields, tx),
                   createdBy: params.user?.id ?? null,
                   // Labelled with a locale only when locale-specific state was
                   // actually captured. A migrated localized collection routes

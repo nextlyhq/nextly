@@ -20,4 +20,7 @@ export {
   getDispatcher,
   setHandlerConfig,
   getHandlerConfig,
+  // Consumed by the direct-dispatch entry points, which return before the
+  // dispatcher path that normally performs initialisation.
+  ensureServicesInitialized,
 } from "./auth-handler";

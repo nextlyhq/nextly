@@ -28,6 +28,13 @@ export interface ColumnSpec {
   // Raw default expression as written in DDL. Undefined when no default.
   // Examples: "'foo'::text", "now()", "0", "true", "gen_random_uuid()".
   default?: string;
+  // `true` when the column is the table's primary key. Recorded from the
+  // desired side, which reads it from the Drizzle column; introspected
+  // snapshots leave it undefined, and so do snapshots written before this
+  // field existed. Both read as "not known to be a primary key", which only
+  // costs the nullability exemption the diff grants primary keys — never a
+  // wrong op.
+  primaryKey?: boolean;
 }
 
 export interface IndexSpec {

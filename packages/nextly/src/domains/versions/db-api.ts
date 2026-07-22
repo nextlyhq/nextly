@@ -54,4 +54,18 @@ export interface VersionsDbApi {
    * extra optional arguments remain assignable to this narrower shape.
    */
   delete(table: string, where: VersionsWhere): Promise<number>;
+  /**
+   * Update rows matching `where`.
+   *
+   * Narrow for the same reason as `delete`: the only thing that edits a stored
+   * version is its label, and a snapshot is never rewritten. Keeping the port
+   * to what is actually used means both the adapter and the transaction
+   * context satisfy it without adapting, and makes any future widening a
+   * deliberate act rather than an inherited capability.
+   */
+  update(
+    table: string,
+    data: Record<string, unknown>,
+    where: VersionsWhere
+  ): Promise<unknown>;
 }

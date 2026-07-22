@@ -27,6 +27,7 @@ vi.mock("../../../api/versions-access", () => ({
 
 import { COLLECTION_VERSION_METHODS } from "../collection-dispatcher";
 import { SINGLE_VERSION_METHODS } from "../single-dispatcher";
+import { parseRestRoute } from "../../../route-handler/route-parser";
 
 describe("version methods are registered", () => {
   beforeEach(() => {
@@ -43,6 +44,7 @@ describe("version methods are registered", () => {
       "getEntryVersion",
       "listEntryVersions",
       "restoreEntryVersion",
+      "setEntryVersionLabel",
     ]);
   });
 
@@ -51,6 +53,7 @@ describe("version methods are registered", () => {
       "getSingleVersion",
       "listSingleVersions",
       "restoreSingleVersion",
+      "setSingleVersionLabel",
     ]);
   });
 
@@ -112,5 +115,85 @@ describe("version methods are registered", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     expect(listSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("version methods reach the router", () => {
+  // The sets above pin what the dispatcher exposes. This pins the other half:
+  // a method the router cannot resolve is unreachable however well registered,
+  // and one resolved with the wrong operation is authorized as the wrong thing.
+  it.each([
+    {
+      method: "listEntryVersions",
+      path: ["collections", "posts", "entries", "e1", "versions"],
+      verb: "GET",
+    },
+    {
+      method: "getEntryVersion",
+      path: ["collections", "posts", "entries", "e1", "versions", "2"],
+      verb: "GET",
+    },
+    {
+      method: "restoreEntryVersion",
+      path: [
+        "collections",
+        "posts",
+        "entries",
+        "e1",
+        "versions",
+        "2",
+        "restore",
+      ],
+      verb: "POST",
+    },
+    {
+      method: "setEntryVersionLabel",
+      path: ["collections", "posts", "entries", "e1", "versions", "2"],
+      verb: "PATCH",
+    },
+    {
+      method: "listSingleVersions",
+      path: ["singles", "settings", "versions"],
+      verb: "GET",
+    },
+    {
+      method: "getSingleVersion",
+      path: ["singles", "settings", "versions", "2"],
+      verb: "GET",
+    },
+    {
+      method: "restoreSingleVersion",
+      path: ["singles", "settings", "versions", "2", "restore"],
+      verb: "POST",
+    },
+    {
+      method: "setSingleVersionLabel",
+      path: ["singles", "settings", "versions", "2"],
+      verb: "PATCH",
+    },
+  ])("$method is reachable at $verb $path", ({ method, path, verb }) => {
+    expect(parseRestRoute(path, verb).method).toBe(method);
+  });
+
+  it("routes the writes as writes and the reads as reads", () => {
+    const operationFor = (path: string[], verb: string) =>
+      parseRestRoute(path, verb).operation;
+
+    expect(
+      operationFor(
+        ["collections", "posts", "entries", "e1", "versions", "2"],
+        "PATCH"
+      )
+    ).toBe("update");
+    expect(
+      operationFor(["singles", "settings", "versions", "2"], "PATCH")
+    ).toBe("update");
+    // A read of the same version must not be promoted to a write.
+    expect(
+      operationFor(
+        ["collections", "posts", "entries", "e1", "versions", "2"],
+        "GET"
+      )
+    ).not.toBe("update");
   });
 });

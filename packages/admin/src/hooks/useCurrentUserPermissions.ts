@@ -14,7 +14,7 @@ import { useRouter } from "./useRouter";
  * Permissions for these resources map to dedicated capability flags
  * rather than per-collection capabilities.
  */
-const SYSTEM_RESOURCES = new Set([
+export const SYSTEM_RESOURCES = new Set([
   "users",
   "roles",
   "permissions",
@@ -23,6 +23,7 @@ const SYSTEM_RESOURCES = new Set([
   "email-providers",
   "email-templates",
   "api-keys",
+  "webhooks",
 ]);
 
 /**

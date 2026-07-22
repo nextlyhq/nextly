@@ -789,11 +789,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
 
     // The 4 rebuild statements pass through (CREATE / INSERT / DROP /
     // RENAME), the orphan DROP for dc_jobs gets blocked.
-    expect(executedStmts).toHaveLength(4);
     expect(executedStmts[0]).toContain('CREATE TABLE "__new_dc_posts"');
     expect(executedStmts[1]).toContain("INSERT INTO");
     expect(executedStmts[2]).toContain('DROP TABLE "dc_posts"');
     expect(executedStmts[3]).toContain('RENAME TO "dc_posts"');
+
+    // This rebuild is exactly how SQLite loses indexes: the table the indexes
+    // belonged to is dropped at [2], and the one that replaces it is built
+    // from a Drizzle schema that declares none. The restore statements follow
+    // the rename, so the table cannot commit without them.
+    const restored = executedStmts.slice(4);
+    expect(restored.length).toBeGreaterThan(0);
+    expect(restored.every(s => /CREATE\s+(UNIQUE\s+)?INDEX/i.test(s))).toBe(
+      true
+    );
+    expect(restored.every(s => s.includes("dc_posts"))).toBe(true);
     // dc_jobs DROP did NOT make it through.
     expect(executedStmts.some(s => /DROP\s+TABLE\s+"?dc_jobs/i.test(s))).toBe(
       false
