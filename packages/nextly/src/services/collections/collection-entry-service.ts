@@ -357,6 +357,8 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     ids: string[];
     user?: UserContext;
+    /** Who performed the delete, recorded on each entry's outbox event. */
+    actor?: RequestActor;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
   }): Promise<BulkOperationResult<{ id: string }>> {

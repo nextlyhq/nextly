@@ -281,17 +281,38 @@ export class CollectionMutationService extends BaseService {
       tableName: string;
       row: Record<string, unknown>;
       fields: FieldDefinition[];
+      /**
+       * Locale whose companion translations to merge into the snapshot. For a
+       * migrated localized collection the main row holds no translatable values,
+       * so without this the payload omits every localized field.
+       */
+      locale?: string;
     }
   ): Promise<Record<string, unknown>> {
-    const { collectionName, entryId, tableName, row, fields } = args;
+    const { collectionName, entryId, tableName, row, fields, locale } = args;
     const manyToManyFields = fields.filter(
       f => f.type === "relationship" && f.options?.relationType === "manyToMany"
     );
 
-    const parentRow = this.deserializeJsonFieldsForSnapshot(
-      convertTimestampsToCamelCase({ ...row }),
-      fields
-    );
+    // Overlay the locale's translatable values from the companion table before
+    // deserializing, so a localized field still held as a JSON string is parsed
+    // to the read shape too — matching how the update path builds `previous`.
+    const merged: Record<string, unknown> = {
+      ...convertTimestampsToCamelCase({ ...row }),
+    };
+    if (locale && this.localization) {
+      Object.assign(
+        merged,
+        await this.readCompanionLocalizedValues(
+          tx,
+          collectionName,
+          entryId,
+          locale
+        )
+      );
+    }
+
+    const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
     stripPasswordFieldValues(parentRow, fields);
     stripSystemOwnerField(parentRow);
 
@@ -301,7 +322,8 @@ export class CollectionMutationService extends BaseService {
       collectionName,
       tableName,
       fields,
-      manyToManyFields
+      manyToManyFields,
+      locale
     );
 
     return assembleDocument({ parentRow, components, manyToMany });
@@ -3446,19 +3468,39 @@ export class CollectionMutationService extends BaseService {
       const webhookFields = await this.webhookFieldTree(snapshotFields);
 
       // Delete the entry, cascade its component subtrees, and append the
-      // `entry.deleted` event in one transaction so the event commits with the
-      // deletion (never recorded for a delete that rolls back) and a
-      // component-cascade failure rolls the whole thing back instead of leaving
-      // orphaned component rows.
+      // `entry.deleted` event in one transaction, so the event commits with the
+      // deletion and is never recorded for a delete that rolled back. (The
+      // component cascade is best-effort inside the shared helper — it logs and
+      // continues on a per-table failure — so this pairs the entry delete with
+      // its event, not full cascade atomicity.)
+      let deletedRow = false;
       await this.adapter.transaction(async tx => {
+        // Lock and re-read the committed row inside the transaction. `entry`
+        // above was read before the hooks ran and outside this transaction, so a
+        // concurrent write may have changed or removed it; the event must
+        // describe the row actually deleted, and the lock serializes a racing
+        // delete so only one of them records the event. The adapter no-ops the
+        // lock where row locking is unavailable (e.g. SQLite, itself serialized).
+        await tx.lockRow(tableName, params.entryId);
+        const [currentRow] = await tx
+          .getDrizzle<typeof this.db>()
+          .select()
+          .from(schema)
+          .where(eq(schema.id, params.entryId))
+          .limit(1);
+        if (!currentRow) return; // a concurrent delete won the race.
+
         // Read the removed document before the cascade delete removes its
-        // relations, in the read shape create/update events use.
+        // relations, in the read shape create/update events use. A localized
+        // collection keeps translatable values in the companion, so overlay the
+        // default locale's.
         const deletedDocument = await this.buildDeletedDocument(tx, {
           collectionName: params.collectionName,
           entryId: params.entryId,
           tableName,
-          row: entry as Record<string, unknown>,
+          row: currentRow as Record<string, unknown>,
           fields: snapshotFields,
+          locale: this.localization?.defaultLocale,
         });
 
         if (this.componentDataService) {
@@ -3469,7 +3511,15 @@ export class CollectionMutationService extends BaseService {
           });
         }
 
-        await tx.delete(tableName, this.whereEq("id", params.entryId));
+        const deletedCount = await tx.delete(
+          tableName,
+          this.whereEq("id", params.entryId)
+        );
+        // With the lock held a found row always deletes; the guard still covers
+        // the lock-less dialects and keeps a racing delete from recording a
+        // duplicate `entry.deleted` for a row it did not remove.
+        if (deletedCount === 0) return;
+        deletedRow = true;
 
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
@@ -3488,9 +3538,10 @@ export class CollectionMutationService extends BaseService {
         });
       });
 
-      const deleted = entry;
-
-      if (!deleted) {
+      // A concurrent delete removed the row first: report not-found rather than
+      // a second success (and a duplicate event) for a deletion this call did
+      // not perform.
+      if (!deletedRow) {
         return {
           success: false,
           statusCode: 404,
@@ -3498,6 +3549,8 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+
+      const deleted = entry;
 
       // Execute afterDelete hooks (code-registered)
       // Hooks run after deletion completes (for cleanup)

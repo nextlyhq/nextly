@@ -1224,6 +1224,9 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
         userRoles: readAuthenticatedRoles(p),
+        // Who performed the bulk delete (user vs API key), recorded on each
+        // entry's `entry.deleted` event — same attribution as single delete.
+        actor: readAuthenticatedActor(p),
         // Route middleware already ran the RBAC/code-access gate; attest it so
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.

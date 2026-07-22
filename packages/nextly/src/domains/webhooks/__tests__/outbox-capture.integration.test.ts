@@ -475,6 +475,44 @@ describe("webhook outbox capture (integration)", () => {
     });
   });
 
+  it("attributes each bulk-deleted entry's event to the acting API key", async () => {
+    // The REST bulk delete fans out to the single-entry delete, which now emits
+    // entry.deleted; the actor must be threaded through the bulk stack too, or
+    // every bulk-delete event is misattributed to the key owner or system.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const a = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "a" }
+    );
+    const b = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "b" }
+    );
+    const ids = [(a.data as { id: string }).id, (b.data as { id: string }).id];
+
+    await handler.bulkDeleteEntries({
+      collectionName: "posts",
+      ids,
+      overrideAccess: true,
+      actor: { type: "apiKey", id: "key_bulk" },
+    });
+
+    const rows = await events(current);
+    const deletes = rows.filter(r => r.type === "entry.deleted");
+    expect(deletes).toHaveLength(2);
+    for (const row of deletes) {
+      expect(row.actorType).toBe("apiKey");
+      expect(row.actorId).toBe("key_bulk");
+    }
+  });
+
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {
     // The outbox guarantee: an event must never outlive the change it describes,
     // or a webhook fires for something that never happened. Recording through the

@@ -303,6 +303,8 @@ export class CollectionBulkService extends BaseService {
     collectionName: string;
     ids: string[];
     user?: UserContext;
+    /** Who performed the delete, recorded on each entry's outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /** When true, the route middleware already ran the RBAC gate; forwarded to
@@ -328,6 +330,10 @@ export class CollectionBulkService extends BaseService {
               collectionName: params.collectionName,
               entryId,
               user: params.user,
+              // Forward the acting identity so each bulk-deleted entry's
+              // `entry.deleted` event is attributed to the API key/user that
+              // performed the bulk delete, not the key owner or system.
+              actor: params.actor,
               overrideAccess: params.overrideAccess,
               routeAuthorized: params.routeAuthorized,
               context: params.context,

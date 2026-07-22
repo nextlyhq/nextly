@@ -24,9 +24,11 @@ Emit an `entry.deleted` webhook event when a collection entry is deleted.
 
 Deleting an entry now records a durable outbox event carrying the removed
 document in the same read shape the `entry.created`/`entry.updated` events use —
-component subtrees and many-to-many ids populated, password and hidden fields
-stripped — so a subscriber sees a consistent payload for every lifecycle event.
-The delete, its component cascade, and the event now run in one transaction, so
-the event never fires for a deletion that rolled back and a cascade failure no
-longer leaves orphaned component rows. The event is attributed to the acting
-identity (user or API key), matching create/update.
+component subtrees, many-to-many ids, and localized companion values populated,
+password and hidden fields stripped — so a subscriber sees a consistent payload
+for every lifecycle event, including on localized collections. The delete and
+its event run in one transaction (the event never fires for a deletion that
+rolled back), and the row is locked and re-read inside that transaction so two
+concurrent deletes cannot both emit — only the delete that actually removed the
+row records the event. The event is attributed to the acting identity (user or
+API key), for single and bulk deletes alike.
