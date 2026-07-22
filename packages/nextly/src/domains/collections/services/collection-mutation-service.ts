@@ -1277,7 +1277,10 @@ export class CollectionMutationService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the create gate.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -2509,7 +2512,10 @@ export class CollectionMutationService extends BaseService {
         params.entryId,
         existingEntry,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the update gate.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;

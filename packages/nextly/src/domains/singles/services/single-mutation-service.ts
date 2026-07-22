@@ -191,6 +191,9 @@ export class SingleMutationService extends BaseService {
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the primary update gate.
+        authenticatedScope: options.authenticatedScope,
         accessControlService: this.accessControlService,
         accessRules: singleMeta.accessRules,
         document: existingDoc ?? undefined,
