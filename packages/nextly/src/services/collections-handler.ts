@@ -9,6 +9,7 @@ import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
@@ -155,6 +156,12 @@ export class CollectionsHandler {
       ? container.get<ComponentDataService>("componentDataService")
       : undefined;
 
+    // Shared post-response drain fast path (registered by the webhook services),
+    // handed to the entry service — the seam every write path runs through.
+    const fastDrainScheduler = container.has("webhookFastDrainScheduler")
+      ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+      : undefined;
+
     // Late-inject relationshipService if componentDataService was created before it was available
     if (componentDataService) {
       componentDataService.setRelationshipService(this.relationshipService);
@@ -171,7 +178,8 @@ export class CollectionsHandler {
       componentDataService,
       undefined,
       this.localization,
-      retentionRunner
+      retentionRunner,
+      fastDrainScheduler
     );
   }
 
@@ -664,6 +672,8 @@ export class CollectionsHandler {
     userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
@@ -695,6 +705,8 @@ export class CollectionsHandler {
     userRoles?: string[];
     /** User context for access control */
     user?: UserContext;
+    /** Who performed the delete, recorded on each entry's outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
@@ -796,6 +808,8 @@ export class CollectionsHandler {
       where: WhereFilter;
       /** User context for access control */
       user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**

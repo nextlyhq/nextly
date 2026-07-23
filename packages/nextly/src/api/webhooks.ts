@@ -27,11 +27,22 @@
  * @module api/webhooks
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { z } from "zod";
 
+import { validateOrigin } from "../auth/csrf/validate";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
+import {
+  runWebhookDrain,
+  type RunWebhookDrainOptions,
+  type WebhookDrainDatabase,
+} from "../domains/webhooks/drain-runner";
+import type { WebhookEndpointRegistry } from "../domains/webhooks/endpoint-registry";
+import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -39,6 +50,8 @@ import {
   CreateWebhookSchema,
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
+import { env } from "../shared/lib/env";
 
 import { readJsonBody } from "./read-json-body";
 import {
@@ -65,6 +78,36 @@ async function getWebhookService(): Promise<WebhookEndpointService> {
   await getCachedNextly();
   return container.get<WebhookEndpointService>("webhookEndpointService");
 }
+
+async function getWebhookDeliveryService(): Promise<WebhookDeliveryQueryService> {
+  await getCachedNextly();
+  return container.get<WebhookDeliveryQueryService>(
+    "webhookDeliveryQueryService"
+  );
+}
+
+/** Delivery statuses a caller may filter on; matches the drain's vocabulary. */
+const DELIVERY_STATUSES = [
+  "pending",
+  "processing",
+  "delivered",
+  "retrying",
+  "failed",
+] as const;
+
+/**
+ * Query parameters for the delivery list. `page`/`limit` are coerced and
+ * bounded (a huge limit would let one request read the whole ledger); an
+ * unknown `status` is a client mistake rather than an empty result, so it is
+ * rejected. `eventType` is passed through — an unknown type simply matches
+ * nothing.
+ */
+const ListDeliveriesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).catch(1),
+  limit: z.coerce.number().int().min(1).max(100).catch(20),
+  status: z.enum(DELIVERY_STATUSES).optional(),
+  eventType: z.string().min(1).max(100).optional(),
+});
 
 /**
  * `update` is accepted for every action, matching how `api-keys` treats its
@@ -93,6 +136,164 @@ function denySessionOnly(
     logContext: { reason: "session-only", action },
   });
 }
+
+/**
+ * Minimum length for a secret that may authorize the drain trigger. Enforced at
+ * the auth boundary so a short platform-wide `CRON_SECRET` is ignored without
+ * failing app boot (see env.ts).
+ */
+const MIN_DRAIN_SECRET_LENGTH = 32;
+
+/**
+ * Per-invocation work bounds for the cron/manual drain trigger. A scheduler tick
+ * runs inside a platform execution limit (Vercel Cron functions default to tens
+ * of seconds), so one request must NOT try to drain an unbounded backlog: it
+ * does a bounded slice and returns, and the next tick continues where this one
+ * left off (the outbox is durable and claims are leased).
+ *
+ * The wall-clock budget is the real bound: the drain stops attempting new
+ * deliveries once it is spent, so even a batch of hung receivers extends the
+ * pass by at most one in-flight request rather than `batch × rounds × timeout`.
+ * The drain also uses a shorter per-request timeout than the engine default —
+ * 10s matches common webhook-receiver expectations (e.g. GitHub) — so that one
+ * in-flight overrun stays small. Together they keep a tick within roughly
+ * `budget + 10s`, comfortably inside a typical serverless window; the round and
+ * batch caps are secondary limits on a healthy, fast backlog.
+ */
+const DRAIN_MAX_ROUNDS = 10;
+const DRAIN_DELIVER_BATCH = 25;
+// Bound fan-out too, not just delivery: at the engine default (100) ten rounds
+// could fan out 1,000 events into 1,000 × endpoints delivery rows in one tick —
+// database work the delivery deadline does not cover. Keep it near the delivery
+// batch so a tick creates roughly what it can attempt; the rest waits.
+const DRAIN_FANOUT_BATCH = 50;
+const DRAIN_MAX_DURATION_MS = 25_000;
+const DRAIN_REQUEST_TIMEOUT_MS = 10_000;
+
+/** The bearer token on the request, or null when there is no bearer header. */
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization");
+  if (!header) return null;
+  const [scheme, token] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && token ? token : null;
+}
+
+/**
+ * Constant-time string compare. Both sides are hashed to a fixed length first so
+ * `timingSafeEqual` never throws on a length mismatch and the comparison leaks
+ * neither the secret's length nor its content through timing.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a).digest();
+  const bh = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ah, bh);
+}
+
+/**
+ * Authorize a drain trigger. The cron path matches the shared drain secret
+ * presented as a bearer token (Vercel Cron sends `Authorization: Bearer
+ * <CRON_SECRET>`); constant-time so it leaks nothing. Anything else must be an
+ * authenticated caller able to manage webhooks — a non-matching bearer simply
+ * falls through to be tried as an API key by the permission check.
+ */
+async function authorizeDrain(request: Request): Promise<void> {
+  const presented = bearerToken(request);
+  if (presented) {
+    // A scheduler presents a shared secret as a bearer token — either Nextly's
+    // NEXTLY_DRAIN_SECRET or Vercel Cron's CRON_SECRET (what Vercel actually
+    // sends). Constant-time against each configured value. A bearer token is not
+    // sent on a cross-site request, so this path is not CSRF-exposed.
+    //
+    // The entropy floor is enforced HERE, not only in the env schema, so a
+    // platform-wide CRON_SECRET that is too short to be a safe authorizer is
+    // ignored rather than accepted — and its length never blocks app boot for a
+    // deployment that doesn't use the drain.
+    for (const secret of [env.NEXTLY_DRAIN_SECRET, env.CRON_SECRET]) {
+      if (
+        secret &&
+        secret.length >= MIN_DRAIN_SECRET_LENGTH &&
+        constantTimeEqual(presented, secret)
+      ) {
+        return;
+      }
+    }
+  }
+  // GET is authorized ONLY by the shared bearer secret above. A GET can be
+  // driven by a cross-site top-level navigation, which carries the victim's
+  // `SameSite=Lax` session cookie, so falling through to the session/API-key
+  // path here would be a CSRF trigger. The session/API-key path (a manual admin
+  // drain) is therefore POST-only: a `SameSite=Lax` cookie is not sent on a
+  // cross-site POST, the same baseline the rest of the session-authenticated
+  // REST API relies on.
+  if (request.method.toUpperCase() === "GET") {
+    throw NextlyError.forbidden({
+      logContext: { reason: "drain-get-requires-secret" },
+    });
+  }
+  const authResult = await requireWebhookPermission(request, "update");
+  if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+  // Defense in depth for the cookie path: on top of `SameSite=Lax`, require a
+  // same-origin `Origin`/`Referer` so a same-site or misconfigured browser
+  // context cannot forge this side-effecting trigger. API-key auth carries no
+  // ambient cookie and sends no browser Origin, so it is exempt.
+  if (
+    authResult.authMethod !== "api-key" &&
+    !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED)
+  ) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "drain-origin-mismatch" },
+    });
+  }
+}
+
+/**
+ * Run one webhook drain: fan out due events into deliveries and attempt the due
+ * deliveries. Idempotent and safe to call repeatedly — a scheduler (e.g. Vercel
+ * Cron, which triggers with a GET) hits this on an interval; retries are
+ * advanced on later calls. Accepts GET or POST.
+ *
+ * Auth: a shared `NEXTLY_DRAIN_SECRET` or Vercel's `CRON_SECRET` (bearer,
+ * constant-time) OR an authenticated admin/API-key caller with
+ * `update-webhooks`. Not session-only: a scheduler has no session.
+ *
+ * Response: the canonical mutation envelope `{ message, item }`, where `item` is
+ * the drain summary (rounds, events processed, deliveries created,
+ * attempted/delivered/retried/failed).
+ */
+export const drainWebhooks = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    await authorizeDrain(request);
+
+    await getCachedNextly();
+    // The runtime adapter satisfies the fan-out + delivery database surfaces;
+    // resolve it as exactly that from the container.
+    const adapter = container.get<WebhookDrainDatabase>("adapter");
+    const registry = container.get<WebhookEndpointRegistry>(
+      "webhookEndpointRegistry"
+    );
+    // Retention runs after delivery so a cron-only install still prunes its
+    // event/delivery ledger; `undefined` when the operator disabled retention,
+    // in which case the drain skips pruning entirely.
+    const retention = container.get<RunWebhookDrainOptions["retention"]>(
+      "webhookRetentionDeps"
+    );
+
+    const result = await runWebhookDrain(adapter, registry, {
+      // Bound the work one scheduler tick performs; the next tick continues.
+      // maxDurationMs is the hard bound (stops mid-batch when receivers hang);
+      // the shorter timeout caps the single in-flight overrun past it.
+      maxRounds: DRAIN_MAX_ROUNDS,
+      fanOutBatchSize: DRAIN_FANOUT_BATCH,
+      deliverBatchSize: DRAIN_DELIVER_BATCH,
+      maxDurationMs: DRAIN_MAX_DURATION_MS,
+      requestTimeoutMs: DRAIN_REQUEST_TIMEOUT_MS,
+      retention,
+    });
+    // A POST/GET trigger with fan-out + delivery side effects: return the
+    // canonical mutation envelope with the drain summary as the item.
+    return respondMutation("Webhook drain completed.", result);
+  }
+);
 
 /**
  * List every registered webhook endpoint.
@@ -145,6 +346,89 @@ export function getWebhookById(req: Request, id: string): Promise<Response> {
     }
 
     return respondDoc(endpoint);
+  })(req);
+}
+
+/**
+ * List an endpoint's deliveries, newest first, with paging and optional
+ * status/event-type filters.
+ *
+ * Auth: session or API key + `read-webhooks` (or `update-webhooks`).
+ *
+ * Scoped by webhook id alone, so deliveries remain readable after an endpoint
+ * is retired (its history is kept deliberately). A delivery row carries no
+ * credential, so this is a plain read.
+ *
+ * Response: `{ items: WebhookDeliverySummary[], meta: PaginationMeta }`.
+ */
+export function listWebhookDeliveries(
+  req: Request,
+  webhookId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "read");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    const url = new URL(request.url);
+    const parsed = ListDeliveriesQuerySchema.safeParse({
+      page: url.searchParams.get("page") ?? undefined,
+      limit: url.searchParams.get("limit") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined,
+      eventType: url.searchParams.get("eventType") ?? undefined,
+    });
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const { page, limit, status, eventType } = parsed.data;
+
+    const service = await getWebhookDeliveryService();
+    const { items, total } = await service.listDeliveries(webhookId, {
+      page,
+      limit,
+      status,
+      eventType,
+    });
+
+    // Opt this response out of timezone rewriting: a delivery's lastError and
+    // response snippet are opaque captured text that must survive verbatim.
+    return respondList(
+      items,
+      offsetPaginationToMeta({ total, limit, offset: (page - 1) * limit }),
+      { headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" } }
+    );
+  })(req);
+}
+
+/**
+ * Fetch one delivery (with its attempt history and response snippet) for an
+ * endpoint.
+ *
+ * Auth: session or API key + `read-webhooks` (or `update-webhooks`).
+ *
+ * Response: bare `WebhookDeliveryDetail` via `respondDoc`. 404 when no delivery
+ * with this id belongs to this endpoint.
+ */
+export function getWebhookDelivery(
+  req: Request,
+  webhookId: string,
+  deliveryId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "read");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    const service = await getWebhookDeliveryService();
+    const delivery = await service.getDelivery(webhookId, deliveryId);
+
+    if (!delivery) {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    // Opt out of timezone rewriting so the raw response snippet and attempt
+    // errors are returned exactly as the receiver sent them.
+    return respondDoc(delivery, {
+      headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+    });
   })(req);
 }
 

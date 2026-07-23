@@ -37,6 +37,7 @@ import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
 import {
   mapIntentToPayload,
+  passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
@@ -201,11 +202,32 @@ function getDefaultValues(
       case "textarea":
       case "email":
       case "password":
-      case "select":
-      case "radio":
         defaults[fieldName] =
           (field as { defaultValue?: string }).defaultValue ?? "";
         break;
+      case "select":
+      case "radio": {
+        // A hasMany select holds an array, so it must seed [] rather than the
+        // scalar "" used by the other cases — an empty string would render as
+        // no selection and then fail the field's array validation on save.
+        const selectField = field as {
+          defaultValue?: string | string[];
+          hasMany?: boolean;
+        };
+        const { defaultValue } = selectField;
+        if (selectField.hasMany) {
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? defaultValue
+            : defaultValue
+              ? [defaultValue]
+              : [];
+        } else {
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? (defaultValue[0] ?? "")
+            : (defaultValue ?? "");
+        }
+        break;
+      }
       case "richText":
         // Why: richText was previously lumped with text/textarea and
         // defaulted to "" — but its value is a Lexical JSON state, not
@@ -346,6 +368,13 @@ export function SingleForm({
     }
   }, [schema.fields]);
 
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(schema.fields),
+    [schema.fields]
+  );
+
   // Generate default values from document data, then pin the single's identity
   // (title/slug) to its config so the read-only display and the submitted
   // payload always reflect the definition rather than any stale stored value.
@@ -417,7 +446,7 @@ export function SingleForm({
         // contract (see useEntryForm.mapIntentToPayload). Unpublish
         // strips other dirty fields so a confirm-modal misclick can't
         // ship unrelated changes to the public site.
-        const data = mapIntentToPayload(rawData, intent);
+        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
         try {
           await onSubmit(data);
@@ -427,7 +456,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit]
+    [form, onSubmit, blankPasswordFields]
   );
 
   const handleCancel = useCallback(() => {

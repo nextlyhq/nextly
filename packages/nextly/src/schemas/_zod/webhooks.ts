@@ -5,13 +5,15 @@
  * `enabled`, an explicit event-type list, a human `description` — so an
  * integration written against Stripe or Svix reads the same here.
  *
- * Subscription is an explicit list rather than a wildcard. Both models exist in
- * the market, but they fail in opposite directions: adding a new event type to
- * Nextly would immediately change what a wildcard endpoint receives, which
- * breaks a consumer doing exhaustive matching on the type. Explicit costs the
- * consumer an update when they want the new type, and that is the safe
- * direction. Wildcards can be added later without breaking anyone; removing
- * them could not.
+ * Subscription is an explicit list of event types, and also accepts the `"*"`
+ * wildcard for "all-and-future". Both models exist in the market and fail in
+ * opposite directions: a new event type immediately changes what a wildcard
+ * endpoint receives (which can surprise a consumer that matches types
+ * exhaustively), while an explicit list costs the consumer an update to receive
+ * a newly-added type. Wildcard is offered because an operator managing endpoints
+ * usually wants "everything" without editing config as the catalog grows; a
+ * consumer that needs the exhaustive-matching guarantee should list specific
+ * types instead. The wildcard cannot be combined with specific types.
  *
  * @module schemas/_zod/webhooks
  */
@@ -21,6 +23,7 @@ import { z } from "zod";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
+  WEBHOOK_EVENT_WILDCARD,
 } from "../../domains/webhooks/types";
 
 /**
@@ -35,6 +38,37 @@ import {
  * `WebhookEventType[]` and reaches the service without a cast at the boundary.
  */
 export const WebhookEventTypeSchema = z.enum(WEBHOOK_EVENT_TYPES);
+
+/**
+ * One subscription entry: a concrete event type or the wildcard for
+ * all-and-future. The wildcard is accepted only in the subscription list, never
+ * in the finer `FilterSpec`.
+ */
+export const WebhookEventSubscriptionSchema = z.union([
+  z.literal(WEBHOOK_EVENT_WILDCARD),
+  WebhookEventTypeSchema,
+]);
+
+/**
+ * The subscription list an endpoint create/update accepts: at least one entry,
+ * no duplicates, and the wildcard cannot be combined with specific types (it
+ * already covers them, so a mix is contradictory rather than additive).
+ */
+const EventSubscriptionsSchema = z
+  .array(WebhookEventSubscriptionSchema)
+  .min(1, "Subscribe to at least one event type.")
+  // A duplicate would not change delivery, but it would make the stored
+  // subscription disagree with what the user typed.
+  .refine(types => new Set(types).size === types.length, {
+    message: "Event types must be unique.",
+  })
+  .refine(
+    types => !types.includes(WEBHOOK_EVENT_WILDCARD) || types.length === 1,
+    {
+      message:
+        'Use "*" on its own to subscribe to all events; do not combine it with specific types.',
+    }
+  );
 
 /** Header names a caller may not set, because delivery owns them. */
 const RESERVED_HEADER_PREFIXES = ["webhook-", "content-type", "user-agent"];
@@ -111,14 +145,7 @@ const UrlSchema = z
 export const CreateWebhookSchema = z.object({
   name: z.string().min(1, "Name is required.").max(255),
   url: UrlSchema,
-  eventTypes: z
-    .array(WebhookEventTypeSchema)
-    .min(1, "Subscribe to at least one event type.")
-    // A duplicate would not change delivery, but it would make the stored
-    // subscription disagree with what the user typed.
-    .refine(types => new Set(types).size === types.length, {
-      message: "Event types must be unique.",
-    }),
+  eventTypes: EventSubscriptionsSchema,
   enabled: z.boolean().optional(),
   headers: HeadersSchema.nullable().optional(),
 });
@@ -133,13 +160,7 @@ export const UpdateWebhookSchema = z
   .object({
     name: z.string().min(1).max(255).optional(),
     url: UrlSchema.optional(),
-    eventTypes: z
-      .array(WebhookEventTypeSchema)
-      .min(1, "Subscribe to at least one event type.")
-      .refine(types => new Set(types).size === types.length, {
-        message: "Event types must be unique.",
-      })
-      .optional(),
+    eventTypes: EventSubscriptionsSchema.optional(),
     enabled: z.boolean().optional(),
     headers: HeadersSchema.nullable().optional(),
   })

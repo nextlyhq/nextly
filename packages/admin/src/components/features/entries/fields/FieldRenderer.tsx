@@ -47,6 +47,7 @@ import { RelationshipInput } from "./relational/RelationshipInput";
 import { CheckboxInput } from "./selection/CheckboxInput";
 import { ChipsInput } from "./selection/ChipsInput";
 import { DateInput } from "./selection/DateInput";
+import { MultiSelectInput } from "./selection/MultiSelectInput";
 import { RadioInput } from "./selection/RadioInput";
 import { SelectInput } from "./selection/SelectInput";
 import { ComponentInput } from "./structured/ComponentInput";
@@ -417,7 +418,14 @@ export function FieldRenderer({
         );
 
       case "select":
-        return (
+        // hasMany selects store an array; SelectInput is single-value only and
+        // would submit a scalar that fails the field's z.array() schema.
+        return (field as SelectFieldConfig).hasMany ? (
+          <MultiSelectInput
+            {...commonProps}
+            field={field as SelectFieldConfig}
+          />
+        ) : (
           <SelectInput {...commonProps} field={field as SelectFieldConfig} />
         );
 

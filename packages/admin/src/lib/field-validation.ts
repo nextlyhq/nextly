@@ -295,7 +295,7 @@ function fieldToZodSchema(
   } else if (isEmailField(field)) {
     schema = convertEmailFieldToZod(field);
   } else if (isPasswordField(field)) {
-    schema = convertPasswordFieldToZod(field, options);
+    schema = convertPasswordFieldToZod(field);
   } else if (isCodeField(field)) {
     schema = convertCodeFieldToZod(field);
   } else if (isRichTextField(field)) {
@@ -344,7 +344,16 @@ function fieldToZodSchema(
   }
 
   if (!isRequired) {
-    schema = schema.optional().nullable();
+    // An untouched optional scalar field arrives from the form as "" (empty
+    // string). `.optional()` only tolerates `undefined`, so "" would otherwise
+    // be run through the field's format/length rules (email, minLength) and
+    // wrongly block save. Accept "" alongside the schema for scalars only —
+    // without rewriting the value. Array fields (hasMany / chips / repeater)
+    // use [] as their empty value, which the base array schema already accepts,
+    // so they must not also accept a stray "".
+    const optionalBase =
+      schema instanceof z.ZodArray ? schema : z.union([z.literal(""), schema]);
+    schema = optionalBase.optional().nullable();
   } else if (schema instanceof z.ZodString) {
     // For required string fields, ensure they are not empty
     // unless a specific minLength is already set
@@ -579,10 +588,7 @@ function convertEmailFieldToZod(field: EmailFieldConfig): z.ZodTypeAny {
   return schema;
 }
 
-function convertPasswordFieldToZod(
-  field: PasswordFieldConfig,
-  options: GenerateSchemaOptions = {}
-): z.ZodTypeAny {
+function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
   // Get validation values from both flat and nested formats
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
@@ -612,12 +618,11 @@ function convertPasswordFieldToZod(
     );
   }
 
-  // On edit, blank means "keep the current password" (the server strips
-  // empty values), so strength rules must only apply to a typed value.
-  if (options.mode === "edit") {
-    schema = z.union([z.literal(""), schema]);
-  }
-
+  // Blank means "keep the current password" on edit, and "no password" when
+  // the field is optional. That empty-string tolerance is applied centrally in
+  // `fieldToZodSchema` (the optional branch), together with the edit-mode rule
+  // that treats a required password field as optional, so no per-type handling
+  // is needed here.
   return schema;
 }
 

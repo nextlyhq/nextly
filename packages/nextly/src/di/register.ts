@@ -59,6 +59,7 @@ import type {
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
@@ -295,6 +296,8 @@ export interface ServiceMap {
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
+  /** Read-only webhook delivery log, resolved by the webhooks REST handlers. */
+  webhookDeliveryQueryService: WebhookDeliveryQueryService;
   authService: AuthService;
   generalSettingsService: GeneralSettingsService;
   activityLogService: ActivityLogService;
@@ -1626,11 +1629,20 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.updated,
   ];
 
+  // Shared resolver so the existence probe below, the DDL path further down and
+  // the migration CLI all produce identical component table names.
+  const { resolveComponentTableName } = await import(
+    "../domains/schema/utils/resolve-table-name"
+  );
+
   for (const slug of componentSyncResult.unchanged) {
-    const tableName = `comp_${slug
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")}`;
+    // A component may declare a custom `dbName`, in which case its table is not
+    // named `comp_<slug>` at all. Probing the unresolved name would never find
+    // it and would queue a redundant sync on every boot.
+    const tableName = resolveComponentTableName(
+      slug,
+      transformedConfig.components.find(c => c.slug === slug)?.dbName
+    );
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -1663,12 +1675,7 @@ async function syncCodeFirstComponents(
       );
       if (!compConfig) continue;
 
-      const tableName =
-        compConfig.dbName ??
-        `comp_${slug
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "")}`;
+      const tableName = resolveComponentTableName(slug, compConfig.dbName);
 
       // i18n: a localized component omits its translatable columns from the main comp_
       // table and gets a companion `comp_<slug>_locales` (created below).

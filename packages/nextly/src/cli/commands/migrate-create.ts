@@ -69,6 +69,11 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../../domains/schema/ui-schema/metadata-sql";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -218,18 +223,20 @@ export async function runMigrateCreate(
     );
   }
 
-  // Convert config entries to the minimal shape the orchestrator needs.
+  // Convert config entries to the minimal shape the orchestrator needs. Each
+  // kind resolves its table name through the same helper the runtime uses, so
+  // generated names match the live database (collections, singles, and
+  // components each normalize differently).
   const codeCollections = toMinimalEntities(
     configResult.config.collections,
-    "dc_"
+    e => resolveCollectionTableName(e.slug, e.dbName)
   );
-  const codeSingles = toMinimalEntities(
-    configResult.config.singles ?? [],
-    "single_"
+  const codeSingles = toMinimalEntities(configResult.config.singles ?? [], e =>
+    resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
   );
   const codeComponents = toMinimalEntities(
     configResult.config.components ?? [],
-    "comp_"
+    e => resolveComponentTableName(e.slug, e.dbName)
   );
 
   // Load + merge UI-built entities (code-first wins on slug collision).
@@ -419,7 +426,7 @@ async function runBlankPath(
  */
 function toMinimalEntities(
   entities: unknown[],
-  tableNamePrefix: "dc_" | "single_" | "comp_"
+  resolveTableName: (entity: { slug: string; dbName?: string }) => string
 ): MinimalConfigEntity[] {
   return entities.map(raw => {
     const e = raw as {
@@ -461,7 +468,10 @@ function toMinimalEntities(
     }));
     return {
       slug,
-      tableName: e.dbName ?? `${tableNamePrefix}${slug.replace(/-/g, "_")}`,
+      // Resolve through the same per-kind helper the runtime uses so a dbName
+      // that omits the prefix (e.g. a plugin collection with dbName:"forms")
+      // still resolves to the table the runtime creates (dc_forms).
+      tableName: resolveTableName({ slug, dbName: e.dbName }),
       fields,
       // Why: forward the Draft/Published flag so migrate:create emits
       // the system status column on first sync. Mirrors the same

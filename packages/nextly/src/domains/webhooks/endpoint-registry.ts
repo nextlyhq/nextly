@@ -10,7 +10,12 @@
  * @module domains/webhooks/endpoint-registry
  */
 
-import type { FilterSpec, WebhookEndpoint, WebhookEventType } from "./types";
+import type {
+  FilterSpec,
+  WebhookEndpoint,
+  WebhookEventSubscription,
+  WebhookEventType,
+} from "./types";
 
 /**
  * Normalize a stored filter so a malformed value can't throw during matching.
@@ -61,7 +66,7 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
     url: row.url as string,
     enabled: Boolean(row.enabled),
     eventTypes: Array.isArray(row.eventTypes)
-      ? (row.eventTypes as WebhookEventType[])
+      ? (row.eventTypes as WebhookEventSubscription[])
       : [],
     filter: normalizeFilter(row.filter),
     headers: (row.headers as Record<string, string> | null) ?? null,
@@ -145,6 +150,20 @@ export class WebhookEndpointRegistry {
   invalidate(): void {
     this.cache = null;
     this.generation++;
+  }
+
+  /**
+   * Enabled endpoints read fresh from the database, bypassing the TTL cache.
+   *
+   * Fan-out uses this rather than {@link getEnabledEndpoints}: a fanned-out
+   * event is marked done permanently and never reconsidered, so serving a stale
+   * cross-process list — an endpoint another instance created within the TTL —
+   * would drop that new subscriber's deliveries forever. Correctness there beats
+   * saving a per-round query; delivery and other readers can still use the cache.
+   */
+  async getEnabledEndpointsFresh(): Promise<readonly WebhookEndpoint[]> {
+    this.invalidate();
+    return this.getEnabledEndpoints();
   }
 
   private async load(): Promise<WebhookEndpoint[]> {

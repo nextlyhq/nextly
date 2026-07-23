@@ -153,6 +153,54 @@ export type EntryFormIntent =
   | "unpublish";
 
 /**
+ * Send a blank optional field as `null` rather than an empty string.
+ *
+ * An untouched optional field reaches submit as `""`, which validation accepts.
+ * Persisting that literal would make "empty" mean two different things
+ * depending on how the row was written — `""` from the admin, `NULL` from the
+ * API or a migration — so `WHERE col IS NULL` would quietly miss rows. It also
+ * breaks optional unique fields outright: `""` is a real value to a unique
+ * index, so the second entry left blank collides with the first.
+ *
+ * `preserveBlank` names the fields that must keep their empty string. Password
+ * fields rely on it: the edit form seeds them with `""` to mean "keep the
+ * stored hash", which the server drops before writing, whereas `null` reads as
+ * an intentional clear and would wipe the hash — or fail a required password.
+ *
+ * Only `""` is rewritten. `0`, `false` and `[]` are genuine values and pass
+ * through untouched, as does a required field, which cannot be blank and still
+ * reach this point. Nested values (groups, repeaters) are objects and are left
+ * alone, so a password inside a container is unaffected either way.
+ */
+function blankToNull(
+  data: Record<string, unknown>,
+  preserveBlank?: ReadonlySet<string>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      value === "" && !preserveBlank?.has(key) ? null : value,
+    ])
+  );
+}
+
+/**
+ * Names of the top-level password fields in a field list, for `preserveBlank`.
+ *
+ * Only the top level is collected because that is the only level
+ * `mapIntentToPayload` rewrites — a password nested in a group or repeater sits
+ * inside an object value and is never touched.
+ */
+export function passwordFieldNames(fields: FieldConfig[]): Set<string> {
+  const names = new Set<string>();
+  for (const field of fields) {
+    const { name, type } = field as { name?: string; type?: string };
+    if (type === "password" && name) names.add(name);
+  }
+  return names;
+}
+
+/**
  * Map a submit intent to the wire payload. Pure helper extracted so the
  * mapping can be unit-tested without renderHook plumbing.
  *
@@ -165,22 +213,27 @@ export type EntryFormIntent =
  *   to the public site (matches the Payload pattern).
  * - undefined intent: pass `rawData` through unchanged. Used by the
  *   single-Save button when drafts aren't enabled on the collection.
+ *
+ * `preserveBlank` is forwarded to `blankToNull` — see there for why password
+ * fields must keep their empty string.
  */
 export function mapIntentToPayload(
   rawData: Record<string, unknown>,
-  intent?: EntryFormIntent
+  intent?: EntryFormIntent,
+  preserveBlank?: ReadonlySet<string>
 ): Record<string, unknown> {
+  const data = blankToNull(rawData, preserveBlank);
   switch (intent) {
     case "save-draft":
-      return { ...rawData, status: "draft" };
+      return { ...data, status: "draft" };
     case "publish":
-      return { ...rawData, status: "published" };
+      return { ...data, status: "published" };
     case "save-changes":
-      return { ...rawData, status: "published" };
+      return { ...data, status: "published" };
     case "unpublish":
       return { status: "draft" };
     default:
-      return rawData;
+      return data;
   }
 }
 
@@ -320,16 +373,28 @@ function getDefaultValues(
 
       case "select":
       case "radio": {
+        // A select's defaultValue may be declared as a single value or, for
+        // hasMany, as an array (`defaultValue: ["technology", "design"]`).
+        // Widening the type here matters: treating an array default as a scalar
+        // would wrap it again and hand the field [["technology", "design"]],
+        // which renders as one nonsense badge and fails array validation.
         const selectField = field as {
-          defaultValue?: string;
+          defaultValue?: string | string[];
           hasMany?: boolean;
         };
+        const { defaultValue } = selectField;
         if (selectField.hasMany) {
-          defaults[fieldName] = selectField.defaultValue
-            ? [selectField.defaultValue]
-            : [];
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? defaultValue
+            : defaultValue
+              ? [defaultValue]
+              : [];
         } else {
-          defaults[fieldName] = selectField.defaultValue ?? null;
+          // A single-value select given an array default takes its first entry
+          // rather than stringifying the whole array into the control.
+          defaults[fieldName] = Array.isArray(defaultValue)
+            ? (defaultValue[0] ?? null)
+            : (defaultValue ?? null);
         }
         break;
       }
@@ -533,6 +598,13 @@ export function useEntryForm({
     locale,
   });
 
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(fields),
+    [fields]
+  );
+
   const deleteMutation = useDeleteEntry({
     collectionSlug: collection.name,
     showToast: true,
@@ -553,7 +625,7 @@ export function useEntryForm({
         // Why: intent → payload mapping is the core PR-3 bug fix —
         // extracted to mapIntentToPayload above so the contract is
         // unit-testable without renderHook plumbing.
-        const data = mapIntentToPayload(rawData, intent);
+        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
         try {
           if (mode === "create") {
@@ -583,7 +655,16 @@ export function useEntryForm({
         }
       })(e);
     },
-    [form, mode, entry?.id, createMutation, updateMutation, onSuccess, onError]
+    [
+      form,
+      mode,
+      entry?.id,
+      createMutation,
+      updateMutation,
+      onSuccess,
+      onError,
+      blankPasswordFields,
+    ]
   );
 
   // Delete handler

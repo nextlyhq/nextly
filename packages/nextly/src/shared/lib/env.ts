@@ -39,6 +39,23 @@ export const _envSchema = z
 
     // Nextly auth secret (required in production, min 32 chars)
     NEXTLY_SECRET: z.string().optional(),
+    // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
+    // drain route. Optional: when unset, the drain route can still be triggered
+    // by an authenticated admin/API-key call, but unattended cron triggering is
+    // disabled. When set it must be >= 32 chars (like NEXTLY_SECRET): it
+    // independently authorizes a public trigger, so a short/guessable value —
+    // and the empty string, which would silently disable the cron path — is
+    // rejected at boot rather than accepted. Compared in constant time.
+    NEXTLY_DRAIN_SECRET: z.string().min(32).optional(),
+    // Vercel Cron's convention: the platform sends the project's `CRON_SECRET`
+    // as the bearer token on scheduled invocations. Accepted as an alternative
+    // drain secret. Deliberately NOT length-constrained here: `CRON_SECRET` is a
+    // platform-wide variable that may already be set (possibly short) for other
+    // cron routes, so enforcing a length in the global env schema would fail boot
+    // for deployments that don't even use the webhook drain. The entropy floor is
+    // enforced at the drain-auth boundary instead: a `CRON_SECRET` shorter than
+    // the required length is simply not accepted as a drain secret.
+    CRON_SECRET: z.string().optional(),
     // Additional allowed origins for CSRF validation (comma-separated)
     NEXTLY_ALLOWED_ORIGINS: z.string().optional(),
 
@@ -51,6 +68,20 @@ export const _envSchema = z
   })
   .superRefine((val, ctx) => {
     const isProd = val.NODE_ENV === "production";
+
+    // A CRON_SECRET too short to authorize the drain is ignored at the auth
+    // boundary rather than rejected here (it is a platform-wide variable and
+    // must not fail app boot for deployments that don't use the drain). Warn so
+    // an operator who set it FOR the drain gets a signal instead of silent 403s.
+    // `!== undefined` (not truthiness) so an explicit empty string — which also
+    // fails the auth-boundary length gate — still produces the warning.
+    if (val.CRON_SECRET !== undefined && val.CRON_SECRET.length < 32) {
+      console.warn(
+        "⚠️  CRON_SECRET is shorter than 32 characters and will NOT be accepted " +
+          "as a webhook drain secret. Use a >= 32-char value (or NEXTLY_DRAIN_SECRET) " +
+          "if you rely on the webhooks drain route to authorize scheduled runs."
+      );
+    }
 
     // Production hard requirements
     if (isProd) {

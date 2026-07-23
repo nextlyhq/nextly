@@ -86,8 +86,10 @@ describe("version capture on update (integration)", () => {
   it("captures a version on a single update when versioning is enabled", async () => {
     current = await createTestNextly({
       singles: [
+        // "settings" is a reserved slug (system-resource permission-collision
+        // guard), so this suite uses "preferences".
         defineSingle({
-          slug: "settings",
+          slug: "preferences",
           versions: true,
           fields: [text({ name: "title" })],
         }),
@@ -97,12 +99,12 @@ describe("version capture on update (integration)", () => {
       current.getService<SingleEntryService>("singleEntryService");
 
     await singles.update(
-      "settings",
+      "preferences",
       { title: "hello" },
       { overrideAccess: true }
     );
 
-    const rows = await versions(current, "settings");
+    const rows = await versions(current, "preferences");
     expect(rows.length).toBeGreaterThanOrEqual(1);
     const latest = rows[rows.length - 1];
     expect(latest.scopeKind).toBe("single");
@@ -422,7 +424,7 @@ describe("version capture on update (integration)", () => {
       ],
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "preferences",
           versions: true,
           fields: [
             group({
@@ -437,12 +439,12 @@ describe("version capture on update (integration)", () => {
       current.getService<SingleEntryService>("singleEntryService");
 
     await singles.update(
-      "settings",
+      "preferences",
       { meta: { hero: { heading: "Welcome" } } },
       { overrideAccess: true }
     );
 
-    const rows = await versions(current, "settings");
+    const rows = await versions(current, "preferences");
     const snapshot = rows.at(-1)?.snapshot as {
       meta?: { hero?: { _componentType?: string; heading?: string } };
     };

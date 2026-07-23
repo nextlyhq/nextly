@@ -121,8 +121,10 @@ describe("version capture on create (integration)", () => {
     // the live row is not left without any version.
     current = await createTestNextly({
       singles: [
+        // "settings" is a reserved slug (system-resource permission-collision
+        // guard), so this suite uses "preferences".
         defineSingle({
-          slug: "settings",
+          slug: "preferences",
           versions: true,
           fields: [text({ name: "title" })],
         }),
@@ -131,10 +133,10 @@ describe("version capture on create (integration)", () => {
     const singles =
       current.getService<SingleEntryService>("singleEntryService");
 
-    const res = await singles.get("settings", { overrideAccess: true });
+    const res = await singles.get("preferences", { overrideAccess: true });
     expect(res.success).toBe(true);
 
-    const rows = await versionRows(current, "settings");
+    const rows = await versionRows(current, "preferences");
     expect(rows).toHaveLength(1);
     expect(rows[0].scopeKind).toBe("single");
     expect(rows[0].versionNo).toBe(1);
@@ -144,7 +146,7 @@ describe("version capture on create (integration)", () => {
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "preferences",
           fields: [text({ name: "title" })],
         }),
       ],
@@ -152,8 +154,8 @@ describe("version capture on create (integration)", () => {
     const singles =
       current.getService<SingleEntryService>("singleEntryService");
 
-    await singles.get("settings", { overrideAccess: true });
+    await singles.get("preferences", { overrideAccess: true });
 
-    expect(await versionRows(current, "settings")).toHaveLength(0);
+    expect(await versionRows(current, "preferences")).toHaveLength(0);
   });
 });

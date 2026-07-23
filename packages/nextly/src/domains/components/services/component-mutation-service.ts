@@ -1129,7 +1129,13 @@ export class ComponentMutationService extends BaseService {
 
     for (const slug of slugs) {
       try {
-        const meta = await this.registryService.getComponent(slug);
+        // Resolve the component on the transaction's own connection: on a small
+        // pool the delete transaction already holds the only connection, so a
+        // pooled registry read here could wait on itself and hang the delete.
+        const meta = await this.registryService.getComponent(
+          slug,
+          tx.getDrizzle()
+        );
         await tx.delete(
           meta.tableName,
           this.whereAnd({

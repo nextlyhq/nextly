@@ -1741,10 +1741,62 @@ function parseWebhookRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  // Nothing here nests further than one level, so any deeper path is not a
+  // GET /api/webhooks/:id/deliveries/:deliveryId → one delivery with its
+  // attempt history. Handled before the one-level depth guard below, which is
+  // the only two-segment route under an endpoint.
+  if (
+    id &&
+    subresource === "deliveries" &&
+    subId &&
+    additionalParams.length === 0
+  ) {
+    if (httpMethod !== "GET") return null;
+    routeParams.webhookId = id;
+    routeParams.deliveryId = subId;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "getWebhookDelivery",
+      routeParams,
+    };
+  }
+
+  // Nothing else here nests further than one level, so any deeper path is not a
   // route. Without this, `/webhooks/:id/secret/anything` would still match the
   // secret branch and hand back active signing secrets.
   if (subId || additionalParams.length > 0) return null;
+
+  if (id && subresource === "deliveries") {
+    // GET /api/webhooks/:id/deliveries → the endpoint's delivery log (paged).
+    if (httpMethod !== "GET") return null;
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhookDeliveries",
+      routeParams,
+    };
+  }
+
+  // GET or POST /api/webhooks/drain → run one drain pass. "drain" is a reserved
+  // operation path, not an endpoint id: endpoint ids are generated UUIDs and
+  // cannot collide with it. GET is accepted because Vercel Cron triggers with a
+  // GET; the drain is idempotent, and the route is authorized regardless of
+  // method. Matched before the generic `GET /webhooks/:id` branch so `drain` is
+  // never treated as an endpoint id.
+  if (id === "drain" && !subresource) {
+    if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+    // A drain is not a CRUD OperationType, but the dispatch guard rejects a
+    // route with no operation before the direct-dispatch webhooks branch runs;
+    // a truthy value is required. The webhook handler dispatches on `method` and
+    // does its own authorization, so this value is otherwise unused.
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "drainWebhooks",
+      routeParams,
+    };
+  }
 
   if (id && subresource === "secret") {
     // GET /api/webhooks/:id/secret → reveal active signing secrets.

@@ -70,6 +70,37 @@ describe("selectDeliveryTargets", () => {
     expect(targets.map(t => t.id)).toEqual(["sub"]);
   });
 
+  it("delivers to a wildcard subscription for any event type", () => {
+    const targets = selectDeliveryTargets(
+      [
+        endpoint({ id: "all", eventTypes: ["*"] }),
+        endpoint({ id: "specific", eventTypes: ["entry.created"] }),
+      ],
+      // A type the specific endpoint is not subscribed to; the wildcard still
+      // matches it.
+      event({ type: "media.uploaded", resource: { kind: "media", id: "m1" } })
+    );
+    expect(targets.map(t => t.id)).toEqual(["all"]);
+  });
+
+  it("still applies enabled and filter constraints to a wildcard subscription", () => {
+    const targets = selectDeliveryTargets(
+      [
+        endpoint({ id: "off", eventTypes: ["*"], enabled: false }),
+        endpoint({
+          id: "pages-only",
+          eventTypes: ["*"],
+          filter: { version: 1, collections: ["pages"] },
+        }),
+        endpoint({ id: "on", eventTypes: ["*"] }),
+      ],
+      event({ resource: { kind: "entry", collection: "posts", id: "p1" } })
+    );
+    // The wildcard widens which types match, not which endpoints are enabled or
+    // which filters apply.
+    expect(targets.map(t => t.id)).toEqual(["on"]);
+  });
+
   it("excludes endpoints created after the event (no pre-subscription backlog)", () => {
     const targets = selectDeliveryTargets(
       [

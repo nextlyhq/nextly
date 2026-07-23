@@ -20,6 +20,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { NextlyError } from "../../../errors";
+import type { CollectionService } from "../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { recordMutationEvent } from "../record-mutation-event";
 import type { WebhookEvent } from "../types";
@@ -96,6 +97,83 @@ describe("webhook outbox capture (integration)", () => {
       kind: "entry",
       collection: "posts",
     });
+  });
+
+  it("flags eventRecorded when the write commits but a post-commit hook throws", async () => {
+    // The event is appended inside the write transaction; afterCreate hooks run
+    // after it commits. A throwing hook surfaces success:false on an already
+    // committed write, so the result must still report `eventRecorded` — that is
+    // the signal the fast drain + retention key off, not `success`.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    current.hooks.register("afterCreate", "posts", () => {
+      throw new Error("afterCreate observer failed");
+    });
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+
+    // The hook failure is surfaced, but the entry + event committed.
+    expect(created.success).toBe(false);
+    expect(created.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("entry.created");
+  });
+
+  it("flags eventRecorded on a bulk result when a committed item's hook throws", async () => {
+    // A bulk delete runs each item through the per-item mutation, which commits
+    // the row + event and then runs afterDelete. A throwing hook makes that item
+    // a failure (successCount stays 0), but the event is durable — so the bulk
+    // result must still report eventRecorded, or the batch would skip the drain.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    current.hooks.register("afterDelete", "posts", () => {
+      throw new Error("afterDelete observer failed");
+    });
+
+    const result = await handler.bulkDeleteEntries({
+      collectionName: "posts",
+      ids: [id],
+      overrideAccess: true,
+    });
+
+    // The item is counted a failure, yet the delete + event committed.
+    expect(result.successCount).toBe(0);
+    expect(result.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows.map(r => r.type).sort()).toEqual([
+      "entry.created",
+      "entry.deleted",
+    ]);
   });
 
   it("records the event for a versioned collection too (one assembly, both consumers)", async () => {
@@ -315,6 +393,245 @@ describe("webhook outbox capture (integration)", () => {
       expect(row.actorType).toBe("apiKey");
       expect(row.actorId).toBe("key_wrapper");
     }
+  });
+
+  it("records entry.deleted carrying the removed document, and the row is gone", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "doomed" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const result = await handler.deleteEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted).toBeDefined();
+    expect(deleted!.resourceKind).toBe("entry");
+    expect(deleted!.resourceCollection).toBe("posts");
+    expect(deleted!.resourceId).toBe(id);
+
+    const envelope = envelopeOf(deleted!);
+    // The removed document's final state ships as `data`; there is no
+    // post-delete state, so `previous` is null. The event is appended after the
+    // row delete in the same transaction, so its presence proves the delete
+    // committed.
+    expect(envelope.data.title).toBe("doomed");
+    expect(envelope.previous).toBeNull();
+  });
+
+  it("never ships a secret field in the delete payload", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "accounts",
+          fields: [text({ name: "title" }), password({ name: "secret" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "accounts", overrideAccess: true },
+      { title: "acct", secret: "SuperSecret123!" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "accounts",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    const envelope = envelopeOf(deleted!);
+    expect(envelope.data.title).toBe("acct");
+    expect(envelope.data).not.toHaveProperty("secret");
+    expect(JSON.stringify(envelope)).not.toContain("SuperSecret123!");
+  });
+
+  it("never ships a hidden component field in the delete payload", async () => {
+    // The delete payload is assembled with the same component population as the
+    // create/update events, so a field hidden inside a component must be stripped
+    // there too — otherwise a delete would leak what a create never did.
+    current = await createTestNextly({
+      components: [
+        defineComponent({
+          slug: "profile",
+          fields: [
+            text({ name: "heading" }),
+            text({ name: "internalNote", admin: { hidden: true } }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [
+            text({ name: "title" }),
+            component({ name: "profile", component: "profile" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      {
+        title: "page",
+        profile: { heading: "shown", internalNote: "CONFIDENTIAL_NOTE" },
+      }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    const envelope = envelopeOf(deleted!);
+    // The component's visible value is in the removed document...
+    expect((envelope.data.profile as { heading?: string })?.heading).toBe(
+      "shown"
+    );
+    // ...but the hidden one never leaves the system, even on delete.
+    expect(JSON.stringify(envelope)).not.toContain("CONFIDENTIAL_NOTE");
+  });
+
+  it("attributes the delete to the acting identity, including an API key", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "by key" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await handler.deleteEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+      actor: { type: "apiKey", id: "key_del" },
+    });
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted!.actorType).toBe("apiKey");
+    expect(deleted!.actorId).toBe("key_del");
+    expect(envelopeOf(deleted!).actor).toEqual({
+      type: "apiKey",
+      id: "key_del",
+    });
+  });
+
+  it("attributes each bulk-deleted entry's event to the acting API key", async () => {
+    // The REST bulk delete fans out to the single-entry delete, which now emits
+    // entry.deleted; the actor must be threaded through the bulk stack too, or
+    // every bulk-delete event is misattributed to the key owner or system.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const a = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "a" }
+    );
+    const b = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "b" }
+    );
+    const ids = [(a.data as { id: string }).id, (b.data as { id: string }).id];
+
+    await handler.bulkDeleteEntries({
+      collectionName: "posts",
+      ids,
+      overrideAccess: true,
+      actor: { type: "apiKey", id: "key_bulk" },
+    });
+
+    const rows = await events(current);
+    const deletes = rows.filter(r => r.type === "entry.deleted");
+    expect(deletes).toHaveLength(2);
+    for (const row of deletes) {
+      expect(row.actorType).toBe("apiKey");
+      expect(row.actorId).toBe("key_bulk");
+    }
+  });
+
+  it("emits entry.deleted from the transactional delete helper too", async () => {
+    // The batch/cascade delete paths go through the transactional helpers rather
+    // than the single-delete method, so they must record the event as well — a
+    // delete that removes rows silently is invisible to subscribers.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "tx-del" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const collectionService =
+      current.getService<CollectionService>("collectionService");
+    // Pass an API-key actor through the public transactional wrapper: it must
+    // forward to the event rather than falling back to the key owner or system.
+    await current.adapter.transaction(async tx =>
+      collectionService.deleteEntryInTransaction(
+        tx,
+        "posts",
+        id,
+        {},
+        {
+          type: "apiKey",
+          id: "key_tx",
+        }
+      )
+    );
+
+    const rows = await events(current);
+    const deleted = rows.find(r => r.type === "entry.deleted");
+    expect(deleted).toBeDefined();
+    expect(deleted!.resourceId).toBe(id);
+    expect(envelopeOf(deleted!).data.title).toBe("tx-del");
+    expect(deleted!.actorType).toBe("apiKey");
+    expect(deleted!.actorId).toBe("key_tx");
   });
 
   it("writes the event inside the caller's transaction, so a rollback drops it", async () => {

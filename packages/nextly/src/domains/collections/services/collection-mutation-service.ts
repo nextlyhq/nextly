@@ -257,12 +257,95 @@ export class CollectionMutationService extends BaseService {
    * inside a component and their values would ship in the event payload.
    */
   private async webhookFieldTree(
-    fields: readonly SensitiveFieldSource[]
+    fields: readonly SensitiveFieldSource[],
+    // Executor to resolve component schemas on. When called inside an open
+    // transaction, pass `tx.getDrizzle()`: resolving on the default pooled
+    // connection would take a second connection while the tx holds one and can
+    // starve a small pool. Omit it (the default) when no transaction is open.
+    executor?: unknown
   ): Promise<SensitiveFieldSource[]> {
     const dataService = this.componentDataService;
     return expandComponentFields(fields, async slug =>
-      dataService ? await dataService.getComponentFields(slug) : null
+      dataService ? await dataService.getComponentFields(slug, executor) : null
     );
+  }
+
+  /**
+   * Assemble a removed entry as the read shape the create/update events carry —
+   * JSON container fields parsed, component subtrees and many-to-many id arrays
+   * populated, password and system-owner fields stripped — so a delete event
+   * reports the document in a shape consistent with every other event. Reads the
+   * relations on the delete transaction, so the caller MUST build this BEFORE the
+   * cascade delete removes them.
+   */
+  private async buildDeletedDocument(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      row: Record<string, unknown>;
+      fields: FieldDefinition[];
+      /**
+       * Locale whose companion translations to merge into the snapshot. For a
+       * migrated localized collection the main row holds no translatable values,
+       * so without this the payload omits every localized field.
+       */
+      locale?: string;
+    }
+    // Returns the assembled document plus the locale that actually applied — set
+    // only when the collection is localized — so the caller tags `resource.locale`
+    // with the same locale the payload represents (and omits it otherwise).
+  ): Promise<{ document: Record<string, unknown>; locale?: string }> {
+    const { collectionName, entryId, tableName, row, fields, locale } = args;
+    const manyToManyFields = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+
+    // Overlay the locale's translatable values from the companion table before
+    // deserializing, so a localized field still held as a JSON string is parsed
+    // to the read shape too — matching how the update path builds `previous`.
+    const merged: Record<string, unknown> = {
+      ...convertTimestampsToCamelCase({ ...row }),
+    };
+    let appliedLocale: string | undefined;
+    if (locale && this.localization) {
+      // A companion schema means the collection is localized; only then does the
+      // locale disambiguate the payload, so only then is it recorded.
+      const companion =
+        await this.fileManager.loadCompanionSchema(collectionName);
+      if (companion) {
+        appliedLocale = locale;
+        Object.assign(
+          merged,
+          await this.readCompanionLocalizedValues(
+            tx,
+            collectionName,
+            entryId,
+            locale
+          )
+        );
+      }
+    }
+
+    const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
+    stripPasswordFieldValues(parentRow, fields);
+    stripSystemOwnerField(parentRow);
+
+    const { components, manyToMany } = await this.buildFullSnapshotRelations(
+      tx,
+      entryId,
+      collectionName,
+      tableName,
+      fields,
+      manyToManyFields,
+      appliedLocale
+    );
+
+    return {
+      document: assembleDocument({ parentRow, components, manyToMany }),
+      locale: appliedLocale,
+    };
   }
 
   private transitionStatus(args: {
@@ -1149,6 +1232,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below), so the catch can report a
+    // committed-but-hook-failed write as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -1735,6 +1822,10 @@ export class CollectionMutationService extends BaseService {
           actor: actorForWrite(params.actor, params.user),
         });
       });
+      // Set only after the transaction resolves (this line is skipped if it
+      // rejected), so a commit failure never flags a durable event that isn't
+      // there; from here a post-commit hook failure must not hide the delivery.
+      eventRecorded = true;
 
       // Execute afterCreate hooks (code-registered)
       // Hooks run after database insert completes (for side effects)
@@ -1844,6 +1935,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: responseEntry,
+        eventRecorded,
       };
     } catch (error: unknown) {
       // Legacy per-kind override messages ("Duplicate value: ...",
@@ -1852,11 +1944,14 @@ export class CollectionMutationService extends BaseService {
       // wire never reveals which constraint or column failed. The original
       // DbError is preserved on the NextlyError as `cause` for log lines.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to create entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to create entry" },
+          this.dialect
+        ),
+        eventRecorded,
+      };
     }
   }
 
@@ -2208,6 +2303,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below); lets the catch report a
+    // committed-but-hook-failed update as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -2652,8 +2751,13 @@ export class CollectionMutationService extends BaseService {
       // by the per-locale status event below. Re-read inside each attempt (like
       // committedPreviousStatus) so a retry reports the true prior state.
       let localizedPreviousStatus: string | null = null;
+      // Reset at the start of each attempt and read back only after the retry
+      // resolves, so a rolled-back attempt (a version conflict) or a commit
+      // failure never flags a durable event that isn't there.
+      let recorded = false;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          recorded = false;
           const updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
@@ -3069,10 +3173,14 @@ export class CollectionMutationService extends BaseService {
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
+              recorded = true;
             }
           }
         })
       );
+      // The transaction committed (skipped if the retry ultimately threw), so
+      // the event is durable; a later hook failure must not hide the delivery.
+      eventRecorded = recorded;
 
       // Fetch the updated entry to return it and use in hooks
       const [updated] = await this.db
@@ -3087,6 +3195,9 @@ export class CollectionMutationService extends BaseService {
           statusCode: 404,
           message: "Entry not found",
           data: null,
+          // The event may already be durable (the row vanished only after the
+          // update committed), so still signal a delivery is owed.
+          eventRecorded,
         };
       }
 
@@ -3255,16 +3366,22 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: responseEntry,
+        // Reflects whether this update actually recorded an event (a no-op
+        // update commits without one), so a no-op does not kick the drain.
+        eventRecorded,
       };
     } catch (error: unknown) {
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+        eventRecorded,
+      };
     }
   }
 
@@ -3282,6 +3399,8 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryId: string;
     user?: UserContext;
+    /** Who performed the delete, recorded on the outbox event. */
+    actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /** When true, the route middleware already ran the RBAC gate; stored rules
@@ -3290,6 +3409,10 @@ export class CollectionMutationService extends BaseService {
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below); lets the catch report a
+    // committed-but-hook-failed delete as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -3388,24 +3511,101 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
-      // Cascade delete component data before deleting the main entry
-      if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
-        await this.componentDataService.deleteComponentData({
-          parentId: params.entryId,
-          parentTable: tableName,
-          fields: collectionFields,
+      // The collection schema, viewed two ways: the component cascade takes
+      // FieldConfig, the outbox snapshot takes FieldDefinition. Both are the
+      // same underlying array off the loosely-typed collection.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+      // Resolved before the transaction opens: the expansion reads the component
+      // registry on the pooled connection (see the create/update paths).
+      const webhookFields = await this.webhookFieldTree(snapshotFields);
+
+      // Delete the entry, cascade its component subtrees, and append the
+      // `entry.deleted` event in one transaction, so the event commits with the
+      // deletion and is never recorded for a delete that rolled back. (The
+      // component cascade is best-effort inside the shared helper — it logs and
+      // continues on a per-table failure — so this pairs the entry delete with
+      // its event, not full cascade atomicity.)
+      let deletedRow = false;
+      await this.adapter.transaction(async tx => {
+        // Lock and re-read the committed row inside the transaction. `entry`
+        // above was read before the hooks ran and outside this transaction, so a
+        // concurrent write may have changed or removed it; the event must
+        // describe the row actually deleted, and the lock serializes a racing
+        // delete so only one of them records the event. The adapter no-ops the
+        // lock where row locking is unavailable (e.g. SQLite, itself serialized).
+        await tx.lockRow(tableName, params.entryId);
+        const [currentRow] = await tx
+          .getDrizzle<typeof this.db>()
+          .select()
+          .from(schema)
+          .where(eq(schema.id, params.entryId))
+          .limit(1);
+        if (!currentRow) return; // a concurrent delete won the race.
+
+        // Read the removed document before the cascade delete removes its
+        // relations, in the read shape create/update events use. A localized
+        // collection keeps translatable values in the companion, so overlay the
+        // default locale's.
+        const { document: deletedDocument, locale: deletedLocale } =
+          await this.buildDeletedDocument(tx, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            tableName,
+            row: currentRow as Record<string, unknown>,
+            fields: snapshotFields,
+            locale: this.localization?.defaultLocale,
+          });
+
+        if (this.componentDataService) {
+          await this.componentDataService.deleteComponentDataInTransaction(tx, {
+            parentId: params.entryId,
+            parentTable: tableName,
+            fields: collectionFields,
+          });
+        }
+
+        const deletedCount = await tx.delete(
+          tableName,
+          this.whereEq("id", params.entryId)
+        );
+        // With the lock held a found row always deletes; the guard still covers
+        // the lock-less dialects and keeps a racing delete from recording a
+        // duplicate `entry.deleted` for a row it did not remove.
+        if (deletedCount === 0) return;
+        deletedRow = true;
+
+        // The removed document's final state ships as `data`; there is no
+        // post-delete state, so `previous` is null (mirroring create, which
+        // carries only `data`). `locale` is set only for a localized collection,
+        // so a receiver knows which translation the payload represents.
+        await recordMutationEvent(tx, {
+          type: "entry.deleted",
+          resource: {
+            kind: "entry",
+            collection: params.collectionName,
+            id: params.entryId,
+            ...(deletedLocale ? { locale: deletedLocale } : {}),
+          },
+          data: deletedDocument,
+          previous: null,
+          fields: webhookFields,
+          actor: actorForWrite(params.actor, params.user),
         });
-      }
+      });
+      // Set only after the transaction resolves: `deletedRow` is true exactly
+      // when the delete + event committed, so a commit failure never flags a
+      // durable event that isn't there; a later hook failure must not hide it.
+      eventRecorded = deletedRow;
 
-      await this.db.delete(schema).where(eq(schema.id, params.entryId));
-      // .returning();
-
-      const deleted = entry;
-
-      if (!deleted) {
+      // A concurrent delete removed the row first: report not-found rather than
+      // a second success (and a duplicate event) for a deletion this call did
+      // not perform.
+      if (!deletedRow) {
         return {
           success: false,
           statusCode: 404,
@@ -3413,6 +3613,8 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+
+      const deleted = entry;
 
       // Execute afterDelete hooks (code-registered)
       // Hooks run after deletion completes (for cleanup)
@@ -3453,6 +3655,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
       return {
@@ -3461,6 +3664,7 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        eventRecorded,
       };
     }
   }
@@ -4199,8 +4403,16 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // True only in the window between the row delete and the outbox insert: a
+    // failure there has left this shared transaction with a delete but no event,
+    // so the catch re-throws to force a rollback. Cleared once the event is
+    // recorded — a later failure (e.g. an afterDelete hook) is a per-item
+    // side-effect issue, not an eventless delete, and must NOT roll the batch back.
+    let deleteNeedsRollback = false;
     try {
       // Get collection metadata and stored hooks
       const collection = await this.collectionService.getCollection(
@@ -4283,11 +4495,50 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // The collection schema, two views: FieldConfig for the component cascade,
+      // FieldDefinition for the outbox snapshot.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+
+      // Lock and re-read the committed row before snapshotting it: `entry` above
+      // was read before the hooks ran, so a concurrent update could otherwise
+      // make the event describe values other than the row this delete removes.
+      // The adapter no-ops the lock where row locking is unavailable (SQLite,
+      // itself serialized).
+      await tx.lockRow(tableName, params.entryId);
+      const freshEntry = await tx.selectOne<Record<string, unknown>>(
+        tableName,
+        {
+          where: this.whereEq("id", params.entryId),
+        }
+      );
+      if (!freshEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+
+      // Assemble the removed document before the cascade removes its relations,
+      // in the read shape create/update events use.
+      const { document: deletedDocument, locale: deletedLocale } =
+        await this.buildDeletedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          tableName,
+          row: freshEntry,
+          fields: snapshotFields,
+          locale: this.localization?.defaultLocale,
+        });
+
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
         await this.componentDataService.deleteComponentDataInTransaction(tx, {
           parentId: params.entryId,
           parentTable: tableName,
@@ -4309,6 +4560,29 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      deleteNeedsRollback = true;
+
+      // Append the outbox event in the same transaction so a delete performed
+      // through this helper (batch/cascade/internal) is observable too, in the
+      // same shape as the single-delete path. Resolve component schemas on this
+      // transaction's connection to avoid taking a second pooled connection.
+      // `locale` is set only for a localized collection.
+      await recordMutationEvent(tx, {
+        type: "entry.deleted",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: params.entryId,
+          ...(deletedLocale ? { locale: deletedLocale } : {}),
+        },
+        data: deletedDocument,
+        previous: null,
+        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
+        actor: actorForWrite(params.actor, params.user),
+      });
+      // The event is recorded, so the delete + event are now consistent; a later
+      // failure no longer needs to force a rollback.
+      deleteNeedsRollback = false;
 
       // Execute afterDelete hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
@@ -4342,6 +4616,11 @@ export class CollectionMutationService extends BaseService {
         data: { deleted: true },
       };
     } catch (error: unknown) {
+      // Only a failure in the delete→event window propagates (to roll back an
+      // eventless delete). Pre-delete failures and post-event failures (e.g. an
+      // afterDelete hook) stay soft: the row is either untouched or already
+      // consistent with its event, so a returned failure is safe.
+      if (deleteNeedsRollback) throw error;
       return {
         success: false,
         statusCode: 500,
@@ -5171,10 +5450,21 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
     },
     entryId: string,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // True only in the window between the row delete and the outbox insert: a
+    // failure there has left this shared transaction with a delete but no event,
+    // so the catch re-throws to force a rollback. Cleared once the event is
+    // recorded — a later failure (e.g. an afterDelete hook) is a per-item
+    // side-effect issue, not an eventless delete, and must NOT roll the batch back.
+    let deleteNeedsRollback = false;
+    // Set once the event is appended to the shared transaction; the batch caller
+    // reads it back and applies it only after the transaction commits.
+    let eventRecorded = false;
     try {
       // Get collection metadata early
       const collection = await this.collectionService.getCollection(
@@ -5302,11 +5592,50 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // The collection schema, two views: FieldConfig for the component cascade,
+      // FieldDefinition for the outbox snapshot.
+      const collectionFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[];
+      const snapshotFields = (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldDefinition[];
+
+      // Lock and re-read the committed row before snapshotting it: `entry` above
+      // was read before the hooks ran, so a concurrent update could otherwise
+      // make the event describe values other than the row this delete removes.
+      // The adapter no-ops the lock where row locking is unavailable (SQLite,
+      // itself serialized).
+      await tx.lockRow(tableName, entryId);
+      const freshEntry = await tx.selectOne<Record<string, unknown>>(
+        tableName,
+        {
+          where: this.whereEq("id", entryId),
+        }
+      );
+      if (!freshEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: `Entry not found: ${entryId}`,
+          data: null,
+        };
+      }
+
+      // Assemble the removed document before the cascade removes its relations,
+      // in the read shape create/update events use.
+      const { document: deletedDocument, locale: deletedLocale } =
+        await this.buildDeletedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId,
+          tableName,
+          row: freshEntry,
+          fields: snapshotFields,
+          locale: this.localization?.defaultLocale,
+        });
+
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
-        const collectionFields = (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[];
         await this.componentDataService.deleteComponentDataInTransaction(tx, {
           parentId: entryId,
           parentTable: tableName,
@@ -5328,6 +5657,30 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      deleteNeedsRollback = true;
+
+      // Append the outbox event in the same transaction so a batch delete
+      // through this helper is observable too, in the same shape as the
+      // single-delete path. Resolve component schemas on this transaction's
+      // connection to avoid taking a second pooled connection. `locale` is set
+      // only for a localized collection.
+      await recordMutationEvent(tx, {
+        type: "entry.deleted",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: entryId,
+          ...(deletedLocale ? { locale: deletedLocale } : {}),
+        },
+        data: deletedDocument,
+        previous: null,
+        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
+        actor: actorForWrite(params.actor, params.user),
+      });
+      // The event is recorded, so the delete + event are now consistent; a later
+      // failure no longer needs to force a rollback.
+      deleteNeedsRollback = false;
+      eventRecorded = true;
 
       // Execute afterDelete hooks (unless skipped)
       if (!skipHooks) {
@@ -5365,14 +5718,21 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
+      // Only a failure in the delete→event window propagates (to roll back an
+      // eventless delete). Pre-delete failures and post-event failures (e.g. an
+      // afterDelete hook) stay soft: the row is either untouched or already
+      // consistent with its event, so a returned failure is safe.
+      if (deleteNeedsRollback) throw error;
       return {
         success: false,
         statusCode: 500,
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        eventRecorded,
       };
     }
   }

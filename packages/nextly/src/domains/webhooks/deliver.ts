@@ -143,6 +143,15 @@ export interface DeliverDeps {
   leaseMs?: number;
   /** Per-request timeout in ms. Defaults to 15s. */
   requestTimeoutMs?: number;
+  /**
+   * Wall-clock cutoff for this pass. Once reached, no further due delivery is
+   * claimed or attempted; an already in-flight attempt still completes (bounded
+   * by `requestTimeoutMs`). Lets a latency-bounded trigger — a serverless cron
+   * tick — stop cleanly instead of running a full batch of hung receivers to
+   * completion; the leftover rows are picked up on the next pass. Unbounded when
+   * unset.
+   */
+  deadline?: Date;
   /** Clock; injectable for deterministic tests. */
   now?: () => Date;
   /** Unique id for this drain runner, recorded as the lease owner. */
@@ -608,6 +617,11 @@ export async function deliverDueDeliveries(
   );
 
   for (const candidate of candidates) {
+    // Stop before claiming the next row once the wall-clock budget is spent, so
+    // a hung/slow receiver can extend this pass by at most one in-flight request
+    // rather than the whole batch. No row is left claimed-but-unattempted: the
+    // claim and attempt happen together below.
+    if (deps.deadline && now() >= deps.deadline) break;
     const claimedAt = now();
     const row = await claimDelivery(
       deps,
