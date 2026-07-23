@@ -134,7 +134,7 @@ jobs:
           tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --yes
           cd smoke-app
-          npm run build
+          pnpm run build
 
   # A red nightly must surface without anyone watching the Actions tab.
   report-failure:
