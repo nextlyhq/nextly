@@ -440,10 +440,22 @@ async function generatePluginPackageJson(
   const runtimeVersions = await resolveRuntimeVersions();
   const range = (pkg: string): string => versions[pkg] ?? "latest";
 
+  // peerDependencies must be a valid semver range: pnpm 11 rejects the
+  // "latest" dist-tag there (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION)
+  // and then refuses to run ANY script in the scaffold, including `pnpm dev`.
+  // The dist-tag can appear whenever a registry version lookup fails
+  // (offline, transient npm error) or under --use-yalc, so fall back to an
+  // open range instead. Dev/regular dependencies keep "latest" — the
+  // dist-tag is valid there and installs the newest release.
+  const peerRange = (pkg: string): string => {
+    const v = range(pkg);
+    return v === "latest" ? ">=0.0.0" : v;
+  };
+
   const peerDependencies: Record<string, string> = {
-    nextly: range("nextly"),
-    "@nextlyhq/admin": range("@nextlyhq/admin"),
-    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    nextly: peerRange("nextly"),
+    "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
+    "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
   };
