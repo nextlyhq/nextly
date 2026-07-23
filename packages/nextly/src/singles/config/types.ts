@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { HookHandler } from "../../hooks/types";
+import type { RevalidateConfig } from "../../revalidation/types";
 // Builder-facing content-versioning options surfaced on the Single config.
 import type { VersionsConfig } from "../../schemas/versions/types";
 
@@ -410,6 +411,16 @@ export interface SingleConfig {
   description?: string;
 
   /**
+   * Cache-revalidation configuration. When a Next cache adapter is registered,
+   * every write to this single busts its `nextly:single:{slug}` cache tag, so
+   * tagged reads refresh on save. Use `tags` to bust extra shared tags on every
+   * write, or `disable` to opt this single out of automatic revalidation.
+   *
+   * @default undefined (automatic revalidation on when a cache adapter exists)
+   */
+  revalidate?: RevalidateConfig;
+
+  /**
    * Custom metadata for plugins and extensions.
    *
    * Store arbitrary data that can be accessed by hooks, plugins,
@@ -418,7 +429,6 @@ export interface SingleConfig {
    * @example
    * ```typescript
    * custom: {
-   *   revalidateTags: ['site-settings', 'header'],
    *   cacheKey: 'global:site-settings',
    * }
    * ```
