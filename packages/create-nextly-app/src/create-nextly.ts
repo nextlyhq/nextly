@@ -355,13 +355,23 @@ export async function createNextly(
 
     try {
       // Resolve template source (download from GitHub or use local path).
-      // For "blank" template without --local-template, we use the bundled
-      // fallback embedded in the CLI. For content templates (blog) we
-      // resolve via GitHub or a local path. --use-yalc also triggers
-      // resolution for the blank template so local-dev runs always pair
-      // yalc-linked packages with the live template rather than a
-      // potentially-stale bundled copy.
-      if (projectType !== "blank" || options.localTemplatePath || useYalc) {
+      // "blank" and "plugin" ship bundled inside the CLI package, so their
+      // default scaffolds work offline and always match the installed CLI's
+      // package versions (a GitHub-main template can drift ahead of the npm
+      // packages the scaffold installs). Content templates (blog) resolve
+      // via GitHub. --local-template, --use-yalc, or an explicit non-main
+      // --branch still force resolution so development workflows keep
+      // pairing live templates with local packages.
+      const usesBundledPluginTemplate =
+        projectType === "plugin" &&
+        !options.localTemplatePath &&
+        !useYalc &&
+        (options.branch ?? "main") === "main";
+      if (
+        (projectType !== "blank" && !usesBundledPluginTemplate) ||
+        options.localTemplatePath ||
+        useYalc
+      ) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
