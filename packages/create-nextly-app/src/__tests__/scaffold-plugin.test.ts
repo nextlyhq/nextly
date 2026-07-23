@@ -107,6 +107,18 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(adminPage).toContain("QueryProvider");
     expect(adminPage).toContain("ErrorBoundary");
 
+    // The generated test must match the current harness + Direct API: the
+    // harness applies plugin schema contributions itself (passing them again
+    // via `collections` is a slug collision), and CRUD methods take a single
+    // args object (`create({ collection, data })`, `findByID({ ... })`).
+    const pluginTest = await readFile(
+      path.join(target, "src/plugin.test.ts"),
+      "utf-8"
+    );
+    expect(pluginTest).not.toContain("contributes?.collections");
+    expect(pluginTest).toContain("findByID({");
+    expect(pluginTest).toContain("create({");
+
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(
       path.join(target, "src/plugin.ts"),
