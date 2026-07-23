@@ -242,9 +242,12 @@ function classifyTransportError(err: unknown): {
 /**
  * Claim one due delivery by taking a lease inside a transaction. Returns the row
  * if this runner won the claim, else null (another runner holds it, it is no
- * longer due, or it vanished). The read-check-write runs in one transaction so
- * SQLite's single-writer semantics make it exclusive; the lease bounds the window
- * on other dialects.
+ * longer due, or it vanished). The read-check-write runs in one transaction under
+ * a `FOR UPDATE` row lock (a no-op on SQLite, whose transactions already
+ * serialize writers), so a concurrent claim or a redelivery re-arm cannot slip
+ * between the read and the lease write: the claimed row's state — including its
+ * `attemptCount` — is the committed state this runner then acts on, never a stale
+ * copy a re-arm has since reset.
  */
 async function claimDelivery(
   deps: DeliverDeps,
@@ -257,6 +260,7 @@ async function claimDelivery(
     const rows = await tx.select<DeliveryRow>("nextly_webhook_deliveries", {
       where: { and: [{ column: "id", op: "=", value: id }] },
       limit: 1,
+      forUpdate: true,
     });
     const row = rows[0];
     if (!row) return null;
