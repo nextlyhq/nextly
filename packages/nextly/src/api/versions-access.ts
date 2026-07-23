@@ -64,7 +64,22 @@ export async function requireRouteVersionReadAccess(
     role: roles?.[0],
   };
 
-  await assertVersionDocumentReadable(scopeKind, slug, entryId, user);
+  // For an API-key request the live-document read gate must judge the key's OWN
+  // read grant, not the key owner's roles — otherwise a super-admin-owned key
+  // scoped for read could see a document's history while bypassing its stored
+  // owner-only/custom read rule (the dispatcher path does the same).
+  const authenticatedScope: AuthenticatedScope | undefined =
+    auth.authMethod === "api-key"
+      ? { actorType: "apiKey", permissions: auth.permissions }
+      : undefined;
+
+  await assertVersionDocumentReadable(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
 
   return user;
 }
