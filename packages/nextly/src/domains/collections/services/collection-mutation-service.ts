@@ -370,9 +370,13 @@ export class CollectionMutationService extends BaseService {
     let appliedLocale: string | undefined;
     if (locale && this.localization) {
       // A companion schema means the collection is localized; only then does the
-      // locale disambiguate the payload, so only then is it recorded.
-      const companion =
-        await this.fileManager.loadCompanionSchema(collectionName);
+      // locale disambiguate the payload, so only then is it recorded. Bound to
+      // the transaction connection so the metadata read does not re-enter the
+      // pool from inside the caller's transaction.
+      const companion = await this.fileManager.loadCompanionSchema(
+        collectionName,
+        tx.getDrizzle()
+      );
       if (companion) {
         appliedLocale = locale;
         Object.assign(
@@ -719,8 +723,12 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     locale: string
   ): Promise<Record<string, unknown>> {
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
+    // Bound to the transaction connection so the companion metadata read does not
+    // re-enter the pool from inside the caller's transaction.
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx.getDrizzle()
+    );
     if (!companion) return {};
 
     const row: Record<string, unknown> = { id: entryId };
