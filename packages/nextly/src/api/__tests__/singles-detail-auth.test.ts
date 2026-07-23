@@ -88,6 +88,10 @@ describe("singles-detail PATCH route auth forwarding", () => {
         },
         overrideAccess: false,
         routeAuthorized: true,
+        // The route forwards the caller's authenticated scope so a scoped API
+        // key is judged on its own publish grant; a session user carries an
+        // empty-permission user scope.
+        authenticatedScope: { actorType: "user", permissions: [] },
       }
     );
   });

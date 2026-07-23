@@ -15,6 +15,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestContext } from "@nextly/collections/fields/types/base";
 
+import {
+  apiKeyWriteAllowed,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type {
   AccessControlService,
@@ -160,7 +164,19 @@ export class CollectionAccessService extends BaseService {
     documentId?: string,
     document?: Record<string, unknown>,
     overrideAccess?: boolean,
-    routeAuthorized?: boolean
+    routeAuthorized?: boolean,
+    // The caller's authenticated scope. For a scoped API key the RBAC gate
+    // judges the key's OWN stamped grants rather than the owner's permissions
+    // (see auth/authenticated-scope). Undefined for session/system callers.
+    authenticatedScope?: AuthenticatedScope,
+    // Skip the stored-rule evaluation (owner-only/custom/role-based/...) and
+    // return after only the RBAC/permission gate. The transition pre-resolve uses
+    // this so a document-dependent stored rule (owner-only or custom) is NOT
+    // judged against an absent document here — a custom rule that denies on
+    // missing data would otherwise cache a denial that pre-empts the under-lock
+    // recheck. The rule is instead evaluated against the row-locked document via
+    // {@link evaluateTransitionDocumentRule}.
+    deferStoredRuleEval?: boolean
   ): Promise<CollectionServiceResult<T> | null> {
     // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
@@ -168,10 +184,15 @@ export class CollectionAccessService extends BaseService {
     }
 
     // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
-    // owner-only) so an admin can act on any record on every transport. Keyed
-    // on the authorized role set (see isSuperAdminContext), so a scoped API key
-    // cannot inherit its owner's super-admin bypass.
-    if (isSuperAdminContext(user)) {
+    // owner-only) so an admin can act on any record on every transport — EXCEPT
+    // via a scoped API key. The bypass belongs to the session path: a key is
+    // authoritative on its OWN stamped scope, never on the owner's roles, so a
+    // read/update-only key issued by an administrator is not equivalent to their
+    // full account (mirrors canReadEntity). Applying the bypass here would let a
+    // super-admin-owned, update-only key publish, recreating the very hole this
+    // scope check closes.
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && isSuperAdminContext(user)) {
       return null;
     }
 
@@ -194,7 +215,34 @@ export class CollectionAccessService extends BaseService {
     // permissions. Skipped when routeAuthorized, because the route middleware
     // (requireCollectionAccess) already performed this exact check; the stored
     // rules below still run.
-    if (!routeAuthorized && this.rbacAccessControlService && user) {
+    //
+    // For a scoped API key the gate judges the key's OWN stamped grants, not the
+    // owner's DB permissions: the route only authorized the write as `update`,
+    // so this publish/unpublish re-check must consult the key's scope or an
+    // update-only key owned by a publisher could publish. `apiKeyWriteAllowed`
+    // evaluates both the key's permission grant AND the code-defined access rule
+    // against that scope, and returns null for a non-API-key caller, which falls
+    // through to RBAC.
+    const scopeDecision =
+      !routeAuthorized && user
+        ? await apiKeyWriteAllowed(
+            authenticatedScope,
+            operation,
+            collectionName,
+            user,
+            this.rbacAccessControlService
+          )
+        : null;
+    if (!routeAuthorized && user && scopeDecision !== null) {
+      if (!scopeDecision) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+          data: null as unknown as T,
+        };
+      }
+    } else if (!routeAuthorized && this.rbacAccessControlService && user) {
       try {
         const allowed = await this.rbacAccessControlService.checkAccess({
           userId: user.id,
@@ -228,6 +276,14 @@ export class CollectionAccessService extends BaseService {
       }
     }
 
+    // The caller (transition pre-resolve) will evaluate the document-dependent
+    // stored rule against the row-locked document itself, so the docless
+    // evaluation here is skipped: the RBAC/permission gate above stands, but a
+    // custom rule is not run with an absent document.
+    if (deferStoredRuleEval) {
+      return null;
+    }
+
     try {
       // Get collection metadata to retrieve access rules
       const collection =
@@ -235,6 +291,26 @@ export class CollectionAccessService extends BaseService {
       const accessRules = this.getAccessRules(
         collection as Record<string, unknown>
       );
+
+      // Secure-by-default publish gate (Option A): an unauthenticated caller may
+      // publish/unpublish ONLY when an explicit rule grants it. With no explicit
+      // publish/unpublish rule the operation would otherwise fall through to the
+      // rule-less public default below (evaluateAccess allows), letting an
+      // anonymous caller publish a publicly-writable collection. An explicit rule
+      // (public/authenticated/role-based/owner-only/custom) is still evaluated
+      // below and decides on its own — only the implicit default denies here.
+      if (
+        !user &&
+        (operation === "publish" || operation === "unpublish") &&
+        !accessRules?.[operation]
+      ) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
+          data: null as unknown as T,
+        };
+      }
 
       // Build request context from user
       const requestContext = this.buildRequestContext(user);
@@ -285,6 +361,94 @@ export class CollectionAccessService extends BaseService {
         data: null as unknown as T,
       };
     }
+  }
+
+  /**
+   * Whether a stored access rule's decision depends on the specific document —
+   * `owner-only` (compares the owner column) or `custom` (a function that may
+   * inspect `id`/`data`). These must be re-judged against the row-locked row, not
+   * the docless pre-resolve. `public`/`authenticated`/`role-based` are fully
+   * decided without a document, so they are excluded.
+   */
+  isDocumentDependentRule(rule: { type?: string } | undefined): boolean {
+    return rule?.type === "owner-only" || rule?.type === "custom";
+  }
+
+  /**
+   * Pre-resolve whether a collection has a document-dependent (owner-only or
+   * custom) publish/unpublish rule that must be judged against the specific row
+   * being transitioned. Runs on the pooled connection BEFORE a write transaction,
+   * so the in-transaction check needs no metadata read (mirrors the permission
+   * pre-resolve used by the transaction/batch paths).
+   *
+   * Returns the already-fetched rules + user when such a rule applies, or null
+   * when it does not: a super-admin SESSION bypasses stored rules — but NOT a
+   * scoped API key it owns (matching {@link checkCollectionAccess}) — and a
+   * collection with no document-dependent publish/unpublish rule has nothing to
+   * re-enforce. role-based/authenticated/public rules are fully decided by the
+   * docless permission pre-resolve, so they are intentionally excluded here. The
+   * caller is responsible for skipping this on an `overrideAccess` write.
+   */
+  resolveTransitionDocumentRule(
+    collection: Record<string, unknown>,
+    user: UserContext | undefined,
+    authenticatedScope?: AuthenticatedScope
+  ): {
+    accessRules: CollectionAccessRules;
+    user: UserContext | undefined;
+  } | null {
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && isSuperAdminContext(user)) {
+      return null;
+    }
+    const accessRules = this.getAccessRules(collection);
+    if (!accessRules) return null;
+    const documentDependent =
+      this.isDocumentDependentRule(accessRules.publish) ||
+      this.isDocumentDependentRule(accessRules.unpublish);
+    return documentDependent ? { accessRules, user } : null;
+  }
+
+  /**
+   * Evaluate the stored document-dependent (owner-only or custom) publish/
+   * unpublish rule for a transition against an ALREADY-FETCHED (row-locked)
+   * document, with no metadata or permission read — safe to call inside a
+   * transaction. Returns a 403 result when the rule denies, or null when it
+   * allows or no document-dependent rule governs the operation.
+   *
+   * This closes the gap where the docless permission pre-resolve lets a
+   * document-dependent publish/unpublish through: owner checks defer without a
+   * document, and a custom rule is judged on empty `id`/`data`. So a caller who
+   * may update another user's row could otherwise batch-publish or unpublish it
+   * under the transaction. The row's own `id` is passed so a custom rule that
+   * keys off the document id sees the real value.
+   */
+  async evaluateTransitionDocumentRule<T = unknown>(
+    accessRules: CollectionAccessRules,
+    operation: "publish" | "unpublish",
+    user: UserContext | undefined,
+    document: Record<string, unknown>
+  ): Promise<CollectionServiceResult<T> | null> {
+    if (!this.isDocumentDependentRule(accessRules[operation])) {
+      return null;
+    }
+    const documentId =
+      typeof document.id === "string" ? document.id : undefined;
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      operation,
+      this.buildRequestContext(user),
+      documentId,
+      document,
+      DEFAULT_OWNER_FIELD
+    );
+    if (result.allowed) return null;
+    return {
+      success: false,
+      statusCode: 403,
+      message: result.reason || "Access denied",
+      data: null as unknown as T,
+    };
   }
 
   /**
@@ -352,10 +516,22 @@ export class CollectionAccessService extends BaseService {
     collectionName: string,
     operation: AccessOperation,
     user?: UserContext,
-    overrideAccess?: boolean
+    overrideAccess?: boolean,
+    // The caller's authenticated scope. A scoped API key is judged on its OWN
+    // grant, so the session super-admin bypass does not lift the owner predicate
+    // for a super-admin-owned key — mirrors checkCollectionAccess.
+    authenticatedScope?: AuthenticatedScope
   ): Promise<{ field: string; value: string } | null> {
-    // Super-admin bypasses the owner predicate on the transactional paths too.
-    if (overrideAccess || !user || isSuperAdminContext(user)) return null;
+    // Super-admin bypasses the owner predicate on the transactional paths too —
+    // EXCEPT via a scoped API key, which must still obey stored owner rules.
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (
+      overrideAccess ||
+      !user ||
+      (!isScopedApiKey && isSuperAdminContext(user))
+    ) {
+      return null;
+    }
 
     try {
       const collection =

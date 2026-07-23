@@ -45,6 +45,14 @@ export interface CompanionMigrationSpec {
   /** columns being localized (moved main -> companion). */
   columns: LocalizedColumnSpec[];
   /**
+   * Names of `columns` that physically exist on the main table right now, so the ENABLE seed
+   * (`SELECT ... FROM main`) and the main-table DROP only touch real columns. A field added
+   * and localized in the same save is in `columns` (it needs a companion column) but not here
+   * (there is nothing on main to seed from or drop). Undefined means "all of `columns`" — the
+   * file-migration path, where every localized column pre-exists on main.
+   */
+  columnsOnMain?: string[];
+  /**
    * Whether the collection has Draft/Published enabled (i18n M6). When true, the companion gets a
    * per-locale `_status` column (`'draft' | 'published'`, default `'draft'`) so each language
    * publishes independently. On an ENABLE seed, existing rows carry the main row's `status`.

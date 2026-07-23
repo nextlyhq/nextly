@@ -80,10 +80,19 @@ export function planCompanionMigration(
   const hadLocalizedColumns = spec.columns.some(c => prev.has(c.name));
 
   if (hadLocalizedColumns) {
+    // Seed from (and drop) only the localized columns the previous main actually carried. A
+    // field added and localized in the same config change is in `spec.columns` (the companion
+    // CREATE needs it) but was never on main, so including it in the seed SELECT or the DROP
+    // list makes the migration fail on apply with "no such column". The DOWN uses the same
+    // subset so it re-adds exactly what the UP dropped.
+    const enableSpec: CompanionMigrationSpec = {
+      ...spec,
+      columnsOnMain: spec.columns.map(c => c.name).filter(n => prev.has(n)),
+    };
     return {
       kind: "enable",
-      upSql: buildLocalizationUpSql(spec),
-      downSql: buildLocalizationDownSql(spec),
+      upSql: buildLocalizationUpSql(enableSpec),
+      downSql: buildLocalizationDownSql(enableSpec),
     };
   }
 

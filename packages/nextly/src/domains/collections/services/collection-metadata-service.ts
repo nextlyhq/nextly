@@ -242,6 +242,13 @@ export class CollectionMetadataService extends BaseService {
         // a restart — matching the just-created physical table.
         localized,
       });
+      // The entry-list read resolves its SELECT columns from the file manager's own schema
+      // cache, which is separate from the adapter resolver below. The schema-apply path
+      // refreshes both (CollectionsHandler.refreshCollectionSchema); this metadata path must
+      // too, or a localization toggle updates CRUD but leaves the read selecting the moved
+      // column from a table that no longer has it. Same shared file manager instance, so this
+      // reaches the exact cache the read consumes.
+      this.fileManager.refreshSchema(tableName, table);
       const resolver = (
         this.adapter as unknown as {
           tableResolver?: {
@@ -251,21 +258,33 @@ export class CollectionMetadataService extends BaseService {
       ).tableResolver;
       if (resolver && typeof resolver.registerDynamicSchema === "function") {
         resolver.registerDynamicSchema(tableName, table);
-        // i18n: also register the companion `_locales` runtime table so the current
-        // process can resolve it for localized reads/writes before any restart.
-        if (localized) {
-          const { buildCompanionRuntimeTable } = await import(
-            "../../i18n/runtime/companion-registration"
+      }
+      // i18n: also push the companion `_locales` runtime table into BOTH consumers, so the
+      // current process resolves it for localized reads/writes before any restart. The read
+      // path caches the companion under `<table>_locales` in the same file-manager registry
+      // (loadCompanionSchema), so a metadata change on an already-cached collection must
+      // replace that entry too or entry reads keep the pre-change companion column set.
+      if (localized) {
+        const { buildCompanionRuntimeTable } = await import(
+          "../../i18n/runtime/companion-registration"
+        );
+        const companion = buildCompanionRuntimeTable({
+          slug: tableName,
+          tableName,
+          fields: fields,
+          dialect,
+          localized: true,
+          status: options?.hasStatus === true,
+        });
+        if (companion) {
+          this.fileManager.refreshSchema(
+            companion.companionTableName,
+            companion.table
           );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields,
-            dialect,
-            localized: true,
-            status: options?.hasStatus === true,
-          });
-          if (companion) {
+          if (
+            resolver &&
+            typeof resolver.registerDynamicSchema === "function"
+          ) {
             resolver.registerDynamicSchema(
               companion.companionTableName,
               companion.table
