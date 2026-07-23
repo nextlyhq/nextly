@@ -155,6 +155,18 @@ describe("toUpdateInput", () => {
     expect(out.headers).toBeNull();
   });
 
+  it("lets the remove-all flag win over any stale rows", () => {
+    const out = toUpdateInput(
+      {
+        ...base,
+        clearExistingHeaders: true,
+        headers: [{ name: "X-Token", value: "stale" }],
+      },
+      { original: endpoint }
+    );
+    expect(out.headers).toBeNull();
+  });
+
   it("keeps headers when neither rows nor the clear flag are present", () => {
     const out = toUpdateInput(
       { ...base, name: "Renamed" },

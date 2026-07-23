@@ -175,11 +175,13 @@ export function toUpdateInput(
 
   if (values.enabled !== original.enabled) patch.enabled = values.enabled;
 
-  const headers = headersRecord(values.headers);
-  if (headers !== undefined) {
-    patch.headers = headers;
-  } else if (values.clearExistingHeaders) {
+  // Clear takes precedence: the "remove all" flag hides the row editor, so any
+  // rows left behind are stale and must not resurrect the headers it clears.
+  if (values.clearExistingHeaders) {
     patch.headers = null;
+  } else {
+    const headers = headersRecord(values.headers);
+    if (headers !== undefined) patch.headers = headers;
   }
 
   return patch;

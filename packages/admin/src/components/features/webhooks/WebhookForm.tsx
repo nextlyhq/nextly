@@ -256,7 +256,12 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
                     render={({ field }) => (
                       <Switch
                         checked={field.value}
-                        onCheckedChange={field.onChange}
+                        onCheckedChange={value => {
+                          field.onChange(value);
+                          // Drop any entered rows so "remove all" can't leave
+                          // stale replacement headers behind.
+                          if (value) form.setValue("headers", []);
+                        }}
                         disabled={isPending}
                       />
                     )}
