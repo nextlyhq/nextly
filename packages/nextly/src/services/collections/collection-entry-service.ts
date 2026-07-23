@@ -498,6 +498,9 @@ export class CollectionEntryService extends BaseService {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /** Caller's authenticated scope; a scoped key is judged on its own grant. */
+      authenticatedScope?: AuthenticatedScope;
+      routeAuthorized?: boolean;
       overrideAccess?: boolean;
       context?: Record<string, unknown>;
     },

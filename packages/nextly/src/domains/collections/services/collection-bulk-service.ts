@@ -738,6 +738,12 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its own
+       * delete grant for both the owner-predicate enumeration and each per-row
+       * delete, not the key owner's session (super-admin) bypass.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** When true, the route middleware already ran the RBAC gate; stored
@@ -769,7 +775,10 @@ export class CollectionBulkService extends BaseService {
       undefined,
       undefined,
       params.overrideAccess,
-      params.routeAuthorized
+      params.routeAuthorized,
+      // Judge a scoped API key on its own delete grant at the gate, so a
+      // super-admin-owned key without delete fails fast rather than enumerating.
+      params.authenticatedScope
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -792,7 +801,10 @@ export class CollectionBulkService extends BaseService {
       params.collectionName,
       "delete",
       params.user,
-      params.overrideAccess
+      params.overrideAccess,
+      // A scoped API key must keep the owner predicate even when owned by a
+      // super-admin, so a where-clause delete only enumerates rows the key owns.
+      params.authenticatedScope
     );
     const deleteEnumerationWhere: WhereFilter = deleteOwnerConstraint
       ? {
@@ -875,6 +887,8 @@ export class CollectionBulkService extends BaseService {
       // Carry the acting identity into the per-entry deletes so a where-clause
       // bulk delete attributes its events like the id-based one.
       actor: params.actor,
+      // Judge each per-row delete on the key's own grant, not the owner session.
+      authenticatedScope: params.authenticatedScope,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,

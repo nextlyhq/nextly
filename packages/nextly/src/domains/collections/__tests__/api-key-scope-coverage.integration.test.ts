@@ -171,6 +171,55 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     expect(allowed.success).toBe(true);
   });
 
+  it("judges a scoped key on delete-by-query, not the owner session", async () => {
+    // A where-clause delete gates the collection, enumerates under the delete
+    // owner rule, then deletes per row. A super-admin-owned delete-scoped key
+    // must be judged on the key at every step, so a code rule refusing delete
+    // still applies (the super-admin bypass is skipped because the scope reaches
+    // the collection gate, the owner-predicate enumeration, and each per-row
+    // delete). Collection-wide denial is a request-level 403, so the scoped key
+    // is rejected before any row is enumerated or removed.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          access: { read: () => true, delete: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t" }
+    );
+
+    // The scope reaches the collection gate, the super-admin bypass is skipped,
+    // and the refusing delete rule rejects the request (nothing is deleted).
+    await expect(
+      handler.bulkDeleteByQuery({
+        collectionName: "posts",
+        where: { and: [{ column: "title", op: "=", value: "t" }] },
+        user: { id: "admin", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["delete-posts"],
+        },
+      })
+    ).rejects.toThrow();
+
+    // The same super-admin as a session caller (no scope) bypasses the rule and
+    // deletes the still-present row — proving the scope, not the role, decides
+    // and that the denied attempt left the row intact.
+    const allowed = await handler.bulkDeleteByQuery({
+      collectionName: "posts",
+      where: { and: [{ column: "title", op: "=", value: "t" }] },
+      user: { id: "admin", roles: ["super-admin"] },
+    });
+    expect(allowed.successCount).toBe(1);
+  });
+
   it("judges a scoped key on the batch publish pre-resolve, not the owner", async () => {
     // The array batch worker pre-resolves the caller's publish authorization ONCE
     // before the transaction. That pre-resolve must carry the API-key scope, or a

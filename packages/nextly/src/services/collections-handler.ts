@@ -882,6 +882,11 @@ export class CollectionsHandler {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its own
+       * delete grant for the owner-predicate enumeration and each per-row delete.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**
