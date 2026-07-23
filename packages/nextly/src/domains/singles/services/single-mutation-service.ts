@@ -47,7 +47,6 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   isBlank,
   populateCompanionFields,
@@ -146,6 +145,36 @@ export class SingleMutationService extends BaseService {
   // ============================================================
   // Webhook helpers
   // ============================================================
+
+  /**
+   * Read a Single's FULL companion translation state for one locale, keyed by
+   * companion column — every localized field carries its stored value or is
+   * absent (untranslated). Used to assemble the default-locale view for a
+   * shared-field event on a localized Single, whose write locale may differ
+   * from the default and so is not already in hand.
+   */
+  private async readCompanionLocaleValues(
+    tx: TransactionContext,
+    companion: CompanionSchema,
+    entryId: string,
+    locale: string
+  ): Promise<Record<string, unknown>> {
+    const localeRow: Record<string, unknown> = { id: entryId };
+    await populateCompanionFields({
+      db: tx.getDrizzle<Parameters<typeof populateCompanionFields>[0]["db"]>(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [localeRow],
+      localeChain: [locale],
+    });
+    const values: Record<string, unknown> = {};
+    for (const f of companion.localizedFields) {
+      if (localeRow[f.name] !== undefined) {
+        values[f.column] = localeRow[f.name];
+      }
+    }
+    return values;
+  }
 
   /**
    * Assemble a Single's main row plus its component subtrees into the read
@@ -771,19 +800,21 @@ export class SingleMutationService extends BaseService {
             // not mistaken for a localized component write. A non-localized
             // component written at a locale is the narrower edge this shares
             // with the version-capture gate.
-            // A component write is per-locale only when a WRITTEN component
-            // actually declares a localized field. Keying off the Single's own
-            // localization is wrong both ways: a non-localized Single can embed a
-            // localized component (whose write DOES store per-locale data), and a
-            // localized Single can embed a purely shared one. Resolve each
-            // written component's schema on the transaction to decide.
+            // A component write is per-locale only when a WRITTEN component's OWN
+            // definition is localized. That is the exact gate the storage path
+            // uses (`meta.localized !== true` keeps all of a component's data on
+            // its shared main table), so it holds both ways: a non-localized
+            // Single can embed a localized component (whose write DOES store
+            // per-locale data), and a localized Single can embed a purely shared
+            // one. Reading inner field types instead would over-tag a shared
+            // component that merely carries text fields as locale-specific.
             let wroteLocalizedComponents = false;
             if (
               snapshotLocale !== undefined &&
               this.componentDataService &&
+              this.localization !== undefined &&
               Object.keys(componentFieldData).length > 0
             ) {
-              const appLocalized = this.localization !== undefined;
               for (const writtenName of Object.keys(componentFieldData)) {
                 const fieldConfig = fieldConfigs.find(
                   f => "name" in f && f.name === writtenName
@@ -791,22 +822,12 @@ export class SingleMutationService extends BaseService {
                 if (!fieldConfig || !isComponentField(fieldConfig)) continue;
                 const componentSlug = fieldConfig.component;
                 if (!componentSlug) continue;
-                const componentFields =
-                  await this.componentDataService.getComponentFields(
+                if (
+                  await this.componentDataService.isComponentLocalized(
                     componentSlug,
                     tx.getDrizzle()
-                  );
-                const hasLocalizedField = (componentFields ?? []).some(cf =>
-                  isFieldLocalized(
-                    {
-                      type: cf.type,
-                      name: "name" in cf && cf.name ? cf.name : "",
-                      localized: "localized" in cf ? cf.localized : undefined,
-                    },
-                    appLocalized
                   )
-                );
-                if (hasLocalizedField) {
+                ) {
                   wroteLocalizedComponents = true;
                   break;
                 }
@@ -832,12 +853,42 @@ export class SingleMutationService extends BaseService {
             // to `previous` and `data` so the diff stays like-for-like.
             const overlayLocaleStatus =
               eventLocale != null || writtenStatus !== undefined;
+            // For a shared/non-locale-specific event on a LOCALIZED single, the
+            // payload represents the default view (a no-locale read resolves to
+            // the default locale), so it must carry the default locale's
+            // translations — not null them out (empty companion values) and not
+            // the write locale's content (which would be unlabeled
+            // locale-specific data). A shared-field write never touches any
+            // localized column, so the default locale's translations are the
+            // same before and after; a default-locale (or non-localized) write
+            // already read them into `previousCompanionValues`, while a
+            // non-default write locale needs them read explicitly.
+            const defaultLocale = this.localization?.defaultLocale;
+            let defaultViewCompanion: Record<string, unknown> = {};
+            let defaultViewLocale: string | undefined;
+            if (
+              eventLocale == null &&
+              companion &&
+              companionPhysicallyExists &&
+              defaultLocale !== undefined
+            ) {
+              defaultViewLocale = defaultLocale;
+              defaultViewCompanion =
+                writeLocale === defaultLocale
+                  ? previousCompanionValues
+                  : await this.readCompanionLocaleValues(
+                      tx,
+                      companion,
+                      existingDoc.id,
+                      defaultLocale
+                    );
+            }
+
             // The locale the payload REPRESENTS. A locale-specific event reads
             // component subtrees at, and overlays translations for, the write
-            // locale; a shared/default event reads the default view so
-            // `data`/`previous` never carry locale-specific content without a
-            // matching `resource.locale`.
-            const payloadLocale = eventLocale ?? undefined;
+            // locale; a shared event on a localized single reads the default
+            // view; a non-localized single has no locale.
+            const payloadLocale = eventLocale ?? defaultViewLocale;
 
             const previousDoc = preRow
               ? await this.buildSingleWebhookDoc(
@@ -847,7 +898,9 @@ export class SingleMutationService extends BaseService {
                   preRow,
                   fieldConfigs,
                   companion,
-                  eventLocale != null ? previousCompanionValues : {},
+                  eventLocale != null
+                    ? previousCompanionValues
+                    : defaultViewCompanion,
                   payloadLocale,
                   overlayLocaleStatus ? previousLocaleStatus : undefined
                 )
@@ -1112,7 +1165,9 @@ export class SingleMutationService extends BaseService {
             // Assemble the just-written document in the outbox read shape.
             // `dataCompanionValues` supplies this locale's FULL post-write
             // translation state (prior values overlaid with this write's
-            // columns); components are read on the transaction (read-your-writes).
+            // columns); a shared-field event instead carries the default view
+            // (`defaultViewCompanion`), which the shared write left untouched.
+            // Components are read on the transaction (read-your-writes).
             const dataDoc = await this.buildSingleWebhookDoc(
               tx,
               existingDoc.id,
@@ -1120,7 +1175,7 @@ export class SingleMutationService extends BaseService {
               rows[0],
               fieldConfigs,
               companion,
-              eventLocale != null ? dataCompanionValues : {},
+              eventLocale != null ? dataCompanionValues : defaultViewCompanion,
               payloadLocale,
               overlayLocaleStatus ? dataLocaleStatus : undefined
             );

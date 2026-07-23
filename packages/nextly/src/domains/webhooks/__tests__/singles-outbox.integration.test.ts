@@ -9,7 +9,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, password, text } from "../../../config";
+import {
+  component,
+  defineComponent,
+  defineSingle,
+  password,
+  text,
+} from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -461,7 +467,13 @@ describe("webhook outbox capture — singles (integration)", () => {
       ],
     });
 
-    // Give German its own translation, then edit only a shared field at `de`.
+    // Give English (default) and German their own translations, then edit only
+    // a shared field at `de`.
+    await singles(current).update(
+      "preferences",
+      { title: "hello" },
+      { overrideAccess: true, locale: "en" }
+    );
     await singles(current).update(
       "preferences",
       { title: "hallo" },
@@ -480,10 +492,83 @@ describe("webhook outbox capture — singles (integration)", () => {
     );
     expect(shared).toBeDefined();
     const env = envelopeOf(shared!);
-    // No locale tag, and the German translation is not leaked into the
-    // locale-agnostic payload.
+    // No locale tag; the payload carries the default (English) view, not the
+    // German translation, and not a nulled-out field.
     expect((env.resource as { locale?: string }).locale).toBeUndefined();
-    expect((env.data as { title?: string }).title).not.toBe("hallo");
+    expect((env.data as { title?: string }).title).toBe("hello");
+  });
+
+  it("omits resource.locale when only a shared component is written at a non-default locale", async () => {
+    // A shared (non-localized) component stores its data on the shared main
+    // table, so writing it is not a per-locale write even in a localized app —
+    // the event must not be tagged with a language.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      components: [
+        defineComponent({
+          slug: "hero",
+          localized: false,
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            component({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { hero: { heading: "Welcome" } },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const row = (await events(current)).find(r => r.type === "single.updated");
+    expect(row).toBeDefined();
+    expect(
+      (envelopeOf(row!).resource as { locale?: string }).locale
+    ).toBeUndefined();
+  });
+
+  it("tags resource.locale when a localized component is written at a locale", async () => {
+    // A localized component routes its translatable fields to a per-locale
+    // companion, so writing it IS a per-locale write and the event carries the
+    // write locale.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      components: [
+        defineComponent({
+          slug: "hero",
+          localized: true,
+          fields: [text({ name: "heading", localized: true })],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [component({ name: "hero", component: "hero" })],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { hero: { heading: "Willkommen" } },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const row = (await events(current)).find(r => r.type === "single.updated");
+    expect(row).toBeDefined();
+    expect((envelopeOf(row!).resource as { locale?: string }).locale).toBe(
+      "de"
+    );
   });
 
   it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
