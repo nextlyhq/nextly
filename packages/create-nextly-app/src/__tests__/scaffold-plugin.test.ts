@@ -119,6 +119,14 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pluginTest).toContain("findByID({");
     expect(pluginTest).toContain("create({");
 
+    // The playground seeds the auto-login user at boot; without it the first
+    // /admin visit dead-ends on the setup wizard despite devAutoLogin.
+    const instrumentation = await readFile(
+      path.join(target, "dev/instrumentation.ts"),
+      "utf-8"
+    );
+    expect(instrumentation).toContain("seedSuperAdmin");
+
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(
       path.join(target, "src/plugin.ts"),

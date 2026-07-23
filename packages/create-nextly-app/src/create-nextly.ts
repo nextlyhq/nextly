@@ -558,7 +558,7 @@ export async function createNextly(
     );
     lines.push("");
     lines.push(
-      `  Open ${pc.cyan("http://localhost:3000/admin")} — your plugin is registered.`
+      `  Open ${pc.cyan("http://localhost:3000/admin")} — auto-logged-in with your plugin registered.`
     );
     lines.push(
       `  Edit your plugin in ${pc.dim("src/")}; the ${pc.dim("dev/")} app is never published.`
