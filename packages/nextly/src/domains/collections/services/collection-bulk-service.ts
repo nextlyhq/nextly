@@ -930,6 +930,9 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // A scoped API key is judged on its OWN publish grant when the batch's
+      // transition authorization is pre-resolved, not the key owner's RBAC.
+      authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
@@ -988,6 +991,7 @@ export class CollectionBulkService extends BaseService {
         collectionName: params.collectionName,
         accessUser,
         overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
       });
 
     // Process all entries within a single transaction
@@ -1116,7 +1120,11 @@ export class CollectionBulkService extends BaseService {
    */
   async createEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1165,6 +1173,7 @@ export class CollectionBulkService extends BaseService {
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
         accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
       });
 
     // Process in batches for memory efficiency
@@ -1263,7 +1272,11 @@ export class CollectionBulkService extends BaseService {
    * ```
    */
   async updateEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1316,6 +1329,7 @@ export class CollectionBulkService extends BaseService {
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
         accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
       });
 
     // Process all entries within a single transaction
@@ -1444,7 +1458,11 @@ export class CollectionBulkService extends BaseService {
    */
   async updateEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1493,6 +1511,7 @@ export class CollectionBulkService extends BaseService {
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
         accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
       });
 
     // Process in batches for memory efficiency

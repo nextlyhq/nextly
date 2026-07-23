@@ -170,4 +170,66 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     });
     expect(allowed.success).toBe(true);
   });
+
+  it("judges a scoped key on the batch publish pre-resolve, not the owner", async () => {
+    // The array batch worker pre-resolves the caller's publish authorization ONCE
+    // before the transaction. That pre-resolve must carry the API-key scope, or a
+    // super-admin-owned key scoped only for update could publish a whole batch via
+    // the owner's bypass.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          // Update is allowed; publish is refused by a code rule. A session
+          // super-admin bypasses it, but a scoped key must be judged on the key.
+          access: {
+            read: () => true,
+            create: () => true,
+            update: () => true,
+            publish: () => false,
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entryService = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService();
+
+    const seeded = await entryService.createEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ title: "a", status: "draft" }]
+    );
+    const [id] = seeded.ids;
+
+    // Super-admin owner of an update-only scoped key batch-publishes: the scope
+    // reaches the pre-resolve, the super-admin bypass is skipped, and the refusing
+    // publish rule applies — the row fails.
+    const denied = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts"],
+        },
+      },
+      [{ id, data: { status: "published" } }]
+    );
+    expect(denied.successful).toBe(0);
+    expect(denied.failed).toBe(1);
+
+    // The same super-admin as a session caller (no scope) bypasses the rule —
+    // proving the scope, not the role, decides the batch publish.
+    const allowed = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+      },
+      [{ id, data: { status: "published" } }]
+    );
+    expect(allowed.successful).toBe(1);
+    expect(allowed.failed).toBe(0);
+  });
 });

@@ -513,6 +513,7 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
@@ -528,7 +529,11 @@ export class CollectionEntryService extends BaseService {
 
   async createEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -541,7 +546,11 @@ export class CollectionEntryService extends BaseService {
   }
 
   async updateEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -556,7 +565,11 @@ export class CollectionEntryService extends BaseService {
 
   async updateEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
