@@ -484,4 +484,81 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     });
     expect(allowed.successCount).toBe(1);
   });
+
+  it("refuses an anonymous publish on a rule-less lifecycle collection", async () => {
+    // TFl0l Option A (secure-by-default): with no explicit publish rule, an
+    // unauthenticated caller who can update a publicly-writable collection must
+    // NOT be able to move a document into published via the rule-less default.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Anonymous (no user, no override): the update passes on the public default,
+    // but the publish transition falls through to the rule-less default, which
+    // must deny — publishing requires an authenticated caller.
+    const denied = await handler.updateEntry(
+      { collectionName: "posts", entryId: id },
+      { status: "published" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // The denial left the row draft.
+    const [afterDenial] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterDenial?.status).toBe("draft");
+  });
+
+  it("allows an anonymous publish when an explicit publish rule grants it", async () => {
+    // Option A respects an explicit rule: a collection with an explicit public
+    // `publish` rule still allows the anonymous publish; only the implicit
+    // rule-less default denies. Update stays rule-less (public default) so the
+    // anonymous write reaches the publish transition.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+      collectionAccessRules: {
+        posts: { publish: { type: "public" } },
+      },
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const allowed = await handler.updateEntry(
+      { collectionName: "posts", entryId: id },
+      { status: "published" }
+    );
+    expect(allowed.success).toBe(true);
+
+    const [afterAllow] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterAllow?.status).toBe("published");
+  });
 });

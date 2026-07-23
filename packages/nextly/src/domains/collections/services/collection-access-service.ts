@@ -292,6 +292,26 @@ export class CollectionAccessService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      // Secure-by-default publish gate (Option A): an unauthenticated caller may
+      // publish/unpublish ONLY when an explicit rule grants it. With no explicit
+      // publish/unpublish rule the operation would otherwise fall through to the
+      // rule-less public default below (evaluateAccess allows), letting an
+      // anonymous caller publish a publicly-writable collection. An explicit rule
+      // (public/authenticated/role-based/owner-only/custom) is still evaluated
+      // below and decides on its own — only the implicit default denies here.
+      if (
+        !user &&
+        (operation === "publish" || operation === "unpublish") &&
+        !accessRules?.[operation]
+      ) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
+          data: null as unknown as T,
+        };
+      }
+
       // Build request context from user
       const requestContext = this.buildRequestContext(user);
 
