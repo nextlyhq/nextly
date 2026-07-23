@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import {
@@ -100,7 +101,9 @@ async function waitForLockWaiter(adapter: TestAdapter): Promise<void> {
     if ((rows[0]?.n ?? 0) > 0) return;
     await sleep(25);
   }
-  throw new Error(`timed out waiting for a lock waiter on ${TABLE}`);
+  throw NextlyError.internal({
+    logContext: { reason: "toctou-lock-waiter-timeout", table: TABLE },
+  });
 }
 
 const whereId = (id: string) => ({
