@@ -1030,7 +1030,10 @@ describe("SingleEntryService", () => {
         { overrideAccess: true }
       );
 
-      expect(result.statusCode).not.toBe(403);
+      // Assert the intended success, not merely "not 403": a regression in the
+      // overrideAccess bypass that returned 500 (or no status) would still pass a
+      // `not.toBe(403)` check.
+      expect(result.success).toBe(true);
     });
 
     it("does not commit the default when a first publish is denied", async () => {
