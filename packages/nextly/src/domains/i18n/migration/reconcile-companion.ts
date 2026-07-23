@@ -236,6 +236,16 @@ export function buildCompanionTransitionStatements(
         companionDropped: false,
       };
     }
+    // `wasLocalized` is false here, so every field that existed before this save lived on the
+    // main table; one added in this same save did not, and gets a companion column only. The
+    // names go through the same descriptor that produced `spec.columns`, so the seed/drop
+    // address the physical snake_case column (a field named `subTitle` is stored as
+    // `sub_title` — the raw field name would never match it).
+    const oldNames = new Set(oldFields.map(f => f.name));
+    spec.columnsOnMain = localizedNew
+      .filter(f => oldNames.has(f.name))
+      .map(f => fieldToLocalizedColumnSpec(f, dialect)?.name)
+      .filter((n): n is string => typeof n === "string");
     return {
       statements: buildLocalizationUpStatements(spec),
       needsArchive: false,

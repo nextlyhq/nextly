@@ -69,25 +69,43 @@ export function buildLocalizationUpStatements(
   spec: CompanionMigrationSpec
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
-  const colNames = columns.map(c => q(c.name, dialect));
 
   const create = buildCompanionCreateStatement(spec);
+
+  // Only columns already on the main table can be seeded from or dropped. A field added and
+  // localized in the same save is in `columns` (so the companion gets it) but not on main, so
+  // it is excluded from the SELECT and the DROP. Undefined `columnsOnMain` means "all" — the
+  // file-migration path, where every localized column pre-exists on main.
+  const onMainSet = spec.columnsOnMain && new Set(spec.columnsOnMain);
+  const onMain = onMainSet
+    ? columns.filter(c => onMainSet.has(c.name))
+    : columns;
+  // A leading ", <col>" per column, so an empty set contributes nothing to the column lists.
+  const onMainCols = onMain.map(c => `, ${q(c.name, dialect)}`).join("");
 
   // When the collection has Draft/Published, the seeded default-locale rows carry the existing
   // main row's `status` into the companion `_status` so enabling localization doesn't silently
   // un-publish live content.
   const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
   const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
-  const seed =
-    `INSERT INTO ${q(companionTable, dialect)} ` +
-    `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}, ${colNames.join(", ")}) ` +
-    `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}, ${colNames.join(", ")} ` +
-    `FROM ${q(mainTable, dialect)}`;
 
-  const drops = columns.map(
+  // Skip the seed entirely when there is nothing on main to copy — no pre-existing translatable
+  // columns and no status. An INSERT with an empty value list would be invalid SQL, and there
+  // is no existing content to preserve.
+  const seed =
+    onMain.length > 0 || spec.status
+      ? [
+          `INSERT INTO ${q(companionTable, dialect)} ` +
+            `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
+            `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
+            `FROM ${q(mainTable, dialect)}`,
+        ]
+      : [];
+
+  const drops = onMain.map(
     c =>
       `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
   );
 
-  return [create, seed, ...drops];
+  return [create, ...seed, ...drops];
 }
