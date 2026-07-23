@@ -102,6 +102,11 @@ export async function installDependencies(
           "@nextlyhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
           ...pluginPackages,
+          // A plugin scaffold imports @nextlyhq/plugin-sdk directly (its
+          // definePlugin surface + test harness). Linking it from the yalc
+          // store keeps it in lockstep with the other local packages instead
+          // of mixing the published SDK into a local-package scaffold.
+          ...(projectType === "plugin" ? ["@nextlyhq/plugin-sdk"] : []),
         ]),
       ];
 
