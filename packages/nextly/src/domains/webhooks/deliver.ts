@@ -40,7 +40,10 @@ const DEFAULT_LEASE_MS = 60_000; // 1 min
 /** Per-request response body cap; a receiver's body is only sampled for diagnostics. */
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024; // 64 KiB
 /** Per-request timeout covering connect + response. */
-const DEFAULT_REQUEST_TIMEOUT_MS = 15_000; // 15s
+// Exported so the connectivity probe waits exactly as long as a real delivery:
+// a receiver that answers within the delivery window must not be reported
+// unreachable by a test that gave up sooner.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000; // 15s
 /** How much of the response body is retained on the row for debugging. */
 const RESPONSE_SNIPPET_LIMIT = 500;
 /** Cap on the retained per-row attempt log so a flapping endpoint can't grow it unbounded. */

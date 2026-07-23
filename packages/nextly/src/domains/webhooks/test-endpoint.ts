@@ -12,7 +12,7 @@
  */
 import { safeFetch } from "../../utils/validate-external-url";
 
-import type { DeliverTransport } from "./deliver";
+import { DEFAULT_REQUEST_TIMEOUT_MS, type DeliverTransport } from "./deliver";
 import { classifyResponse } from "./delivery-policy";
 import { buildSignatureHeaders } from "./signing";
 
@@ -20,8 +20,9 @@ import { buildSignatureHeaders } from "./signing";
 const RESPONSE_SNIPPET_LIMIT = 500;
 /** Cap the response we read back, matching the delivery engine. */
 const MAX_RESPONSE_BYTES = 64 * 1024;
-/** A test is interactive; keep the operator's wait short. */
-const TEST_REQUEST_TIMEOUT_MS = 10_000;
+// Wait the same as a real delivery, so a receiver that answers within the
+// delivery window is never falsely reported unreachable by a test.
+const TEST_REQUEST_TIMEOUT_MS = DEFAULT_REQUEST_TIMEOUT_MS;
 
 /**
  * The synthetic payload a test-ping delivers. Intentionally NOT a

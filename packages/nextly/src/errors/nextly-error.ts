@@ -284,11 +284,16 @@ export class NextlyError extends Error {
 
   static conflict(opts?: {
     reason?: "version" | "state";
+    // A domain-specific, actionable message overriding the generic default,
+    // for state conflicts where "refresh and try again" would misdirect the
+    // caller (a disabled endpoint, an in-flight delivery, and so on).
+    message?: string;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "CONFLICT",
       publicMessage:
+        opts?.message ??
         "The resource has changed since you last loaded it. Please refresh and try again.",
       logContext: { reason: opts?.reason, ...opts?.logContext },
     });

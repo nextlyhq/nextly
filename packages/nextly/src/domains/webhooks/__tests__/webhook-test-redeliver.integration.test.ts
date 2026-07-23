@@ -243,6 +243,31 @@ describe("webhook test-ping + redeliver (real SQLite)", () => {
       expect(all).toHaveLength(1);
     });
 
+    it("refuses to re-arm a delivery that is still in flight (leased)", async () => {
+      const { endpoint } = await create();
+      const deliveryId = await seedFailedDelivery(endpoint.id);
+      // Simulate a drain worker mid-attempt: the row is claimed with an
+      // unexpired lease (far-future seconds), which is how the drain guards an
+      // active send — not via the status. Re-arming must not revoke it.
+      await adapter.executeQuery(
+        `UPDATE nextly_webhook_deliveries ` +
+          `SET status = 'retrying', locked_by = 'worker_1', locked_until = 9999999999 ` +
+          `WHERE id = '${deliveryId}'`
+      );
+
+      await expect(
+        service.redeliverDelivery(endpoint.id, deliveryId)
+      ).rejects.toBeInstanceOf(NextlyError);
+
+      // The lease and status are intact — the in-flight attempt was not touched.
+      const rows = await adapter.select<{ status: string; lockedBy: unknown }>(
+        "nextly_webhook_deliveries",
+        { where: { and: [{ column: "id", op: "=", value: deliveryId }] } }
+      );
+      expect(rows[0].status).toBe("retrying");
+      expect(rows[0].lockedBy).toBe("worker_1");
+    });
+
     it("404s an unknown delivery", async () => {
       const { endpoint } = await create();
       await expect(

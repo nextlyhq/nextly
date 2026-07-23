@@ -25,7 +25,7 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -565,9 +565,9 @@ export class WebhookEndpointService extends BaseService {
     const secrets = stored.map(value => decryptWebhookSecret(String(value)));
     if (secrets.length === 0) {
       // A delivery must be signed; without a secret there is nothing to sign.
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
           "This endpoint has no active signing secret to sign a test event.",
         logContext: { entity: "webhook-endpoint", id },
       });
@@ -603,16 +603,30 @@ export class WebhookEndpointService extends BaseService {
    * The caller triggers the drain; the row is now claimable.
    *
    * Guards: 404 if the delivery is not this endpoint's; 409 if the endpoint was
-   * deleted or is disabled (delivering to it would immediately fail).
+   * deleted or is disabled (delivering to it would immediately fail), or if the
+   * delivery is still in flight (a drain worker holds an unexpired lease).
+   *
+   * Never touch an in-flight row: the drain protects an active attempt with a
+   * lease (`locked_until` in the future), not with a status change, so clearing
+   * that lease would let a second worker claim and POST the same delivery while
+   * the first attempt is still open — a duplicate send, and the first worker's
+   * later finalize would clobber this re-arm. The re-arm therefore refuses a
+   * leased row, and the UPDATE itself is conditioned on the lease being free so
+   * a worker that claims the row between the read and the write cannot be
+   * revoked.
    */
   async redeliverDelivery(
     webhookId: string,
     deliveryId: string
   ): Promise<void> {
+    const now = new Date();
     const rows = await this.query(
       async () =>
         (await this.db
-          .select({ id: this.deliveries.id })
+          .select({
+            id: this.deliveries.id,
+            lockedUntil: this.deliveries.lockedUntil,
+          })
           .from(this.deliveries)
           .where(
             and(
@@ -620,10 +634,23 @@ export class WebhookEndpointService extends BaseService {
               eq(this.deliveries.webhookId, webhookId)
             )
           )
-          .limit(1)) as Array<{ id: string }>
+          .limit(1)) as Array<{ id: string; lockedUntil: Date | null }>
     );
-    if (!rows[0]) {
+    const delivery = rows[0];
+    if (!delivery) {
       throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    const leaseHeld =
+      delivery.lockedUntil != null &&
+      delivery.lockedUntil.getTime() > now.getTime();
+    if (leaseHeld) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This delivery is currently being sent; try again once it settles.",
         logContext: { entity: "webhook-delivery", webhookId, deliveryId },
       });
     }
@@ -632,23 +659,25 @@ export class WebhookEndpointService extends BaseService {
     // retired; a disabled endpoint would fail the re-attempt permanently.
     const endpoint = await this.getEndpoint(webhookId);
     if (!endpoint) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
           "This endpoint has been deleted; its deliveries cannot be re-sent.",
         logContext: { entity: "webhook-endpoint", id: webhookId },
       });
     }
     if (!endpoint.enabled) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
           "This endpoint is disabled; enable it before re-sending deliveries.",
         logContext: { entity: "webhook-endpoint", id: webhookId },
       });
     }
 
-    const now = new Date();
+    // Condition the re-arm on the lease still being free: if a drain worker
+    // claimed the row between the read above and this write, the WHERE matches
+    // nothing and we leave the active attempt untouched rather than revoking it.
     await this.query(() =>
       this.db
         .update(this.deliveries)
@@ -663,7 +692,11 @@ export class WebhookEndpointService extends BaseService {
         .where(
           and(
             eq(this.deliveries.id, deliveryId),
-            eq(this.deliveries.webhookId, webhookId)
+            eq(this.deliveries.webhookId, webhookId),
+            or(
+              isNull(this.deliveries.lockedUntil),
+              lte(this.deliveries.lockedUntil, now)
+            )
           )
         )
     );
