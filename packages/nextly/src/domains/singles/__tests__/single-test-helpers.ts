@@ -156,6 +156,9 @@ export function createMockComponentDataService(): MockRecord {
 export function createMockRBACService(allowed: boolean = true): MockRecord {
   return {
     checkAccess: vi.fn().mockResolvedValue(allowed),
+    // Consulted by the API-key scope path to evaluate a code-defined access
+    // rule; no rule by default.
+    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
 }
 

@@ -1,3 +1,4 @@
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor, RequestActorType } from "../../auth/request-actor";
 import type { Params } from "../types";
 
@@ -21,4 +22,34 @@ export function readAuthenticatedActor(p: Params): RequestActor | undefined {
   if (!type || !isActorType(type)) return undefined;
   const id = p._authenticatedActorId;
   return id ? { type, id } : { type };
+}
+
+/**
+ * Decode the caller's authenticated scope for a service-side access re-check.
+ *
+ * For an API key the route stamps its OWN scoped grants on the params; a service
+ * check (e.g. the publish/unpublish transition gate) must judge the key on those
+ * rather than the owner's RBAC. A corrupt permissions value reads as an empty
+ * list, which denies — the safe direction. Missing or invalid actor metadata
+ * returns `undefined`; a non-API-key (e.g. session) caller receives a scope with
+ * an empty permission list, so the API-key branch is skipped and the check falls
+ * back to normal RBAC resolution.
+ */
+export function readAuthenticatedScope(
+  p: Params
+): AuthenticatedScope | undefined {
+  const type = p._authenticatedActorType;
+  if (!type || !isActorType(type)) return undefined;
+
+  let permissions: string[] = [];
+  if (type === "apiKey" && p._authenticatedPermissions) {
+    try {
+      const parsed: unknown = JSON.parse(String(p._authenticatedPermissions));
+      if (Array.isArray(parsed)) permissions = parsed as string[];
+    } catch {
+      permissions = [];
+    }
+  }
+
+  return { actorType: type, permissions };
 }

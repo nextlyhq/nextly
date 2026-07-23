@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -204,6 +205,12 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. A duplicate is a create, so a
+     * scoped API key that copies a published source into a published row is
+     * judged on the key's OWN publish grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
@@ -223,6 +230,9 @@ export class CollectionBulkService extends BaseService {
         overrideAccess: params.overrideAccess,
         status: sourceStatus,
         context: params.context,
+        // Judge the source read on the key's OWN read grant: a create-scoped key
+        // that lacks read must not copy fields from a row it cannot see.
+        authenticatedScope: params.authenticatedScope,
       });
 
       if (!sourceResult.success || !sourceResult.data) {
@@ -281,6 +291,8 @@ export class CollectionBulkService extends BaseService {
           actor: params.actor,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          // Judge the create-as-published on the key's own publish grant.
+          authenticatedScope: params.authenticatedScope,
         },
         duplicateData
       );
@@ -324,6 +336,11 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. Forwarded to each per-id delete so a
+     * scoped API key is judged on its OWN delete grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     // Phase 4.5: result carries minimal `{id}` records for delete (the
     // entries are gone; no value in materializing more) and structured
@@ -349,6 +366,8 @@ export class CollectionBulkService extends BaseService {
               overrideAccess: params.overrideAccess,
               routeAuthorized: params.routeAuthorized,
               context: params.context,
+              // Judge the key's own delete grant per row.
+              authenticatedScope: params.authenticatedScope,
             });
 
             if (deleteResult.success) {
@@ -409,6 +428,13 @@ export class CollectionBulkService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. Forwarded to each per-id `updateEntry`
+     * so a scoped API key's publish/unpublish transition is judged on the key's
+     * OWN grants — a bulk update must not become a way around the single-write
+     * gate for a key whose owner could publish but whose scope cannot.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
@@ -430,6 +456,8 @@ export class CollectionBulkService extends BaseService {
                 overrideAccess: params.overrideAccess,
                 routeAuthorized: params.routeAuthorized,
                 context: params.context,
+                // Judge the key's own publish/unpublish grant per row.
+                authenticatedScope: params.authenticatedScope,
               },
               params.data
             );
@@ -513,6 +541,11 @@ export class CollectionBulkService extends BaseService {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. Judges the collection-level gate and
+       * each per-row transition on a scoped API key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: BulkOperationOptions & {
       /**
@@ -538,7 +571,10 @@ export class CollectionBulkService extends BaseService {
       undefined,
       undefined,
       params.overrideAccess,
-      params.routeAuthorized
+      params.routeAuthorized,
+      // A scoped API key is judged on its own grants here too, so the session
+      // super-admin bypass does not apply to it on the collection-level gate.
+      params.authenticatedScope
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -564,7 +600,11 @@ export class CollectionBulkService extends BaseService {
       params.collectionName,
       "update",
       params.user,
-      params.overrideAccess
+      params.overrideAccess,
+      // Scope the enumeration too: a super-admin-owned key on an owner-only
+      // collection must enumerate only its own rows, so the response ids, counts,
+      // and limit check never expose rows the owner constraint should hide.
+      params.authenticatedScope
     );
     const updateEnumerationWhere: WhereFilter = updateOwnerConstraint
       ? {
@@ -656,6 +696,8 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
+      // Carry the key's scope into the per-id transition gate.
+      authenticatedScope: params.authenticatedScope,
     });
   }
 
@@ -696,6 +738,12 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its own
+       * delete grant for both the owner-predicate enumeration and each per-row
+       * delete, not the key owner's session (super-admin) bypass.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /** When true, the route middleware already ran the RBAC gate; stored
@@ -727,7 +775,10 @@ export class CollectionBulkService extends BaseService {
       undefined,
       undefined,
       params.overrideAccess,
-      params.routeAuthorized
+      params.routeAuthorized,
+      // Judge a scoped API key on its own delete grant at the gate, so a
+      // super-admin-owned key without delete fails fast rather than enumerating.
+      params.authenticatedScope
     );
     if (accessDenied) {
       throw NextlyError.forbidden({
@@ -750,7 +801,10 @@ export class CollectionBulkService extends BaseService {
       params.collectionName,
       "delete",
       params.user,
-      params.overrideAccess
+      params.overrideAccess,
+      // A scoped API key must keep the owner predicate even when owned by a
+      // super-admin, so a where-clause delete only enumerates rows the key owns.
+      params.authenticatedScope
     );
     const deleteEnumerationWhere: WhereFilter = deleteOwnerConstraint
       ? {
@@ -833,6 +887,8 @@ export class CollectionBulkService extends BaseService {
       // Carry the acting identity into the per-entry deletes so a where-clause
       // bulk delete attributes its events like the id-based one.
       actor: params.actor,
+      // Judge each per-row delete on the key's own grant, not the owner session.
+      authenticatedScope: params.authenticatedScope,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
@@ -888,6 +944,9 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      // A scoped API key is judged on its OWN publish grant when the batch's
+      // transition authorization is pre-resolved, not the key owner's RBAC.
+      authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
@@ -923,7 +982,13 @@ export class CollectionBulkService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        undefined,
+        // Judge a scoped API key on its OWN create grant, not the key owner's:
+        // otherwise a super-admin-owned key without create-<slug> could batch
+        // create via this collection-level gate (the transition pre-resolve
+        // below already carries the scope, but this gate ran without it).
+        params.authenticatedScope
       );
     if (accessDenied) {
       // All entries fail due to access denial
@@ -937,6 +1002,17 @@ export class CollectionBulkService extends BaseService {
         ids: [],
       };
     }
+
+    // Resolve the caller's publish authorization ONCE on the pooled connection
+    // before the shared transaction, so each worker enforces the create-as-
+    // published under its row without a permission read inside the transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      });
 
     // Process all entries within a single transaction
     try {
@@ -958,7 +1034,7 @@ export class CollectionBulkService extends BaseService {
               const createResult =
                 await this.mutationService.createSingleEntryInTransaction(
                   tx,
-                  params,
+                  { ...params, transitionAuth },
                   entryData,
                   skipHooks
                 );
@@ -1064,7 +1140,11 @@ export class CollectionBulkService extends BaseService {
    */
   async createEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1092,7 +1172,13 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "create",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN create grant, not the key owner's.
+        params.authenticatedScope
       );
     if (accessDenied) {
       return {
@@ -1105,6 +1191,16 @@ export class CollectionBulkService extends BaseService {
         ids: [],
       };
     }
+
+    // Resolve the caller's publish authorization ONCE (pooled) before looping the
+    // workers, so each create-as-published is enforced without a permission read
+    // inside the caller's transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
+      });
 
     // Process in batches for memory efficiency
     for (let i = 0; i < entries.length; i += batchSize) {
@@ -1119,7 +1215,7 @@ export class CollectionBulkService extends BaseService {
           const createResult =
             await this.mutationService.createSingleEntryInTransaction(
               tx,
-              params,
+              { ...params, transitionAuth },
               entryData,
               skipHooks
             );
@@ -1202,7 +1298,11 @@ export class CollectionBulkService extends BaseService {
    * ```
    */
   async updateEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1232,7 +1332,17 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "update",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN update grant, not the key owner's:
+        // otherwise a super-admin-owned key without update-<slug> could
+        // batch-update via this collection-level gate (the transition
+        // pre-resolve below already carries the scope, but this gate ran without
+        // it).
+        params.authenticatedScope
       );
     if (accessDenied) {
       // All entries fail due to access denial
@@ -1246,6 +1356,17 @@ export class CollectionBulkService extends BaseService {
         ids: [],
       };
     }
+
+    // Resolve the caller's publish/unpublish authorization ONCE on the pooled
+    // connection before the shared transaction, so each worker enforces its
+    // transition under the row lock without a permission read inside the batch's
+    // transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
+      });
 
     // Process all entries within a single transaction
     try {
@@ -1267,7 +1388,7 @@ export class CollectionBulkService extends BaseService {
               const updateResult =
                 await this.mutationService.updateSingleEntryInTransaction(
                   tx,
-                  params,
+                  { ...params, transitionAuth },
                   id,
                   data,
                   skipHooks
@@ -1373,7 +1494,11 @@ export class CollectionBulkService extends BaseService {
    */
   async updateEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -1401,7 +1526,13 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "update",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN update grant, not the key owner's.
+        params.authenticatedScope
       );
     if (accessDenied) {
       return {
@@ -1414,6 +1545,16 @@ export class CollectionBulkService extends BaseService {
         ids: [],
       };
     }
+
+    // Resolve the caller's publish/unpublish authorization ONCE (pooled) before
+    // looping the workers, so each transition is enforced under the row lock
+    // without a permission read inside the caller's transaction.
+    const transitionAuth =
+      await this.mutationService.resolveTransitionAuthorization({
+        collectionName: params.collectionName,
+        accessUser: params.user,
+        authenticatedScope: params.authenticatedScope,
+      });
 
     // Process in batches for memory efficiency
     for (let i = 0; i < entries.length; i += batchSize) {
@@ -1428,7 +1569,7 @@ export class CollectionBulkService extends BaseService {
           const updateResult =
             await this.mutationService.updateSingleEntryInTransaction(
               tx,
-              params,
+              { ...params, transitionAuth },
               id,
               data,
               skipHooks

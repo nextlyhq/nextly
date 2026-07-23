@@ -20,13 +20,20 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, type Column } from "drizzle-orm";
 
 import { isComponentField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
-import { AccessControlService } from "../../../services/access";
+import { resolvePublishTransition } from "../../../lib/status-transition";
+import {
+  AccessControlService,
+  type CollectionAccessRules,
+  isSuperAdminContext,
+} from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -82,6 +89,24 @@ import {
   serializeJsonFields,
   shouldTreatAsJson,
 } from "./single-utils";
+
+/**
+ * Thrown inside the write transaction when the publish/unpublish transition is
+ * refused against the ROW-LOCKED status, to abort (roll back) the transaction.
+ * The matching 403 is carried out-of-band on `transitionDeniedResult` rather
+ * than on the error, because the adapter re-wraps a thrown error as a
+ * DatabaseError when the transaction rolls back, so an `instanceof` check no
+ * longer identifies it after the throw.
+ */
+class SingleStatusTransitionDeniedError extends NextlyError {
+  constructor() {
+    super({
+      code: "FORBIDDEN",
+      publicMessage: "Publishing this document is not allowed.",
+    });
+    this.name = "SingleStatusTransitionDeniedError";
+  }
+}
 
 /**
  * SingleMutationService
@@ -146,6 +171,13 @@ export class SingleMutationService extends BaseService {
   ): Promise<SingleResult> {
     this.logger.debug("Updating Single document", { slug, options });
 
+    // Set when the in-transaction transition check refuses the write against the
+    // row-locked status. Declared out here (not in `try`) so the catch can read
+    // it: the adapter wraps the thrown sentinel in a DatabaseError as the
+    // transaction rolls back, so `instanceof` no longer identifies it after the
+    // throw, but this result stays correct regardless of how the error is wrapped.
+    let transitionDeniedResult: SingleResult | undefined;
+
     try {
       // 1. Get Single metadata from registry
       const singleMeta = await this.singleRegistryService.getSingleBySlug(slug);
@@ -189,6 +221,9 @@ export class SingleMutationService extends BaseService {
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the primary update gate.
+        authenticatedScope: options.authenticatedScope,
         accessControlService: this.accessControlService,
         accessRules: singleMeta.accessRules,
         document: existingDoc ?? undefined,
@@ -198,12 +233,23 @@ export class SingleMutationService extends BaseService {
         return accessDenied;
       }
 
-      // 2. Ensure document exists (auto-create if it did not yet exist).
+      // 2. Resolve the document to write against. When the Single has never been
+      // written, build its default in memory but DO NOT persist it yet. The
+      // publish-transition gate below runs after hooks (it needs the post-hook
+      // status), and a first write refused there must not leave a row behind —
+      // one a concurrent writer could have populated and that a rollback delete
+      // would then destroy. The default is inserted only once the write
+      // (including any publish) is authorized.
+      let autoCreated = false;
+      let pendingAutoCreateValues: Record<string, unknown> | null = null;
       if (!existingDoc) {
-        this.logger.info("Auto-creating Single document before update", {
+        this.logger.info("Preparing default Single document before update", {
           slug,
         });
-        existingDoc = await this.queryService.createDefaultDocument(singleMeta);
+        const built = this.queryService.buildDefaultDocument(singleMeta);
+        existingDoc = built.document;
+        pendingAutoCreateValues = built.insertValues;
+        autoCreated = true;
       }
 
       // Deserialize for hook context
@@ -348,6 +394,123 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
+      // 6.35. Authorize a change to the single's published state, judged on the
+      // post-hook data. Publishing needs `publish-<slug>` and unpublishing
+      // `unpublish-<slug>`, on top of update — editing and publishing are
+      // separate capabilities, mirroring the collection write path. A write
+      // targeting a non-default locale publishes through that locale's companion
+      // `_status` (only when a string status was provided) and does not move the
+      // main row; a default-locale or non-localized write moves the main-row
+      // status. The gate no-ops when the single has no draft/published lifecycle,
+      // and a trusted write bypasses it.
+      //
+      // TOCTOU-safe: the permission (and any owner-only/custom rule) for the ONE
+      // op this write could require is pre-resolved here, OFF the write
+      // transaction's connection, but the transition is CLASSIFIED against the
+      // status read UNDER THE ROW LOCK inside the transaction (below). Only
+      // "published" can publish; any other explicit value can only unpublish a
+      // currently-published row — so the candidate op is fully determined by the
+      // status this write persists, and a concurrent writer that changes the
+      // published state between now and the lock cannot slip a real transition
+      // past the gate (a stale-status window the pre-transaction classification
+      // left open before).
+      const singleHasStatus =
+        (singleMeta as { status?: boolean }).status === true;
+      const finalStatus = (currentData as { status?: unknown }).status;
+      const isNonDefaultLocaleWrite =
+        companion?.hasStatus === true &&
+        writeLocale !== undefined &&
+        writeLocale !== this.localization?.defaultLocale;
+      // The MAIN row status this write moves (a non-default-locale write leaves it
+      // untouched — the split strips it from the main payload).
+      const mainNextStatus = isNonDefaultLocaleWrite ? undefined : finalStatus;
+      // The write locale's companion `_status` — any localized write providing a
+      // string status stamps it, INCLUDING the default locale (whose status also
+      // lands on the companion row). The split only persists a string value.
+      const writesCompanionStatus =
+        companion?.hasStatus === true && typeof finalStatus === "string";
+      const companionNextStatus = writesCompanionStatus
+        ? finalStatus
+        : undefined;
+      // The one status this write persists, keyed to pick the single permission it
+      // could require. For a non-default-locale write it is the companion
+      // `_status`; otherwise the main-row status (both derive from `finalStatus`,
+      // so they can only agree on the op — never conflict).
+      const transitionNextStatus = isNonDefaultLocaleWrite
+        ? companionNextStatus
+        : mainNextStatus;
+      // The guard carries the pre-resolved PERMISSION denial (document-
+      // independent, judged off this transaction's connection) plus, when the
+      // op's stored rule is document-dependent (owner-only/custom), the rules to
+      // re-evaluate against the ROW-LOCKED document inside the transaction. A
+      // custom transition rule keyed on a mutable field must not be judged
+      // against the stale pre-transaction document.
+      let transitionGuard: {
+        op: "publish" | "unpublish";
+        permissionDenied: SingleResult | null;
+        documentRule: CollectionAccessRules | null;
+      } | null = null;
+      if (
+        singleHasStatus &&
+        !options.overrideAccess &&
+        transitionNextStatus !== undefined
+      ) {
+        const transitionOp =
+          transitionNextStatus === "published" ? "publish" : "unpublish";
+        // Defer a document-dependent (owner-only/custom) rule for this op to the
+        // under-lock re-check; public/authenticated/role-based rules are decided
+        // here since they need no document. A session super-admin bypasses stored
+        // rules on every transport (matching checkSingleAccess) — but NOT via a
+        // scoped API key — so no document rule is installed for them, or the
+        // under-lock evaluation (which does not re-apply the bypass) would wrongly
+        // 403 an admin on an owner-only/custom Single they do not own.
+        const isSuperAdminSession =
+          isSuperAdminContext(options.user) &&
+          options.authenticatedScope?.actorType !== "apiKey";
+        const opRule = (singleMeta.accessRules as CollectionAccessRules)?.[
+          transitionOp
+        ] as { type?: string } | undefined;
+        const deferDocumentRule =
+          !isSuperAdminSession &&
+          (opRule?.type === "owner-only" || opRule?.type === "custom");
+        const permissionDenied = await checkSingleAccess({
+          slug,
+          operation: transitionOp,
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          // NOT route-authorized: the route authorizes a Single write as
+          // `update`, never as `publish`/`unpublish`, so the RBAC check for the
+          // transition permission must actually run.
+          routeAuthorized: false,
+          rbacAccessControlService: this.rbacAccessControlService,
+          // A scoped API key is judged on its own publish/unpublish grant, not
+          // the key owner's — the route only checked `update` against the scope.
+          authenticatedScope: options.authenticatedScope,
+          accessControlService: this.accessControlService,
+          accessRules: singleMeta.accessRules,
+          document: existingDoc ?? undefined,
+          deferStoredRuleEval: deferDocumentRule,
+          logger: this.logger,
+        });
+        // Only guard under the lock when there is something to enforce there: a
+        // pre-resolved permission denial, or a deferred document rule to re-judge.
+        if (permissionDenied || deferDocumentRule) {
+          transitionGuard = {
+            op: transitionOp,
+            permissionDenied,
+            documentRule: deferDocumentRule
+              ? (singleMeta.accessRules as CollectionAccessRules)
+              : null,
+          };
+        }
+      }
+
+      // The auto-created default is persisted INSIDE the update transaction
+      // below (not here), so the insert commits atomically with the update,
+      // component saves, companion upsert, and version capture — a failure in any
+      // of them rolls the default back instead of orphaning it, and a refused
+      // publish (enforced under the lock below) rolls its insert back too.
+
       // 6.4. Extract component field data (stored in separate comp_{slug}
       // tables) AFTER the access/hooks/validation pipeline above has seen
       // the component fields.
@@ -396,6 +559,138 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // First-write auto-create, committed atomically with the update. A
+            // failed update/component/companion/version write rolls the insert
+            // back rather than orphaning a default row, and no compensating
+            // delete is needed. Idempotent: a `beforeUpdate` hook that read the
+            // Single may already have auto-created the row (via `get`), and a
+            // version-conflict retry re-enters this closure — in both cases the
+            // existing row is reused instead of inserting a duplicate.
+            if (autoCreated && pendingAutoCreateValues) {
+              const committed = await tx.selectOne<SingleDocument>(
+                singleMeta.tableName,
+                {}
+              );
+              existingDoc =
+                committed ??
+                (await tx.insert<SingleDocument>(
+                  singleMeta.tableName,
+                  pendingAutoCreateValues,
+                  { returning: "*" }
+                ));
+            }
+            // Unreachable: the pre-transaction step always resolves `existingDoc`
+            // to a loaded or in-memory default, and the block above only replaces
+            // it with another row. Narrows the closure-captured value to non-null.
+            if (!existingDoc) {
+              throw NextlyError.internal({
+                logContext: {
+                  slug,
+                  reason: "single row missing after auto-create",
+                },
+              });
+            }
+
+            // TOCTOU-safe transition enforcement: reclassify the publish/unpublish
+            // transition against the status read UNDER THE ROW LOCK here — the
+            // committed main row, plus the write locale's companion `_status` for a
+            // localized write — not the pre-transaction pooled read. This closes
+            // two windows the earlier pre-transaction classification left open: a
+            // concurrent writer that changed the published state after that read,
+            // AND a hook/concurrent writer whose row was just adopted above (the
+            // `committed ?? insert` branch) — the transition is judged against the
+            // row this update actually mutates. The PERMISSION was pre-resolved
+            // into `transitionGuard` off this transaction's connection (no
+            // permission read here); a document-dependent (owner-only/custom)
+            // rule is re-evaluated against the row-locked document below. Runs
+            // before the UPDATE, so throwing rolls the transaction back — including
+            // any auto-create insert above — with nothing persisted and no
+            // compensating delete.
+            if (transitionGuard) {
+              // Lock + read the committed main row in the SAME query (`forUpdate`).
+              // A plain read would, on MySQL's repeatable-read isolation, return
+              // this transaction's snapshot (established by the pre-lock fetch) and
+              // miss a concurrent writer's publish/unpublish; `FOR UPDATE` always
+              // sees the latest committed row. SQLite serializes writers via BEGIN
+              // IMMEDIATE, so the lock is a no-op and its committed read is current.
+              const lockedRow = await tx.selectOne<SingleDocument>(
+                singleMeta.tableName,
+                { where: this.whereEq("id", existingDoc.id), forUpdate: true }
+              );
+              const lockedMainStatus =
+                ((lockedRow as { status?: unknown } | null)?.status as
+                  | string
+                  | undefined) ?? null;
+              // The write locale's committed companion `_status`, read under the
+              // main-row lock: every write to this Single takes the main-row lock
+              // first, so the companion read is serialized with concurrent writers.
+              const lockedCompanionStatus =
+                writesCompanionStatus && companion && writeLocale !== undefined
+                  ? await this.readCompanionStatusInTx(
+                      tx,
+                      companion,
+                      existingDoc.id,
+                      writeLocale
+                    )
+                  : null;
+              // The guard fires if EITHER the main row or the companion `_status`
+              // makes the guarded transition against its row-locked prior status.
+              const firesOnMainRow =
+                mainNextStatus !== undefined &&
+                resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
+                  transitionGuard.op;
+              const firesOnCompanion =
+                companionNextStatus !== undefined &&
+                resolvePublishTransition(
+                  lockedCompanionStatus,
+                  companionNextStatus
+                ) === transitionGuard.op;
+              if (firesOnMainRow || firesOnCompanion) {
+                // Permission first (pre-resolved, no DB read): a caller lacking
+                // publish-<slug>/unpublish-<slug> is denied regardless of the row.
+                if (transitionGuard.permissionDenied) {
+                  transitionDeniedResult = transitionGuard.permissionDenied;
+                  throw new SingleStatusTransitionDeniedError();
+                }
+                // Then the deferred document-dependent (owner-only/custom) rule,
+                // judged against the ROW-LOCKED document (`lockedRow`) — not the
+                // stale pre-transaction one — so a custom rule keyed on a mutable
+                // field sees the committed value this update transitions from.
+                // Pure evaluation, no metadata or permission read.
+                if (transitionGuard.documentRule && lockedRow) {
+                  const docResult =
+                    await this.accessControlService.evaluateAccess(
+                      transitionGuard.documentRule,
+                      transitionGuard.op,
+                      {
+                        user: options.user
+                          ? {
+                              id: options.user.id,
+                              role: options.user.role,
+                              roles: options.user.roles,
+                              email: options.user.email,
+                            }
+                          : undefined,
+                      },
+                      typeof (lockedRow as { id?: unknown }).id === "string"
+                        ? (lockedRow as { id: string }).id
+                        : undefined,
+                      lockedRow
+                    );
+                  if (!docResult.allowed) {
+                    transitionDeniedResult = {
+                      success: false,
+                      statusCode: 403,
+                      message:
+                        docResult.reason ??
+                        `Access denied: ${transitionGuard.op} on single "${slug}" is not permitted`,
+                    };
+                    throw new SingleStatusTransitionDeniedError();
+                  }
+                }
+              }
+            }
+
             // Build the payload inside the closure so a retried attempt after a
             // concurrent winner stamps a FRESH `updated_at`, rather than reusing
             // a timestamp created before the first attempt (which could commit an
@@ -798,8 +1093,52 @@ export class SingleMutationService extends BaseService {
         data: updatedDoc,
       };
     } catch (error) {
+      // A publish-transition refused against the row-locked status aborts the
+      // write; return the 403 the pre-transaction guard resolved, not a 500.
+      // Read from the out-of-band result rather than `instanceof`: the adapter
+      // wraps the thrown sentinel in a DatabaseError before it reaches here.
+      if (transitionDeniedResult) {
+        return transitionDeniedResult;
+      }
       this.logger.error("Failed to update Single document", { slug, error });
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
+  }
+
+  /**
+   * The write locale's committed per-locale `_status`, read INSIDE the write
+   * transaction (on its connection) for the under-lock publish-transition gate.
+   *
+   * Reads through `tx.getDrizzle()` so it sees the transaction's own writes and
+   * is serialized with concurrent writers by the main-row lock taken just before
+   * it. The companion `_locales` table is a runtime Drizzle table object rather
+   * than part of the static schema, so its columns are reached off the object
+   * built by `buildCompanionSchema` — the same way `populateCompanionFields`
+   * queries it. `(_parent, _locale)` is the companion primary key, so the lookup
+   * returns at most one row.
+   */
+  private async readCompanionStatusInTx(
+    tx: TransactionContext,
+    companion: { table: unknown },
+    parentId: string,
+    locale: string
+  ): Promise<string | null> {
+    const table = companion.table as Record<string, Column>;
+    const drizzle = tx.getDrizzle<{
+      select: () => {
+        from: (t: unknown) => {
+          where: (c: unknown) => Promise<Record<string, unknown>[]>;
+        };
+      };
+    }>();
+    const rows = (await drizzle
+      .select()
+      .from(companion.table)
+      .where(and(eq(table._parent, parentId), eq(table._locale, locale)))) as {
+      _status?: unknown;
+    }[];
+
+    const status = rows[0]?._status;
+    return typeof status === "string" ? status : null;
   }
 }
