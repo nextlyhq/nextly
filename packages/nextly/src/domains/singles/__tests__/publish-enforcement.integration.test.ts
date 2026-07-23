@@ -181,4 +181,57 @@ describe("single publish enforcement — authorize before create (integration)",
     const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
     expect(list[0]?._status).toBe("draft");
   });
+
+  it("judges a scoped API-key publish on the key's own grant, not the owner's", async () => {
+    // End-to-end: a key scoped for `update-settings` but not `publish-settings`
+    // is refused the publish; a key scoped for publish is allowed. The route
+    // stamped only `update`, so the service-side gate judges the key's scope.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "settings",
+          status: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    const service =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Seed a draft via a trusted write so the update path is a pure transition.
+    await service.update(
+      "settings",
+      { siteName: "S", status: "draft" },
+      { overrideAccess: true }
+    );
+
+    const denied = await service.update(
+      "settings",
+      { status: "published" },
+      {
+        user: { id: "key-owner" },
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-settings"],
+        },
+      }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    const allowed = await service.update(
+      "settings",
+      { status: "published" },
+      {
+        user: { id: "key-owner" },
+        routeAuthorized: true,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-settings", "publish-settings"],
+        },
+      }
+    );
+    expect(allowed.success).toBe(true);
+  });
 });

@@ -22,6 +22,7 @@ import { eq, ne, and, like, ilike } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -1249,6 +1250,10 @@ export class CollectionMutationService extends BaseService {
       // to what this user may read (this is not a trusted-server read).
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      // The caller's authenticated scope. For a scoped API-key REST create the
+      // publish transition gate (a create-as-published) judges the key's OWN
+      // grants — the route only authorized `create` against the key's scope.
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -1272,7 +1277,10 @@ export class CollectionMutationService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the create gate.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -1649,6 +1657,7 @@ export class CollectionMutationService extends BaseService {
         nextStatus: finalData.status,
         accessUser,
         overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
       });
       if (createTransitionDenied) {
         return createTransitionDenied;
@@ -2020,6 +2029,13 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    // Set by the REST dispatcher: the route already authorized this POST as
+    // `update`, so the preliminary update gate below skips its redundant RBAC
+    // re-check (its stored rules still run). The publish gate is unaffected.
+    routeAuthorized?: boolean;
+    // A scoped API key is judged on its own `publish-<slug>` grant, not the key
+    // owner's — the route authorized this POST only as `update`.
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -2047,7 +2063,12 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         existingEntry,
-        params.overrideAccess
+        params.overrideAccess,
+        // The route already ran the `update` gate (against the API key's scope,
+        // when applicable), so skip the redundant RBAC re-check here; the publish
+        // gate below still runs.
+        params.routeAuthorized,
+        params.authenticatedScope
       );
       if (accessDenied) return accessDenied;
 
@@ -2093,7 +2114,12 @@ export class CollectionMutationService extends BaseService {
         accessUser,
         params.entryId,
         existingEntry,
-        params.overrideAccess
+        params.overrideAccess,
+        // Not route-authorized as publish: the POST was authorized as `update`,
+        // so the publish permission is checked here.
+        false,
+        // Judge a scoped API key on its own `publish-<slug>` grant.
+        params.authenticatedScope
       );
       if (publishDenied) return publishDenied;
 
@@ -2375,6 +2401,7 @@ export class CollectionMutationService extends BaseService {
     entryId?: string;
     document?: Record<string, unknown>;
     overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult | null> {
     // No draft/published lifecycle → `status` is an ordinary field, not a
     // publish signal, so there is no transition to authorize.
@@ -2395,11 +2422,15 @@ export class CollectionMutationService extends BaseService {
       args.overrideAccess,
       // NOT route-authorized, even on a REST write. `routeAuthorized` means the
       // route middleware already ran this exact RBAC check — but the route
-      // authorizes a document PATCH as `update`, never as `publish`/`unpublish`,
-      // so for the transition operation that assertion does not hold. Passing it
-      // through would skip the RBAC check for the very permission this gate
-      // exists to enforce, letting any caller who may update also publish.
-      false
+      // authorizes a document PATCH/create as `update`/`create`, never as
+      // `publish`/`unpublish`, so for the transition operation that assertion
+      // does not hold. Passing it through would skip the RBAC check for the very
+      // permission this gate exists to enforce, letting any caller who may
+      // update/create also publish.
+      false,
+      // A scoped API key is judged on its own publish/unpublish grant here, not
+      // the key owner's.
+      args.authenticatedScope
     );
   }
 
@@ -2427,6 +2458,10 @@ export class CollectionMutationService extends BaseService {
        * restore is an ordinary write that happens to reproduce an earlier state.
        */
       sourceVersionNo?: number;
+      // The caller's authenticated scope. For a scoped API-key REST write the
+      // publish/unpublish transition gate judges the key's OWN grants, since the
+      // route only authorized `update` against the key's scope.
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -2477,7 +2512,10 @@ export class CollectionMutationService extends BaseService {
         params.entryId,
         existingEntry,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own grants here too, so the session
+        // super-admin bypass does not apply to it on the update gate.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -2914,7 +2952,11 @@ export class CollectionMutationService extends BaseService {
           params.overrideAccess,
           // Never route-authorized: the route authorizes the write as `update`,
           // never as `publish`/`unpublish`, so the RBAC check must run.
-          false
+          false,
+          // A scoped API key is judged on its OWN publish/unpublish grant here,
+          // not the key owner's — the route only checked `update` against the
+          // key's scope.
+          params.authenticatedScope
         );
         if (denied) transitionGuard = { op: transitionOp, denied };
       }

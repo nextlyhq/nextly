@@ -72,7 +72,10 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -1041,6 +1044,9 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized only `create` against an API key's scope; a
+          // create-as-published publish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         body as Record<string, unknown>
       );
@@ -1116,6 +1122,9 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized only `update` against an API key's scope; the
+          // service-side publish/unpublish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         body as Record<string, unknown>
       );
@@ -1152,6 +1161,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized this POST as `update`; the publish check judges a
+        // scoped API key's own `publish-<slug>` grant.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

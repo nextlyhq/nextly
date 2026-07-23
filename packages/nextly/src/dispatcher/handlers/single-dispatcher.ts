@@ -76,7 +76,10 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -791,6 +794,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // still run for this user (overrideAccess stays false).
           overrideAccess: false,
           routeAuthorized: !!user,
+          // The route authorized only `update` against an API key's scope; the
+          // service-side publish/unpublish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         }
       );
       const doc = unwrapServiceResult(result, { slug });

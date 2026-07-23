@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
@@ -287,6 +288,11 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -328,6 +334,11 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -343,6 +354,13 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher: the route already authorized this POST as
+     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+     */
+    routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
     await this.afterWriteIfRecorded(result);

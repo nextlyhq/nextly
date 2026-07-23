@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { StatusOption } from "../../lib/status-filter";
 
 /**
@@ -133,6 +134,13 @@ export interface UpdateSingleOptions {
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
+
+  /**
+   * The caller's authenticated scope. For a scoped API-key REST write, the
+   * publish/unpublish transition gate judges the key's OWN grants rather than
+   * the key owner's RBAC.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /**
