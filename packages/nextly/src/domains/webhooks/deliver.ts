@@ -40,10 +40,16 @@ const DEFAULT_LEASE_MS = 60_000; // 1 min
 /** Per-request response body cap; a receiver's body is only sampled for diagnostics. */
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024; // 64 KiB
 /** Per-request timeout covering connect + response. */
-// Exported so the connectivity probe waits exactly as long as a real delivery:
-// a receiver that answers within the delivery window must not be reported
-// unreachable by a test that gave up sooner.
-export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000; // 15s
+// Fallback when a trigger passes no `requestTimeoutMs`; the product drain paths
+// always pass one (see DRAIN_REQUEST_TIMEOUT_MS and the fast-path scheduler).
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000; // 15s
+
+// The per-request budget the durable drain (cron/manual trigger) gives each
+// delivery. Exported so the connectivity probe waits exactly as long as the
+// path that actually persists retries — a receiver that answers within this
+// window is one deliveries reach, and one that exceeds it is not, so the test
+// predicts real deliverability instead of a more lenient library default.
+export const DRAIN_REQUEST_TIMEOUT_MS = 10_000; // 10s
 /** How much of the response body is retained on the row for debugging. */
 const RESPONSE_SNIPPET_LIMIT = 500;
 /** Cap on the retained per-row attempt log so a flapping endpoint can't grow it unbounded. */

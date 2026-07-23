@@ -37,6 +37,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import { DRAIN_REQUEST_TIMEOUT_MS } from "../domains/webhooks/deliver";
 import {
   runWebhookDrain,
   type RunWebhookDrainOptions,
@@ -169,7 +170,6 @@ const DRAIN_DELIVER_BATCH = 25;
 // batch so a tick creates roughly what it can attempt; the rest waits.
 const DRAIN_FANOUT_BATCH = 50;
 const DRAIN_MAX_DURATION_MS = 25_000;
-const DRAIN_REQUEST_TIMEOUT_MS = 10_000;
 
 /** The bearer token on the request, or null when there is no bearer header. */
 function bearerToken(request: Request): string | null {

@@ -67,9 +67,15 @@ function recordingTransport(response: () => Response) {
     url: string;
     headers: Record<string, string>;
     body: string;
+    timeoutMs: number | undefined;
   }> = [];
   const transport: DeliverTransport = async (url, options) => {
-    calls.push({ url, headers: options.headers, body: options.body });
+    calls.push({
+      url,
+      headers: options.headers,
+      body: options.body,
+      timeoutMs: options.timeoutMs,
+    });
     return response();
   };
   return { transport, calls };
@@ -162,6 +168,10 @@ describe("webhook test-ping + redeliver (real SQLite)", () => {
           secrets: [secret],
         })
       ).toBe(true);
+
+      // The probe waits the durable drain's per-request budget, so its verdict
+      // predicts real deliverability rather than a more lenient library default.
+      expect(calls[0].timeoutMs).toBe(10_000);
 
       // Nothing was written to the outbox or the delivery ledger.
       expect(await adapter.select("nextly_events")).toHaveLength(0);
