@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 import {
@@ -115,6 +116,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   let schema: ReturnType<typeof createMockSchema>;
   let selectData: { rows: unknown[] };
   let mockDb: ReturnType<typeof createMockDb>;
+  let mockAdapter: ReturnType<typeof createMockAdapter>;
   let mockFileManager: ReturnType<typeof createMockFileManager>;
   let mockCollectionService: ReturnType<typeof createMockCollectionService>;
   let mockRelationshipService: ReturnType<typeof createMockRelationshipService>;
@@ -132,7 +134,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     schema = createMockSchema();
     selectData = { rows: [] };
     mockDb = createMockDb(selectData);
-    const mockAdapter = createMockAdapter(mockDb);
+    mockAdapter = createMockAdapter(mockDb);
     mockFileManager = createMockFileManager(schema);
     mockCollectionService = createMockCollectionService();
     mockRelationshipService = createMockRelationshipService();
@@ -245,6 +247,30 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       await service.createEntry({ collectionName: "posts" }, { title: "Test" });
 
       expect(mockCollectionService.getCollection).toHaveBeenCalledWith("posts");
+    });
+
+    it("should carry the DUPLICATE code on a unique-violation failure", async () => {
+      // A duplicate insert surfaces as NextlyError.duplicate out of the
+      // entry-write transaction. The legacy result envelope must keep the
+      // code alongside the 409 status: boundary translators (dispatcher,
+      // Direct API) need it to rebuild DUPLICATE instead of guessing
+      // CONFLICT from the bare status.
+      // No companion schema → not localized; lets the write reach the
+      // transaction, where the duplicate is raised.
+      mockFileManager.loadCompanionSchema = vi.fn().mockResolvedValue(null);
+      mockAdapter.transaction = vi
+        .fn()
+        .mockRejectedValue(NextlyError.duplicate());
+
+      const result = await service.createEntry(
+        { collectionName: "posts" },
+        { title: "Duplicate Post" }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(409);
+      expect(result.code).toBe("DUPLICATE");
+      expect(result.message).toBe("Resource already exists.");
     });
 
     it("should return error when collection service fails", async () => {

@@ -151,6 +151,9 @@ function errorToServiceResult<T = unknown>(
     return {
       success: false,
       statusCode: error.statusCode,
+      // The canonical code rides along so boundary translators can rebuild
+      // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
+      code: error.code,
       message: error.publicMessage,
       data: null,
       ...(validationErrors ? { errors: validationErrors } : {}),
@@ -171,6 +174,9 @@ function errorToServiceResult<T = unknown>(
   return {
     success: false,
     statusCode: mapped.statusCode,
+    // Same passthrough as the NextlyError branch: a unique-violation maps to
+    // DUPLICATE here, and the code keeps that distinction across the envelope.
+    code: mapped.code,
     message: mapped.publicMessage,
     data: null,
   };
