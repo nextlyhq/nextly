@@ -54,7 +54,7 @@ function singles(handle: TestNextly): SingleEntryService {
 describe("webhook outbox capture — singles (integration)", () => {
   it("records single.updated with the read-shape document and prior state (versioning OFF)", async () => {
     // Versioning off is the case the recording must not depend on: the document
-    // assembly used to live only in the versioning branch.
+    // assembly must run for a non-versioned single as well.
     current = await createTestNextly({
       singles: [
         // "settings" is a reserved slug; this suite uses "preferences".
@@ -251,9 +251,9 @@ describe("webhook outbox capture — singles (integration)", () => {
   });
 
   it("fires single.published for a non-default locale even when the default is already published", async () => {
-    // Regression: a non-default locale with no companion row yet is draft, not
-    // the main row's status — so publishing it under an already-published
-    // default must still emit single.published for that locale.
+    // A non-default locale with no companion row yet is draft, not the main
+    // row's status — so publishing it under an already-published default must
+    // still emit single.published for that locale.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       singles: [
