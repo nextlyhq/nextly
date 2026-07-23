@@ -67,6 +67,13 @@ export interface CreateTestNextlyOptions {
    * the access path surfaces it through `getCollection`.
    */
   collectionAccessRules?: Record<string, CollectionAccessRules>;
+  /**
+   * Stored per-single access rules, keyed by slug. Mirrors
+   * `collectionAccessRules` for Singles: written to the `dynamic_singles` row
+   * after boot so the access path surfaces a STORED rule (for example an
+   * owner-only publish rule) that a code-first `defineSingle` cannot carry.
+   */
+  singleAccessRules?: Record<string, CollectionAccessRules>;
 }
 
 export interface TestNextly {
@@ -178,6 +185,17 @@ export async function createTestNextly(
         and: [{ column: "slug", op: "=", value: slug }],
       };
       await adapter.update("dynamic_collections", { accessRules }, where);
+    }
+  }
+
+  // Same for Singles: the single access path reads `accessRules` off the
+  // (uncached) single metadata, so writing the row after boot surfaces it.
+  if (opts.singleAccessRules) {
+    for (const [slug, accessRules] of Object.entries(opts.singleAccessRules)) {
+      const where: WhereClause = {
+        and: [{ column: "slug", op: "=", value: slug }],
+      };
+      await adapter.update("dynamic_singles", { accessRules }, where);
     }
   }
 

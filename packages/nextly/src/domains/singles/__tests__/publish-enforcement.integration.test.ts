@@ -241,4 +241,43 @@ describe("single publish enforcement — authorize before create (integration)",
     );
     expect(allowed.success).toBe(true);
   });
+
+  it("preserves the super-admin bypass for an owner-only Single publish", async () => {
+    // A session super-admin bypasses stored rules on every transport (not via a
+    // scoped key). The under-lock document-rule re-check must NOT run for them,
+    // or an owner-only Single they do not own would 403 the admin — the defer
+    // must be skipped for a super-admin session.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          status: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+      singleAccessRules: {
+        branding: {
+          publish: { type: "owner-only" },
+          unpublish: { type: "owner-only" },
+        },
+      },
+    });
+    const service =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Seed a draft via a trusted write (no owner stamped).
+    await service.update(
+      "branding",
+      { siteName: "S", status: "draft" },
+      { overrideAccess: true }
+    );
+
+    // A session super-admin who does not own the row publishes it: allowed.
+    const ok = await service.update(
+      "branding",
+      { status: "published" },
+      { user: { id: "admin", roles: ["super-admin"] }, routeAuthorized: true }
+    );
+    expect(ok.success).toBe(true);
+  });
 });

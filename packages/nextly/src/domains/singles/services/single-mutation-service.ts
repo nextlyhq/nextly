@@ -32,6 +32,7 @@ import { resolvePublishTransition } from "../../../lib/status-transition";
 import {
   AccessControlService,
   type CollectionAccessRules,
+  isSuperAdminContext,
 } from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -458,12 +459,20 @@ export class SingleMutationService extends BaseService {
           transitionNextStatus === "published" ? "publish" : "unpublish";
         // Defer a document-dependent (owner-only/custom) rule for this op to the
         // under-lock re-check; public/authenticated/role-based rules are decided
-        // here since they need no document.
+        // here since they need no document. A session super-admin bypasses stored
+        // rules on every transport (matching checkSingleAccess) — but NOT via a
+        // scoped API key — so no document rule is installed for them, or the
+        // under-lock evaluation (which does not re-apply the bypass) would wrongly
+        // 403 an admin on an owner-only/custom Single they do not own.
+        const isSuperAdminSession =
+          isSuperAdminContext(options.user) &&
+          options.authenticatedScope?.actorType !== "apiKey";
         const opRule = (singleMeta.accessRules as CollectionAccessRules)?.[
           transitionOp
         ] as { type?: string } | undefined;
         const deferDocumentRule =
-          opRule?.type === "owner-only" || opRule?.type === "custom";
+          !isSuperAdminSession &&
+          (opRule?.type === "owner-only" || opRule?.type === "custom");
         const permissionDenied = await checkSingleAccess({
           slug,
           operation: transitionOp,
