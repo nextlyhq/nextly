@@ -102,6 +102,29 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
         crumb: "API Keys",
       };
     }
+    if (pathname.includes("webhooks")) {
+      if (pathname.includes("/create")) {
+        return {
+          title: "New Webhook",
+          description: "Send signed events to an external endpoint",
+          crumb: "New Webhook",
+          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+        };
+      }
+      if (pathname.includes("/edit/")) {
+        return {
+          title: "Edit Webhook",
+          description: "Update the endpoint, events, and headers",
+          crumb: "Edit Webhook",
+          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+        };
+      }
+      return {
+        title: "Webhooks",
+        description: "Send signed events to your services when content changes",
+        crumb: "Webhooks",
+      };
+    }
     if (pathname.includes("permissions")) {
       return {
         title: "Permissions",

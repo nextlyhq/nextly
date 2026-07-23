@@ -10,6 +10,7 @@ import {
   Shield,
   SlidersHorizontal,
   Users,
+  Webhook,
   type LucideIcon,
 } from "../components/icons";
 
@@ -150,6 +151,14 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     category: "settings",
     subGroup: "system",
     requiredPermission: "update-api-keys",
+  },
+  {
+    title: "Webhooks",
+    href: ROUTES.SETTINGS_WEBHOOKS,
+    icon: Webhook,
+    category: "settings",
+    subGroup: "system",
+    requiredPermission: "read-webhooks",
   },
   {
     title: "Email Providers",
