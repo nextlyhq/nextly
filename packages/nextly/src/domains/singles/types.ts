@@ -86,6 +86,13 @@ export interface GetSingleOptions {
   routeAuthorized?: boolean;
 
   /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * read grant rather than the key owner's permissions, so a super-admin-owned
+   * key does not skip a stored read rule.
+   */
+  authenticatedScope?: AuthenticatedScope;
+
+  /**
    * Draft/Published filter override. Only effective when single.status === true.
    * - 'published' (default for public/untrusted callers): only return the
    *   document when its status is 'published'; otherwise return 404 (so a

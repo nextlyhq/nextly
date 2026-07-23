@@ -425,6 +425,9 @@ export class SingleQueryService extends BaseService {
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // A scoped API key is judged on its OWN read grant, so a super-admin-owned
+        // key does not skip the read gate via the owner's roles.
+        authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       });
       if (accessDenied) {

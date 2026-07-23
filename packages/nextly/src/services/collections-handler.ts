@@ -565,6 +565,12 @@ export class CollectionsHandler {
      * other document-level rules in force.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant, so a super-admin-owned key does not skip the collection's
+     * stored owner-only/custom read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
   }

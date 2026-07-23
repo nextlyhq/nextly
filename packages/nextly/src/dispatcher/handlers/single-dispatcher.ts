@@ -348,6 +348,7 @@ export const SINGLE_VERSION_METHODS: Record<
         slug,
         entryId,
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
       });
@@ -381,6 +382,7 @@ export const SINGLE_VERSION_METHODS: Record<
         slug,
         entryId,
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);

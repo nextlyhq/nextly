@@ -85,9 +85,20 @@ export async function assertVersionDocumentReadable(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  // The caller's authenticated scope. Version history is a read of the live
+  // document, so a scoped API key is judged on its OWN read grant here — a
+  // super-admin-owned key does not skip the document's stored owner-only/custom
+  // read rules before its snapshots are exposed.
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
-  const readable = await canReadLiveDocument(scopeKind, slug, entryId, user);
+  const readable = await canReadLiveDocument(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
     // confirm the document exists to a caller not allowed to know that.
@@ -224,10 +235,11 @@ async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
   if (scopeKind === "single") {
-    return canReadLiveSingle(slug, entryId, user);
+    return canReadLiveSingle(slug, entryId, user, authenticatedScope);
   }
 
   const collections = getService("collectionsHandler");
@@ -240,6 +252,9 @@ async function canReadLiveDocument(
     // the redundant RBAC re-check (which would reject a scoped API key by
     // resolving its creator's stored roles). Document-level rules still run.
     routeAuthorized: true,
+    // A scoped API key is judged on its OWN read grant, so a super-admin-owned
+    // key does not skip the collection's stored owner-only/custom read rule.
+    authenticatedScope,
     // Match the authenticated read path: without this, a status-enabled
     // collection filters to published only, and a draft would report no
     // history — exactly when an author needs it most.
@@ -262,7 +277,8 @@ async function canReadLiveDocument(
 async function canReadLiveSingle(
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -278,6 +294,9 @@ async function canReadLiveSingle(
     user,
     overrideAccess: false,
     routeAuthorized: true,
+    // A scoped API key is judged on its OWN read grant, mirroring the collection
+    // read gate above.
+    authenticatedScope,
     status: "all",
   });
   return interpretReadResult(result.success, result.statusCode);
