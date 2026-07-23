@@ -169,6 +169,17 @@ export async function checkSingleAccess(params: {
    * compare ownership; without it they allow (deferring to the DB-level check).
    */
   document?: Record<string, unknown>;
+  /**
+   * Skip the stored-rule evaluation and return after only the RBAC/permission
+   * gate. The publish-transition pre-resolve sets this when the operation's
+   * stored rule is document-dependent (owner-only/custom), so that rule is NOT
+   * judged against the pre-transaction document here — it is re-evaluated against
+   * the row-locked document inside the write transaction instead (see
+   * `evaluateTransitionDocumentRule` on the mutation service). Non-dependent
+   * rules (public/authenticated/role-based) are fully decidable without the row,
+   * so callers leave this false and let them run here.
+   */
+  deferStoredRuleEval?: boolean;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -182,6 +193,7 @@ export async function checkSingleAccess(params: {
     accessControlService,
     accessRules,
     document,
+    deferStoredRuleEval,
     logger,
   } = params;
 
@@ -203,8 +215,10 @@ export async function checkSingleAccess(params: {
   // single global document; public / authenticated / role-based / custom all
   // apply). This runs for both route-authorized and Direct API callers so a
   // caller holding the coarse `update-<single>` permission but failing a
-  // stored rule is still denied.
-  if (accessControlService && accessRules) {
+  // stored rule is still denied. Skipped when `deferStoredRuleEval` is set: the
+  // transition pre-resolve defers a document-dependent (owner-only/custom) rule
+  // to the under-lock re-check so it is not judged against a stale document.
+  if (accessControlService && accessRules && !deferStoredRuleEval) {
     // Owner-only with no loaded document: ownership cannot be evaluated (there
     // is nothing to compare against), and evaluateOwnerAccess would otherwise
     // ALLOW the write for lack of a document — letting a caller with only the

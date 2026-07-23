@@ -29,7 +29,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolvePublishTransition } from "../../../lib/status-transition";
-import { AccessControlService } from "../../../services/access";
+import {
+  AccessControlService,
+  type CollectionAccessRules,
+} from "../../../services/access";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -435,9 +438,16 @@ export class SingleMutationService extends BaseService {
       const transitionNextStatus = isNonDefaultLocaleWrite
         ? companionNextStatus
         : mainNextStatus;
+      // The guard carries the pre-resolved PERMISSION denial (document-
+      // independent, judged off this transaction's connection) plus, when the
+      // op's stored rule is document-dependent (owner-only/custom), the rules to
+      // re-evaluate against the ROW-LOCKED document inside the transaction. A
+      // custom transition rule keyed on a mutable field must not be judged
+      // against the stale pre-transaction document.
       let transitionGuard: {
         op: "publish" | "unpublish";
-        denied: SingleResult;
+        permissionDenied: SingleResult | null;
+        documentRule: CollectionAccessRules | null;
       } | null = null;
       if (
         singleHasStatus &&
@@ -446,7 +456,15 @@ export class SingleMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const denied = await checkSingleAccess({
+        // Defer a document-dependent (owner-only/custom) rule for this op to the
+        // under-lock re-check; public/authenticated/role-based rules are decided
+        // here since they need no document.
+        const opRule = (singleMeta.accessRules as CollectionAccessRules)?.[
+          transitionOp
+        ] as { type?: string } | undefined;
+        const deferDocumentRule =
+          opRule?.type === "owner-only" || opRule?.type === "custom";
+        const permissionDenied = await checkSingleAccess({
           slug,
           operation: transitionOp,
           user: options.user,
@@ -462,9 +480,20 @@ export class SingleMutationService extends BaseService {
           accessControlService: this.accessControlService,
           accessRules: singleMeta.accessRules,
           document: existingDoc ?? undefined,
+          deferStoredRuleEval: deferDocumentRule,
           logger: this.logger,
         });
-        if (denied) transitionGuard = { op: transitionOp, denied };
+        // Only guard under the lock when there is something to enforce there: a
+        // pre-resolved permission denial, or a deferred document rule to re-judge.
+        if (permissionDenied || deferDocumentRule) {
+          transitionGuard = {
+            op: transitionOp,
+            permissionDenied,
+            documentRule: deferDocumentRule
+              ? (singleMeta.accessRules as CollectionAccessRules)
+              : null,
+          };
+        }
       }
 
       // The auto-created default is persisted INSIDE the update transaction
@@ -561,9 +590,10 @@ export class SingleMutationService extends BaseService {
             // concurrent writer that changed the published state after that read,
             // AND a hook/concurrent writer whose row was just adopted above (the
             // `committed ?? insert` branch) — the transition is judged against the
-            // row this update actually mutates. The permission (and any owner-only/
-            // custom rule) was pre-resolved into `transitionGuard` off this
-            // transaction's connection, so no permission read happens here. Runs
+            // row this update actually mutates. The PERMISSION was pre-resolved
+            // into `transitionGuard` off this transaction's connection (no
+            // permission read here); a document-dependent (owner-only/custom)
+            // rule is re-evaluated against the row-locked document below. Runs
             // before the UPDATE, so throwing rolls the transaction back — including
             // any auto-create insert above — with nothing persisted and no
             // compensating delete.
@@ -595,7 +625,7 @@ export class SingleMutationService extends BaseService {
                     )
                   : null;
               // The guard fires if EITHER the main row or the companion `_status`
-              // makes the denied transition against its row-locked prior status.
+              // makes the guarded transition against its row-locked prior status.
               const firesOnMainRow =
                 mainNextStatus !== undefined &&
                 resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
@@ -607,8 +637,48 @@ export class SingleMutationService extends BaseService {
                   companionNextStatus
                 ) === transitionGuard.op;
               if (firesOnMainRow || firesOnCompanion) {
-                transitionDeniedResult = transitionGuard.denied;
-                throw new SingleStatusTransitionDeniedError();
+                // Permission first (pre-resolved, no DB read): a caller lacking
+                // publish-<slug>/unpublish-<slug> is denied regardless of the row.
+                if (transitionGuard.permissionDenied) {
+                  transitionDeniedResult = transitionGuard.permissionDenied;
+                  throw new SingleStatusTransitionDeniedError();
+                }
+                // Then the deferred document-dependent (owner-only/custom) rule,
+                // judged against the ROW-LOCKED document (`lockedRow`) — not the
+                // stale pre-transaction one — so a custom rule keyed on a mutable
+                // field sees the committed value this update transitions from.
+                // Pure evaluation, no metadata or permission read.
+                if (transitionGuard.documentRule && lockedRow) {
+                  const docResult =
+                    await this.accessControlService.evaluateAccess(
+                      transitionGuard.documentRule,
+                      transitionGuard.op,
+                      {
+                        user: options.user
+                          ? {
+                              id: options.user.id,
+                              role: options.user.role,
+                              roles: options.user.roles,
+                              email: options.user.email,
+                            }
+                          : undefined,
+                      },
+                      typeof (lockedRow as { id?: unknown }).id === "string"
+                        ? (lockedRow as { id: string }).id
+                        : undefined,
+                      lockedRow
+                    );
+                  if (!docResult.allowed) {
+                    transitionDeniedResult = {
+                      success: false,
+                      statusCode: 403,
+                      message:
+                        docResult.reason ??
+                        `Access denied: ${transitionGuard.op} on single "${slug}" is not permitted`,
+                    };
+                    throw new SingleStatusTransitionDeniedError();
+                  }
+                }
               }
             }
 

@@ -64,6 +64,33 @@ describe("checkSingleAccess — stored rule enforcement", () => {
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
   });
 
+  it("defers a document-dependent stored rule when deferStoredRuleEval is set", async () => {
+    const { accessControlService, rbacAccessControlService } = makeDeps();
+    // The same owner-only-with-no-document rule that fails closed above. With the
+    // defer flag the pre-resolve skips it (permission-only), so the publish
+    // transition gate can re-judge it against the row-locked document instead of
+    // the stale pre-transaction one.
+    accessControlService.evaluateAccess.mockResolvedValue({ allowed: false });
+
+    const result = await checkSingleAccess({
+      slug: "site",
+      operation: "publish",
+      user: editor,
+      routeAuthorized: true,
+      rbacAccessControlService: rbacAccessControlService as never,
+      accessControlService: accessControlService as never,
+      accessRules: { publish: { type: "owner-only" } },
+      document: undefined,
+      deferStoredRuleEval: true,
+      logger: silentLogger,
+    });
+
+    // The document-dependent rule is NOT evaluated here (contrast the 403 above);
+    // the permission gate passes, so the pre-resolve returns permission-only allow.
+    expect(result).toBeNull();
+    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+
   it("denies a route-authorized update when the stored rule fails, without RBAC", async () => {
     const { accessControlService, rbacAccessControlService } = makeDeps();
     accessControlService.evaluateAccess.mockResolvedValue({
