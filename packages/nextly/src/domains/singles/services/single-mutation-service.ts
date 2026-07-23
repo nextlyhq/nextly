@@ -224,6 +224,12 @@ export class SingleMutationService extends BaseService {
               parentTable,
               fields: fieldConfigs,
               executor: tx.getDrizzle(),
+              // Keep a component's relationship/upload references as stored IDs
+              // rather than expanding them into full related entries: the
+              // sensitive-field list is built from this Single's tree only, so an
+              // expanded related entry could smuggle its own hidden/password
+              // fields into the payload. Matches the collection snapshot read.
+              depth: 0,
               // Read as the locale the components were written at, with no
               // fallback, so an embedded localized component reports this
               // language's text rather than another standing in for it.

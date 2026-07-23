@@ -22,6 +22,8 @@ import type { ComponentDataService } from "../../../services/components/componen
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
+import type { WebhookRetentionRunner } from "../../webhooks/retention-runner";
 import type {
   GetSingleOptions,
   SingleResult,
@@ -62,7 +64,20 @@ export class SingleEntryService extends BaseService {
     rbacAccessControlService?: RBACAccessControlService,
     // i18n: normalized localization config so a localized single resolves/writes
     // translatable fields via its companion `single_<slug>_locales` table.
-    localization?: SanitizedLocalizationConfig
+    localization?: SanitizedLocalizationConfig,
+    /**
+     * Webhook-retention pass offered after a write that recorded an event, so a
+     * frequently-written single trims old outbox rows without waiting for a
+     * scheduled drain. Absent when webhook retention is not configured.
+     */
+    private readonly retentionRunner?: WebhookRetentionRunner,
+    /**
+     * Kicks an immediate, bounded drain after a write (via Next `after()`) so a
+     * single's outbox rows are delivered without waiting for the scheduled
+     * trigger. Shared with the collection write path; absent when webhooks were
+     * never registered.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
   ) {
     super(adapter, logger);
 
@@ -113,11 +128,35 @@ export class SingleEntryService extends BaseService {
    * If the document doesn't exist, it will be auto-created first,
    * then updated with the provided data.
    */
-  update(
+  async update(
     slug: string,
     data: Record<string, unknown>,
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
-    return this.mutationService.update(slug, data, options);
+    const result = await this.mutationService.update(slug, data, options);
+    // A successful update always appends an outbox event (single.updated, plus a
+    // publish/unpublish transition), so kick the post-write side effects; a
+    // rejected write (access/404) recorded nothing and skips them.
+    if (result.success) await this.afterWrite();
+    return result;
   }
+
+  /**
+   * Post-write side effects run after a write that recorded an outbox event: the
+   * drain fast path goes first so the `after()` callback is scheduled promptly
+   * (it runs post-response, adding no latency), then a bounded retention pass.
+   * Both absorb their own failures, so this never turns a successful save into an
+   * error. `offer()` is synchronous — it only registers the post-response
+   * callback — so it is not awaited; retention is awaited because a detached
+   * promise may not survive a serverless response.
+   */
+  private async afterWrite(): Promise<void> {
+    this.fastDrainScheduler?.offer();
+    await this.retentionRunner?.maybeRun(
+      SingleEntryService.WRITE_PATH_PRUNE_BATCHES
+    );
+  }
+
+  /** Retention batches to attempt per write, matching the collection path. */
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
 }

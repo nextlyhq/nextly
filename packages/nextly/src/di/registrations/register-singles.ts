@@ -14,6 +14,9 @@ import type { PermissionSeedService } from "../../domains/auth/services/permissi
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
+import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
+import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { ComponentDataService } from "../../services/components";
 import { container } from "../container";
 
@@ -60,7 +63,23 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n: forward the normalized localization config so localized singles resolve
       // and write translatable fields via their companion table (mirrors collections).
-      ctx.config.localization
+      ctx.config.localization,
+      // The single write path appends outbox events through this service, so it
+      // gets its own retention runner (the handler's is not on this path),
+      // matching the collection write path.
+      ctx.config.webhookRetention
+        ? new WebhookRetentionRunner({
+            policy: ctx.config.webhookRetention,
+            prune: { adapter, logger },
+            gate: new MetaRetentionGate(adapter),
+            logger,
+          })
+        : undefined,
+      // Shared post-response drain fast path (registered by the webhook
+      // services). Absent only when webhooks were never registered.
+      container.has("webhookFastDrainScheduler")
+        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        : undefined
     );
   });
 }
