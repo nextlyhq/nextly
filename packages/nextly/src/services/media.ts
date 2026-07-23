@@ -578,6 +578,18 @@ export class MediaService extends BaseService {
       if (changes.folderId !== undefined)
         updateData.folderId = changes.folderId;
 
+      // Regenerate focal-point image variants when the crop changed, before the
+      // write transaction opens. Storage is not transactional, so regenerating
+      // shared variant paths can never be made atomic with the DB write: doing
+      // it inside the transaction would hold the row lock (and, on a
+      // single-connection pool, the only connection) across slow storage I/O
+      // without removing the underlying dual-write inconsistency (a rollback or
+      // a concurrent edit still overwrites the shared paths). Keeping it here
+      // preserves the existing behavior; a content-addressed variant scheme
+      // (new unique paths per generation, old paths cleaned up after commit) is
+      // the real fix and is tracked as a separate image-pipeline follow-up.
+      await this.regenerateFocalPointSizes(existing.data!, changes, updateData);
+
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
       // RE-READ inside the transaction (not reused from the pre-transaction
@@ -599,14 +611,6 @@ export class MediaService extends BaseService {
           if (!current) {
             return null;
           }
-
-          // Regenerate focal-point image variants UNDER the row lock, from the
-          // freshly-read row, so a concurrent focal edit on the SAME item cannot
-          // interleave its shared-path storage writes with this one: the lock
-          // serializes the storage regeneration and the row/event commit
-          // together, so the committed row never describes a different crop than
-          // the bytes in storage. (Runs only when the crop actually changed.)
-          await this.regenerateFocalPointSizes(current, changes, updateData);
 
           await tx.update("media", updateData, this.whereEq("id", mediaId));
 
