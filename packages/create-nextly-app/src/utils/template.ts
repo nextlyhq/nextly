@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { getAvailableTemplateNames } from "../lib/templates";
 import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 
 /**
@@ -666,7 +667,7 @@ export async function copyTemplate(
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
-      `Template "${projectType}" not found at ${typeDir}. Available templates: blank, blog.`
+      `Template "${projectType}" not found at ${typeDir}. Available templates: ${getAvailableTemplateNames().join(", ")}.`
     );
   }
 
