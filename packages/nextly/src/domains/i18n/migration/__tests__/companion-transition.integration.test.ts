@@ -8,17 +8,43 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
+import { ddlType } from "../ddl-types";
+import { fieldToLocalizedColumnSpec } from "../field-to-column-spec";
 import { buildCompanionTransitionStatements } from "../reconcile-companion";
 
 let sqlite: Database.Database;
 
-/** A non-localized single's main table with a translatable `heading` column and a shared `views`. */
+/** The camelCase translatable field exercised by the enable tests. */
+const SUB_TITLE_FIELD = { name: "subTitle", type: "text" as const };
+
+/** The field's physical column, resolved through the SAME descriptor + DDL helpers the
+ *  migration generator uses, so the fixture tracks any change to the field-to-column
+ *  mapping instead of hand-copying its current output. */
+function subTitleColumn(): { name: string; ddl: string } {
+  const col = fieldToLocalizedColumnSpec(SUB_TITLE_FIELD, "sqlite");
+  if (!col) {
+    // A text field must map to a physical column; the fixture cannot be built without one.
+    throw NextlyError.internal({
+      logContext: {
+        field: SUB_TITLE_FIELD.name,
+        reason: "no column descriptor",
+      },
+    });
+  }
+  return { name: col.name, ddl: ddlType(col, "sqlite") };
+}
+
+/** A non-localized single's main table with a translatable `heading` column, a shared
+ *  `views`, and the descriptor-derived column for {@link SUB_TITLE_FIELD}. */
 function createMainTable() {
+  const sub = subTitleColumn();
   sqlite.exec(`CREATE TABLE "single_hero" (
     "id" TEXT PRIMARY KEY,
     "title" TEXT,
     "heading" TEXT,
+    "${sub.name}" ${sub.ddl},
     "views" INTEGER
   )`);
 }
@@ -45,9 +71,9 @@ beforeEach(() => {
   createMainTable();
   sqlite
     .prepare(
-      `INSERT INTO "single_hero" ("id","title","heading","views") VALUES (?,?,?,?)`
+      `INSERT INTO "single_hero" ("id","title","heading","${subTitleColumn().name}","views") VALUES (?,?,?,?,?)`
     )
-    .run("h1", "Hero", "Hello", 42);
+    .run("h1", "Hero", "Hello", "Sub", 42);
 });
 
 afterEach(() => sqlite.close());
@@ -85,6 +111,107 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const cols = mainColumns();
     expect(cols).not.toContain("heading");
     expect(cols).toContain("views");
+  });
+
+  it("enables localization while a translatable field is added in the same save", () => {
+    // `description` is added AND localized in this save, so it was never on the main table.
+    // The seed must not read it from main (there is nothing to copy), and the drop must not
+    // target a column that is not there; the companion still gets the column.
+    const plan = buildCompanionTransitionStatements({
+      slug: "hero",
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      status: false,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: FIELDS,
+      newFields: [...FIELDS, { name: "description", type: "text" as const }],
+      companionExists: false,
+    });
+
+    // Runs clean: the seed reads only columns that exist on main, so the added-and-localized
+    // `description` is never selected from a table it was never on.
+    run(plan.statements);
+
+    // The companion carries both translatable columns.
+    const companionCols = (
+      sqlite.prepare(`PRAGMA table_info("single_hero_locales")`).all() as {
+        name: string;
+      }[]
+    ).map(c => c.name);
+    expect(companionCols).toContain("heading");
+    expect(companionCols).toContain("description");
+
+    // The pre-existing value seeded; the brand-new field seeds as null (no source data).
+    const companionRow = sqlite
+      .prepare(`SELECT * FROM "single_hero_locales"`)
+      .get() as { heading: string; description: string | null };
+    expect(companionRow.heading).toBe("Hello");
+    expect(companionRow.description).toBeNull();
+
+    // Only the pre-existing translatable column left main; the new one was never there.
+    const cols = mainColumns();
+    expect(cols).not.toContain("heading");
+    expect(cols).toContain("views");
+  });
+
+  it("seeds and drops a camelCase-named field via its physical column", () => {
+    // The field is NAMED `subTitle` but stored under the descriptor-derived column name.
+    // The seed's SELECT and the main-table DROP must address the physical column, not the
+    // raw field name, or the value is stranded on main.
+    const sub = subTitleColumn();
+    const plan = buildCompanionTransitionStatements({
+      slug: "hero",
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      status: false,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: [...FIELDS, SUB_TITLE_FIELD],
+      newFields: [...FIELDS, SUB_TITLE_FIELD],
+      companionExists: false,
+    });
+    run(plan.statements);
+
+    // The pre-existing value was copied into the companion under the physical column name.
+    const companionRow = sqlite
+      .prepare(`SELECT * FROM "single_hero_locales"`)
+      .get() as Record<string, unknown>;
+    expect(companionRow.heading).toBe("Hello");
+    expect(companionRow[sub.name]).toBe("Sub");
+
+    // The physical column was relocated off main.
+    expect(mainColumns()).not.toContain(sub.name);
+  });
+
+  it("ignores a field whose previous type had no main column", () => {
+    // `gallery` used to be a `component` field (layout-only, no physical column) and becomes
+    // a localized text field in the same save that enables localization. It matches by field
+    // name in the old set, but the main table never carried a `gallery` column, so the seed
+    // and drop must skip it; only its companion column is created.
+    const plan = buildCompanionTransitionStatements({
+      slug: "hero",
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      status: false,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: [...FIELDS, { name: "gallery", type: "component" as const }],
+      newFields: [...FIELDS, { name: "gallery", type: "text" as const }],
+      companionExists: false,
+    });
+    run(plan.statements);
+
+    // The companion has the column with no seeded data; the pre-existing field still seeded.
+    const companionRow = sqlite
+      .prepare(`SELECT * FROM "single_hero_locales"`)
+      .get() as { heading: string; gallery: string | null };
+    expect(companionRow.heading).toBe("Hello");
+    expect(companionRow.gallery).toBeNull();
+    expect(mainColumns()).not.toContain("heading");
   });
 });
 
