@@ -11,6 +11,7 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
@@ -357,7 +358,20 @@ export class ServiceContainer {
    */
   get media(): LegacyMediaService {
     if (!this._media) {
-      this._media = new LegacyMediaService(this.adapter, this.getLogger());
+      // Server actions reach media through this container rather than the
+      // unified media service, so inject the shared drain fast path directly —
+      // otherwise action-driven media events would sit in the outbox until the
+      // scheduled drain (which also owns retention pruning). Resolved from DI
+      // when the app has booted webhooks; a bare container (e.g. a CLI/test
+      // build) gets none and simply relies on the scheduled drain.
+      const fastDrainScheduler = container.has("webhookFastDrainScheduler")
+        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        : undefined;
+      this._media = new LegacyMediaService(
+        this.adapter,
+        this.getLogger(),
+        fastDrainScheduler
+      );
     }
     return this._media;
   }

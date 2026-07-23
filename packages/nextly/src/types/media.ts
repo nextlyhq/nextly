@@ -111,6 +111,9 @@ export const UpdateMediaInputSchema = z.object({
   tags: z.array(z.string()).optional(),
   focalX: z.number().int().min(0).max(100).optional(),
   focalY: z.number().int().min(0).max(100).optional(),
+  // A move is a folder_id change: routing it through the update path records a
+  // media.updated event (bare folder writes did not). `null` moves to root.
+  folderId: z.string().nullable().optional(),
 });
 
 export type UpdateMediaInput = z.infer<typeof UpdateMediaInputSchema>;

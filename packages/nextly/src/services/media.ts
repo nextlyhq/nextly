@@ -41,7 +41,9 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -68,8 +70,41 @@ export class MediaService extends BaseService {
     return getImageProcessor();
   }
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  // A short prune pass on the write path: enough to keep the outbox from
+  // growing unbounded without turning a media write into a long maintenance job.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    /**
+     * Shared post-response drain fast path. This service records media outbox
+     * events directly, so callers that reach it WITHOUT the unified media
+     * service (the exported server actions via `ServiceContainer.media`) still
+     * get the immediate drain. Left undefined when the unified service wraps
+     * this one (that wrapper offers the drain itself), so the drain is offered
+     * exactly once per write.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
+    /** Prunes the outbox after a write, paired with the drain fast path. */
+    private readonly retentionRunner?: WebhookRetentionRunner
+  ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Post-write webhook maintenance for callers that use this service directly:
+   * offer the fast drain, then a short retention pass. No-op when no scheduler
+   * was injected (the unified media service handles the drain in that path).
+   * Both absorb their own failures, so this never turns a committed write into
+   * an error.
+   */
+  private async afterWrite(): Promise<void> {
+    if (!this.fastDrainScheduler && !this.retentionRunner) {
+      return;
+    }
+    this.fastDrainScheduler?.offer();
+    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
   }
 
   /**
@@ -409,6 +444,10 @@ export class MediaService extends BaseService {
         });
       });
 
+      // The upload committed a media.uploaded outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
+
       return {
         success: true,
         statusCode: 201,
@@ -448,6 +487,10 @@ export class MediaService extends BaseService {
       if (changes.tags !== undefined) updateData.tags = changes.tags;
       if (changes.focalX !== undefined) updateData.focalX = changes.focalX;
       if (changes.focalY !== undefined) updateData.focalY = changes.focalY;
+      // A folder move (including to root, `null`) rides the same update path so
+      // the change is captured as a media.updated event.
+      if (changes.folderId !== undefined)
+        updateData.folderId = changes.folderId;
 
       // If crop point changed and media is an image, regenerate sizes immediately
       const focalPointChanged =
@@ -583,6 +626,10 @@ export class MediaService extends BaseService {
         };
       }
 
+      // The update committed a media.updated outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
+
       return {
         success: true,
         statusCode: 200,
@@ -712,6 +759,10 @@ export class MediaService extends BaseService {
         console.warn("[MediaService] Storage deletion warning:", error);
         // Storage cleanup is best-effort; the row and event are already gone.
       }
+
+      // The delete committed a media.deleted outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
 
       return {
         success: true,

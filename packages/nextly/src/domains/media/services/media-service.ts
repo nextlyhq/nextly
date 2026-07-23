@@ -786,32 +786,44 @@ export class MediaService {
   async moveToFolder(
     mediaId: string,
     folderId: string | null,
-    _context: RequestContext
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
   ): Promise<void> {
     this.logger.debug("Moving media to folder", { mediaId, folderId });
 
-    const result = await this.legacyFolderService.moveMediaToFolder(
+    // Validate the target folder up front (throws NOT_FOUND) so a bad folder
+    // fails before the write, preserving the prior move path's 404 behavior.
+    if (folderId) {
+      await this.findFolderById(folderId, context);
+    }
+
+    // Route the move through the update path so the folder change is captured
+    // as a media.updated outbox event — a bare folder write recorded nothing,
+    // leaving subscribers unaware of moves. Attribute it to the transport actor
+    // when present, otherwise the request-context user.
+    const resolvedActor = actorForWrite(actor, context.user);
+    const result = await this.legacyMediaService.updateMedia(
       mediaId,
-      folderId
+      { folderId },
+      resolvedActor
     );
 
     if (!result.success) {
       if (result.statusCode === 404) {
         // Driver text moves into logContext per §13.8 — only generic "Not found."
-        // hits the wire. The legacyMessage is kept operator-side for diagnostics.
+        // hits the wire.
         throw NextlyError.notFound({
-          logContext: {
-            entity: "media",
-            mediaId,
-            folderId,
-            legacyMessage: result.message,
-          },
+          logContext: { entity: "media", mediaId, folderId },
         });
       }
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Media moved to folder", { mediaId, folderId });
+
+    // The update committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
   }
 
   /**

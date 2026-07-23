@@ -31,11 +31,14 @@ vi.mock("@nextly/storage", () => ({
   isTransientError: vi.fn(() => false),
 }));
 
+import { MediaService as UnifiedMediaService } from "../../../domains/media/services/media-service";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { MediaService } from "../../../services/media";
+import type { RequestContext } from "../../../services/shared";
+import type { WebhookFastDrainScheduler } from "../after-drain";
 import type { WebhookEvent } from "../types";
 
 let current: TestNextly | undefined;
@@ -304,6 +307,71 @@ describe("webhook outbox capture — media (integration)", () => {
     expect(updated).toBeDefined();
     expect(updated!.actorType).toBe("user");
     expect(updated!.actorId).toBe("editor-7");
+  });
+
+  it("records media.updated when a media item is moved to a folder", async () => {
+    // A folder move is a folder_id change; it must be captured as a
+    // media.updated event (a bare folder write recorded nothing) so subscribers
+    // see the move.
+    await seedUser(current!, "editor-7");
+    const nextly = current!.nextly;
+    const folder = await nextly.media.folders.create({
+      name: "Archive",
+      user: { id: "editor-7" },
+    });
+    const uploaded = await nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      user: { id: "editor-7" },
+    });
+
+    const mediaService =
+      current!.getService<UnifiedMediaService>("mediaService");
+    const context: RequestContext = { user: { id: "editor-7" } };
+    await mediaService.moveToFolder(uploaded.id, folder.id, context);
+
+    const moved = (await events(current!)).find(
+      r => r.type === "media.updated" && r.resourceId === uploaded.id
+    );
+    expect(moved).toBeDefined();
+    expect((envelopeOf(moved!).data as { folderId?: string }).folderId).toBe(
+      folder.id
+    );
+    expect(moved!.actorType).toBe("user");
+    expect(moved!.actorId).toBe("editor-7");
+  });
+
+  it("offers the fast-drain from the legacy service when given a scheduler", async () => {
+    // The exported server actions reach the legacy service directly (via
+    // ServiceContainer), so a legacy service constructed WITH the scheduler must
+    // offer the drain after a write — otherwise action-driven media events would
+    // sit until the scheduled drain.
+    const scheduler = current!.getService<WebhookFastDrainScheduler>(
+      "webhookFastDrainScheduler"
+    );
+    const offerSpy = vi.spyOn(scheduler, "offer");
+    const legacy = new MediaService(
+      current!.adapter,
+      noopLogger as never,
+      scheduler
+    );
+
+    await legacy.uploadMedia(
+      {
+        file: Buffer.from("x"),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      },
+      { type: "user", id: "user-1" }
+    );
+
+    expect(offerSpy).toHaveBeenCalled();
   });
 
   it("offers the webhook fast-drain after a media write", async () => {
