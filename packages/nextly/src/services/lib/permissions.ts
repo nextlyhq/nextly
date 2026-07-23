@@ -118,33 +118,40 @@ class PermissionChecker {
 
     const key = `${userId}|${action}|${resource}`;
 
-    // Tier 1: In-memory instance cache (ultra-fast <1ms)
-    const cached = this.memo.get(key);
-    if (typeof cached === "boolean") return cached;
+    // Skip EVERY cache tier when a transaction executor is supplied. Such a check
+    // reads through the caller's still-open (uncommitted) transaction, so its
+    // result must be neither served from nor promoted into the process-wide
+    // caches: if that transaction rolls back, a grant or denial that never
+    // committed would otherwise be reused by later, non-transactional requests
+    // for the cache TTL. An executor-backed check always computes fresh below.
+    if (!executor) {
+      // Tier 1: In-memory instance cache (ultra-fast <1ms)
+      const cached = this.memo.get(key);
+      if (typeof cached === "boolean") return cached;
 
-    // Tier 1b: Process-wide LRU cache (<1ms)
-    const hit = cache.get(key);
-    if (hit) {
-      if (hit.expiresAt > Date.now()) {
-        this.memo.set(key, hit.value);
-        // refresh LRU by deleting+setting
+      // Tier 1b: Process-wide LRU cache (<1ms)
+      const hit = cache.get(key);
+      if (hit) {
+        if (hit.expiresAt > Date.now()) {
+          this.memo.set(key, hit.value);
+          // refresh LRU by deleting+setting
+          cache.delete(key);
+          cache.set(key, hit);
+          return hit.value;
+        }
+        // expired -> clear reverse maps
         cache.delete(key);
-        cache.set(key, hit);
-        return hit.value;
+        const rids = keyToRoleIds.get(key);
+        keyToRoleIds.delete(key);
+        if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(key);
+        userIdToKeys.get(userId)?.delete(key);
       }
-      // expired -> clear reverse maps
-      cache.delete(key);
-      const rids = keyToRoleIds.get(key);
-      keyToRoleIds.delete(key);
-      if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(key);
-      userIdToKeys.get(userId)?.delete(key);
     }
 
     // Tier 2: Database cache (fast ~3-5ms). Skipped when a transaction executor
     // is supplied: this lookup is itself a pooled query, so running it inside the
-    // caller's transaction would re-enter the pool. The in-memory tiers above
-    // still serve hits, and a miss falls through to a fresh computation on the
-    // supplied executor.
+    // caller's transaction would re-enter the pool (and by the rule above must
+    // not serve a cached decision to a transaction-scoped check anyway).
     if (this.cacheService && !executor) {
       try {
         const dbCached = await this.cacheService.getCachedPermission(
@@ -177,17 +184,20 @@ class PermissionChecker {
       const roleIds = await this.getAllRoleIdsForUser(userId, executor);
 
       if (roleIds.size === 0) {
-        this.memo.set(key, false);
-        // Store negative result in DB cache (skipped under a transaction executor
-        // — the write is a pooled query the caller's transaction would block on).
-        if (this.cacheService && !executor) {
-          void this.cacheService.setCachedPermission(
-            userId,
-            action,
-            resource,
-            false,
-            []
-          );
+        // Cache tiers are populated only for pooled (committed-view) checks; an
+        // executor-backed result must not leak into them (see the top-of-method
+        // skip). The DB write is also a pooled query the transaction would block on.
+        if (!executor) {
+          this.memo.set(key, false);
+          if (this.cacheService) {
+            void this.cacheService.setCachedPermission(
+              userId,
+              action,
+              resource,
+              false,
+              []
+            );
+          }
         }
         return false;
       }
@@ -198,9 +208,13 @@ class PermissionChecker {
         executor
       );
 
-      // Populate both cache tiers
-      this.memo.set(key, allowed);
-      setCacheEntry(key, allowed, userId, Array.from(roleIds));
+      // Populate the cache tiers only for pooled checks. An executor-backed
+      // result reflects the caller's uncommitted transaction and must not be
+      // promoted into the process-wide caches (see the top-of-method skip).
+      if (!executor) {
+        this.memo.set(key, allowed);
+        setCacheEntry(key, allowed, userId, Array.from(roleIds));
+      }
 
       // Async write to DB cache (don't block response). Skipped under a
       // transaction executor for the same pooled-query reason as the read above.
@@ -650,17 +664,21 @@ const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
 export async function isSuperAdmin(
   userId: string,
   // Optional transaction-bound executor so the role read runs on the caller's
-  // transaction connection instead of the pool; see `hasPermission`. The
-  // in-memory super-admin cache below is unaffected — a hit still short-circuits
-  // before any DB read.
+  // transaction connection instead of the pool; see `hasPermission`. When
+  // supplied, the process-wide super-admin cache is bypassed for both read and
+  // write: the check reads through the caller's uncommitted transaction, so its
+  // result must not be served from — nor promoted into — a cache shared with
+  // later requests (a rolled-back transaction would otherwise poison it).
   executor?: unknown
 ): Promise<boolean> {
   if (!userId) return false;
 
-  // Check in-memory cache
-  const cached = superAdminCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.value;
+  // Check in-memory cache (only for pooled, committed-view checks).
+  if (!executor) {
+    const cached = superAdminCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
   }
 
   try {
@@ -668,10 +686,12 @@ export async function isSuperAdmin(
     const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
     if (roleIds.size === 0) {
-      superAdminCache.set(userId, {
-        value: false,
-        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-      });
+      if (!executor) {
+        superAdminCache.set(userId, {
+          value: false,
+          expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+        });
+      }
       return false;
     }
 
@@ -694,15 +714,19 @@ export async function isSuperAdmin(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = (superAdmin as any[]).length > 0;
 
-    superAdminCache.set(userId, {
-      value: result,
-      expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-    });
+    // Populate the process-wide cache only for pooled checks; an executor-backed
+    // result reflects the caller's uncommitted transaction (see the param note).
+    if (!executor) {
+      superAdminCache.set(userId, {
+        value: result,
+        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+      });
 
-    // Evict oldest if cache grows too large
-    if (superAdminCache.size > 1000) {
-      const oldest = superAdminCache.keys().next().value;
-      if (oldest) superAdminCache.delete(oldest);
+      // Evict oldest if cache grows too large
+      if (superAdminCache.size > 1000) {
+        const oldest = superAdminCache.keys().next().value;
+        if (oldest) superAdminCache.delete(oldest);
+      }
     }
 
     return result;

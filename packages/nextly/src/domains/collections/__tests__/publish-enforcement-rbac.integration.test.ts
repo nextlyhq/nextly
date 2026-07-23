@@ -605,4 +605,64 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     expect(row?.status).toBe("published");
     expect(row?.title).toBe("changed");
   });
+
+  it("does not unpublish when a field hook reintroduces status: undefined", async () => {
+    // The undefined-status strip must run AFTER field-level hooks, not just on
+    // the caller's payload. A field `beforeChange` hook receives the whole record
+    // and can set an own `status: undefined` as a side effect — which names no
+    // status change but, if it reaches the write, is sanitized to SQL NULL on the
+    // raw-parameter path and silently unpublishes the row. Stripping only before
+    // the hooks would miss it.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { update: () => true, unpublish: () => false },
+          fields: [
+            text({
+              name: "title",
+              hooks: {
+                beforeChange: [
+                  context => {
+                    // Reintroduce an explicit undefined status on UPDATE only, so
+                    // the published seed still publishes on create.
+                    if (context.operation === "update" && context.data) {
+                      (context.data as Record<string, unknown>).status =
+                        undefined;
+                    }
+                    return undefined;
+                  },
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // The caller sends NO status; only the field hook introduces the undefined,
+    // after the point where the caller payload would have been stripped.
+    const res = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "editor" },
+      { title: "changed" }
+    );
+    expect(res.success).toBe(true);
+
+    const [row] = await current.adapter.select<{
+      status: string;
+      title: string;
+    }>("dc_posts", {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(row?.status).toBe("published");
+    expect(row?.title).toBe("changed");
+  });
 });

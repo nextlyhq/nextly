@@ -1403,13 +1403,6 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
-      // An explicit `status: undefined` (own key) names no status change; strip
-      // it so the transition gate and the write agree. A kept undefined status
-      // would be sanitized to SQL NULL on the raw-parameter path — silently
-      // unpublishing a published row, or nulling a create's draft default —
-      // without ever passing the publish/unpublish gate.
-      stripUndefinedStatus(finalData);
-
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -1493,6 +1486,16 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2887,13 +2890,6 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
-      // An explicit `status: undefined` (own key) names no status change; strip
-      // it so the transition gate and the write agree. A kept undefined status
-      // would be sanitized to SQL NULL on the raw-parameter path — silently
-      // unpublishing a published row, or nulling a create's draft default —
-      // without ever passing the publish/unpublish gate.
-      stripUndefinedStatus(finalData);
-
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -2960,6 +2956,16 @@ export class CollectionMutationService extends BaseService {
       });
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -4437,13 +4443,6 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
-      // An explicit `status: undefined` (own key) names no status change; strip
-      // it so the transition gate and the write agree. A kept undefined status
-      // would be sanitized to SQL NULL on the raw-parameter path — silently
-      // unpublishing a published row, or nulling a create's draft default —
-      // without ever passing the publish/unpublish gate.
-      stripUndefinedStatus(finalData);
-
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -4525,6 +4524,16 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -4854,13 +4863,6 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
-      // An explicit `status: undefined` (own key) names no status change; strip
-      // it so the transition gate and the write agree. A kept undefined status
-      // would be sanitized to SQL NULL on the raw-parameter path — silently
-      // unpublishing a published row, or nulling a create's draft default —
-      // without ever passing the publish/unpublish gate.
-      stripUndefinedStatus(finalData);
-
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -4919,6 +4921,16 @@ export class CollectionMutationService extends BaseService {
       });
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -5486,9 +5498,6 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
-      // Strip an explicit `status: undefined` so it does not sanitize to SQL NULL
-      // and move the row out of published without the gate (see the other paths).
-      stripUndefinedStatus(finalData);
 
       // Password fields store bcrypt hashes, never the submitted value —
       // same guarantee as the non-transaction paths.
@@ -5573,6 +5582,16 @@ export class CollectionMutationService extends BaseService {
       }
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -5977,9 +5996,6 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
-      // Strip an explicit `status: undefined` so it does not sanitize to SQL NULL
-      // and move the row out of published without the gate (see the other paths).
-      stripUndefinedStatus(finalData);
 
       // Password fields store bcrypt hashes, never the submitted value —
       // same guarantee as the non-transaction paths.
@@ -6042,6 +6058,16 @@ export class CollectionMutationService extends BaseService {
       }
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
