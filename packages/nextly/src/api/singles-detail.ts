@@ -17,6 +17,7 @@
  * @module api/singles-detail
  */
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
 import type { SingleResult } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
@@ -240,6 +241,10 @@ export const PATCH = withErrorHandler(
     const result = await service.update(slug, body, {
       locale,
       user,
+      // Record who performed the write on the outbox event: an API-key caller
+      // attributes to the key itself, not the user that owns it. Resolved from
+      // the same auth context the route already verified.
+      actor: actorFromAuthContext(auth),
       overrideAccess: false,
       // Guard on a resolved user id (matches the dispatcher) so the
       // RBAC-skip only applies to an authenticated caller.

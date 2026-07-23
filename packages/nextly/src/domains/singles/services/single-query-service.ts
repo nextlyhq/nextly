@@ -809,7 +809,17 @@ export class SingleQueryService extends BaseService {
       }
     }
 
-    const snakeCaseDefaults = keysToSnakeCase(defaults) as Record<
+    // title and slug are auto-injected system columns, but a Single may opt to
+    // localize them (define-single.ts). When it does, their column lives on the
+    // companion `_locales` table, not the main table, so they must be dropped
+    // from the main-table auto-create insert like any other localized field —
+    // otherwise the insert targets a non-existent main column. They stay on the
+    // in-memory `document` (the read path resolves the localized value).
+    const insertDefaults = { ...defaults };
+    if (localizedNames.has("title")) delete insertDefaults.title;
+    if (localizedNames.has("slug")) delete insertDefaults.slug;
+
+    const snakeCaseDefaults = keysToSnakeCase(insertDefaults) as Record<
       string,
       unknown
     >;

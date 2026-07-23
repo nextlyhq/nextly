@@ -463,7 +463,9 @@ describe("SingleEntryService", () => {
         siteName: "Set",
       });
 
-      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      // Two inserts: the auto-created default document, then the outbox event
+      // appended in the same update transaction.
+      expect(ctx.adapter.insert).toHaveBeenCalledTimes(2);
       expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
       expect(result.data?.siteName).toBe("Set");
     });
@@ -1081,8 +1083,13 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.success).toBe(true);
-      // The default row was persisted (once), only after authorization.
-      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      // The default row was persisted (once), only after authorization. The
+      // write also appends outbox events, so count only inserts to the Single
+      // table, not the `nextly_events` outbox.
+      const rowInserts = ctx.adapter.insert.mock.calls.filter(
+        (c: unknown[]) => c[0] !== "nextly_events"
+      );
+      expect(rowInserts).toHaveLength(1);
       expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
 
@@ -1111,8 +1118,13 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.success).toBe(true);
-      // No duplicate insert — the existing (hook-created) row was reused.
-      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+      // No duplicate insert — the existing (hook-created) row was reused. The
+      // write still appends outbox events, so assert no insert to the Single
+      // table specifically, not the `nextly_events` outbox.
+      const rowInserts = ctx.adapter.insert.mock.calls.filter(
+        (c: unknown[]) => c[0] !== "nextly_events"
+      );
+      expect(rowInserts).toHaveLength(0);
     });
 
     it("does not let a super-admin-owned key bypass a stored rule on update", async () => {

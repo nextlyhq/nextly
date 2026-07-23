@@ -12,7 +12,7 @@
  * @module domains/i18n/companion-join
  */
 
-import { and, inArray, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 /** One localized field: its API/row key (camelCase) + its physical companion column (snake_case). */
 export interface LocalizedFieldRef {
@@ -23,7 +23,7 @@ export interface LocalizedFieldRef {
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
-function isBlank(value: unknown): boolean {
+export function isBlank(value: unknown): boolean {
   return value === null || value === undefined || value === "";
 }
 
@@ -74,6 +74,39 @@ export interface PopulateCompanionArgs {
    * (admin/`status=all`, or a collection without per-locale status).
    */
   statusValue?: string;
+  /**
+   * When true, only a MISSING companion table is tolerated; any other read
+   * failure (a transient drop, a permission or schema error) propagates instead
+   * of being swallowed. Callers that have already confirmed the table exists and
+   * whose result feeds a durable write (e.g. a webhook payload) set this so a
+   * real error aborts rather than silently emitting nulled translations.
+   */
+  strict?: boolean;
+}
+
+/**
+ * Whether an error is the companion `_locales` table simply not existing yet (a
+ * localized entity before its companion migration runs), matched the same way
+ * the boot sync detects it. Distinguishes the tolerated missing-table case from
+ * a real failure (transient drop, permission, schema error). The driver message
+ * rides on the error or its cause.
+ */
+export function isMissingCompanionTableError(err: unknown): boolean {
+  const message = [
+    err instanceof Error ? err.message : String(err),
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
+  ].join(" ");
+  // Match ONLY a missing table/relation, not any "does not exist" — on Postgres
+  // a missing COLUMN reads `column "x" does not exist`, a real schema error that
+  // strict mode must surface, whereas a missing table reads
+  // `relation "x" does not exist`. SQLite uses `no such table` (its missing
+  // column is `no such column`), and MySQL uses `Table '...' doesn't exist`
+  // (its missing column is `Unknown column`).
+  return (
+    message.includes("no such table") ||
+    message.includes("doesn't exist") ||
+    (message.includes("relation") && message.includes("does not exist"))
+  );
 }
 
 /**
@@ -114,11 +147,17 @@ export async function populateCompanionFields(
           inArray(localeCol as never, localeChain)
         )
       );
-  } catch {
+  } catch (err) {
     // The companion table may not physically exist yet — e.g. a localized collection
     // whose companion migration hasn't been run (dev auto-sync leaves localized columns
     // on the main table until `migrate`). Leave rows untouched (main-table values stand)
     // rather than failing the whole read. Mirrors loadDynamicTables' fresh-DB resilience.
+    // In `strict` mode only that missing-table case is tolerated; any other
+    // failure propagates so a durable write is not committed with a silently
+    // incomplete companion read.
+    if (args.strict && !isMissingCompanionTableError(err)) {
+      throw err;
+    }
     return;
   }
 
@@ -149,6 +188,61 @@ export async function populateCompanionFields(
       }
       row[field.name] = resolveLocalizedValue(perLocaleValue, localeChain);
     }
+  }
+}
+
+/** A Drizzle-select surface that also supports `.limit()` for a single-row read. */
+interface LimitableDb {
+  select: () => {
+    from: (table: unknown) => {
+      where: (cond: unknown) => {
+        limit: (n: number) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/**
+ * Read one companion row's per-locale `_status` for `(parentId, locale)`.
+ *
+ * Goes through the Drizzle companion table object rather than raw SQL, so the
+ * read uses the same typed query builder the populate helpers do. Returns the
+ * `_status` string, or `null` when no companion row exists for the pair (or the
+ * stored value is not a string). Swallows a missing-companion-table error the
+ * same way {@link populateCompanionFields} does, so an entity whose companion
+ * migration has not run yet reads as having no per-locale status instead of
+ * failing the caller.
+ */
+export async function readCompanionLocaleStatus(
+  db: LimitableDb,
+  companionTable: unknown,
+  parentId: string | number,
+  locale: string
+): Promise<string | null> {
+  const table = companionTable as CompanionTable;
+  try {
+    const rows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale)
+        )
+      )
+      .limit(1);
+    const status = rows[0]?._status;
+    return typeof status === "string" ? status : null;
+  } catch (err) {
+    // Tolerate ONLY the companion `_locales` table not existing yet (a localized
+    // entity before its companion migration runs). Any other failure (a
+    // transient connection drop, a deadlock) must propagate: this value drives
+    // the publish/unpublish transition, so silently reading it as "no per-locale
+    // status" could emit a spurious event.
+    if (isMissingCompanionTableError(err)) {
+      return null;
+    }
+    throw err;
   }
 }
 

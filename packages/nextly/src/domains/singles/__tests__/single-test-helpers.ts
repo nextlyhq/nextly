@@ -62,6 +62,12 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     tableExists: vi.fn().mockResolvedValue(true),
     executeQuery: vi.fn().mockResolvedValue(undefined),
     getDialect: vi.fn().mockReturnValue("postgresql"),
+    // The webhook read-shape assembly reads components on the transaction's
+    // Drizzle handle; the component mocks ignore the executor, so a stub is fine.
+    getDrizzle: vi.fn().mockReturnValue({}),
+    // The update takes the row lock before its prior-state read; the real
+    // adapter no-ops where locking is unsupported, so a resolved stub matches.
+    lockRow: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   // Run a transaction callback with the adapter itself as the tx context, so
@@ -148,6 +154,9 @@ export function createMockComponentDataService(): MockRecord {
     saveComponentData: vi.fn().mockResolvedValue(undefined),
     saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
+    // The webhook field tree expands component references to find nested
+    // secrets; null = no nested component schema for this slug in the mock.
+    getComponentFields: vi.fn().mockResolvedValue(null),
   };
 }
 

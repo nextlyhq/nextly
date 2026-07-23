@@ -76,6 +76,26 @@ export class ComponentDataService {
     return record?.fields ?? null;
   }
 
+  /**
+   * Whether the component's OWN definition is localized — i.e. its translatable
+   * field values route to the per-locale companion (`comp_<slug>_locales`)
+   * table. Mirrors the storage gate in the component mutation service
+   * (`meta.localized !== true` keeps all data on the shared main table
+   * regardless of inner field types), so a caller can tell a per-locale
+   * component write apart from a shared one without re-deriving it from the
+   * inner field types.
+   */
+  async isComponentLocalized(
+    slug: string,
+    executor?: unknown
+  ): Promise<boolean> {
+    const record = await this.registryService.getComponentBySlug(
+      slug,
+      executor
+    );
+    return record?.localized === true;
+  }
+
   setRelationshipService(service: CollectionRelationshipService): void {
     this.queryService.setRelationshipService(service);
   }

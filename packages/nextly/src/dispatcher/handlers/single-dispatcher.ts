@@ -791,6 +791,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           locale: p.locale,
           user,
+          // Who performed the write, recorded on the outbox event: an API-key
+          // caller attributes to the key itself rather than the user that owns
+          // it. Mirrors the collection update handler.
+          actor: readAuthenticatedActor(p),
           // Route auth already ran the RBAC gate; `routeAuthorized` skips only
           // that re-check while field-level write access + response redaction
           // still run for this user (overrideAccess stays false).

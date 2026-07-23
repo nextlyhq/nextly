@@ -88,6 +88,9 @@ describe("singles-detail PATCH route auth forwarding", () => {
         },
         overrideAccess: false,
         routeAuthorized: true,
+        // Acting identity for the outbox event, resolved from the same auth
+        // context; a session caller attributes to the user.
+        actor: { type: "user", id: "u-1" },
         // The route forwards the caller's authenticated scope so a scoped API
         // key is judged on its own publish grant; a session user carries an
         // empty-permission user scope.
