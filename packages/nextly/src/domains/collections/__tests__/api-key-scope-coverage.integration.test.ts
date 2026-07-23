@@ -281,4 +281,110 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     expect(allowed.successful).toBe(1);
     expect(allowed.failed).toBe(0);
   });
+
+  it("judges a scoped key on the batch create gate, not the owner", async () => {
+    // The array batch create runs a collection-level `create` gate once before
+    // the inserts. That gate must carry the API-key scope, or a super-admin-owned
+    // key without `create-posts` could batch-create via the owner's bypass. A
+    // plain draft create names no publish transition, so the create GATE is the
+    // only thing that can judge the key here.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          // Create is refused by a code rule: a session super-admin bypasses it,
+          // but a scoped key must be judged on the key's own create grant.
+          access: { read: () => true, create: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entryService = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService();
+
+    // Super-admin owner of an update-only scoped key batch-creates: the scope
+    // reaches the create gate, the super-admin bypass is skipped, and the refusing
+    // create rule applies — every row fails.
+    const denied = await entryService.createEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts"],
+        },
+      },
+      [{ title: "a" }]
+    );
+    expect(denied.successful).toBe(0);
+    expect(denied.failed).toBe(1);
+
+    // The same super-admin as a session caller (no scope) bypasses the rule.
+    const allowed = await entryService.createEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+      },
+      [{ title: "b" }]
+    );
+    expect(allowed.successful).toBe(1);
+    expect(allowed.failed).toBe(0);
+  });
+
+  it("judges a scoped key on the batch update gate, not the owner", async () => {
+    // The array batch update runs a collection-level `update` gate once before
+    // the writes. That gate must carry the API-key scope, or a super-admin-owned
+    // key without `update-posts` could batch-update via the owner's bypass. The
+    // write names no publish transition, so the update GATE is the only thing
+    // that can judge the key here.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          // Update is refused by a code rule: a session super-admin bypasses it,
+          // but a scoped key must be judged on the key's own update grant.
+          access: { read: () => true, update: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entryService = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService();
+
+    const seeded = await entryService.createEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ title: "a" }]
+    );
+    const [id] = seeded.ids;
+
+    // Super-admin owner of a read-only scoped key batch-updates: the scope
+    // reaches the update gate, the super-admin bypass is skipped, and the refusing
+    // update rule applies — the row fails.
+    const denied = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-posts"],
+        },
+      },
+      [{ id, data: { title: "b" } }]
+    );
+    expect(denied.successful).toBe(0);
+    expect(denied.failed).toBe(1);
+
+    // The same super-admin as a session caller (no scope) bypasses the rule.
+    const allowed = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+      },
+      [{ id, data: { title: "c" } }]
+    );
+    expect(allowed.successful).toBe(1);
+    expect(allowed.failed).toBe(0);
+  });
 });

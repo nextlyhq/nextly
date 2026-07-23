@@ -982,7 +982,13 @@ export class CollectionBulkService extends BaseService {
         accessUser,
         undefined,
         undefined,
-        params.overrideAccess
+        params.overrideAccess,
+        undefined,
+        // Judge a scoped API key on its OWN create grant, not the key owner's:
+        // otherwise a super-admin-owned key without create-<slug> could batch
+        // create via this collection-level gate (the transition pre-resolve
+        // below already carries the scope, but this gate ran without it).
+        params.authenticatedScope
       );
     if (accessDenied) {
       // All entries fail due to access denial
@@ -1166,7 +1172,13 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "create",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN create grant, not the key owner's.
+        params.authenticatedScope
       );
     if (accessDenied) {
       return {
@@ -1320,7 +1332,17 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "update",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN update grant, not the key owner's:
+        // otherwise a super-admin-owned key without update-<slug> could
+        // batch-update via this collection-level gate (the transition
+        // pre-resolve below already carries the scope, but this gate ran without
+        // it).
+        params.authenticatedScope
       );
     if (accessDenied) {
       // All entries fail due to access denial
@@ -1504,7 +1526,13 @@ export class CollectionBulkService extends BaseService {
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "update",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Judge a scoped API key on its OWN update grant, not the key owner's.
+        params.authenticatedScope
       );
     if (accessDenied) {
       return {
