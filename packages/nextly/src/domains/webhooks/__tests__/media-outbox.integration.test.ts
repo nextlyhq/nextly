@@ -345,6 +345,47 @@ describe("webhook outbox capture — media (integration)", () => {
     expect(moved!.actorId).toBe("editor-7");
   });
 
+  it("moves the item and records media.updated when update carries a folderId", async () => {
+    // A metadata update that includes folderId must actually move the row and
+    // reflect it in the event — not silently drop the folder change.
+    await seedUser(current!, "editor-7");
+    const nextly = current!.nextly;
+    const folder = await nextly.media.folders.create({
+      name: "Reports",
+      user: { id: "editor-7" },
+    });
+    const uploaded = await nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      user: { id: "editor-7" },
+    });
+
+    await nextly.media.update({
+      id: uploaded.id,
+      data: { folderId: folder.id },
+      user: { id: "editor-7" },
+    });
+
+    const moved = (await events(current!)).find(
+      r => r.type === "media.updated" && r.resourceId === uploaded.id
+    );
+    expect(moved).toBeDefined();
+    expect((envelopeOf(moved!).data as { folderId?: string }).folderId).toBe(
+      folder.id
+    );
+    // The row actually moved.
+    const row = (
+      await current!.adapter.select<{ id: string; folderId: string | null }>(
+        "media"
+      )
+    ).find(m => m.id === uploaded.id);
+    expect(row?.folderId).toBe(folder.id);
+  });
+
   it("offers the fast-drain from the legacy service when given a scheduler", async () => {
     // The exported server actions reach the legacy service directly (via
     // ServiceContainer), so a legacy service constructed WITH the scheduler must

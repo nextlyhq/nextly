@@ -501,14 +501,17 @@ async function handleDeleteMedia(
 
 async function handleMoveMedia(
   request: Request,
-  mediaId: string
+  mediaId: string,
+  actor?: RequestActor
 ): Promise<Response> {
   const mediaService = await getMediaService();
   const body = await readJsonBody<Record<string, unknown>>(request);
   const folderId = body.folderId as string | null | undefined;
   const context = createRequestContext();
 
-  await mediaService.moveToFolder(mediaId, folderId ?? null, context);
+  // Thread the authenticated actor so the move's media.updated event is
+  // attributed to the real user/API key instead of `system`.
+  await mediaService.moveToFolder(mediaId, folderId ?? null, context, actor);
 
   // Service returns void; echo the target ids so the admin can update the
   // moved record locally without re-fetching the affected folders.
@@ -764,7 +767,11 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             );
             break;
           case "move-media":
-            response = await handleMoveMedia(request, route.mediaId!);
+            response = await handleMoveMedia(
+              request,
+              route.mediaId!,
+              gate.actor
+            );
             break;
           case "update-folder":
             response = await handleUpdateFolder(request, route.folderId!);

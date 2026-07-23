@@ -504,12 +504,21 @@ export class MediaService {
     // resolved `actor`, so this leaves them unchanged.
     const resolvedActor = actorForWrite(actor, context.user);
 
+    // A metadata update may also move the item (folderId in the patch). Validate
+    // the target folder up front (throws NOT_FOUND) and forward it, so the move
+    // actually happens and is captured in the media.updated event rather than
+    // silently dropped. `null` moves to root and needs no validation.
+    if (input.folderId) {
+      await this.findFolderById(input.folderId, context);
+    }
+
     const result = await this.legacyMediaService.updateMedia(
       mediaId,
       {
         altText: input.altText ?? undefined,
         caption: input.caption ?? undefined,
         tags: input.tags,
+        ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
       },
       resolvedActor
     );
