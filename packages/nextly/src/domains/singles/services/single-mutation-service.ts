@@ -110,14 +110,13 @@ function writtenComponentInstances(
   value: unknown
 ): Array<{ slug: string; data: Record<string, unknown> }> {
   if (fieldConfig.component) {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? [
-          {
-            slug: fieldConfig.component,
-            data: value as Record<string, unknown>,
-          },
-        ]
-      : [];
+    // A fixed single-component field is one instance; with `repeatable: true`
+    // the value is an array of instances, all under the same component slug.
+    const slug = fieldConfig.component;
+    const items = Array.isArray(value) ? value : value != null ? [value] : [];
+    return items
+      .filter((d): d is Record<string, unknown> => !!d && typeof d === "object")
+      .map(d => ({ slug, data: d }));
   }
   const instances = Array.isArray(value) ? value : value != null ? [value] : [];
   const out: Array<{ slug: string; data: Record<string, unknown> }> = [];
@@ -337,6 +336,11 @@ export class SingleMutationService extends BaseService {
               // expanded related entry could smuggle its own hidden/password
               // fields into the payload. Matches the collection snapshot read.
               depth: 0,
+              // This read feeds the durable webhook payload inside the write
+              // transaction, so a component read failure must roll the write
+              // back rather than ship a payload with silently-missing component
+              // data and a corrupted changed-field diff.
+              strict: true,
               // Read as the locale the components were written at, with no
               // fallback, so an embedded localized component reports this
               // language's text rather than another standing in for it.
@@ -1133,6 +1137,10 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
+                        // Surface a read failure (the catch below fails the
+                        // write) instead of silently capturing an incomplete
+                        // component snapshot in durable version history.
+                        strict: true,
                         // Read as the locale the components were written at,
                         // with no fallback, so an embedded localized component
                         // records this language's text rather than another's

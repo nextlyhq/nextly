@@ -79,6 +79,14 @@ export interface PopulateComponentDataParams {
    * written in it. Omitted for ordinary reads (pooled connection).
    */
   executor?: unknown;
+  /**
+   * When true, a component read failure propagates instead of being caught and
+   * replaced with a default (`null`/`[]`). Callers whose result feeds a durable
+   * write — a webhook payload or version snapshot assembled inside the write
+   * transaction — set this so a real read failure rolls the write back rather
+   * than shipping a payload with silently-missing component data.
+   */
+  strict?: boolean;
 }
 
 /**
@@ -299,6 +307,7 @@ export class ComponentQueryService extends BaseService {
       locale,
       fallbackLocale,
       executor,
+      strict = false,
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -324,7 +333,8 @@ export class ComponentQueryService extends BaseService {
             currentDepth,
             locale,
             fallbackLocale,
-            executor
+            executor,
+            strict
           );
         } else if (field.component) {
           if (field.repeatable) {
@@ -354,6 +364,9 @@ export class ComponentQueryService extends BaseService {
           }
         }
       } catch (error) {
+        // In strict mode a read failure must roll the write back rather than
+        // ship a payload with silently-missing component data.
+        if (strict) throw error;
         this.logger.debug("Could not populate component field", {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
@@ -572,7 +585,8 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -595,6 +609,9 @@ export class ComponentQueryService extends BaseService {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // In strict mode surface the failure so a durable payload is not built
+        // from a partial dynamic-zone read.
+        if (strict) throw error;
         this.logger.debug("Could not load component for populate", {
           slug,
           error: error instanceof Error ? error.message : String(error),
