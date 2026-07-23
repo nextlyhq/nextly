@@ -507,7 +507,7 @@ export async function syncUserFields(
  * to the super_admin role.
  *
  * All operations are idempotent — existing permissions are skipped.
- * Runs on every `nextly dev` startup and watch-mode re-sync.
+ * Runs on every `nextly db:sync` run and watch-mode re-sync.
  */
 export async function performPermissionSeeding(
   adapter: CLIDatabaseAdapter,

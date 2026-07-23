@@ -35,11 +35,14 @@ import {
 } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
+import { maybeForceUnlock } from "./migrate";
+
 interface ResolveCommandOptions {
   applied?: string;
   rolledBack?: string;
   failedCleanup?: string;
   skipVerify?: boolean;
+  forceUnlock?: boolean;
 }
 
 interface ResolvedOptions extends ResolveCommandOptions {
@@ -141,6 +144,11 @@ export async function runMigrateResolve(
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
+    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
+    // crashed prior run): the lock-busy error tells operators to re-run with
+    // this flag, and recovery is exactly when a stale lock is most likely.
+    await maybeForceUnlock(options, db, dialect);
+
     // fail-fast mode (the default) never returns undefined — it runs fn or
     // throws — so the non-null assertion below is safe.
     const result = (await withMigrateLock(db, dialect, () =>
@@ -205,6 +213,11 @@ export function registerMigrateResolveCommand(program: Command): void {
     .option(
       "--skip-verify",
       "With --applied, skip the live-vs-snapshot equivalence check",
+      false
+    )
+    .option(
+      "--force-unlock",
+      "Clear a stale migrate lock before running",
       false
     )
     .action(async (cmdOptions: ResolveCommandOptions, cmd: Command) => {

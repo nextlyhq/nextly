@@ -217,8 +217,7 @@ export async function performAutoSync(
   }
 
   // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:generate` + `nextly migrate:run`. F8
-  // PR 1 inlined this check (was SchemaPushService.getEnvironment()).
+  // explicitly run `nextly migrate:create` + `nextly migrate`.
   if (process.env.NODE_ENV === "production") {
     const pendingCollections = [
       ...syncResult.sync.created,
@@ -229,7 +228,7 @@ export async function performAutoSync(
       logger.newline();
       logger.error("Cannot auto-sync schema in production mode.");
       logger.info(
-        "Run `nextly migrate:generate` to create migrations, then `nextly migrate:run` to apply."
+        "Run `nextly migrate:create` to create migrations, then `nextly migrate` to apply."
       );
       process.exit(1);
     }
@@ -288,7 +287,7 @@ export async function performAutoSync(
   // Build the desired-singles bucket the same way collections are built.
   // Without this, the pipeline never introspects single_* tables and
   // treats them as "not managed" — renames become drop+add and new fields
-  // never propagate on `nextly dev` restart.
+  // never propagate on the next sync run.
   const { resolveSingleTableName } = await import(
     "../../domains/singles/services/resolve-single-table-name"
   );

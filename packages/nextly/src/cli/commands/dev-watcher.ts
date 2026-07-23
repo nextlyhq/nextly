@@ -1,9 +1,9 @@
 /**
- * Dev Command — Watch Mode Debouncer
+ * Watch Mode Debouncer
  *
- * File watching / re-sync orchestration extracted from `dev.ts`. This
- * module owns the debounced sync pipeline used when `nextly dev --watch`
- * is running and config files change on disk.
+ * File watching / re-sync orchestration. This module owns the debounced
+ * sync pipeline used when `nextly db:sync --watch` is running and config
+ * files change on disk.
  *
  * @module cli/commands/dev-watcher
  */

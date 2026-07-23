@@ -33,6 +33,8 @@ import { NextlyError, describeError } from "../../errors";
 import { createContext } from "../program";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 
+import { maybeForceUnlock } from "./migrate";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 const EVENTS_TABLE = "nextly_schema_events";
@@ -331,6 +333,7 @@ export interface UpgradeCommandOptions {
   force?: boolean;
   targetTableName?: string;
   reconcileCore?: boolean;
+  forceUnlock?: boolean;
 }
 
 /** Minimal interactive yes/no prompt for the TTY backup confirmation. */
@@ -368,6 +371,11 @@ export function registerUpgradeCommand(program: Command): void {
       "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
       false
     )
+    .option(
+      "--force-unlock",
+      "Clear a stale migrate lock before running",
+      false
+    )
     .action(async (cmdOptions: UpgradeCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
@@ -393,6 +401,15 @@ export function registerUpgradeCommand(program: Command): void {
       }
 
       try {
+        // Clear a stale lock first when --force-unlock is passed (e.g. left
+        // by a crashed prior run): the lock-busy error tells operators to
+        // re-run with this flag, and both upgrade paths take the migrate lock.
+        await maybeForceUnlock(
+          cmdOptions,
+          adapter.getDrizzle(),
+          adapter.getCapabilities().dialect
+        );
+
         if (cmdOptions.reconcileCore) {
           await runReconcileCore({
             adapter,

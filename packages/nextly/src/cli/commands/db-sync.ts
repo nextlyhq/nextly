@@ -49,8 +49,8 @@
  * # Disable auto-sync (use migrations)
  * nextly db:sync --no-auto-sync
  *
- * # Force auto-sync without warnings
- * nextly db:sync --force
+ * # Apply destructive changes without prompting (non-interactive runs)
+ * nextly db:sync --accept-data-loss
  *
  * # Custom config path
  * nextly db:sync --config ./custom/nextly.config.ts
@@ -374,7 +374,15 @@ export function registerDbSyncCommand(program: Command): void {
       "--no-auto-sync",
       "Disable auto-sync of schema changes (use migrations instead)"
     )
-    .option("-f, --force", "Force auto-sync without data loss warnings", false)
+    // Deprecated no-op: the schema pipeline handles destructive ops via
+    // interactive prompts (or --accept-data-loss / NEXTLY_ACCEPT_DATA_LOSS=1
+    // in non-interactive runs). Kept registered so existing scripts passing
+    // it keep working; the runtime emits a deprecation warning instead.
+    .option(
+      "-f, --force",
+      "(deprecated, no effect) Destructive ops are prompted; use --accept-data-loss for non-interactive runs",
+      false
+    )
     .option(
       "--remove-orphaned",
       "Remove code-first collections/singles/components that no longer exist in config",
