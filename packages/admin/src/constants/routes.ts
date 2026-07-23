@@ -93,6 +93,7 @@ export const ROUTES = {
   SETTINGS_API_KEYS: "/admin/settings/api-keys",
   SETTINGS_API_KEYS_CREATE: "/admin/settings/api-keys/create",
   SETTINGS_API_KEYS_EDIT: "/admin/settings/api-keys/edit/[id]",
+  // Webhook endpoint management (Settings → Webhooks): list, create, and edit.
   SETTINGS_WEBHOOKS: "/admin/settings/webhooks",
   SETTINGS_WEBHOOKS_CREATE: "/admin/settings/webhooks/create",
   SETTINGS_WEBHOOKS_EDIT: "/admin/settings/webhooks/edit/[id]",

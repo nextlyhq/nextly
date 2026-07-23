@@ -37,10 +37,16 @@ const SecretRow: React.FC<{ secret: string }> = ({ secret }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(secret).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
-    });
+    navigator.clipboard.writeText(secret).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
+      },
+      () => {
+        // Clipboard unavailable (permissions/insecure context); the secret is
+        // still on screen for the operator to select and copy manually.
+      }
+    );
   }, [secret]);
 
   return (

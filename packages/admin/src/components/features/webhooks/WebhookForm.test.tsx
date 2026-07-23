@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WebhookFormValues } from "@admin/lib/webhook-validation";

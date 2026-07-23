@@ -3,8 +3,9 @@
  *
  * These mirror the backend contract in
  * `packages/nextly/src/domains/webhooks/**` but are typed for the wire:
- * timestamps arrive as ISO strings, and no shape here ever carries the
- * signing secret or a header value (header values read back redacted).
+ * timestamps arrive as ISO strings, and no summary shape carries the signing
+ * secret or a header value (header values read back redacted). The one
+ * exception is `CreatedWebhook.secret`, returned exactly once on create.
  */
 
 /** Every event an endpoint can subscribe to (mirrors `WEBHOOK_EVENT_TYPES`). */
