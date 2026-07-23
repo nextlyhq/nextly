@@ -27,8 +27,10 @@ silently unpublishes a published entry or single. That value means "no status
 change", so it is dropped before the write instead of being sanitized to a
 database `NULL` that moved the row out of published without the publish gate.
 
-Publish/unpublish permission checks performed inside a caller-owned transaction
-(the transactional bulk create/update paths) now run on that transaction's own
-database connection. Previously the permission read went back to the connection
-pool from inside the transaction, which could stall a bulk write against a small
-or exhausted pool.
+Writes performed inside a caller-owned transaction (the transactional bulk and
+single-entry create/update paths) now run every read on that transaction's own
+database connection. Previously the publish/unpublish permission check, the
+collection metadata and owner-constraint reads, and the built-in sanitization
+hook's field-metadata read all went back to the connection pool from inside the
+transaction, which could stall the write against a small or exhausted pool while
+the transaction held the only connection.
