@@ -47,6 +47,10 @@ const AFTER_HOOK_SLUG = "poolreentryafter";
 const DELETE_SLUG = "poolreentrydelete";
 const DIRECT_DELETE_SLUG = "poolreentrydirdel";
 const BEFOREOP_SLUG = "poolreentrybeforeop";
+// A localized collection: its delete assembles the removed document from the
+// companion `<table>_locales`, which loads the companion schema on the caller's
+// transaction — the binding this fixture exercises. Its teardown also drops the
+// companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
 const SLUGS = [
   RBAC_SLUG,
