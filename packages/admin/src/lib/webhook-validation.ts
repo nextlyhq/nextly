@@ -40,6 +40,8 @@ export interface WebhookFormValues {
   allEvents: boolean;
   eventTypes: WebhookEventType[];
   headers: HeaderRow[];
+  /** On edit: remove all currently-configured headers (sends `headers: null`). */
+  clearExistingHeaders: boolean;
   enabled: boolean;
 }
 
@@ -98,6 +100,7 @@ export const webhookFormSchema = z
     allEvents: z.boolean(),
     eventTypes: z.array(z.enum(WEBHOOK_EVENT_TYPES)),
     headers: z.array(headerRowSchema),
+    clearExistingHeaders: z.boolean(),
     enabled: z.boolean(),
   })
   .refine(values => values.allEvents || values.eventTypes.length >= 1, {
@@ -147,16 +150,17 @@ export function toCreateInput(values: WebhookFormValues): CreateWebhookInput {
 }
 
 /**
- * Build the minimal PATCH: only changed fields. Headers are special — because a
- * read redacts them and a write replaces the whole set, they are sent only when
- * the operator actually edited the section (`headersDirty`). Dirty with rows
- * replaces the set; dirty with no rows clears it (`null`); untouched omits them.
+ * Build the minimal PATCH: only changed fields. Headers follow the redaction +
+ * full-replace contract: entered rows REPLACE the whole set, the explicit
+ * "remove all" flag CLEARS it (`null`), and otherwise (no rows, not cleared)
+ * they are left unchanged (omitted). Reads never seed rows, so an untouched
+ * edit naturally keeps the existing headers.
  */
 export function toUpdateInput(
   values: WebhookFormValues,
-  context: { original: WebhookEndpointSummary; headersDirty: boolean }
+  context: { original: WebhookEndpointSummary }
 ): UpdateWebhookInput {
-  const { original, headersDirty } = context;
+  const { original } = context;
   const patch: UpdateWebhookInput = {};
 
   const name = values.name.trim();
@@ -171,8 +175,11 @@ export function toUpdateInput(
 
   if (values.enabled !== original.enabled) patch.enabled = values.enabled;
 
-  if (headersDirty) {
-    patch.headers = headersRecord(values.headers) ?? null;
+  const headers = headersRecord(values.headers);
+  if (headers !== undefined) {
+    patch.headers = headers;
+  } else if (values.clearExistingHeaders) {
+    patch.headers = null;
   }
 
   return patch;
@@ -197,6 +204,7 @@ export function toFormValues(
       ? []
       : endpoint.eventTypes.filter(type => type !== WEBHOOK_EVENT_WILDCARD),
     headers: [],
+    clearExistingHeaders: false,
     enabled: endpoint.enabled,
   };
 }

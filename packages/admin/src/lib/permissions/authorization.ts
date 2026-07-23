@@ -72,6 +72,13 @@ export function filterNavigationItems(
     // Items without requiredPermission are always visible
     if (!item.requiredPermission) return true;
 
+    // A list is any-of: holding any one of the permissions shows the item.
+    if (Array.isArray(item.requiredPermission)) {
+      return item.requiredPermission.some(permission =>
+        hasCapabilityForPermission(permission, capabilities)
+      );
+    }
+
     // Check against the user's permission set
     return hasCapabilityForPermission(item.requiredPermission, capabilities);
   });

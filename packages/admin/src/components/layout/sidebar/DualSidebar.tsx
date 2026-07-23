@@ -244,7 +244,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     ? true
     : capabilities.canViewSettings ||
       capabilities.canManageEmailProviders ||
-      capabilities.canManageEmailTemplates;
+      capabilities.canManageEmailTemplates ||
+      canAccessApiKeys ||
+      canAccessWebhooks;
   const hasBuildersSection = showBuilder;
 
   const visibleMenuItems = useMemo(

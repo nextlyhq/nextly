@@ -16,6 +16,7 @@ const base: WebhookFormValues = {
   allEvents: false,
   eventTypes: ["entry.created"],
   headers: [],
+  clearExistingHeaders: false,
   enabled: true,
 };
 
@@ -132,26 +133,36 @@ describe("toUpdateInput", () => {
   it("sends only changed fields and never touches untouched headers", () => {
     const out = toUpdateInput(
       { ...base, name: "Renamed" },
-      { original: endpoint, headersDirty: false }
+      { original: endpoint }
     );
     expect(out).toEqual({ name: "Renamed" });
     expect("headers" in out).toBe(false);
   });
 
-  it("replaces the header set when the section was edited", () => {
+  it("replaces the header set when rows are entered", () => {
     const out = toUpdateInput(
       { ...base, headers: [{ name: "X-Token", value: "new" }] },
-      { original: endpoint, headersDirty: true }
+      { original: endpoint }
     );
     expect(out.headers).toEqual({ "X-Token": "new" });
   });
 
-  it("clears headers when edited to empty", () => {
-    const out = toUpdateInput(base, {
-      original: endpoint,
-      headersDirty: true,
-    });
+  it("clears headers when the remove-all flag is set", () => {
+    const out = toUpdateInput(
+      { ...base, clearExistingHeaders: true },
+      { original: endpoint }
+    );
     expect(out.headers).toBeNull();
+  });
+
+  it("keeps headers when neither rows nor the clear flag are present", () => {
+    const out = toUpdateInput(
+      { ...base, name: "Renamed" },
+      {
+        original: endpoint,
+      }
+    );
+    expect("headers" in out).toBe(false);
   });
 });
 

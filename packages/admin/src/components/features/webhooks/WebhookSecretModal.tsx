@@ -92,7 +92,7 @@ export const WebhookSecretModal: React.FC<WebhookSecretModalProps> = ({
                 <Info className="h-4 w-4" />
                 <AlertDescription>
                   {oneTime
-                    ? "This secret will not be shown again. Copy and store it now — it is used to verify the webhook-signature header on every delivery."
+                    ? "Copy your signing secret now. After you close this dialog you can retrieve it again from the endpoint's Reveal signing secret action. Use it to verify the webhook-signature header on every delivery."
                     : "Use this to verify the webhook-signature header on each delivery. Keep it secret; treat it like a password."}
                 </AlertDescription>
               </Alert>

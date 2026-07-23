@@ -49,12 +49,9 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const canDelete = canDeleteWebhooks || canManageWebhooks;
 
   const handleSubmit = useCallback(
-    (values: WebhookFormValues, meta: { headersDirty: boolean }) => {
+    (values: WebhookFormValues) => {
       if (!webhook) return;
-      const input = toUpdateInput(values, {
-        original: webhook,
-        headersDirty: meta.headersDirty,
-      });
+      const input = toUpdateInput(values, { original: webhook });
       // An empty patch would fail the server's "at least one field" rule; a
       // no-op save is a no-op, not an error.
       if (Object.keys(input).length === 0) {

@@ -48,6 +48,7 @@ const EMPTY_VALUES: WebhookFormValues = {
   allEvents: false,
   eventTypes: [],
   headers: [],
+  clearExistingHeaders: false,
   enabled: true,
 };
 
@@ -55,10 +56,7 @@ export interface WebhookFormProps {
   defaultValues?: WebhookFormValues;
   /** Names of headers already configured (values are hidden), shown read-only. */
   existingHeaderNames?: string[];
-  onSubmit: (
-    values: WebhookFormValues,
-    meta: { headersDirty: boolean }
-  ) => void;
+  onSubmit: (values: WebhookFormValues) => void;
   isPending: boolean;
   submitLabel: string;
   pendingLabel: string;
@@ -80,6 +78,8 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
   const headers = useFieldArray({ control: form.control, name: "headers" });
   const allEvents = form.watch("allEvents");
   const selectedTypes = form.watch("eventTypes");
+  const clearExistingHeaders = form.watch("clearExistingHeaders");
+  const hasExistingHeaders = (existingHeaderNames?.length ?? 0) > 0;
 
   const toggleEventType = (type: (typeof WEBHOOK_EVENT_TYPES)[number]) => {
     const next = selectedTypes.includes(type)
@@ -89,9 +89,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
   };
 
   const handleSubmit = (values: WebhookFormValues) => {
-    onSubmit(values, {
-      headersDirty: form.formState.dirtyFields.headers !== undefined,
-    });
+    onSubmit(values);
   };
 
   const eventError = form.formState.errors.eventTypes?.message;
@@ -237,80 +235,104 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
             description="Optional static headers sent with every delivery."
           >
             <div className="space-y-3">
-              {existingHeaderNames && existingHeaderNames.length > 0 && (
+              {hasExistingHeaders && (
                 <Alert variant="info" role="status">
                   <Info className="h-4 w-4" />
                   <AlertDescription>
-                    Currently sending {existingHeaderNames.length} header
-                    {existingHeaderNames.length === 1 ? "" : "s"} (values
-                    hidden): {existingHeaderNames.join(", ")}. Leave this
-                    section empty to keep them, or add headers below to replace
-                    the whole set.
+                    Currently sending {existingHeaderNames?.length} header
+                    {existingHeaderNames?.length === 1 ? "" : "s"} (values
+                    hidden): {existingHeaderNames?.join(", ")}. Leave this
+                    section empty to keep them, add headers to replace the whole
+                    set, or remove them all below.
                   </AlertDescription>
                 </Alert>
               )}
 
-              {headers.fields.map((row, index) => (
-                <div key={row.id} className="flex items-start gap-2">
-                  <FormField
+              {hasExistingHeaders && (
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <Controller
                     control={form.control}
-                    name={`headers.${index}.name`}
+                    name="clearExistingHeaders"
                     render={({ field }) => (
-                      <FormItem className="flex-1">
-                        <FormControl>
-                          <Input
-                            placeholder="Header name"
-                            disabled={isPending}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={isPending}
+                      />
                     )}
                   />
-                  <FormField
-                    control={form.control}
-                    name={`headers.${index}.value`}
-                    render={({ field }) => (
-                      <FormItem className="flex-1">
-                        <FormControl>
-                          <Input
-                            placeholder="Value"
-                            disabled={isPending}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    onClick={() => headers.remove(index)}
-                    disabled={isPending}
-                    aria-label="Remove header"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
+                  Remove all current headers
+                </label>
+              )}
 
-              {headersError && (
+              {!clearExistingHeaders &&
+                headers.fields.map((row, index) => (
+                  <div key={row.id} className="flex items-start gap-2">
+                    <FormField
+                      control={form.control}
+                      name={`headers.${index}.name`}
+                      render={({ field }) => (
+                        <FormItem className="flex-1">
+                          <FormControl>
+                            <Input
+                              placeholder="Header name"
+                              disabled={isPending}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name={`headers.${index}.value`}
+                      render={({ field }) => (
+                        <FormItem className="flex-1">
+                          <FormControl>
+                            <Input
+                              placeholder="Value"
+                              disabled={isPending}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={() => headers.remove(index)}
+                      disabled={isPending}
+                      aria-label="Remove header"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+
+              {headersError && !clearExistingHeaders && (
                 <p className="text-sm text-destructive-500">{headersError}</p>
               )}
 
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => headers.append({ name: "", value: "" })}
-                disabled={isPending}
-              >
-                <Plus className="h-4 w-4" />
-                Add header
-              </Button>
+              {clearExistingHeaders ? (
+                <p className="text-sm text-muted-foreground">
+                  All current headers will be removed on save.
+                </p>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => headers.append({ name: "", value: "" })}
+                  disabled={isPending}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add header
+                </Button>
+              )}
             </div>
           </SettingsRow>
         </SettingsSection>

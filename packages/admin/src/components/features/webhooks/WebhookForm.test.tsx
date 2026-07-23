@@ -26,6 +26,7 @@ const seeded: WebhookFormValues = {
   allEvents: false,
   eventTypes: ["entry.created"],
   headers: [],
+  clearExistingHeaders: false,
   enabled: true,
 };
 
@@ -48,7 +49,7 @@ describe("WebhookForm", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("submits the seeded values with a headersDirty flag", async () => {
+  it("submits the seeded values", async () => {
     const { onSubmit, user } = setup({
       defaultValues: seeded,
       submitLabel: "Save changes",
@@ -56,9 +57,8 @@ describe("WebhookForm", () => {
     });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    const [values, meta] = onSubmit.mock.calls[0];
+    const [values] = onSubmit.mock.calls[0];
     expect(values.name).toBe("Orders");
     expect(values.eventTypes).toEqual(["entry.created"]);
-    expect(meta.headersDirty).toBe(false);
   });
 });

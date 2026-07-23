@@ -70,8 +70,12 @@ export interface NavigationItem {
   subItems?: NavigationSubItem[];
   /** Sub-group label for grouped sections (e.g., "system" for System Settings) */
   subGroup?: string;
-  /** Permission slug required to view this item. Items without this are always visible. */
-  requiredPermission?: string;
+  /**
+   * Permission required to view this item. A single slug, or a list treated as
+   * any-of (holding any one shows the item — models an umbrella permission).
+   * Items without this are always visible.
+   */
+  requiredPermission?: string | string[];
 }
 
 /**
@@ -158,7 +162,9 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Webhook,
     category: "settings",
     subGroup: "system",
-    requiredPermission: "read-webhooks",
+    // update-webhooks is the management umbrella (satisfies read), so either
+    // grant reveals the item — matching the route guard and sub-sidebar.
+    requiredPermission: ["read-webhooks", "update-webhooks"],
   },
   {
     title: "Email Providers",
