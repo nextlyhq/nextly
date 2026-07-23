@@ -17,6 +17,8 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+// Concrete entry-service type: the transactional overrideAccess test below casts
+// the handler's entry service to it to call createEntryInTransaction directly.
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 

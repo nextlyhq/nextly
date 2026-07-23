@@ -44,6 +44,8 @@ const DIRECT_UPDATE_SLUG = "poolreentrydiru";
 const HOOK_SLUG = "poolreentryhook";
 const AFTER_HOOK_SLUG = "poolreentryafter";
 const DELETE_SLUG = "poolreentrydelete";
+const DIRECT_DELETE_SLUG = "poolreentrydirdel";
+const BEFOREOP_SLUG = "poolreentrybeforeop";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -53,6 +55,8 @@ const SLUGS = [
   HOOK_SLUG,
   AFTER_HOOK_SLUG,
   DELETE_SLUG,
+  DIRECT_DELETE_SLUG,
+  BEFOREOP_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -487,6 +491,85 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a direct delete inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(DIRECT_DELETE_SLUG)],
+        });
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: DIRECT_DELETE_SLUG, overrideAccess: true },
+          { title: "doomed", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        // The direct delete worker's access check + metadata reads must run on
+        // the transaction connection; a pooled read would deadlock here.
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.deleteEntryInTransaction(tx, {
+              collectionName: DIRECT_DELETE_SLUG,
+              entryId: id,
+              user: { id: "editor" },
+            })
+          ),
+          15_000
+        );
+
+        expect((result.data as { deleted?: boolean } | null)?.deleted).toBe(
+          true
+        );
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes when a code beforeOperation hook reads via context.executor", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      // A beforeOperation hook that reads the registry via context.executor.
+      const beforeOpHook: HookHandler = async context => {
+        const registry = container.get<CollectionRegistryService>(
+          "collectionRegistryService"
+        );
+        await registry.getCollectionBySlug(
+          context.collection,
+          context.executor
+        );
+      };
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(BEFOREOP_SLUG)],
+        });
+        registerHook("beforeOperation", BEFOREOP_SLUG, beforeOpHook);
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: BEFOREOP_SLUG, user: { id: "editor" } },
+              [{ title: "t", status: "draft" }]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+      } finally {
+        unregisterHook("beforeOperation", BEFOREOP_SLUG, beforeOpHook);
         await handle?.destroy();
       }
     }, 30_000);

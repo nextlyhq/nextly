@@ -459,6 +459,16 @@ export interface BeforeOperationContext<T = any> {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- shared context is a general-purpose key-value store
   context: Record<string, any>;
+
+  /**
+   * Transaction-bound Drizzle executor for the write this hook participates in.
+   *
+   * Present only when the operation runs inside a caller-owned transaction; a
+   * `beforeOperation` hook that reads the database must use it so the read stays
+   * on the transaction's own connection instead of taking a second pooled one.
+   * See {@link HookContext.executor}. Undefined outside a transaction.
+   */
+  executor?: unknown;
 }
 
 /**

@@ -1066,7 +1066,12 @@ export class CollectionMutationService extends BaseService {
   ): Promise<boolean> {
     try {
       // Load the schema for this collection
-      const schema = await this.fileManager.loadDynamicSchema(collectionName);
+      // Forward the executor so an uncached runtime-schema load (UI collection)
+      // stays on the caller's transaction connection rather than the pool.
+      const schema = await this.fileManager.loadDynamicSchema(
+        collectionName,
+        executor
+      );
 
       // Check if the field exists in the schema
       if (!schema[field]) {
@@ -4427,6 +4432,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
       // Use modified data if returned by beforeOperation
@@ -4872,6 +4880,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
       // Use modified data if returned by beforeOperation
@@ -5253,7 +5264,20 @@ export class CollectionMutationService extends BaseService {
       // 1. Check collection-level access FIRST (with document for owner checks)
       const accessDenied = await this.accessService.checkCollectionAccess<{
         deleted: boolean;
-      }>(params.collectionName, "delete", params.user, params.entryId, entry);
+      }>(
+        params.collectionName,
+        "delete",
+        params.user,
+        params.entryId,
+        entry,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Bound to the caller's transaction connection so this RBAC/metadata read
+        // does not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
+      );
       if (accessDenied) {
         return accessDenied;
       }
@@ -5271,6 +5295,9 @@ export class CollectionMutationService extends BaseService {
           ? { id: params.user.id, email: params.user.email }
           : undefined,
         context: sharedContext,
+        // Bind a beforeOperation hook that reads via context.executor to the
+        // caller's transaction connection so it does not re-enter the pool.
+        executor: tx.getDrizzle(),
       });
 
       // Note: For delete, we don't use modified id since we already fetched the entry
@@ -5532,6 +5559,9 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            // Bind a beforeOperation hook that reads via context.executor to the
+            // caller's transaction connection so it does not re-enter the pool.
+            executor: tx.getDrizzle(),
           });
 
         // Use modified data if returned by beforeOperation
@@ -6048,6 +6078,9 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            // Bind a beforeOperation hook that reads via context.executor to the
+            // caller's transaction connection so it does not re-enter the pool.
+            executor: tx.getDrizzle(),
           });
 
         // Use modified data if returned by beforeOperation
@@ -6528,6 +6561,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         // Note: For delete, we don't use modified id since we already fetched the entry
