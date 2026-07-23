@@ -213,7 +213,7 @@ describe("webhook delivery engine (real SQLite)", () => {
       return new Response("ok", { status: 200 });
     };
 
-    await deliverDueDeliveries(deps(stealing));
+    const result = await deliverDueDeliveries(deps(stealing));
 
     // The stale finalize matched nothing: the row keeps its re-armed state
     // rather than being overwritten with the in-flight attempt's "delivered".
@@ -221,6 +221,14 @@ describe("webhook delivery engine (real SQLite)", () => {
     expect(row.status).toBe("pending");
     expect(row.lockedBy).toBeNull();
     expect(row.attemptCount).toBe(0);
+
+    // The dropped outcome is counted as abandoned, never as a committed
+    // delivered — the drain must not over-report progress the ledger never got.
+    expect(result).toMatchObject({
+      attempted: 1,
+      delivered: 0,
+      abandoned: 1,
+    });
   });
 
   it("delivers a 2xx response and signs the request with Standard Webhooks headers", async () => {

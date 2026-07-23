@@ -3,7 +3,7 @@
 **Written:** 2026-07-23 (updated 2026-07-24). **PR:** https://github.com/nextlyhq/nextly/pull/310
 **Status:** OPEN, CI all green, mergeable but merge-BLOCKED pending codex APPROVED. **0 open review threads** as of last check.
 
-**Latest HEAD:** `3fb4da1f` (round 5 — finalize lease fence). The §7 "Expired worker clobbers redelivery" thread is RESOLVED (fixed in `3fb4da1f`, see §6 round 5).
+**Latest HEAD:** `c0bc7bea` (round 6 — 404 unknown endpoint id on redelivery; round 5 = finalize lease fence). The §7 "Expired worker clobbers redelivery" thread is RESOLVED (fixed in `3fb4da1f`, see §6 round 5).
 
 ---
 
@@ -49,7 +49,8 @@
 ### Commits on the branch (newest first)
 
 ```
-3fb4da1f fix(nextly): fence delivery finalize on lease ownership        <- round 5 (open thread §7)
+c0bc7bea fix(nextly): 404 an unknown endpoint id on redelivery         <- round 6
+3fb4da1f fix(nextly): fence delivery finalize on lease ownership        <- round 5
 3e8e3eec fix(nextly): lock the drain claim against a redelivery re-arm
 e933386c fix(nextly): probe with the durable drain timeout
 f16f7b35 fix(nextly): re-arm webhook delivery under a row lock
@@ -153,7 +154,11 @@ Content write → `recordMutationEvent` (writes `nextly_events` outbox) → `fan
 
 - _Expired worker clobbers redelivery (greptile P1):_ a worker that overruns its lease (lease expired but HTTP still in flight) could `finalizeDelivery` by id and overwrite a row a re-arm/other-drain had taken over. **Fixed:** `claimDelivery` stamps the runner as lease owner on the returned row (`row.lockedBy = runnerId`, plus `lockedBy` added to the `DeliveryRow` interface); `finalizeDelivery` fences its UPDATE with `AND locked_by = row.lockedBy`, so a handed-off row's stale finalize is a no-op. Closes the same clobber between two drain workers too. Deterministic test in `deliver.integration.test.ts` (`does not clobber a delivery whose lease was handed off mid-attempt`) steals the lease during the in-flight request and asserts the re-armed row survives.
 
-All five rounds: check-types + lint clean, full webhook integration suite green (531 passed on SQLite locally as of `3fb4da1f`; CI runs pg/mysql/sqlite legs). Every thread replied + resolved.
+**Round 6 → commit `c0bc7bea`:**
+
+- _Unknown endpoint id returned 409 instead of 404 (codex P2):_ the endpoint check ran before the scoped delivery lookup, and `getEndpoint` returns null for both a missing and a soft-deleted endpoint, so a mistyped `webhookId` got a bogus "endpoint deleted" 409. **Fixed:** reordered so the `FOR UPDATE` delivery lookup runs first (unknown/foreign/bogus id → 404), then the endpoint row is read in the same transaction and its `deleted_at`/`enabled` distinguish deleted (409) from disabled (409). A delivery outlives its endpoint's soft-delete (tombstone only cancels queued rows), so the deleted branch stays reachable. Two tests added.
+
+All six rounds: check-types + lint clean, full webhook integration suite green (533 passed on SQLite locally as of `c0bc7bea`; CI runs pg/mysql/sqlite legs). Every thread replied + resolved.
 
 ---
 
