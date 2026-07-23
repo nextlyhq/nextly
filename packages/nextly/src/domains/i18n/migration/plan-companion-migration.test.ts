@@ -26,6 +26,35 @@ describe("planCompanionMigration", () => {
     expect(plan.downSql).toContain("DROP TABLE"); // reverse
   });
 
+  it("ENABLE seeds and drops only the columns the previous main carried", () => {
+    // `summary` is added and localized in the same config change: it is in `columns`
+    // (the companion CREATE needs it) but was never on the previous main table, so the
+    // seed SELECT and the main-table DROP must skip it or the migration fails on apply.
+    const plan = planCompanionMigration({
+      spec: {
+        ...spec,
+        columns: [
+          { name: "title", kind: "text" },
+          { name: "summary", kind: "text" },
+        ],
+      },
+      prevMainColumnNames: ["id", "title", "price"],
+      companionExisted: false,
+    });
+    expect(plan.kind).toBe("enable");
+    // The companion still gets both columns.
+    expect(plan.upSql).toContain('"summary" TEXT');
+    // Seed and drop touch only the pre-existing column.
+    expect(plan.upSql).toContain('SELECT "id", \'en\', "title"');
+    expect(plan.upSql).toContain('DROP COLUMN "title"');
+    expect(plan.upSql).not.toContain('DROP COLUMN "summary"');
+    // DOWN re-adds and restores only what UP dropped, but still archives every
+    // translation (including `summary`) so no language data is silently lost.
+    expect(plan.downSql).toContain('ADD COLUMN "title"');
+    expect(plan.downSql).not.toContain('ADD COLUMN "summary"');
+    expect(plan.downSql).toContain("'summary'");
+  });
+
   it("CREATE-ONLY for a fresh localized collection (main never had the columns)", () => {
     const plan = planCompanionMigration({
       spec,

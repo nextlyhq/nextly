@@ -35,15 +35,25 @@ export function buildLocalizationDownStatements(
   } = spec;
   const stmts: string[] = [];
 
+  // Reversing an ENABLE that dropped only a subset of the localized columns from main
+  // (`columnsOnMain`) must re-add and restore exactly that subset; a column main never
+  // carried has no place to come back to. Undefined means "all of `columns`" — the disable
+  // path, where every localized column belongs on main. The archive step below still spans
+  // ALL columns so no translation is lost when the companion is dropped.
+  const onMainSet = spec.columnsOnMain && new Set(spec.columnsOnMain);
+  const onMain = onMainSet
+    ? columns.filter(c => onMainSet.has(c.name))
+    : columns;
+
   // 1. re-add columns (nullable — localized columns are always nullable)
-  for (const c of columns) {
+  for (const c of onMain) {
     stmts.push(
       `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${ddlType(c, dialect)}`
     );
   }
 
   // 2. restore default-locale value onto the main row (one correlated UPDATE per column)
-  for (const c of columns) {
+  for (const c of onMain) {
     const col = q(c.name, dialect);
     const comp = q(companionTable, dialect);
     const main = q(mainTable, dialect);
