@@ -77,4 +77,54 @@ describe("populateCompanionFields (real SQLite)", () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  // A db whose read rejects with `err`, reusing the real companion table so the
+  // query builds before the (mocked) execution fails.
+  function rejectingDb(err: Error) {
+    return {
+      select: () => ({
+        from: () => ({ where: () => Promise.reject(err) }),
+      }),
+    };
+  }
+
+  it("swallows a missing-table read error even in strict mode", async () => {
+    const rows: Record<string, unknown>[] = [{ id: "p1" }];
+    await populateCompanionFields({
+      db: rejectingDb(new Error("no such table: dc_pages_locales")) as never,
+      companionTable,
+      localizedFields: [{ name: "body", column: "body" }],
+      rows,
+      localeChain: ["en"],
+      strict: true,
+    });
+    // The unmigrated-table case is tolerated: the row is left untouched so the
+    // main-table value stands.
+    expect(rows[0]).not.toHaveProperty("body");
+  });
+
+  it("propagates a non-missing-table read error in strict mode", async () => {
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error("deadlock detected")) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+        strict: true,
+      })
+    ).rejects.toThrow("deadlock");
+  });
+
+  it("swallows any read error when not strict (default)", async () => {
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error("deadlock detected")) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+      })
+    ).resolves.toBeUndefined();
+  });
 });

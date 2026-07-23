@@ -84,7 +84,9 @@ describe("webhook outbox capture — singles (integration)", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].resourceKind).toBe("single");
-    expect(rows[0].resourceCollection).toBeNull();
+    // The single slug is denormalized into the scope column so the delivery log
+    // identifies which single changed.
+    expect(rows[0].resourceCollection).toBe("preferences");
     expect(rows[0].resourceId).toBeTruthy();
 
     const envelope = envelopeOf(rows[0]);
@@ -93,7 +95,15 @@ describe("webhook outbox capture — singles (integration)", () => {
     // prior document is that default and `title` reads as a changed field.
     expect(envelope.previous).not.toBeNull();
     expect(envelope.changedFields).toContain("title");
-    expect(envelope.resource).toMatchObject({ kind: "single" });
+    // The payload resource carries the slug so a receiver can route the event,
+    // but no entry `collection` (which would feed the collections filter).
+    expect(envelope.resource).toMatchObject({
+      kind: "single",
+      slug: "preferences",
+    });
+    expect(
+      (envelope.resource as { collection?: unknown }).collection
+    ).toBeUndefined();
   });
 
   it("emits BOTH single.updated and single.published on a draft→published write", async () => {
@@ -561,6 +571,48 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { hero: { heading: "Willkommen" } },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const row = (await events(current)).find(r => r.type === "single.updated");
+    expect(row).toBeDefined();
+    expect((envelopeOf(row!).resource as { locale?: string }).locale).toBe(
+      "de"
+    );
+  });
+
+  it("tags resource.locale when a localized dynamic-zone component is written", async () => {
+    // A dynamic-zone field stores each written block by its `_componentType`.
+    // Writing a localized block routes its translatable data to a per-locale
+    // companion, so the event must carry the write locale even though the field
+    // config names an allow-list rather than a single component slug.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      components: [
+        defineComponent({
+          slug: "hero_localized",
+          localized: true,
+          fields: [text({ name: "heading", localized: true })],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [
+            component({
+              name: "blocks",
+              components: ["hero_localized"],
+              repeatable: true,
+            }),
+          ],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { blocks: [{ _componentType: "hero_localized", heading: "Willkommen" }] },
       { overrideAccess: true, locale: "de" }
     );
 

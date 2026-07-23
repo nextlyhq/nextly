@@ -97,6 +97,37 @@ import {
 } from "./single-utils";
 
 /**
+ * The component slug(s) a written component field value actually stored. A
+ * single-component field (`component`) names one slug on its config; a
+ * dynamic-zone field (`components`) stores a written instance per entry, each
+ * discriminated by `_componentType` — so only the blocks the write used are
+ * returned, never the whole allow-list. Used to decide whether a component
+ * write was per-locale (any written component whose definition is localized).
+ */
+function writtenComponentSlugs(
+  fieldConfig: { component?: string; components?: string[] },
+  value: unknown
+): string[] {
+  if (fieldConfig.component) {
+    return [fieldConfig.component];
+  }
+  const instances = Array.isArray(value) ? value : value != null ? [value] : [];
+  const slugs = new Set<string>();
+  for (const instance of instances) {
+    if (
+      instance &&
+      typeof instance === "object" &&
+      "_componentType" in instance &&
+      typeof (instance as { _componentType?: unknown })._componentType ===
+        "string"
+    ) {
+      slugs.add((instance as { _componentType: string })._componentType);
+    }
+  }
+  return [...slugs];
+}
+
+/**
  * SingleMutationService
  *
  * Handles the write-path for Single documents. The get-style helpers
@@ -166,6 +197,10 @@ export class SingleMutationService extends BaseService {
       localizedFields: companion.localizedFields,
       rows: [localeRow],
       localeChain: [locale],
+      // This read feeds a durable webhook payload and the caller has already
+      // confirmed the companion table exists, so a real read failure must abort
+      // the write rather than silently ship nulled default-view translations.
+      strict: true,
     });
     const values: Record<string, unknown> = {};
     for (const f of companion.localizedFields) {
@@ -202,6 +237,7 @@ export class SingleMutationService extends BaseService {
     row: Record<string, unknown>,
     fieldConfigs: FieldConfig[],
     companion: CompanionSchema | null,
+    companionExists: boolean,
     companionValues: Record<string, unknown>,
     snapshotLocale: string | undefined,
     localeStatus?: string
@@ -211,7 +247,12 @@ export class SingleMutationService extends BaseService {
     const parentRow = convertTimestampsToCamelCase({ ...row });
     // A localized single's main row omits translatable columns (split to the
     // companion), so overlay this locale's values back on, keyed by field.name.
-    if (companion) {
+    // Skip the overlay when the companion table does not physically exist yet
+    // (a localized single before its companion migration runs): in that
+    // unmigrated state the translatable values still live on the main row, so
+    // nulling them here would drop existing translations and report bogus
+    // changed fields.
+    if (companion && companionExists) {
       // A shared field can legitimately be NAMED like a localized field's
       // physical column (e.g. a shared `meta_title` next to localized
       // `metaTitle` → column `meta_title`); never drop such a real field.
@@ -820,14 +861,29 @@ export class SingleMutationService extends BaseService {
                   f => "name" in f && f.name === writtenName
                 );
                 if (!fieldConfig || !isComponentField(fieldConfig)) continue;
-                const componentSlug = fieldConfig.component;
-                if (!componentSlug) continue;
-                if (
-                  await this.componentDataService.isComponentLocalized(
-                    componentSlug,
-                    tx.getDrizzle()
-                  )
-                ) {
+                // The component slug(s) this write actually stored: a
+                // single-component field names one slug on its config; a
+                // dynamic-zone field names each written instance's
+                // `_componentType`, so only the blocks the write used count (a
+                // zone that merely ALLOWS a localized component does not
+                // over-tag a write that used only shared ones).
+                const writtenSlugs = writtenComponentSlugs(
+                  fieldConfig,
+                  componentFieldData[writtenName]
+                );
+                let anyLocalized = false;
+                for (const slug of writtenSlugs) {
+                  if (
+                    await this.componentDataService.isComponentLocalized(
+                      slug,
+                      tx.getDrizzle()
+                    )
+                  ) {
+                    anyLocalized = true;
+                    break;
+                  }
+                }
+                if (anyLocalized) {
                   wroteLocalizedComponents = true;
                   break;
                 }
@@ -898,6 +954,7 @@ export class SingleMutationService extends BaseService {
                   preRow,
                   fieldConfigs,
                   companion,
+                  companionPhysicallyExists,
                   eventLocale != null
                     ? previousCompanionValues
                     : defaultViewCompanion,
@@ -1175,6 +1232,7 @@ export class SingleMutationService extends BaseService {
               rows[0],
               fieldConfigs,
               companion,
+              companionPhysicallyExists,
               eventLocale != null ? dataCompanionValues : defaultViewCompanion,
               payloadLocale,
               overlayLocaleStatus ? dataLocaleStatus : undefined
@@ -1214,11 +1272,15 @@ export class SingleMutationService extends BaseService {
               previousLocaleStatus === "published";
 
             const actor = actorForWrite(options.actor ?? null, options.user);
-            // `single` FORBIDS a `collection` slug; `locale` rides only when the
-            // single (or an embedded component) is localized, so a receiver can
-            // tell one language's write apart from another's.
+            // `slug` identifies WHICH single changed so a receiver can route the
+            // event without scanning for the opaque document id; `single` still
+            // FORBIDS an entry `collection` (the slug never feeds the collections
+            // filter). `locale` rides only when the single (or an embedded
+            // component) is localized, so a receiver can tell one language's
+            // write apart from another's.
             const resource: WebhookResource = {
               kind: "single",
+              slug,
               id: existingDoc.id,
               ...(eventLocale != null ? { locale: eventLocale } : {}),
             };

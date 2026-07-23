@@ -74,6 +74,33 @@ export interface PopulateCompanionArgs {
    * (admin/`status=all`, or a collection without per-locale status).
    */
   statusValue?: string;
+  /**
+   * When true, only a MISSING companion table is tolerated; any other read
+   * failure (a transient drop, a permission or schema error) propagates instead
+   * of being swallowed. Callers that have already confirmed the table exists and
+   * whose result feeds a durable write (e.g. a webhook payload) set this so a
+   * real error aborts rather than silently emitting nulled translations.
+   */
+  strict?: boolean;
+}
+
+/**
+ * Whether an error is the companion `_locales` table simply not existing yet (a
+ * localized entity before its companion migration runs), matched the same way
+ * the boot sync detects it. Distinguishes the tolerated missing-table case from
+ * a real failure (transient drop, permission, schema error). The driver message
+ * rides on the error or its cause.
+ */
+function isMissingCompanionTableError(err: unknown): boolean {
+  const message = [
+    err instanceof Error ? err.message : String(err),
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
+  ].join(" ");
+  return (
+    message.includes("does not exist") ||
+    message.includes("no such table") ||
+    message.includes("doesn't exist")
+  );
 }
 
 /**
@@ -114,11 +141,17 @@ export async function populateCompanionFields(
           inArray(localeCol as never, localeChain)
         )
       );
-  } catch {
+  } catch (err) {
     // The companion table may not physically exist yet — e.g. a localized collection
     // whose companion migration hasn't been run (dev auto-sync leaves localized columns
     // on the main table until `migrate`). Leave rows untouched (main-table values stand)
     // rather than failing the whole read. Mirrors loadDynamicTables' fresh-DB resilience.
+    // In `strict` mode only that missing-table case is tolerated; any other
+    // failure propagates so a durable write is not committed with a silently
+    // incomplete companion read.
+    if (args.strict && !isMissingCompanionTableError(err)) {
+      throw err;
+    }
     return;
   }
 
@@ -196,22 +229,11 @@ export async function readCompanionLocaleStatus(
     return typeof status === "string" ? status : null;
   } catch (err) {
     // Tolerate ONLY the companion `_locales` table not existing yet (a localized
-    // entity before its companion migration runs) — matched the same way the
-    // boot sync detects it. Any other failure (a transient connection drop, a
-    // deadlock) must propagate: this value drives the publish/unpublish
-    // transition, so silently reading it as "no per-locale status" could emit a
-    // spurious event. The driver message rides on the error or its cause.
-    const message = [
-      err instanceof Error ? err.message : String(err),
-      err instanceof Error && err.cause instanceof Error
-        ? err.cause.message
-        : "",
-    ].join(" ");
-    if (
-      message.includes("does not exist") ||
-      message.includes("no such table") ||
-      message.includes("doesn't exist")
-    ) {
+    // entity before its companion migration runs). Any other failure (a
+    // transient connection drop, a deadlock) must propagate: this value drives
+    // the publish/unpublish transition, so silently reading it as "no per-locale
+    // status" could emit a spurious event.
+    if (isMissingCompanionTableError(err)) {
       return null;
     }
     throw err;

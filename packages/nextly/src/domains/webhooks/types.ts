@@ -100,6 +100,14 @@ export type WebhookResource =
   | {
       kind: "single" | "media" | "user" | "form";
       collection?: never;
+      /**
+       * The stable slug of the changed resource (e.g. the Single's slug), so a
+       * receiver can route `single.updated`/`single.published` without scanning
+       * for the opaque document id. Distinct from `entry.collection`: it never
+       * feeds the endpoint `collections` filter (that reads `collection`), so a
+       * single slug cannot be caught by a collection-scoped subscription.
+       */
+      slug?: string;
       id?: string;
       locale?: string;
     };
