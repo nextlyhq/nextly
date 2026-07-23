@@ -466,6 +466,92 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Regenerate a media item's image size variants for a changed crop point,
+   * writing `sizes`/`thumbnailUrl` onto `updateData`. No-op unless the crop
+   * actually changed and the item is an image on a readable storage adapter.
+   *
+   * Called from inside the update transaction, under the media row lock, so its
+   * shared-path storage writes are serialized with the row commit: two
+   * concurrent focal edits of the same item cannot interleave their variant
+   * writes, so the committed row never points at another crop's bytes.
+   * Best-effort: a regeneration failure is swallowed (the crop point is still
+   * saved) rather than failing the whole update.
+   */
+  private async regenerateFocalPointSizes(
+    media: Media,
+    changes: UpdateMediaInput,
+    updateData: Record<string, unknown>
+  ): Promise<void> {
+    const focalPointChanged =
+      changes.focalX !== undefined || changes.focalY !== undefined;
+    if (!focalPointChanged || !isImageMimeType(media.mimeType)) {
+      return;
+    }
+
+    const adapter = this.storage.getAdapterForCollection("media");
+    if (!adapter.read) {
+      console.log(
+        `[MediaService] Crop point saved for media ${media.id}. ` +
+          `Size regeneration requires local storage or adapter with read support.`
+      );
+      return;
+    }
+
+    try {
+      const originalBuffer = await adapter.read(media.filename);
+      if (!originalBuffer) return;
+
+      const imageSizeService = new ImageSizeService(this.adapter, this.logger);
+      const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
+      if (sizeConfigs.length === 0) return;
+
+      const oldSizes = (media as unknown as Record<string, unknown>).sizes;
+      if (oldSizes) {
+        const parsed =
+          typeof oldSizes === "string" ? JSON.parse(oldSizes) : oldSizes;
+        await deleteImageSizes(parsed, path =>
+          this.storage.delete(path, "media")
+        );
+      }
+
+      const uploadFn = async (
+        buffer: Buffer,
+        opts: { filename: string; mimeType: string }
+      ) => {
+        return this.storage.upload(buffer, {
+          filename: opts.filename,
+          mimeType: opts.mimeType,
+          collection: "media",
+        });
+      };
+      const newSizes = await generateImageSizes(
+        originalBuffer,
+        media.originalFilename || media.filename,
+        sizeConfigs,
+        uploadFn,
+        { focalX: changes.focalX, focalY: changes.focalY }
+      );
+
+      updateData.sizes = newSizes;
+      if (newSizes && "thumbnail" in newSizes) {
+        updateData.thumbnailUrl = (
+          newSizes.thumbnail as unknown as { url: string }
+        ).url;
+      }
+
+      console.log(
+        `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
+      );
+    } catch (error) {
+      console.warn(
+        "[MediaService] Crop point size regeneration failed:",
+        error
+      );
+      // Continue without regeneration - crop point is still saved.
+    }
+  }
+
+  /**
    * Update media metadata (altText, caption, tags)
    */
   async updateMedia(
@@ -492,83 +578,6 @@ export class MediaService extends BaseService {
       if (changes.folderId !== undefined)
         updateData.folderId = changes.folderId;
 
-      // If crop point changed and media is an image, regenerate sizes immediately
-      const focalPointChanged =
-        changes.focalX !== undefined || changes.focalY !== undefined;
-      const mediaData = existing.data!;
-
-      if (focalPointChanged && isImageMimeType(mediaData.mimeType)) {
-        const adapter = this.storage.getAdapterForCollection("media");
-        if (adapter.read) {
-          try {
-            const originalBuffer = await adapter.read(mediaData.filename);
-            if (originalBuffer) {
-              const imageSizeService = new ImageSizeService(
-                this.adapter,
-                this.logger
-              );
-              const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-
-              if (sizeConfigs.length > 0) {
-                const oldSizes = (
-                  mediaData as unknown as Record<string, unknown>
-                ).sizes;
-                if (oldSizes) {
-                  const parsed =
-                    typeof oldSizes === "string"
-                      ? JSON.parse(oldSizes)
-                      : oldSizes;
-                  await deleteImageSizes(parsed, path =>
-                    this.storage.delete(path, "media")
-                  );
-                }
-
-                const uploadFn = async (
-                  buffer: Buffer,
-                  opts: { filename: string; mimeType: string }
-                ) => {
-                  return this.storage.upload(buffer, {
-                    filename: opts.filename,
-                    mimeType: opts.mimeType,
-                    collection: "media",
-                  });
-                };
-                const newSizes = await generateImageSizes(
-                  originalBuffer,
-                  mediaData.originalFilename || mediaData.filename,
-                  sizeConfigs,
-                  uploadFn,
-                  { focalX: changes.focalX, focalY: changes.focalY }
-                );
-
-                updateData.sizes = newSizes;
-
-                if (newSizes && "thumbnail" in newSizes) {
-                  updateData.thumbnailUrl = (
-                    newSizes.thumbnail as unknown as { url: string }
-                  ).url;
-                }
-
-                console.log(
-                  `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${mediaId}`
-                );
-              }
-            }
-          } catch (error) {
-            console.warn(
-              "[MediaService] Crop point size regeneration failed:",
-              error
-            );
-            // Continue without regeneration - crop point is still saved
-          }
-        } else {
-          console.log(
-            `[MediaService] Crop point saved for media ${mediaId}. ` +
-              `Size regeneration requires local storage or adapter with read support.`
-          );
-        }
-      }
-
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
       // RE-READ inside the transaction (not reused from the pre-transaction
@@ -590,6 +599,14 @@ export class MediaService extends BaseService {
           if (!current) {
             return null;
           }
+
+          // Regenerate focal-point image variants UNDER the row lock, from the
+          // freshly-read row, so a concurrent focal edit on the SAME item cannot
+          // interleave its shared-path storage writes with this one: the lock
+          // serializes the storage regeneration and the row/event commit
+          // together, so the committed row never describes a different crop than
+          // the bytes in storage. (Runs only when the crop actually changed.)
+          await this.regenerateFocalPointSizes(current, changes, updateData);
 
           await tx.update("media", updateData, this.whereEq("id", mediaId));
 
