@@ -230,4 +230,60 @@ describe("owner-only publish enforcement on batch paths (integration)", () => {
     });
     expect(owner.success).toBe(true);
   });
+
+  it("keeps the owner predicate for a scoped key on a batch update", async () => {
+    // A stored `update: owner-only` rule. A super-admin OWNS an update-scoped API
+    // key; the batch per-row worker must judge the key on its own grant, so the
+    // super-admin bypass does not drop the owner predicate and let it update
+    // another user's row.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { create: () => true, read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+      collectionAccessRules: { posts: { update: { type: "owner-only" } } },
+    });
+    const entryService = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService();
+
+    // A draft owned by "author" (created_by = author).
+    const seeded = await entryService.createEntries(
+      { collectionName: "posts", user: { id: "author" } },
+      [{ title: "a", status: "draft" }]
+    );
+    const [id] = seeded.ids;
+
+    // The super-admin's update-scoped key batch-updates author's row (a plain
+    // field change, no publish). The key is judged on its own grant, so the
+    // owner-only rule denies it: the row fails.
+    const denied = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-posts"],
+        },
+      },
+      [{ id, data: { title: "changed" } }]
+    );
+    expect(denied.successful).toBe(0);
+    expect(denied.failed).toBe(1);
+
+    // The same super-admin as a session caller (no scope) bypasses owner-only.
+    const allowed = await entryService.updateEntries(
+      {
+        collectionName: "posts",
+        user: { id: "admin", roles: ["super-admin"] },
+      },
+      [{ id, data: { title: "changed-by-admin" } }]
+    );
+    expect(allowed.successful).toBe(1);
+    expect(allowed.failed).toBe(0);
+  });
 });

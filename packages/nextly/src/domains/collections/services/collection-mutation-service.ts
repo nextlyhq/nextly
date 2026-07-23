@@ -5749,6 +5749,10 @@ export class CollectionMutationService extends BaseService {
       // row lock with no permission read inside the transaction. Self-resolved
       // (pooled) when a direct caller does not provide it.
       transitionAuth?: TransitionAuthorization;
+      // The caller's authenticated scope. A scoped API key is judged on its OWN
+      // update grant for the owner-only predicate + safety net, so a
+      // super-admin-owned key cannot batch-update other users' rows.
+      authenticatedScope?: AuthenticatedScope;
     },
     entryId: string,
     body: Record<string, unknown>,
@@ -5787,7 +5791,10 @@ export class CollectionMutationService extends BaseService {
         params.user,
         // A trusted override must not have an owner predicate forced onto its
         // fetch, or it would 404 rows it is entitled to update.
-        params.overrideAccess
+        params.overrideAccess,
+        // A scoped API key keeps the owner predicate even when owned by a
+        // super-admin, so a batch update judges the key on its OWN grant.
+        params.authenticatedScope
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -5820,15 +5827,21 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      // A super-admin bypasses stored rules on every transport — EXCEPT via a
+      // scoped API key, which is judged on its own grant (mirrors the owner
+      // predicate + checkCollectionAccess). So the safety net still fires for a
+      // scoped key even when the key owner is a super-admin.
+      const isScopedApiKey = params.authenticatedScope?.actorType === "apiKey";
       if (
         accessRules?.update?.type === "owner-only" &&
         params.user &&
-        // A trusted override (overrideAccess) and super-admins both bypass
+        // A trusted override (overrideAccess) and a super-admin SESSION bypass
         // stored rules on every transport, including the batch transaction
         // path — mirror the SQL owner-predicate bypass so this safety net does
-        // not re-impose owner-only on them.
+        // not re-impose owner-only on them. A scoped API key is not covered by
+        // the super-admin bypass.
         !params.overrideAccess &&
-        !this.accessService.isSuperAdmin(params.user)
+        !(this.accessService.isSuperAdmin(params.user) && !isScopedApiKey)
       ) {
         // Default to the auto-stamped system owner column (snake_case, matching
         // the runtime schema and raw rows) so zero-config owner-only works.
