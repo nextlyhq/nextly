@@ -9,6 +9,7 @@ import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  isMissingCompanionTableError,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -145,7 +146,10 @@ export class ComponentQueryService extends BaseService {
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    // Propagate a real companion read failure (durable webhook/version reads)
+    // instead of swallowing it and leaving translatable fields unresolved.
+    strict = false
   ): Promise<void> {
     if (
       !this.localization ||
@@ -204,6 +208,7 @@ export class ComponentQueryService extends BaseService {
       rows: dataArray,
       localeChain,
       idKey: "id",
+      strict,
     });
     this.decodeJsonLocalizedValues(
       meta,
@@ -347,7 +352,8 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              strict
             );
           } else {
             result[fieldName] = await this.populateSingleField(
@@ -359,7 +365,8 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              strict
             );
           }
         }
@@ -491,7 +498,8 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -503,7 +511,8 @@ export class ComponentQueryService extends BaseService {
       parentId,
       parentTable,
       fieldName,
-      executor
+      executor,
+      strict
     );
 
     if (rows.length === 0) return null;
@@ -515,7 +524,8 @@ export class ComponentQueryService extends BaseService {
       [data],
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
     data = await this.expandComponentRelationships(
       data,
@@ -537,7 +547,8 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -549,7 +560,8 @@ export class ComponentQueryService extends BaseService {
       parentId,
       parentTable,
       fieldName,
-      executor
+      executor,
+      strict
     );
 
     let dataArray = rows.map(row =>
@@ -562,7 +574,8 @@ export class ComponentQueryService extends BaseService {
       dataArray,
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -603,7 +616,8 @@ export class ComponentQueryService extends BaseService {
           parentId,
           parentTable,
           fieldName,
-          executor
+          executor,
+          strict
         );
         for (const row of rows) {
           allRows.push({ row, fields: meta.fields, slug });
@@ -633,7 +647,8 @@ export class ComponentQueryService extends BaseService {
         [data],
         locale,
         fallbackLocale,
-        executor
+        executor,
+        strict
       );
       data = await this.expandComponentRelationships(
         data,
@@ -841,7 +856,11 @@ export class ComponentQueryService extends BaseService {
     // transaction's connection (read-your-writes, #226), so a version snapshot
     // captured inside the write transaction sees the components just written in
     // it. Omitted for ordinary reads, which use the pooled connection.
-    executor?: unknown
+    executor?: unknown,
+    // When true, only a MISSING component table is tolerated; any other read
+    // failure propagates so a durable webhook/version payload is not built from
+    // a component silently read as empty.
+    strict = false
   ): Promise<ComponentRow[]> {
     try {
       return await this.adapter.select<ComponentRow>(
@@ -857,6 +876,12 @@ export class ComponentQueryService extends BaseService {
         executor
       );
     } catch (error) {
+      // The comp_* table may not exist yet (a component before its migration
+      // runs) — tolerate that and read as empty. In strict mode a real failure
+      // (transient/permission/schema) instead propagates.
+      if (strict && !isMissingCompanionTableError(error)) {
+        throw error;
+      }
       this.logger.debug("Could not query component table", {
         tableName,
         error: error instanceof Error ? error.message : String(error),

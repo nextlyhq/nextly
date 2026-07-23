@@ -91,7 +91,7 @@ export interface PopulateCompanionArgs {
  * a real failure (transient drop, permission, schema error). The driver message
  * rides on the error or its cause.
  */
-function isMissingCompanionTableError(err: unknown): boolean {
+export function isMissingCompanionTableError(err: unknown): boolean {
   const message = [
     err instanceof Error ? err.message : String(err),
     err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
