@@ -77,6 +77,17 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pkg.files).toEqual(["dist"]);
     expect(pkg.keywords).toContain("nextly-plugin");
     expect(pkg.scripts.dev).toContain("next dev dev");
+
+    // peerDependencies must never carry the "latest" dist-tag: pnpm 11
+    // rejects it (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then
+    // refuses to run any script in the scaffold. This test runs with the
+    // registry stubbed offline, so every version lookup exercises the
+    // fallback path — exactly where the dist-tag used to leak in.
+    for (const [peer, spec] of Object.entries(
+      pkg.peerDependencies as Record<string, string>
+    )) {
+      expect(spec, `peerDependencies.${peer}`).not.toBe("latest");
+    }
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
@@ -120,12 +131,16 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pluginTest).toContain("create({");
 
     // The playground seeds the auto-login user at boot; without it the first
-    // /admin visit dead-ends on the setup wizard despite devAutoLogin.
+    // /admin visit dead-ends on the setup wizard despite devAutoLogin. The
+    // seed must run twice: the runtime's background permission seeding races
+    // the first pass, and the second pass (role-exists path) tops up any
+    // permissions created in between so the role is complete either way.
     const instrumentation = await readFile(
       path.join(target, "dev/instrumentation.ts"),
       "utf-8"
     );
     expect(instrumentation).toContain("seedSuperAdmin");
+    expect(instrumentation.match(/await seedDevUser\(\)/g)).toHaveLength(2);
 
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(

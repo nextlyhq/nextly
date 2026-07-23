@@ -19,12 +19,27 @@ export async function register(): Promise<void> {
       "nextly/database/seeders"
     );
     const adapter = getService("adapter");
+    const seedDevUser = () =>
+      seedSuperAdmin(adapter, {
+        email: "dev@nextly.local",
+        password: "DevPassword123!",
+        name: "Dev User",
+        silent: true,
+      });
+
     await seedPermissions(adapter, { silent: true });
-    await seedSuperAdmin(adapter, {
-      email: "dev@nextly.local",
-      password: "DevPassword123!",
-      name: "Dev User",
-      silent: true,
-    });
+    await seedDevUser();
+
+    // createRegister() fires the runtime's own permission seeding in the
+    // background (post-init tasks are not awaited), and its new-permission
+    // assignment silently no-ops while the Super Admin role does not exist.
+    // Permissions it creates can therefore miss both the role-creation
+    // snapshot above and that assignment. The runtime's assignment call runs
+    // after all of its inserts, so either it sees the role created above and
+    // assigns everything itself, or every insert it made is already visible
+    // to this second run — which takes the role-exists path, re-lists all
+    // permissions, and tops up any that are missing. In both orderings the
+    // role ends up with the complete permission set.
+    await seedDevUser();
   }
 }
