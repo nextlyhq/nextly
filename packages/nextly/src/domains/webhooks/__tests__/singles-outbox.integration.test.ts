@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineSingle, password, text } from "../../../config";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
   type TestNextly,
@@ -439,8 +440,50 @@ describe("webhook outbox capture — singles (integration)", () => {
     const env = envelopeOf(deWrite!);
     expect((env.resource as { locale?: string }).locale).toBeUndefined();
     expect((env.data as { status?: string }).status).toBe("published");
+    // The shared value the write set is present regardless of locale.
+    expect((env.data as { theme?: string }).theme).toBe("dark");
     // The shared-field edit is not a status transition.
     expect(rows.filter(r => r.type === "single.unpublished")).toHaveLength(0);
+  });
+
+  it("ships the default view, not the write locale's translations, on a shared-field write", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "theme", localized: false }),
+          ],
+        }),
+      ],
+    });
+
+    // Give German its own translation, then edit only a shared field at `de`.
+    await singles(current).update(
+      "preferences",
+      { title: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    await singles(current).update(
+      "preferences",
+      { theme: "dark" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const shared = (await events(current)).find(
+      r =>
+        r.type === "single.updated" &&
+        (envelopeOf(r).data as { theme?: string }).theme === "dark"
+    );
+    expect(shared).toBeDefined();
+    const env = envelopeOf(shared!);
+    // No locale tag, and the German translation is not leaked into the
+    // locale-agnostic payload.
+    expect((env.resource as { locale?: string }).locale).toBeUndefined();
+    expect((env.data as { title?: string }).title).not.toBe("hallo");
   });
 
   it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
@@ -458,7 +501,9 @@ describe("webhook outbox capture — singles (integration)", () => {
       "afterUpdate",
       getSingleHookCollection("preferences"),
       () => {
-        throw new Error("afterUpdate observer failed");
+        throw NextlyError.internal({
+          logContext: { reason: "afterUpdate-observer-failed" },
+        });
       }
     );
 

@@ -23,7 +23,7 @@ export interface LocalizedFieldRef {
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
-function isBlank(value: unknown): boolean {
+export function isBlank(value: unknown): boolean {
   return value === null || value === undefined || value === "";
 }
 

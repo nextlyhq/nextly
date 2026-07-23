@@ -48,6 +48,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  isBlank,
   populateCompanionFields,
   readCompanionLocaleStatus,
 } from "../../i18n/companion-join";
@@ -58,6 +59,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionTableExists,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -180,6 +182,14 @@ export class SingleMutationService extends BaseService {
     // A localized single's main row omits translatable columns (split to the
     // companion), so overlay this locale's values back on, keyed by field.name.
     if (companion) {
+      // A shared field can legitimately be NAMED like a localized field's
+      // physical column (e.g. a shared `meta_title` next to localized
+      // `metaTitle` → column `meta_title`); never drop such a real field.
+      const mainFieldNames = new Set(
+        fieldConfigs
+          .map(f => ("name" in f ? f.name : undefined))
+          .filter((n): n is string => !!n)
+      );
       for (const f of companion.localizedFields) {
         if (Object.prototype.hasOwnProperty.call(companionValues, f.column)) {
           parentRow[f.name] = companionValues[f.column];
@@ -187,8 +197,13 @@ export class SingleMutationService extends BaseService {
         // The post-write main row may carry the raw snake_case companion column
         // (merged back after the upsert); the read shape keys a translatable
         // value by field name only, so drop the raw column so `data` and
-        // `previous` keep an identical key set.
-        if (f.column !== f.name && f.column in parentRow) {
+        // `previous` keep an identical key set — unless it is itself a declared
+        // shared field, whose value must survive.
+        if (
+          f.column !== f.name &&
+          f.column in parentRow &&
+          !mainFieldNames.has(f.column)
+        ) {
           delete parentRow[f.column];
         }
       }
@@ -635,7 +650,24 @@ export class SingleMutationService extends BaseService {
             // `previous`/`data` diff symmetrically.
             const previousCompanionValues: Record<string, unknown> = {};
             let previousCompanionStatus: string | null = null;
-            if (companion && writeLocale !== undefined) {
+            // A companion read inside THIS write transaction that hits a
+            // not-yet-migrated `_locales` table aborts the whole transaction on
+            // Postgres (it does not merely return empty), which would roll back
+            // even a shared-field update that never needed the companion. Probe
+            // existence on the pooled adapter first — off the transaction — and
+            // skip the reads when the companion is absent.
+            const companionPhysicallyExists =
+              companion && writeLocale !== undefined
+                ? await companionTableExists(
+                    this.adapter,
+                    companion.companionTableName
+                  )
+                : false;
+            if (
+              companion &&
+              writeLocale !== undefined &&
+              companionPhysicallyExists
+            ) {
               const preLocaleRow: Record<string, unknown> = {
                 id: existingDoc.id,
               };
@@ -674,9 +706,20 @@ export class SingleMutationService extends BaseService {
             // overlaid with the columns this write touched. No extra DB read —
             // the prior values were just read above and `companionData` holds
             // this write's serialized translatable values.
+            // Normalize blank written translations ("") to null so `data`
+            // matches the read-shape convention `populateCompanionFields` used
+            // for `previous`; without this a blank→blank edit would show
+            // `data.field === ""` vs `previous === null` and appear in
+            // `changedFields` for a field whose effective value did not change.
+            const normalizedWrittenCompanion: Record<string, unknown> = {};
+            for (const [column, value] of Object.entries(companionData)) {
+              normalizedWrittenCompanion[column] = isBlank(value)
+                ? null
+                : value;
+            }
             const dataCompanionValues: Record<string, unknown> = {
               ...previousCompanionValues,
-              ...companionData,
+              ...normalizedWrittenCompanion,
             };
 
             // Whether the single stores this write's status per locale. True
@@ -719,6 +762,11 @@ export class SingleMutationService extends BaseService {
             // with the version-capture gate.
             const wroteLocalizedComponents =
               snapshotLocale !== undefined &&
+              // A component write is per-locale only when the Single itself is
+              // localized (has a companion). A non-localized Single stores only
+              // shared component rows, so its component edits are not
+              // locale-specific and must not tag the event with a locale.
+              companion !== null &&
               Object.keys(componentFieldData).length > 0;
             // `locale` rides the event only when the write genuinely stored
             // per-locale data: it touched localized Single columns, set a
@@ -740,6 +788,12 @@ export class SingleMutationService extends BaseService {
             // to `previous` and `data` so the diff stays like-for-like.
             const overlayLocaleStatus =
               eventLocale != null || writtenStatus !== undefined;
+            // The locale the payload REPRESENTS. A locale-specific event reads
+            // component subtrees at, and overlays translations for, the write
+            // locale; a shared/default event reads the default view so
+            // `data`/`previous` never carry locale-specific content without a
+            // matching `resource.locale`.
+            const payloadLocale = eventLocale ?? undefined;
 
             const previousDoc = preRow
               ? await this.buildSingleWebhookDoc(
@@ -749,8 +803,8 @@ export class SingleMutationService extends BaseService {
                   preRow,
                   fieldConfigs,
                   companion,
-                  previousCompanionValues,
-                  snapshotLocale,
+                  eventLocale != null ? previousCompanionValues : {},
+                  payloadLocale,
                   overlayLocaleStatus ? previousLocaleStatus : undefined
                 )
               : null;
@@ -1022,8 +1076,8 @@ export class SingleMutationService extends BaseService {
               rows[0],
               fieldConfigs,
               companion,
-              dataCompanionValues,
-              snapshotLocale,
+              eventLocale != null ? dataCompanionValues : {},
+              payloadLocale,
               overlayLocaleStatus ? dataLocaleStatus : undefined
             );
 
