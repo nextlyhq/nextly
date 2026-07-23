@@ -4698,6 +4698,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterCreate", afterContext);
@@ -5120,6 +5123,9 @@ export class CollectionMutationService extends BaseService {
         originalData: existingEntry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterUpdate", afterContext);
@@ -5386,6 +5392,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterDelete", afterContext);
@@ -5795,6 +5804,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -6295,6 +6307,9 @@ export class CollectionMutationService extends BaseService {
           originalData: existingEntry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -6626,6 +6641,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(

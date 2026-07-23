@@ -19,13 +19,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { container } from "../../../di/container";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
+import { registerHook, unregisterHook } from "../../../hooks";
+import type { HookHandler } from "../../../hooks/types";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 const POSTGRES_URL = process.env.TEST_POSTGRES_URL ?? "";
@@ -38,6 +42,7 @@ const BULK_UPDATE_SLUG = "poolreentrybulku";
 const DIRECT_CREATE_SLUG = "poolreentrydirc";
 const DIRECT_UPDATE_SLUG = "poolreentrydiru";
 const HOOK_SLUG = "poolreentryhook";
+const AFTER_HOOK_SLUG = "poolreentryafter";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -45,6 +50,7 @@ const SLUGS = [
   DIRECT_CREATE_SLUG,
   DIRECT_UPDATE_SLUG,
   HOOK_SLUG,
+  AFTER_HOOK_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -382,6 +388,54 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes when a code afterCreate hook reads via context.executor in a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      // A code-registered afterCreate hook that reads the collection registry
+      // through the hook context's transaction executor. If the after-hook
+      // context omits the executor, this read falls back to the pool and, on a
+      // single-connection pool, deadlocks while the caller's transaction holds
+      // the only connection.
+      const afterHook: HookHandler = async context => {
+        const registry = container.get<CollectionRegistryService>(
+          "collectionRegistryService"
+        );
+        await registry.getCollectionBySlug(
+          context.collection,
+          context.executor
+        );
+      };
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(AFTER_HOOK_SLUG)],
+        });
+        // Registered AFTER boot: createTestNextly resets the hook registry on
+        // startup, and the running services share that same singleton registry.
+        registerHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: AFTER_HOOK_SLUG, user: { id: "editor" } },
+              [{ title: "t", status: "draft" }]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+      } finally {
+        unregisterHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
         await handle?.destroy();
       }
     }, 30_000);
