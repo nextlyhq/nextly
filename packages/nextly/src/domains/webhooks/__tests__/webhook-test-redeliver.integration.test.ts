@@ -275,6 +275,26 @@ describe("webhook test-ping + redeliver (real SQLite)", () => {
       ).rejects.toBeInstanceOf(NextlyError);
     });
 
+    it("404s when the delivery's event was pruned (cascade removes the delivery)", async () => {
+      const { endpoint } = await create();
+      const deliveryId = await seedFailedDelivery(endpoint.id);
+      // Retention deletes aged events; `event_id` cascades, so the delivery row
+      // is removed with its event. A re-arm therefore finds nothing rather than
+      // re-queuing a delivery whose payload is gone.
+      await adapter.executeQuery(
+        "DELETE FROM nextly_events WHERE id = 'evt_1'"
+      );
+
+      await expect(
+        service.redeliverDelivery(endpoint.id, deliveryId)
+      ).rejects.toBeInstanceOf(NextlyError);
+
+      const rows = await adapter.select("nextly_webhook_deliveries", {
+        where: { and: [{ column: "id", op: "=", value: deliveryId }] },
+      });
+      expect(rows).toHaveLength(0);
+    });
+
     it("409s when the endpoint is disabled", async () => {
       const { endpoint } = await create();
       const deliveryId = await seedFailedDelivery(endpoint.id);

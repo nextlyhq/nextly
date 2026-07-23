@@ -25,7 +25,7 @@
  * @module domains/webhooks/services/webhook-endpoint-service
  */
 
-import { and, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -619,44 +619,10 @@ export class WebhookEndpointService extends BaseService {
     webhookId: string,
     deliveryId: string
   ): Promise<void> {
-    const now = new Date();
-    const rows = await this.query(
-      async () =>
-        (await this.db
-          .select({
-            id: this.deliveries.id,
-            lockedUntil: this.deliveries.lockedUntil,
-          })
-          .from(this.deliveries)
-          .where(
-            and(
-              eq(this.deliveries.id, deliveryId),
-              eq(this.deliveries.webhookId, webhookId)
-            )
-          )
-          .limit(1)) as Array<{ id: string; lockedUntil: Date | null }>
-    );
-    const delivery = rows[0];
-    if (!delivery) {
-      throw NextlyError.notFound({
-        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
-      });
-    }
-
-    const leaseHeld =
-      delivery.lockedUntil != null &&
-      delivery.lockedUntil.getTime() > now.getTime();
-    if (leaseHeld) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message:
-          "This delivery is currently being sent; try again once it settles.",
-        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
-      });
-    }
-
     // `getEndpoint` filters soft-deleted rows, so a null means the endpoint was
-    // retired; a disabled endpoint would fail the re-attempt permanently.
+    // retired; a disabled endpoint would fail the re-attempt permanently. The
+    // drain re-checks endpoint state at send time, so a disable/delete racing
+    // this is caught there rather than delivering to a retired endpoint.
     const endpoint = await this.getEndpoint(webhookId);
     if (!endpoint) {
       throw NextlyError.conflict({
@@ -675,31 +641,71 @@ export class WebhookEndpointService extends BaseService {
       });
     }
 
-    // Condition the re-arm on the lease still being free: if a drain worker
-    // claimed the row between the read above and this write, the WHERE matches
-    // nothing and we leave the active attempt untouched rather than revoking it.
-    await this.query(() =>
-      this.db
-        .update(this.deliveries)
-        .set({
-          status: "pending",
-          nextAttemptAt: now,
-          attemptCount: 0,
-          lockedBy: null,
-          lockedUntil: null,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(this.deliveries.id, deliveryId),
-            eq(this.deliveries.webhookId, webhookId),
-            or(
-              isNull(this.deliveries.lockedUntil),
-              lte(this.deliveries.lockedUntil, now)
-            )
-          )
-        )
+    // Re-arm under a row lock so the read-guard-write cannot interleave with a
+    // drain worker claiming the same row. `forUpdate` takes the lock the write
+    // will need (a no-op on SQLite, whose transactions already serialize
+    // writers), so a worker that would claim the delivery blocks until this
+    // commits, and a worker that already holds an unexpired lease is seen here
+    // and refused — never revoked. Selecting the row before writing is also how
+    // the outcome is known, so success is reported only when the row was armed.
+    const outcome = await this.query(() =>
+      this.adapter.transaction(async tx => {
+        const rows = await tx.select<{ lockedUntil: Date | null }>(
+          "nextly_webhook_deliveries",
+          {
+            where: {
+              and: [
+                { column: "id", op: "=", value: deliveryId },
+                { column: "webhookId", op: "=", value: webhookId },
+              ],
+            },
+            limit: 1,
+            forUpdate: true,
+          }
+        );
+        const delivery = rows[0];
+        if (!delivery) return "not-found" as const;
+
+        const leaseHeld =
+          delivery.lockedUntil != null &&
+          delivery.lockedUntil.getTime() > Date.now();
+        if (leaseHeld) return "in-flight" as const;
+
+        const now = new Date();
+        await tx.update(
+          "nextly_webhook_deliveries",
+          {
+            status: "pending",
+            next_attempt_at: now,
+            attempt_count: 0,
+            locked_by: null,
+            locked_until: null,
+            updated_at: now,
+          },
+          {
+            and: [
+              { column: "id", op: "=", value: deliveryId },
+              { column: "webhookId", op: "=", value: webhookId },
+            ],
+          }
+        );
+        return "rearmed" as const;
+      })
     );
+
+    if (outcome === "not-found") {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+    if (outcome === "in-flight") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This delivery is currently being sent; try again once it settles.",
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
   }
 
   private notFound(id: string): NextlyError {

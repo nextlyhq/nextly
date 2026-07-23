@@ -30,6 +30,8 @@ delivery log.
 `POST /api/webhooks/:id/deliveries/:deliveryId/redeliver` re-attempts a specific
 past delivery from its stored event payload. The existing delivery row is
 re-armed for another attempt (its retry budget reset, its attempt history kept)
-and the drain is nudged so it goes out promptly; the outcome then shows in the
-delivery log. Both actions require the webhook update permission and an
+under a row lock so a delivery that is still being sent is reported as a conflict
+rather than sent twice, and the drain is nudged so it goes out promptly; the
+outcome then shows in the delivery log. A delivery on a disabled or deleted
+endpoint is refused. Both actions require the webhook update permission and an
 interactive session.
