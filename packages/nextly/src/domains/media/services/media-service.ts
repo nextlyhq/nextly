@@ -49,6 +49,8 @@
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
+import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
@@ -188,8 +190,39 @@ export class MediaService {
      * `config.security.uploads.svgCsp` (default `true`).
      */
     private readonly svgCsp: boolean = true,
-    private readonly logger: Logger = consoleLogger
+    private readonly logger: Logger = consoleLogger,
+    /**
+     * Prunes the outbox after a media write appends an event. The media write
+     * path records events through this service, so it carries its own runner
+     * (the webhook handler's is not on this path), mirroring collections.
+     */
+    private readonly retentionRunner?: WebhookRetentionRunner,
+    /**
+     * Shared post-response drain fast path. A media write commits its outbox
+     * row inside the DB transaction; `offer()` then schedules the immediate
+     * drain so subscribers are notified without waiting for the periodic
+     * scheduled drain. Absent only when webhooks were never registered.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
   ) {}
+
+  // A short prune pass on the write path: enough to keep the outbox from
+  // growing unbounded without turning a media write into a long maintenance
+  // job. Mirrors the collection write path.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  /**
+   * The post-write side effects, run after a media write that appended an
+   * outbox event. The drain fast path goes first so the post-response
+   * `after()` callback is scheduled promptly (it adds no latency); the
+   * retention pass follows. Both absorb their own failures (`maybeRun` never
+   * throws, `offer` only registers the callback), so this never turns a
+   * committed media write into an error. Mirrors the collection write path.
+   */
+  private async afterWrite(): Promise<void> {
+    this.fastDrainScheduler?.offer();
+    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
+  }
 
   /**
    * Get the storage adapter (supports both direct reference and getter function)
@@ -364,6 +397,9 @@ export class MediaService {
       filename: result.data.filename,
     });
 
+    // The upload committed a media.uploaded outbox row; drain and prune it.
+    await this.afterWrite();
+
     return this.mapToMediaFile(result.data);
   }
 
@@ -490,6 +526,9 @@ export class MediaService {
 
     this.logger.info("Media file updated", { mediaId });
 
+    // The update committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
+
     return this.mapToMediaFile(result.data);
   }
 
@@ -532,6 +571,9 @@ export class MediaService {
     this.logger.info("Media file deleted", { mediaId });
 
     emitMediaEvent("deleted", { mediaId });
+
+    // The delete committed a media.deleted outbox row; drain and prune it.
+    await this.afterWrite();
   }
 
   /**

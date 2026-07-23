@@ -306,6 +306,29 @@ describe("webhook outbox capture — media (integration)", () => {
     expect(updated!.actorId).toBe("editor-7");
   });
 
+  it("offers the webhook fast-drain after a media write", async () => {
+    // A media write commits its outbox row inside the DB transaction; the
+    // domain service must then offer the shared fast-drain so the event is
+    // delivered promptly instead of waiting for the scheduled drain.
+    await seedUser(current!, "editor-7");
+    const scheduler = current!.getService<{ offer: () => void }>(
+      "webhookFastDrainScheduler"
+    );
+    const offerSpy = vi.spyOn(scheduler, "offer");
+
+    await current!.nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      user: { id: "editor-7" },
+    });
+
+    expect(offerSpy).toHaveBeenCalled();
+  });
+
   it("records the final folder on the media.uploaded event", async () => {
     // A Direct-API upload into a folder must record the folder on the initial
     // insert so the event reflects the final location, rather than recording
