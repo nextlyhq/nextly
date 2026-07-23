@@ -195,6 +195,34 @@ describe("webhook delivery engine (real SQLite)", () => {
     };
   }
 
+  it("does not clobber a delivery whose lease was handed off mid-attempt", async () => {
+    await seedWebhook("wh_a");
+    await seedEvent("evt_1");
+    await seedDelivery("dlv_1", "wh_a", "evt_1");
+
+    // Simulate an overrun: while this worker's request is in flight, its lease is
+    // handed off (a redelivery re-arm clears `locked_by` and resets the row).
+    // The claim set `locked_by = "runner-test"`, so the finalize below is fenced
+    // on that owner and must not overwrite the re-armed state.
+    const stealing: DeliverTransport = async () => {
+      await adapter.update(
+        "nextly_webhook_deliveries",
+        { locked_by: null, status: "pending", attempt_count: 0 },
+        { and: [{ column: "id", op: "=", value: "dlv_1" }] }
+      );
+      return new Response("ok", { status: 200 });
+    };
+
+    await deliverDueDeliveries(deps(stealing));
+
+    // The stale finalize matched nothing: the row keeps its re-armed state
+    // rather than being overwritten with the in-flight attempt's "delivered".
+    const row = await getDelivery("dlv_1");
+    expect(row.status).toBe("pending");
+    expect(row.lockedBy).toBeNull();
+    expect(row.attemptCount).toBe(0);
+  });
+
   it("delivers a 2xx response and signs the request with Standard Webhooks headers", async () => {
     await seedWebhook("wh_a");
     await seedEvent("evt_1");

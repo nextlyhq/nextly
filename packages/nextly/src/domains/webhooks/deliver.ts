@@ -63,6 +63,7 @@ interface DeliveryRow {
   status: string;
   attemptCount: number;
   nextAttemptAt: Date | null;
+  lockedBy: string | null;
   lockedUntil: Date | null;
   attempts: unknown;
 }
@@ -271,20 +272,36 @@ async function claimDelivery(
     const leaseFree =
       row.lockedUntil == null || row.lockedUntil.getTime() <= now.getTime();
     if (!isDue || !leaseFree) return null;
+    const lockedUntil = new Date(now.getTime() + leaseMs);
     await tx.update(
       "nextly_webhook_deliveries",
       {
         locked_by: runnerId,
-        locked_until: new Date(now.getTime() + leaseMs),
+        locked_until: lockedUntil,
         updated_at: now,
       },
       { and: [{ column: "id", op: "=", value: id }] }
     );
+    // Reflect the lease just taken onto the returned row so the finalize can
+    // fence on ownership: `row.lockedBy` now identifies this runner, letting
+    // finalizeDelivery refuse to write if the lease has since been handed off.
+    row.lockedBy = runnerId;
+    row.lockedUntil = lockedUntil;
     return row;
   });
 }
 
-/** Finalize a claimed delivery: write the outcome and release the lease. */
+/**
+ * Finalize a claimed delivery: write the outcome and release the lease, but only
+ * while this runner still owns the lease it took at claim time.
+ *
+ * The `locked_by` fence matters when a worker overruns its lease: once
+ * `locked_until` passes, a redelivery re-arm (which clears `locked_by`) or
+ * another drain can take the row over. Without the fence this worker's late,
+ * unconditional write would clobber that fresh state — silently replacing a
+ * re-armed `pending` with the stale attempt's outcome. Scoping the write to the
+ * lease owner makes it a no-op instead, so whoever holds the row now keeps it.
+ */
 async function finalizeDelivery(
   deps: DeliverDeps,
   row: DeliveryRow,
@@ -294,7 +311,12 @@ async function finalizeDelivery(
   await deps.db.update(
     "nextly_webhook_deliveries",
     { ...update, locked_by: null, locked_until: null, updated_at: now },
-    { and: [{ column: "id", op: "=", value: row.id }] }
+    {
+      and: [
+        { column: "id", op: "=", value: row.id },
+        { column: "lockedBy", op: "=", value: row.lockedBy },
+      ],
+    }
   );
 }
 
