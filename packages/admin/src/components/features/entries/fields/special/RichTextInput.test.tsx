@@ -84,6 +84,14 @@ function Harness({ initial }: { initial: SerializedEditorState | null }) {
           switch-es
         </button>
         <button onClick={() => form.reset({ body: null })}>clear</button>
+        <button
+          onClick={() =>
+            // A corrupted stored value: parseable JSON, but not a Lexical document.
+            form.reset({ body: { root: { type: "bogus-node-type" } } })
+          }
+        >
+          corrupt
+        </button>
       </TooltipProvider>
     </QueryClientProvider>
   );
@@ -116,5 +124,20 @@ describe("RichTextInput — external value sync", () => {
     await userEvent.click(screen.getByText("clear"));
 
     expect(screen.queryByText("English body")).not.toBeInTheDocument();
+  });
+
+  it("degrades to an empty document when the external value cannot be parsed", async () => {
+    render(<Harness initial={doc("English body")} />);
+    await screen.findByText("English body");
+
+    // A corrupted or version-mismatched stored value must not crash the editor
+    // tree, and must not leave the previous document on screen (a save from that
+    // screen would write the previous language's content into this one).
+    await userEvent.click(screen.getByText("corrupt"));
+
+    expect(screen.queryByText("English body")).not.toBeInTheDocument();
+    // The editor is still alive: a follow-up valid value loads normally.
+    await userEvent.click(screen.getByText("switch-es"));
+    expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
   });
 });

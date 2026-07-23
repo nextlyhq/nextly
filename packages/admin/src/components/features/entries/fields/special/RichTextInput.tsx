@@ -209,43 +209,70 @@ const EXTERNAL_SYNC_TAG = "external-value-sync";
  * displaying the first-mounted content (and a save from that stale screen would overwrite the
  * other language's translation with it).
  *
- * `lastAppliedRef` holds the serialized state most recently seen by the editor (its own
- * emissions AND applied external values), so the editor's own typing echoing back through the
- * form is recognized and never re-applied — the caret is left alone while the user types.
+ * Echo detection is by OBJECT IDENTITY: `lastEmittedValueRef` holds the exact object the
+ * editor last handed to the form (react-hook-form stores it as-is, while `form.reset(...)`
+ * clones its input), so the editor's own typing echoing back is recognized and never
+ * re-applied — the caret is left alone while the user types. `lastAppliedRef` (serialized)
+ * additionally skips re-APPLYING an external value whose content the editor already shows,
+ * while the history reset below still runs for it.
  */
 function ExternalValueSyncPlugin({
   value,
   lastAppliedRef,
+  lastEmittedValueRef,
 }: {
   value: unknown;
   lastAppliedRef: RefObject<string | null>;
+  lastEmittedValueRef: RefObject<unknown>;
 }): null {
   const [editor] = useLexicalComposerContext();
   useEffect(() => {
+    if (value === lastEmittedValueRef.current) return;
+    lastEmittedValueRef.current = value;
+
+    // A locale's freshly-seeded translation is byte-identical to the default locale's
+    // content, so "the value did not change" must not be inferred from content equality —
+    // only re-APPLYING is skipped for identical content; the history reset still runs.
     const incoming = value ? JSON.stringify(value) : null;
-    if (incoming === lastAppliedRef.current) return;
-    lastAppliedRef.current = incoming;
-    if (incoming) {
-      editor.setEditorState(editor.parseEditorState(incoming), {
-        tag: EXTERNAL_SYNC_TAG,
-      });
-    } else {
-      // No stored value for this language: show an empty document (one empty
-      // paragraph — Lexical's canonical empty state, matching a fresh editor).
-      editor.update(
-        () => {
-          const root = $getRoot();
-          root.clear();
-          root.append($createParagraphNode());
-        },
-        { tag: EXTERNAL_SYNC_TAG }
-      );
+    if (incoming !== lastAppliedRef.current) {
+      lastAppliedRef.current = incoming;
+      // A stored value can be corrupted or reference a node type that is no longer
+      // registered; parsing throws synchronously, which would take down the whole editor
+      // tree. Degrade to the empty document instead — showing the PREVIOUS document is not
+      // an option, since saving from it would write that content into this language.
+      let applied = false;
+      if (incoming) {
+        try {
+          editor.setEditorState(editor.parseEditorState(incoming), {
+            tag: EXTERNAL_SYNC_TAG,
+          });
+          applied = true;
+        } catch (error) {
+          console.error(
+            "[RichTextInput] Failed to load external editor value:",
+            error
+          );
+        }
+      }
+      if (!applied) {
+        // No stored value for this language (or an unloadable one): show an empty
+        // document (one empty paragraph — Lexical's canonical empty state).
+        editor.update(
+          () => {
+            const root = $getRoot();
+            root.clear();
+            root.append($createParagraphNode());
+          },
+          { tag: EXTERNAL_SYNC_TAG }
+        );
+      }
     }
-    // The applied value replaces the whole document (another language's content, a restored
+    // An external value replaces the whole document (another language's content, a restored
     // version), so the undo stack must not bridge it: an undo would resurrect the PREVIOUS
-    // document into this one and a save would persist it there.
+    // document into this one and a save would persist it there. Runs even when the content
+    // is identical (the seeded-translation case above) — the documents are still distinct.
     editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
-  }, [value, editor, lastAppliedRef]);
+  }, [value, editor, lastAppliedRef, lastEmittedValueRef]);
   return null;
 }
 
@@ -268,6 +295,12 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
     control,
     defaultValue: null as TFieldValues[Path<TFieldValues>],
   });
+
+  // The form value as of MOUNT, frozen: Lexical reads initialConfig.editorState exactly
+  // once, so the config must not observe later values — those are handled by
+  // OnChangePlugin + ExternalValueSyncPlugin. Reading through a never-updated ref keeps
+  // `value` out of the memo entirely.
+  const mountValueRef = useRef(value);
 
   const initialConfig = useMemo(
     () => ({
@@ -299,24 +332,24 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
       onError: (error: Error) => {
         console.error("[RichTextInput] Lexical error:", error);
       },
-      editorState: value
-        ? JSON.stringify(value as SerializedEditorState)
+      editorState: mountValueRef.current
+        ? JSON.stringify(mountValueRef.current as SerializedEditorState)
         : undefined,
     }),
-    // Reason: value is intentionally excluded — Lexical reads initialConfig.editorState
-    // once at mount; later value changes (the user's edits echoing back, or an external
-    // form reset) are handled by OnChangePlugin + ExternalValueSyncPlugin.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [name, disabled, readOnly]
   );
 
   // The serialized state the editor last held, whatever its origin (the user's edits or an
-  // applied external value). The sync plugin compares the form value against this to decide
-  // whether a change is truly external. Seeded with the mount value so the first render is
-  // recognized as already applied (initialConfig loaded it).
+  // applied external value). The sync plugin uses this to skip re-applying content the
+  // editor already shows. Seeded with the mount value (initialConfig loaded it).
   const lastAppliedRef = useRef<string | null>(
     value ? JSON.stringify(value) : null
   );
+  // The exact object the editor last handed to the form via onChange (or the mount value):
+  // the sync plugin's echo detector. Object identity distinguishes the editor's own
+  // emission coming back (same reference) from a form reset (react-hook-form clones reset
+  // values, so those always arrive as new references).
+  const lastEmittedValueRef = useRef<unknown>(value);
 
   const handleChange = useCallback(
     (editorState: EditorState, _editor: unknown, tags: Set<string>) => {
@@ -328,6 +361,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
       // clearing for an untranslated language would otherwise overwrite the form's
       // `null` with an empty document, marking that language as "translated".
       if (tags.has(EXTERNAL_SYNC_TAG)) return;
+      lastEmittedValueRef.current = serializedState;
       onChange(serializedState);
     },
     [onChange]
@@ -381,6 +415,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
         <ExternalValueSyncPlugin
           value={value}
           lastAppliedRef={lastAppliedRef}
+          lastEmittedValueRef={lastEmittedValueRef}
         />
         <ListPlugin />
         <CheckListPlugin />
