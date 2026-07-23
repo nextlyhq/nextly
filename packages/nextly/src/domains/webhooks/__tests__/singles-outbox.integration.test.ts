@@ -623,6 +623,54 @@ describe("webhook outbox capture — singles (integration)", () => {
     );
   });
 
+  it("does not tag resource.locale when only a shared field of a localized component is written", async () => {
+    // A localized component keeps its shared (localized:false) fields on the
+    // main comp_* row for every locale, so a write touching only those is not
+    // per-locale even though the component's definition is localized.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      components: [
+        defineComponent({
+          slug: "hero_mixed",
+          localized: true,
+          fields: [
+            text({ name: "heading", localized: true }),
+            text({ name: "anchor", localized: false }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [component({ name: "hero", component: "hero_mixed" })],
+        }),
+      ],
+    });
+
+    // Seed a localized heading (this write IS per-locale)...
+    await singles(current).update(
+      "preferences",
+      { hero: { heading: "Willkommen", anchor: "top" } },
+      { overrideAccess: true, locale: "de" }
+    );
+    // ...then change ONLY the shared field.
+    await singles(current).update(
+      "preferences",
+      { hero: { anchor: "bottom" } },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const updates = (await events(current)).filter(
+      r => r.type === "single.updated"
+    );
+    const first = envelopeOf(updates[0]);
+    const last = envelopeOf(updates[updates.length - 1]);
+    // The localized-field write is tagged; the shared-only write is not.
+    expect((first.resource as { locale?: string }).locale).toBe("de");
+    expect((last.resource as { locale?: string }).locale).toBeUndefined();
+  });
+
   it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
     current = await createTestNextly({
       singles: [

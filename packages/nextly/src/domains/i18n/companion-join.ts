@@ -96,10 +96,16 @@ function isMissingCompanionTableError(err: unknown): boolean {
     err instanceof Error ? err.message : String(err),
     err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
   ].join(" ");
+  // Match ONLY a missing table/relation, not any "does not exist" — on Postgres
+  // a missing COLUMN reads `column "x" does not exist`, a real schema error that
+  // strict mode must surface, whereas a missing table reads
+  // `relation "x" does not exist`. SQLite uses `no such table` (its missing
+  // column is `no such column`), and MySQL uses `Table '...' doesn't exist`
+  // (its missing column is `Unknown column`).
   return (
-    message.includes("does not exist") ||
     message.includes("no such table") ||
-    message.includes("doesn't exist")
+    message.includes("doesn't exist") ||
+    (message.includes("relation") && message.includes("does not exist"))
   );
 }
 

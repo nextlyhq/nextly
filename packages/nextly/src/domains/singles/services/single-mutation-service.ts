@@ -47,6 +47,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   isBlank,
   populateCompanionFields,
@@ -97,22 +98,29 @@ import {
 } from "./single-utils";
 
 /**
- * The component slug(s) a written component field value actually stored. A
- * single-component field (`component`) names one slug on its config; a
- * dynamic-zone field (`components`) stores a written instance per entry, each
- * discriminated by `_componentType` — so only the blocks the write used are
- * returned, never the whole allow-list. Used to decide whether a component
- * write was per-locale (any written component whose definition is localized).
+ * The component instances a written component field value actually stored,
+ * each paired with its slug and its written data. A single-component field
+ * (`component`) yields one instance keyed by its config slug; a dynamic-zone
+ * field (`components`) yields one per written block, each discriminated by
+ * `_componentType` — so only the blocks the write used are returned, never the
+ * whole allow-list. Used to decide whether a component write was per-locale.
  */
-function writtenComponentSlugs(
+function writtenComponentInstances(
   fieldConfig: { component?: string; components?: string[] },
   value: unknown
-): string[] {
+): Array<{ slug: string; data: Record<string, unknown> }> {
   if (fieldConfig.component) {
-    return [fieldConfig.component];
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? [
+          {
+            slug: fieldConfig.component,
+            data: value as Record<string, unknown>,
+          },
+        ]
+      : [];
   }
   const instances = Array.isArray(value) ? value : value != null ? [value] : [];
-  const slugs = new Set<string>();
+  const out: Array<{ slug: string; data: Record<string, unknown> }> = [];
   for (const instance of instances) {
     if (
       instance &&
@@ -121,10 +129,13 @@ function writtenComponentSlugs(
       typeof (instance as { _componentType?: unknown })._componentType ===
         "string"
     ) {
-      slugs.add((instance as { _componentType: string })._componentType);
+      out.push({
+        slug: (instance as { _componentType: string })._componentType,
+        data: instance as Record<string, unknown>,
+      });
     }
   }
-  return [...slugs];
+  return out;
 }
 
 /**
@@ -760,6 +771,11 @@ export class SingleMutationService extends BaseService {
                 localizedFields: companion.localizedFields,
                 rows: [preLocaleRow],
                 localeChain: [writeLocale],
+                // This pre-image read feeds the durable webhook `previous`
+                // payload and the table is already known to exist, so a real
+                // read failure must abort the write rather than silently ship a
+                // nulled `previous` (which would corrupt `changedFields`).
+                strict: true,
               });
               for (const f of companion.localizedFields) {
                 if (preLocaleRow[f.name] !== undefined) {
@@ -861,29 +877,47 @@ export class SingleMutationService extends BaseService {
                   f => "name" in f && f.name === writtenName
                 );
                 if (!fieldConfig || !isComponentField(fieldConfig)) continue;
-                // The component slug(s) this write actually stored: a
-                // single-component field names one slug on its config; a
-                // dynamic-zone field names each written instance's
-                // `_componentType`, so only the blocks the write used count (a
-                // zone that merely ALLOWS a localized component does not
-                // over-tag a write that used only shared ones).
-                const writtenSlugs = writtenComponentSlugs(
+                // The instances this write actually stored: a single-component
+                // field yields one; a dynamic-zone field yields each written
+                // `_componentType` block (only the blocks the write used).
+                const instances = writtenComponentInstances(
                   fieldConfig,
                   componentFieldData[writtenName]
                 );
-                let anyLocalized = false;
-                for (const slug of writtenSlugs) {
+                let anyLocalizedWrite = false;
+                for (const { slug, data } of instances) {
+                  // A component stores per-locale data only when its OWN
+                  // definition is localized AND the write touches one of its
+                  // localized fields — its shared fields stay on the main
+                  // comp_* row for every locale. So a write that changes only a
+                  // localized component's shared fields is NOT per-locale.
                   if (
-                    await this.componentDataService.isComponentLocalized(
+                    !(await this.componentDataService.isComponentLocalized(
                       slug,
                       tx.getDrizzle()
-                    )
+                    ))
                   ) {
-                    anyLocalized = true;
+                    continue;
+                  }
+                  const componentFields =
+                    (await this.componentDataService.getComponentFields(
+                      slug,
+                      tx.getDrizzle()
+                    )) ?? [];
+                  const localizedNames = resolveLocalizedFieldNames(
+                    componentFields.map(cf => ({
+                      type: cf.type,
+                      name: "name" in cf && cf.name ? cf.name : "",
+                      localized: "localized" in cf ? cf.localized : undefined,
+                    })),
+                    true
+                  );
+                  if (localizedNames.some(name => data[name] !== undefined)) {
+                    anyLocalizedWrite = true;
                     break;
                   }
                 }
-                if (anyLocalized) {
+                if (anyLocalizedWrite) {
                   wroteLocalizedComponents = true;
                   break;
                 }

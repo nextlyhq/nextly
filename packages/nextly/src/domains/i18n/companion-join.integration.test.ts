@@ -116,6 +116,36 @@ describe("populateCompanionFields (real SQLite)", () => {
     ).rejects.toThrow("deadlock");
   });
 
+  it("propagates a Postgres missing-COLUMN error in strict mode", async () => {
+    // A migrated-but-mismatched companion (missing column) is a real schema
+    // error strict mode must surface — not the tolerated missing-table case.
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error('column "body" does not exist')) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+        strict: true,
+      })
+    ).rejects.toThrow("does not exist");
+  });
+
+  it("tolerates a Postgres missing-RELATION error in strict mode", async () => {
+    const rows: Record<string, unknown>[] = [{ id: "p1" }];
+    await populateCompanionFields({
+      db: rejectingDb(
+        new Error('relation "dc_pages_locales" does not exist')
+      ) as never,
+      companionTable,
+      localizedFields: [{ name: "body", column: "body" }],
+      rows,
+      localeChain: ["en"],
+      strict: true,
+    });
+    expect(rows[0]).not.toHaveProperty("body");
+  });
+
   it("swallows any read error when not strict (default)", async () => {
     await expect(
       populateCompanionFields({
