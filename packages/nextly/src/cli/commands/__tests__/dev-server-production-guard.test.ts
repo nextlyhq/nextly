@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { CollectionSyncResultWithValidation } from "../../../services/collections/collection-sync-service";
 import { createProgram } from "../../program";
 import type { CommandContext } from "../../program";
@@ -85,10 +86,14 @@ describe("performAutoSync production guard", () => {
 
     // The guard terminates the process; throwing from the spy keeps the test
     // process alive while still stopping performAutoSync at the exit call.
+    // NextlyError sentinel because bare Error is disallowed package-wide.
     const exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((code?: string | number | null) => {
-        throw new Error(`process.exit(${String(code)})`);
+        throw new NextlyError({
+          code: "TEST_PROCESS_EXIT",
+          publicMessage: `process.exit(${String(code)})`,
+        });
       });
 
     await expect(

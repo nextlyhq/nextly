@@ -52,6 +52,7 @@ import type {
  */
 function legacyEnvelopeToFailureFields(result: {
   statusCode?: number;
+  code?: string;
   message?: string;
 }): { code: string; message: string } {
   const status = result.statusCode ?? 500;
@@ -65,6 +66,13 @@ function legacyEnvelopeToFailureFields(result: {
     };
   }
   if (status === 409) {
+    // Same disambiguation as unwrapServiceResult: 409 covers both a
+    // unique-constraint duplicate and an optimistic-concurrency conflict,
+    // and only the envelope's code can tell them apart. Staleness is the
+    // conservative default for a code-less envelope.
+    if (result.code === "DUPLICATE") {
+      return { code: "DUPLICATE", message: "Resource already exists." };
+    }
     return {
       code: "CONFLICT",
       message:

@@ -44,13 +44,25 @@ const candidate = (
   defaultSuggestion: typesCompatible ? "rename" : "drop_and_add",
 });
 
+const dropEvent = (col: string, type = "text", rows = 5) => ({
+  id: `destructive_drop:dc_posts.${col}`,
+  kind: "destructive_drop" as const,
+  tableName: "dc_posts",
+  columnName: col,
+  columnType: type,
+  tableRowCount: rows,
+  applicableResolutions: ["confirm_drop", "abort"] as ResolutionKind[],
+});
+
 describe("ClackTerminalPromptDispatcher - non-TTY", () => {
   let originalStdinIsTTY: boolean | undefined;
   let originalStdoutIsTTY: boolean | undefined;
+  let originalAcceptDataLoss: string | undefined;
 
   beforeEach(() => {
     originalStdinIsTTY = process.stdin.isTTY;
     originalStdoutIsTTY = process.stdout.isTTY;
+    originalAcceptDataLoss = process.env.NEXTLY_ACCEPT_DATA_LOSS;
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
@@ -61,6 +73,7 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
       configurable: true,
       writable: true,
     });
+    delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
     vi.clearAllMocks();
   });
 
@@ -75,6 +88,9 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
       configurable: true,
       writable: true,
     });
+    if (originalAcceptDataLoss === undefined)
+      delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
+    else process.env.NEXTLY_ACCEPT_DATA_LOSS = originalAcceptDataLoss;
   });
 
   it("throws TTYRequiredError when there's a candidate AND no TTY", async () => {
@@ -105,6 +121,43 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
       resolutions: [],
       proceed: true,
     });
+  });
+
+  it("NEXTLY_ACCEPT_DATA_LOSS=1 auto-confirms a drop-only batch without a TTY", async () => {
+    // `db:sync --accept-data-loss` exports this env var precisely for
+    // non-interactive runs; a drop-only batch must proceed instead of
+    // throwing TTYRequiredError.
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "1";
+    const dispatcher = new ClackTerminalPromptDispatcher();
+
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("excerpt"), dropEvent("byline")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toEqual([
+      { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.excerpt" },
+      { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.byline" },
+    ]);
+  });
+
+  it("still throws without a TTY when the opt-in batch includes a rename candidate", async () => {
+    // The opt-in only covers destructive drops; anything needing a real
+    // decision (renames, type changes) keeps requiring a terminal.
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "1";
+    const dispatcher = new ClackTerminalPromptDispatcher();
+
+    await expect(
+      dispatcher.dispatch({
+        candidates: [candidate("title", "name")],
+        events: [dropEvent("excerpt")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(TTYRequiredError);
   });
 });
 
@@ -220,11 +273,13 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
   let originalStdinIsTTY: boolean | undefined;
   let originalStdoutIsTTY: boolean | undefined;
   let originalFlag: string | undefined;
+  let originalAcceptFlag: string | undefined;
 
   beforeEach(() => {
     originalStdinIsTTY = process.stdin.isTTY;
     originalStdoutIsTTY = process.stdout.isTTY;
     originalFlag = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    originalAcceptFlag = process.env.NEXTLY_ACCEPT_DATA_LOSS;
     Object.defineProperty(process.stdin, "isTTY", {
       value: true,
       configurable: true,
@@ -236,6 +291,7 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
       writable: true,
     });
     delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
     vi.clearAllMocks();
   });
 
@@ -253,16 +309,9 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     if (originalFlag === undefined)
       delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
     else process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = originalFlag;
-  });
-
-  const dropEvent = (col: string, type = "text", rows = 5) => ({
-    id: `destructive_drop:dc_posts.${col}`,
-    kind: "destructive_drop" as const,
-    tableName: "dc_posts",
-    columnName: col,
-    columnType: type,
-    tableRowCount: rows,
-    applicableResolutions: ["confirm_drop", "abort"] as ResolutionKind[],
+    if (originalAcceptFlag === undefined)
+      delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
+    else process.env.NEXTLY_ACCEPT_DATA_LOSS = originalAcceptFlag;
   });
 
   it("user confirms a single drop; emits one confirm_drop resolution", async () => {
@@ -330,6 +379,23 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     // Flag path skips the entire intro/confirm/note frame.
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockIntro).not.toHaveBeenCalled();
+  });
+
+  it("NEXTLY_ACCEPT_DATA_LOSS=1 auto-confirms drops the same way", async () => {
+    // The env var exported by `db:sync --accept-data-loss`; both spellings
+    // of the opt-in must behave identically.
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "1";
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("excerpt"), dropEvent("byline")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toHaveLength(2);
+    expect(result.resolutions.every(r => r.kind === "confirm_drop")).toBe(true);
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 });
 

@@ -42,6 +42,7 @@ interface ResolveCommandOptions {
   rolledBack?: string;
   failedCleanup?: string;
   skipVerify?: boolean;
+  /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
 }
 
@@ -215,6 +216,9 @@ export function registerMigrateResolveCommand(program: Command): void {
       "With --applied, skip the live-vs-snapshot equivalence check",
       false
     )
+    // This command takes the shared migrate lock, and the lock-busy error
+    // tells operators to re-run with this flag — so every lock-taking
+    // command must register it. Same escape hatch as `nextly migrate`.
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",

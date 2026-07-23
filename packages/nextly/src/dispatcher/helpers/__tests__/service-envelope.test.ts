@@ -23,7 +23,12 @@ function unwrapError(
     if (NextlyError.is(err)) return err;
     throw err;
   }
-  throw new Error("unwrapServiceResult did not throw for a failed result");
+  // Test sentinel; NextlyError because bare Error is disallowed package-wide.
+  throw NextlyError.internal({
+    logContext: {
+      reason: "unwrapServiceResult did not throw for a failed result",
+    },
+  });
 }
 
 describe("unwrapServiceResult 409 disambiguation", () => {

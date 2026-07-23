@@ -333,6 +333,7 @@ export interface UpgradeCommandOptions {
   force?: boolean;
   targetTableName?: string;
   reconcileCore?: boolean;
+  /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
 }
 
@@ -371,6 +372,9 @@ export function registerUpgradeCommand(program: Command): void {
       "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
       false
     )
+    // Both upgrade paths take the shared migrate lock, and the lock-busy
+    // error tells operators to re-run with this flag — so every lock-taking
+    // command must register it. Same escape hatch as `nextly migrate`.
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",

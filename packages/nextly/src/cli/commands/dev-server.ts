@@ -228,7 +228,7 @@ export async function performAutoSync(
       logger.newline();
       logger.error("Cannot auto-sync schema in production mode.");
       logger.info(
-        "Run `nextly migrate:create` to create migrations, then `nextly migrate` to apply."
+        "Run `nextly migrate:create --name=<name>` to create migrations, then `nextly migrate` to apply."
       );
       process.exit(1);
     }

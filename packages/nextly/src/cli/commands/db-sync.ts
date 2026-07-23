@@ -49,7 +49,7 @@
  * # Disable auto-sync (use migrations)
  * nextly db:sync --no-auto-sync
  *
- * # Apply destructive changes without prompting (non-interactive runs)
+ * # Auto-confirm destructive column drops (non-interactive runs)
  * nextly db:sync --accept-data-loss
  *
  * # Custom config path
@@ -399,11 +399,13 @@ export function registerDbSyncCommand(program: Command): void {
       "--demote <slug>",
       "Move a code-owned collection to UI (writes to dynamic_collections)"
     )
-    // convention. Sets NEXTLY_ACCEPT_DATA_LOSS=1 for the rest of the run so
-    // non-TTY destructive prompts auto-confirm instead of refusing.
+    // Sets NEXTLY_ACCEPT_DATA_LOSS=1 for the rest of the run so the prompt
+    // dispatcher auto-confirms destructive column drops instead of refusing
+    // in non-TTY runs. Only drops: renames and type changes still need a
+    // terminal to answer their prompts.
     .option(
       "--accept-data-loss",
-      "Apply destructive schema changes without prompting in non-interactive contexts (dangerous)",
+      "Auto-confirm destructive column drops without prompting (dangerous; other destructive changes still prompt)",
       false
     )
     .action(

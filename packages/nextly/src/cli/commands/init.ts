@@ -609,7 +609,7 @@ function showNextSteps(cwd: string, context: CommandContext): void {
 
   // Step 4: Generate migrations
   logger.info(
-    `  ${pc.cyan("4.")} Run ${pc.yellow(`${cmd} nextly migrate:create`)} to generate migrations`
+    `  ${pc.cyan("4.")} Run ${pc.yellow(`${cmd} nextly migrate:create --name=<name>`)} to generate migrations`
   );
 
   // Step 5: Apply migrations
