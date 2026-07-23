@@ -1690,6 +1690,11 @@ export class CollectionMutationService extends BaseService {
         previousStatus: null,
         nextStatus: finalData.status,
         accessUser,
+        // A create has no prior row, so a document-dependent (owner-only/custom)
+        // publish rule is judged against the row this create will persist. Pass
+        // it so a custom rule inspecting the document does not see `data`
+        // undefined and wrongly allow (or deny) a create-as-published.
+        document: entryData,
         overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
       });
