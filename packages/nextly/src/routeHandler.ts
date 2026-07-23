@@ -68,6 +68,8 @@ import {
   revealWebhookSecret,
   listWebhookDeliveries,
   getWebhookDelivery,
+  testWebhookEndpoint,
+  redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
@@ -330,6 +332,10 @@ async function handleWebhookRequest(
       return listWebhookDeliveries(req, id);
     case "getWebhookDelivery":
       return getWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
+    case "testWebhookEndpoint":
+      return testWebhookEndpoint(req, id);
+    case "redeliverWebhookDelivery":
+      return redeliverWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
     case "drainWebhooks":
       return drainWebhooks(req);
     default:

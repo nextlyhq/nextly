@@ -54,6 +54,12 @@ export interface RunDrainResult {
   delivered: number;
   retried: number;
   failed: number;
+  /**
+   * Attempts whose outcome was dropped because the lease had been handed off
+   * (a redelivery re-arm or a reclaimed expired lease) — never counted as a
+   * committed delivered/retried/failed.
+   */
+  abandoned: number;
   /** Rows retention removed on this call; zero when the gate held it off. */
   pruned: { events: number; deliveries: number };
 }
@@ -83,6 +89,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     delivered: 0,
     retried: 0,
     failed: 0,
+    abandoned: 0,
     pruned: { events: 0, deliveries: 0 },
   };
 
@@ -99,6 +106,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     result.delivered += del.delivered;
     result.retried += del.retried;
     result.failed += del.failed;
+    result.abandoned += del.abandoned;
 
     // Nothing was fanned out and nothing was attempted this round → the queue is
     // drained of everything currently due; stop.

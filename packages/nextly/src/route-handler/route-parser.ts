@@ -1761,10 +1761,45 @@ function parseWebhookRoutes(
     };
   }
 
+  // POST /api/webhooks/:id/deliveries/:deliveryId/redeliver → re-arm a past
+  // delivery for another attempt. Handled here (before the one-level guard)
+  // because it is the deepest webhook route.
+  if (
+    id &&
+    subresource === "deliveries" &&
+    subId &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "redeliver"
+  ) {
+    if (httpMethod !== "POST") return null;
+    routeParams.webhookId = id;
+    routeParams.deliveryId = subId;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "redeliverWebhookDelivery",
+      routeParams,
+    };
+  }
+
   // Nothing else here nests further than one level, so any deeper path is not a
   // route. Without this, `/webhooks/:id/secret/anything` would still match the
   // secret branch and hand back active signing secrets.
   if (subId || additionalParams.length > 0) return null;
+
+  // POST /api/webhooks/:id/test → send a synthetic signed ping to the endpoint
+  // and report the outcome. Side-effecting (an outbound request), so it is a
+  // POST and authorized like a mutation.
+  if (id && subresource === "test") {
+    if (httpMethod !== "POST") return null;
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "testWebhookEndpoint",
+      routeParams,
+    };
+  }
 
   if (id && subresource === "deliveries") {
     // GET /api/webhooks/:id/deliveries → the endpoint's delivery log (paged).

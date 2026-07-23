@@ -40,7 +40,16 @@ const DEFAULT_LEASE_MS = 60_000; // 1 min
 /** Per-request response body cap; a receiver's body is only sampled for diagnostics. */
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024; // 64 KiB
 /** Per-request timeout covering connect + response. */
+// Fallback when a trigger passes no `requestTimeoutMs`; the product drain paths
+// always pass one (see DRAIN_REQUEST_TIMEOUT_MS and the fast-path scheduler).
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000; // 15s
+
+// The per-request budget the durable drain (cron/manual trigger) gives each
+// delivery. Exported so the connectivity probe waits exactly as long as the
+// path that actually persists retries — a receiver that answers within this
+// window is one deliveries reach, and one that exceeds it is not, so the test
+// predicts real deliverability instead of a more lenient library default.
+export const DRAIN_REQUEST_TIMEOUT_MS = 10_000; // 10s
 /** How much of the response body is retained on the row for debugging. */
 const RESPONSE_SNIPPET_LIMIT = 500;
 /** Cap on the retained per-row attempt log so a flapping endpoint can't grow it unbounded. */
@@ -54,6 +63,7 @@ interface DeliveryRow {
   status: string;
   attemptCount: number;
   nextAttemptAt: Date | null;
+  lockedBy: string | null;
   lockedUntil: Date | null;
   attempts: unknown;
 }
@@ -168,10 +178,19 @@ export interface DeliverResult {
   retried: number;
   /** Deliveries marked permanently failed. */
   failed: number;
+  /**
+   * Attempts whose outcome was NOT recorded because the lease had been handed
+   * off before finalization — a redelivery re-armed the row, or another worker
+   * reclaimed the expired lease. The write is fenced to the lease owner, so this
+   * worker's outcome is dropped and whoever holds the row now owns the result.
+   * Counted separately so it is never conflated with a committed delivered/
+   * retried/failed, which would over-report progress the ledger never received.
+   */
+  abandoned: number;
 }
 
 /** Which per-outcome counter a single attempt should increment. */
-type OutcomeBucket = "delivered" | "retried" | "failed";
+type OutcomeBucket = "delivered" | "retried" | "failed" | "abandoned";
 
 /**
  * Turn a stored event payload into the request body. The payload is the durable
@@ -233,9 +252,12 @@ function classifyTransportError(err: unknown): {
 /**
  * Claim one due delivery by taking a lease inside a transaction. Returns the row
  * if this runner won the claim, else null (another runner holds it, it is no
- * longer due, or it vanished). The read-check-write runs in one transaction so
- * SQLite's single-writer semantics make it exclusive; the lease bounds the window
- * on other dialects.
+ * longer due, or it vanished). The read-check-write runs in one transaction under
+ * a `FOR UPDATE` row lock (a no-op on SQLite, whose transactions already
+ * serialize writers), so a concurrent claim or a redelivery re-arm cannot slip
+ * between the read and the lease write: the claimed row's state — including its
+ * `attemptCount` — is the committed state this runner then acts on, never a stale
+ * copy a re-arm has since reset.
  */
 async function claimDelivery(
   deps: DeliverDeps,
@@ -248,6 +270,7 @@ async function claimDelivery(
     const rows = await tx.select<DeliveryRow>("nextly_webhook_deliveries", {
       where: { and: [{ column: "id", op: "=", value: id }] },
       limit: 1,
+      forUpdate: true,
     });
     const row = rows[0];
     if (!row) return null;
@@ -258,31 +281,75 @@ async function claimDelivery(
     const leaseFree =
       row.lockedUntil == null || row.lockedUntil.getTime() <= now.getTime();
     if (!isDue || !leaseFree) return null;
+    const lockedUntil = new Date(now.getTime() + leaseMs);
     await tx.update(
       "nextly_webhook_deliveries",
       {
         locked_by: runnerId,
-        locked_until: new Date(now.getTime() + leaseMs),
+        locked_until: lockedUntil,
         updated_at: now,
       },
       { and: [{ column: "id", op: "=", value: id }] }
     );
+    // Reflect the lease just taken onto the returned row so the finalize can
+    // fence on ownership: `row.lockedBy` now identifies this runner, letting
+    // finalizeDelivery refuse to write if the lease has since been handed off.
+    row.lockedBy = runnerId;
+    row.lockedUntil = lockedUntil;
     return row;
   });
 }
 
-/** Finalize a claimed delivery: write the outcome and release the lease. */
+/**
+ * Finalize a claimed delivery: write the outcome and release the lease, but only
+ * while this runner still owns the lease it took at claim time. Returns whether
+ * the write landed — `false` means the lease had been handed off and the outcome
+ * was intentionally dropped.
+ *
+ * The ownership fence matters when a worker overruns its lease: once
+ * `locked_until` passes, a redelivery re-arm (which clears `locked_by`) or
+ * another drain can take the row over. Without the fence this worker's late write
+ * would clobber that fresh state — silently replacing a re-armed `pending` with
+ * the stale attempt's outcome. The read-check-write runs in one transaction under
+ * `FOR UPDATE` (a no-op on SQLite, whose transactions already serialize writers)
+ * so the ownership check and the write cannot interleave, and the boolean lets
+ * the caller avoid counting a dropped outcome as committed progress.
+ */
 async function finalizeDelivery(
   deps: DeliverDeps,
   row: DeliveryRow,
   now: Date,
   update: Record<string, unknown>
-): Promise<void> {
-  await deps.db.update(
-    "nextly_webhook_deliveries",
-    { ...update, locked_by: null, locked_until: null, updated_at: now },
-    { and: [{ column: "id", op: "=", value: row.id }] }
-  );
+): Promise<boolean> {
+  return deps.db.transaction(async tx => {
+    const rows = await tx.select<{ lockedBy: string | null }>(
+      "nextly_webhook_deliveries",
+      {
+        where: { and: [{ column: "id", op: "=", value: row.id }] },
+        limit: 1,
+        forUpdate: true,
+      }
+    );
+    const current = rows[0];
+    // The lease was handed off (re-arm cleared it, or another worker reclaimed
+    // the expired lease): drop this outcome rather than overwrite the new owner.
+    if (!current || current.lockedBy !== row.lockedBy) return false;
+    await tx.update(
+      "nextly_webhook_deliveries",
+      { ...update, locked_by: null, locked_until: null, updated_at: now },
+      { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+    return true;
+  });
+}
+
+/**
+ * The counter a finalized attempt increments: the committed outcome when the
+ * write landed, else `abandoned` because the lease had been handed off and the
+ * outcome was dropped rather than recorded.
+ */
+function finalized(landed: boolean, committed: OutcomeBucket): OutcomeBucket {
+  return landed ? committed : "abandoned";
 }
 
 /**
@@ -339,18 +406,20 @@ async function attemptDelivery(
     deps.logger?.warn(
       `webhook delivery ${row.id} undeliverable (${reason}); marking failed`
     );
-    await finalizeDelivery(deps, row, now(), {
-      status: "failed",
-      attempt_count: attemptCount,
-      next_attempt_at: null,
-      last_error: reason,
-      attempts: appendAttempt(row.attempts, {
-        at: claimedAt.toISOString(),
-        outcome: "failed",
-        error: reason,
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        status: "failed",
+        attempt_count: attemptCount,
+        next_attempt_at: null,
+        last_error: reason,
+        attempts: appendAttempt(row.attempts, {
+          at: claimedAt.toISOString(),
+          outcome: "failed",
+          error: reason,
+        }),
       }),
-    });
-    return "failed";
+      "failed"
+    );
   }
 
   const body = payloadToBody(event.payload);
@@ -358,18 +427,20 @@ async function attemptDelivery(
     deps.logger?.warn(
       `webhook delivery ${row.id} undeliverable (unusable event payload); marking failed`
     );
-    await finalizeDelivery(deps, row, now(), {
-      status: "failed",
-      attempt_count: attemptCount,
-      next_attempt_at: null,
-      last_error: "unusable event payload",
-      attempts: appendAttempt(row.attempts, {
-        at: claimedAt.toISOString(),
-        outcome: "failed",
-        error: "unusable event payload",
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        status: "failed",
+        attempt_count: attemptCount,
+        next_attempt_at: null,
+        last_error: "unusable event payload",
+        attempts: appendAttempt(row.attempts, {
+          at: claimedAt.toISOString(),
+          outcome: "failed",
+          error: "unusable event payload",
+        }),
       }),
-    });
-    return "failed";
+      "failed"
+    );
   }
 
   // A webhook with no stored secret can never be signed (buildSignatureHeaders
@@ -380,18 +451,20 @@ async function attemptDelivery(
     deps.logger?.warn(
       `webhook delivery ${row.id} undeliverable (webhook has no signing secret); marking failed`
     );
-    await finalizeDelivery(deps, row, now(), {
-      status: "failed",
-      attempt_count: attemptCount,
-      next_attempt_at: null,
-      last_error: "no signing secret",
-      attempts: appendAttempt(row.attempts, {
-        at: claimedAt.toISOString(),
-        outcome: "failed",
-        error: "no signing secret",
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        status: "failed",
+        attempt_count: attemptCount,
+        next_attempt_at: null,
+        last_error: "no signing secret",
+        attempts: appendAttempt(row.attempts, {
+          at: claimedAt.toISOString(),
+          outcome: "failed",
+          error: "no signing secret",
+        }),
       }),
-    });
-    return "failed";
+      "failed"
+    );
   }
 
   // Decrypt the active signing secrets (primary first) and build the Standard
@@ -407,18 +480,20 @@ async function attemptDelivery(
       `webhook delivery ${row.id} could not decrypt signing secret; marking failed`,
       err
     );
-    await finalizeDelivery(deps, row, now(), {
-      status: "failed",
-      attempt_count: attemptCount,
-      next_attempt_at: null,
-      last_error: `secret decrypt failed: ${message}`,
-      attempts: appendAttempt(row.attempts, {
-        at: claimedAt.toISOString(),
-        outcome: "failed",
-        error: "secret decrypt failed",
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        status: "failed",
+        attempt_count: attemptCount,
+        next_attempt_at: null,
+        last_error: `secret decrypt failed: ${message}`,
+        attempts: appendAttempt(row.attempts, {
+          at: claimedAt.toISOString(),
+          outcome: "failed",
+          error: "secret decrypt failed",
+        }),
       }),
-    });
-    return "failed";
+      "failed"
+    );
   }
 
   const signatureHeaders = buildSignatureHeaders({
@@ -492,28 +567,34 @@ async function attemptDelivery(
   };
 
   if (decision.status === "delivered") {
-    await finalizeDelivery(deps, row, now(), {
-      ...common,
-      status: "delivered",
-      next_attempt_at: null,
-    });
-    return "delivered";
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        ...common,
+        status: "delivered",
+        next_attempt_at: null,
+      }),
+      "delivered"
+    );
   }
   if (decision.status === "retrying") {
+    return finalized(
+      await finalizeDelivery(deps, row, now(), {
+        ...common,
+        status: "retrying",
+        next_attempt_at: new Date(now().getTime() + decision.delayMs),
+      }),
+      "retried"
+    );
+  }
+  return finalized(
     await finalizeDelivery(deps, row, now(), {
       ...common,
-      status: "retrying",
-      next_attempt_at: new Date(now().getTime() + decision.delayMs),
-    });
-    return "retried";
-  }
-  await finalizeDelivery(deps, row, now(), {
-    ...common,
-    status: "failed",
-    next_attempt_at: null,
-    last_error: decision.reason,
-  });
-  return "failed";
+      status: "failed",
+      next_attempt_at: null,
+      last_error: decision.reason,
+    }),
+    "failed"
+  );
 }
 
 /**
@@ -561,14 +642,18 @@ async function recoverUnexpectedFailure(
             error: message,
           }),
         };
+  let landed = false;
   try {
-    await finalizeDelivery(deps, row, at, update);
+    landed = await finalizeDelivery(deps, row, at, update);
   } catch (err) {
     deps.logger?.warn(
       `webhook delivery ${row.id} could not be finalized after an unexpected error; lease will expire and it will be retried`,
       err
     );
   }
+  // A dropped or failed write is not a committed outcome: count it as abandoned
+  // so the recovery is never reported as a retry/failure that never landed.
+  if (!landed) return "abandoned";
   return decision.status === "retrying" ? "retried" : "failed";
 }
 
@@ -590,6 +675,7 @@ export async function deliverDueDeliveries(
     delivered: 0,
     retried: 0,
     failed: 0,
+    abandoned: 0,
   };
 
   const claimTime = now();
