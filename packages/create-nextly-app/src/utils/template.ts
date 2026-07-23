@@ -828,6 +828,17 @@ async function copyPluginTemplate(opts: {
     },
   });
 
+  // Materialize the dev playground env so `pnpm dev` boots with zero manual
+  // steps: without dev/.env the dialect defaults to postgresql and the
+  // instrumentation hook aborts asking for DATABASE_URL. `overwrite: false`
+  // preserves a user's own dev/.env when scaffolding over an existing dir.
+  const devEnvExample = path.join(targetDir, "dev", ".env.example");
+  if (await fs.pathExists(devEnvExample)) {
+    await fs.copy(devEnvExample, path.join(targetDir, "dev", ".env"), {
+      overwrite: false,
+    });
+  }
+
   // Generate the plugin package.json (database arg is unused for plugins).
   const packageJsonContent = await generatePackageJson(
     projectName,

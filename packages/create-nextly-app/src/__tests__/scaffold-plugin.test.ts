@@ -89,6 +89,14 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(workspaceYaml).toContain("allowBuilds:");
     expect(workspaceYaml).toContain("better-sqlite3");
 
+    // The dev playground must boot with zero manual steps: without dev/.env
+    // the dialect defaults to postgresql and `next dev` aborts in the
+    // instrumentation hook asking for DATABASE_URL. The scaffold
+    // materializes the committed example env into the real one.
+    expect(await exists(path.join(target, "dev/.env"))).toBe(true);
+    const devEnv = await readFile(path.join(target, "dev/.env"), "utf-8");
+    expect(devEnv).toContain("DB_DIALECT=sqlite");
+
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(
       path.join(target, "src/plugin.ts"),
