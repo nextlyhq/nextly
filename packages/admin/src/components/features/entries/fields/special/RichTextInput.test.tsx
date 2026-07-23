@@ -135,7 +135,10 @@ describe("RichTextInput — external value sync", () => {
     // screen would write the previous language's content into this one).
     await userEvent.click(screen.getByText("corrupt"));
 
-    expect(screen.queryByText("English body")).not.toBeInTheDocument();
+    // The whole document is empty — not just missing the previous content, but
+    // holding nothing else either (no partial or garbled render of the bad value).
+    // The contentEditable carries the field name as its accessible label.
+    expect(screen.getByLabelText("body").textContent).toBe("");
     // The editor is still alive: a follow-up valid value loads normally.
     await userEvent.click(screen.getByText("switch-es"));
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
