@@ -37,12 +37,14 @@ const BULK_CREATE_SLUG = "poolreentrybulkc";
 const BULK_UPDATE_SLUG = "poolreentrybulku";
 const DIRECT_CREATE_SLUG = "poolreentrydirc";
 const DIRECT_UPDATE_SLUG = "poolreentrydiru";
+const HOOK_SLUG = "poolreentryhook";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
   BULK_UPDATE_SLUG,
   DIRECT_CREATE_SLUG,
   DIRECT_UPDATE_SLUG,
+  HOOK_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -323,6 +325,62 @@ describePg(
           {}
         );
         expect(row?.status).toBe("published");
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a create with a stored uniqueness hook inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(HOOK_SLUG)],
+        });
+        // Configure the built-in `unique-validation` stored hook on `title`. It
+        // runs on `beforeChange` and calls `context.queryDatabase`, which reads
+        // the collection to check for a duplicate — the read that must run on
+        // the caller's transaction connection, not the pool.
+        await handle.adapter.update(
+          "dynamic_collections",
+          {
+            hooks: [
+              {
+                hookId: "unique-validation",
+                hookType: "beforeChange",
+                enabled: true,
+                config: { field: "title", errorMessage: "duplicate title" },
+              },
+            ],
+          },
+          { and: [{ column: "slug", op: "=", value: HOOK_SLUG }] }
+        );
+
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        // Seed one row (trusted, on the pool) so the collection is non-empty.
+        await h.createEntry(
+          { collectionName: HOOK_SLUG, overrideAccess: true },
+          { title: "seed", status: "draft" }
+        );
+
+        // Create a second row with a fresh title inside a caller-owned
+        // transaction: the stored uniqueness hook's `queryDatabase` read runs
+        // on the transaction's connection and COMPLETES; a pooled read blocks.
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: HOOK_SLUG, user: { id: "editor" } },
+              [{ title: "fresh", status: "draft" }]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
       } finally {
         await handle?.destroy();
       }

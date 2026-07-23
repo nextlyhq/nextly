@@ -36,6 +36,10 @@ export interface QueryDatabaseParams {
   value: unknown;
   caseInsensitive?: boolean;
   excludeId?: string;
+  // Transaction-bound executor so a stored hook's uniqueness read (the built-in
+  // unique-validation hook) runs on the caller's transaction connection instead
+  // of the pool when the write is inside a transaction; defaults to the pool.
+  executor?: unknown;
 }
 
 export class CollectionHookService {
@@ -115,6 +119,9 @@ export class CollectionHookService {
           value: params.value,
           caseInsensitive: params.caseInsensitive || false,
           excludeId: params.excludeId,
+          // Forward the context's transaction executor so the uniqueness read
+          // stays on the caller's transaction connection inside a transaction.
+          executor,
         });
       },
     };

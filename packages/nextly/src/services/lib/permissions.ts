@@ -36,6 +36,35 @@ function getDb(): unknown {
   return adapter.getDrizzle();
 }
 
+/**
+ * A minimal structural view of the Drizzle query builder used by the RBAC reads
+ * below. It exists so the pooled or transaction-bound executor can be typed for
+ * the `select(...).from(...).where(...) / .innerJoin(...) / .limit(...)` chain
+ * these queries use — instead of casting the executor to `any` — while staying
+ * dialect-agnostic (the concrete builder differs per driver). Each chain awaits
+ * to an array of rows; callers narrow a row to the columns they projected.
+ */
+type RbacRow = Record<string, unknown>;
+interface RbacSelectChain extends Promise<RbacRow[]> {
+  from(table: unknown): RbacSelectChain;
+  innerJoin(table: unknown, on: unknown): RbacSelectChain;
+  where(condition: unknown): RbacSelectChain;
+  limit(count: number): RbacSelectChain;
+}
+interface RbacQueryExecutor {
+  select(projection?: Record<string, unknown>): RbacSelectChain;
+}
+
+/**
+ * Resolve the executor for an RBAC read as the typed query builder above:
+ * the caller's transaction-bound instance when supplied, otherwise the pooled
+ * connection. `getDrizzle()` is typed `unknown`, so the cast narrows that opaque
+ * value to the exact chain surface used here (no `any`).
+ */
+function rbacQuery(executor?: unknown): RbacQueryExecutor {
+  return (executor ?? getDb()) as RbacQueryExecutor;
+}
+
 function getAdapter(): DrizzleAdapter {
   return container.get<DrizzleAdapter>("adapter");
 }
@@ -289,8 +318,7 @@ class PermissionChecker {
     while (queue.length > 0) {
       const batch = queue.splice(0, 50);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const childRows = await ((executor ?? getDb()) as any)
+      const childRows = await rbacQuery(executor)
         .select({ childRoleId: roleInherits.childRoleId })
         .from(roleInherits)
         .where(inArray(roleInherits.parentRoleId, batch));
@@ -323,8 +351,7 @@ class PermissionChecker {
   ): Promise<Set<string>> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { userRoles } = this.t as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await ((executor ?? getDb()) as any)
+    const rows = await rbacQuery(executor)
       .select({ roleId: userRoles.roleId })
       .from(userRoles)
       .where(eq(userRoles.userId, userId));
@@ -346,18 +373,15 @@ class PermissionChecker {
 
     // Super Admin bypass: any role with slug 'super-admin' grants all permissions
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const superAdmin = await ((executor ?? getDb()) as any)
+      const superAdmin = await rbacQuery(executor)
         .select({ id: roles.id })
         .from(roles)
         .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
         .limit(1);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((superAdmin as any[]).length > 0) return true;
+      if (superAdmin.length > 0) return true;
 
       // Step 1: resolve permission id by action+resource
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const perm = await ((executor ?? getDb()) as any)
+      const perm = await rbacQuery(executor)
         .select({ id: permissions.id })
         .from(permissions)
         .where(
@@ -367,12 +391,11 @@ class PermissionChecker {
           )
         )
         .limit(1);
-      const permId = (perm?.[0]?.id ?? null) as string | null;
+      const permId = (perm[0]?.id ?? null) as string | null;
       if (!permId) return false;
 
       // Step 2: check existence of mapping for any of the roles
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await ((executor ?? getDb()) as any)
+      const rows = await rbacQuery(executor)
         .select({ id: rolePermissions.id })
         .from(rolePermissions)
         .where(
@@ -383,8 +406,7 @@ class PermissionChecker {
         )
         .limit(1);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (rows as any[]).length > 0;
+      return rows.length > 0;
     } catch {
       return false;
     }
@@ -515,8 +537,7 @@ export async function listEffectivePermissions(
     const { rolePermissions, permissions } = t as any;
 
     // Join role_permissions with permissions to get all permissions for user's roles
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await ((executor ?? getDb()) as any)
+    const rows = await rbacQuery(executor)
       .select({
         action: permissions.action,
         resource: permissions.resource,
@@ -699,8 +720,7 @@ export async function isSuperAdmin(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roles } = t as any;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const superAdmin = await ((executor ?? getDb()) as any)
+    const superAdmin = await rbacQuery(executor)
       .select({ id: roles.id })
       .from(roles)
       .where(
@@ -711,8 +731,7 @@ export async function isSuperAdmin(
       )
       .limit(1);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (superAdmin as any[]).length > 0;
+    const result = superAdmin.length > 0;
 
     // Populate the process-wide cache only for pooled checks; an executor-backed
     // result reflects the caller's uncommitted transaction (see the param note).
@@ -855,8 +874,7 @@ export async function listRoleSlugsForUser(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roles } = t as any;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await ((executor ?? getDb()) as any)
+    const rows = await rbacQuery(executor)
       .select({ slug: roles.slug })
       .from(roles)
       .where(inArray(roles.id, Array.from(roleIds)));

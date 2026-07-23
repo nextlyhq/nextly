@@ -1031,7 +1031,8 @@ export class CollectionMutationService extends BaseService {
       params.field,
       params.value,
       params.caseInsensitive || false,
-      params.excludeId
+      params.excludeId,
+      params.executor
     );
   };
 
@@ -1057,7 +1058,11 @@ export class CollectionMutationService extends BaseService {
     field: string,
     value: unknown,
     caseInsensitive: boolean = false,
-    excludeId?: string
+    excludeId?: string,
+    // Optional transaction-bound executor so the uniqueness read runs on the
+    // caller's transaction connection (a stored unique-validation hook firing
+    // inside a caller-owned transaction) instead of the pool; defaults to it.
+    executor?: unknown
   ): Promise<boolean> {
     try {
       // Load the schema for this collection
@@ -1071,9 +1076,11 @@ export class CollectionMutationService extends BaseService {
         return false;
       }
 
-      // Build the query
-
-      let query = this.db.select().from(schema);
+      // Build the query. Runs on the caller's transaction connection when an
+      // executor is supplied so this read does not re-enter the pool from inside
+      // the transaction; falls back to the pooled connection otherwise.
+      const db = executor ?? this.db;
+      let query = db.select().from(schema);
 
       // Build the WHERE condition
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
@@ -4453,7 +4460,10 @@ export class CollectionMutationService extends BaseService {
             dataAfterCodeHooks,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       const finalData = (storedBeforeResult.data ??
@@ -4702,7 +4712,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -4886,7 +4899,10 @@ export class CollectionMutationService extends BaseService {
             dataAfterCodeHooks,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       const finalData = (storedBeforeResult.data ??
@@ -5118,7 +5134,10 @@ export class CollectionMutationService extends BaseService {
           updated,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5264,7 +5283,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5378,7 +5400,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5523,7 +5548,10 @@ export class CollectionMutationService extends BaseService {
               currentData,
               this.queryDatabaseFn,
               params.user,
-              sharedContext
+              sharedContext,
+              // Bind a stored hook's uniqueness read to the caller's transaction
+              // connection so it does not re-enter the pool from inside the tx.
+              tx.getDrizzle()
             )
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
@@ -5784,7 +5812,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -6030,7 +6061,10 @@ export class CollectionMutationService extends BaseService {
               currentData,
               this.queryDatabaseFn,
               params.user,
-              sharedContext
+              sharedContext,
+              // Bind a stored hook's uniqueness read to the caller's transaction
+              // connection so it does not re-enter the pool from inside the tx.
+              tx.getDrizzle()
             )
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
@@ -6278,7 +6312,10 @@ export class CollectionMutationService extends BaseService {
             updated,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -6482,7 +6519,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -6603,7 +6643,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
