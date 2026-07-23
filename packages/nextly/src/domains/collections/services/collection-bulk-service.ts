@@ -1894,12 +1894,22 @@ export class CollectionBulkService extends BaseService {
       return result;
     }
 
-    // 1. Check collection-level access FIRST (once for all entries)
+    // 1. Check collection-level access FIRST (once for all entries). This runs
+    // inside the caller's transaction, so the RBAC/metadata reads are bound to
+    // the transaction's connection (`tx.getDrizzle()`) rather than taking a
+    // second pooled connection, which can stall against a small pool.
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "delete",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        tx.getDrizzle()
       );
     if (accessDenied) {
       return {

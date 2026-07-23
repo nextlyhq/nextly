@@ -43,6 +43,7 @@ const DIRECT_CREATE_SLUG = "poolreentrydirc";
 const DIRECT_UPDATE_SLUG = "poolreentrydiru";
 const HOOK_SLUG = "poolreentryhook";
 const AFTER_HOOK_SLUG = "poolreentryafter";
+const DELETE_SLUG = "poolreentrydelete";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -51,6 +52,7 @@ const SLUGS = [
   DIRECT_UPDATE_SLUG,
   HOOK_SLUG,
   AFTER_HOOK_SLUG,
+  DELETE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -105,6 +107,7 @@ function openCollection(slug: string) {
       create: () => true,
       read: () => true,
       update: () => true,
+      delete: () => true,
       publish: () => true,
     },
     fields: [text({ name: "title" })],
@@ -436,6 +439,54 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a bulk delete with a beforeDelete hook in a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      // A code beforeDelete hook reading the registry via context.executor.
+      // Exercises both bindings of the delete worker: the metadata/owner reads
+      // (getCollection/getOwnerConstraint) and the beforeDelete hook context.
+      const beforeDeleteHook: HookHandler = async context => {
+        const registry = container.get<CollectionRegistryService>(
+          "collectionRegistryService"
+        );
+        await registry.getCollectionBySlug(
+          context.collection,
+          context.executor
+        );
+      };
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(DELETE_SLUG)],
+        });
+        registerHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: DELETE_SLUG, overrideAccess: true },
+          { title: "doomed", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.deleteEntriesInTransaction(
+              tx,
+              { collectionName: DELETE_SLUG, user: { id: "editor" } },
+              [id]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+      } finally {
+        unregisterHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
         await handle?.destroy();
       }
     }, 30_000);

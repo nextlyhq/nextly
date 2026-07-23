@@ -5220,9 +5220,12 @@ export class CollectionMutationService extends BaseService {
     // side-effect issue, not an eventless delete, and must NOT roll the batch back.
     let deleteNeedsRollback = false;
     try {
-      // Get collection metadata and stored hooks
+      // Get collection metadata and stored hooks. Runs on the caller's
+      // transaction connection so this read does not re-enter the pool from
+      // inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
@@ -5280,6 +5283,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind a code beforeDelete hook that reads via context.executor to the
+        // caller's transaction connection so it does not re-enter the pool.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute(
@@ -6421,9 +6427,12 @@ export class CollectionMutationService extends BaseService {
     // reads it back and applies it only after the transaction commits.
     let eventRecorded = false;
     try {
-      // Get collection metadata early
+      // Get collection metadata early. Runs on the caller's transaction
+      // connection so this read does not re-enter the pool from inside the
+      // transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
 
       const tableName = this.resolveTableName(
@@ -6441,7 +6450,13 @@ export class CollectionMutationService extends BaseService {
         params.user,
         // A trusted override must not have an owner predicate forced onto its
         // fetch, or it would 404 rows it is entitled to delete.
-        params.overrideAccess
+        params.overrideAccess,
+        // This worker carries no scoped-API-key context (unlike the update
+        // worker); the owner predicate is resolved from the session user only.
+        undefined,
+        // Bound to the caller's transaction connection so the metadata read does
+        // not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -6525,6 +6540,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind a code beforeDelete hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
