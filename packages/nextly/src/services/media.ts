@@ -526,24 +526,42 @@ export class MediaService extends BaseService {
         }
       }
 
-      // The updated row in read shape: prior values overlaid with the caller's
-      // changes and the computed update payload (any regenerated sizes/thumbnail
-      // plus the fresh updatedAt). Reused as both the event `data` and the
-      // response body so the two never drift.
-      const updatedRow = {
+      // The updated row in read shape: the prior values overlaid with ONLY the
+      // computed update payload. `updateData` already holds every column being
+      // written (each supplied change plus any regenerated sizes/thumbnail and
+      // the fresh updatedAt) in the same camelCase keys as the read row, so it
+      // is the correct post-update document. The caller's raw `changes` are NOT
+      // spread in: an omitted field arrives as `undefined` and would overwrite
+      // an untouched column, making the event's computed changedFields wrongly
+      // report it as changed and drop its real value.
+      const updatedRow: Media = {
         ...mediaData,
-        ...changes,
         ...updateData,
-        updatedAt: updateData.updatedAt,
-      } as Media;
+      };
 
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. tx.update delegates to
       // the same Drizzle write the fluent path used, so column casing and JSON
       // serialization are unchanged; the positional form is needed only so the
-      // event shares the adapter TransactionContext.
+      // event shares the adapter TransactionContext. `returning` makes the write
+      // report the rows it actually touched so a row removed by a concurrent
+      // delete between the read above and this write is detected.
+      let updatedCount = 0;
       await this.adapter.transaction(async tx => {
-        await tx.update("media", updateData, this.whereEq("id", mediaId));
+        const updated = await tx.update(
+          "media",
+          updateData,
+          this.whereEq("id", mediaId),
+          { returning: ["id"] }
+        );
+        updatedCount = updated.length;
+
+        // Lost an update race: the row was deleted after our read, so nothing
+        // was written. Skip the event so we never record a false `media.updated`
+        // for a no-op, and fall through to the not-found result below.
+        if (updatedCount === 0) {
+          return;
+        }
 
         // `previous` is the row read before the write; `data` is the new state.
         // Media has no field schema, so `fields` is empty (nothing to strip).
@@ -556,6 +574,17 @@ export class MediaService extends BaseService {
           actor: actorForWrite(actor, null),
         });
       });
+
+      if (updatedCount === 0) {
+        // Mirror getMediaById's not-found shape so the domain layer maps this to
+        // a 404 instead of treating the no-op write as a successful update.
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Media not found",
+          data: null,
+        };
+      }
 
       return {
         success: true,
@@ -601,8 +630,18 @@ export class MediaService extends BaseService {
       // already-deleted file (a real read bug). The positional adapter
       // transaction is required so the event shares the adapter
       // TransactionContext; tx.delete replaces the prior raw `sql` template.
+      // tx.delete returns how many rows it actually removed, so a row already
+      // deleted by a concurrent request (between our read above and this write)
+      // is detected as a zero-row no-op.
+      let deletedCount = 0;
       await this.adapter.transaction(async tx => {
-        await tx.delete("media", this.whereEq("id", mediaId));
+        deletedCount = await tx.delete("media", this.whereEq("id", mediaId));
+
+        // Lost a delete race: nothing was removed here, so skip the event. Only
+        // the request that actually deleted the row records `media.deleted`.
+        if (deletedCount === 0) {
+          return;
+        }
 
         // The removed row's final state ships as `data`; there is no post-delete
         // state, so `previous` is null (mirroring create). Media has no field
@@ -616,6 +655,17 @@ export class MediaService extends BaseService {
           actor: actorForWrite(actor, null),
         });
       });
+
+      // The row was gone before we could delete it: report not-found and skip
+      // physical cleanup (the winning request owns the file) rather than
+      // returning a false success for a no-op delete.
+      if (deletedCount === 0) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Media not found",
+        };
+      }
 
       // Best-effort physical cleanup AFTER the row + event have committed.
       // Swallow-and-warn: a storage failure must not fail a delete whose

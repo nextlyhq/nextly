@@ -67,6 +67,13 @@ async function events(handle: TestNextly): Promise<EventRow[]> {
   return handle.adapter.select<EventRow>("nextly_events");
 }
 
+// Media rows (and folders) reference users via a foreign key, so a Direct-API
+// write attributed to a user needs that user to exist. Seed a minimal row
+// (only id + the NOT NULL unique email are required).
+async function seedUser(handle: TestNextly, id: string): Promise<void> {
+  await handle.adapter.insert("users", { id, email: `${id}@test.local` });
+}
+
 const noopLogger = {
   debug: vi.fn(),
   info: vi.fn(),
@@ -164,5 +171,170 @@ describe("webhook outbox capture — media (integration)", () => {
 
     const remaining = await current!.adapter.select<{ id: string }>("media");
     expect(remaining.find(m => m.id === id)).toBeUndefined();
+  });
+
+  it("records exactly one media.deleted when two deletes race the same row", async () => {
+    // Two callers read the row (both see it present), then serialize on the
+    // write. The first delete removes the row; the second finds zero rows
+    // affected inside its transaction and must skip the event and report
+    // not-found, so the outbox never carries a duplicate media.deleted.
+    const media = service(current!);
+    const uploaded = await media.uploadMedia(
+      {
+        file: Buffer.from("x"),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      },
+      { type: "user", id: "user-1" }
+    );
+    const id = uploaded.data!.id;
+
+    const [a, b] = await Promise.all([
+      media.deleteMedia(id, { type: "user", id: "user-1" }),
+      media.deleteMedia(id, { type: "user", id: "user-1" }),
+    ]);
+
+    // Exactly one caller wins the delete; the loser gets a 404 no-op.
+    const outcomes = [a.success, b.success].sort();
+    expect(outcomes).toEqual([false, true]);
+    const loser = a.success ? b : a;
+    expect(loser.statusCode).toBe(404);
+
+    const deletedEvents = (await events(current!)).filter(
+      r => r.type === "media.deleted"
+    );
+    expect(deletedEvents).toHaveLength(1);
+  });
+
+  it("does not record media.updated for an update to an already-deleted row", async () => {
+    // A metadata edit whose target row is gone must not append a false
+    // media.updated event; the write reports zero affected rows and returns
+    // not-found instead of a successful no-op.
+    const media = service(current!);
+    const uploaded = await media.uploadMedia(
+      {
+        file: Buffer.from("x"),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      },
+      { type: "user", id: "user-1" }
+    );
+    const id = uploaded.data!.id;
+
+    await media.deleteMedia(id, { type: "user", id: "user-1" });
+    const result = await media.updateMedia(
+      id,
+      { altText: "too late" },
+      { type: "user", id: "user-1" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(404);
+    const updatedEvents = (await events(current!)).filter(
+      r => r.type === "media.updated"
+    );
+    expect(updatedEvents).toHaveLength(0);
+  });
+
+  it("keeps untouched metadata in the media.updated payload", async () => {
+    // A Direct-API edit forwards omitted fields as `undefined`. The event row
+    // must overlay only the columns actually written, so a field set earlier
+    // (caption) survives a later edit that touches only altText — instead of
+    // being wrongly reported as changed and dropped from `data`.
+    const nextly = current!.nextly;
+    await seedUser(current!, "editor-7");
+    const uploaded = await nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      user: { id: "editor-7" },
+    });
+
+    await nextly.media.update({
+      id: uploaded.id,
+      data: { caption: "keep-me", altText: "first" },
+      user: { id: "editor-7" },
+    });
+    await nextly.media.update({
+      id: uploaded.id,
+      data: { altText: "second" },
+      user: { id: "editor-7" },
+    });
+
+    const latest = (await events(current!))
+      .filter(r => r.type === "media.updated")
+      .map(envelopeOf)
+      .find(e => (e.data as { altText?: string }).altText === "second");
+    expect(latest).toBeDefined();
+    expect((latest!.data as { caption?: string }).caption).toBe("keep-me");
+  });
+
+  it("attributes a Direct-API media edit to the request user", async () => {
+    // nextly.media.update carries the user via the request context but no
+    // transport actor; without the actor fallback the event would record as
+    // `system` instead of the acting user.
+    const nextly = current!.nextly;
+    await seedUser(current!, "editor-7");
+    const uploaded = await nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      user: { id: "editor-7" },
+    });
+
+    await nextly.media.update({
+      id: uploaded.id,
+      data: { altText: "Edited" },
+      user: { id: "editor-7" },
+    });
+
+    const updated = (await events(current!)).find(
+      r => r.type === "media.updated"
+    );
+    expect(updated).toBeDefined();
+    expect(updated!.actorType).toBe("user");
+    expect(updated!.actorId).toBe("editor-7");
+  });
+
+  it("records the final folder on the media.uploaded event", async () => {
+    // A Direct-API upload into a folder must record the folder on the initial
+    // insert so the event reflects the final location, rather than recording
+    // folderId:null and moving the row afterward (which fired the event with
+    // the wrong folder and no move event).
+    const nextly = current!.nextly;
+    await seedUser(current!, "editor-7");
+    const folder = await nextly.media.folders.create({
+      name: "Reports",
+      user: { id: "editor-7" },
+    });
+
+    const uploaded = await nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "doc.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      folder: folder.id,
+      user: { id: "editor-7" },
+    });
+
+    const uploadedEvent = (await events(current!)).find(
+      r => r.type === "media.uploaded" && r.resourceId === uploaded.id
+    );
+    expect(uploadedEvent).toBeDefined();
+    expect(
+      (envelopeOf(uploadedEvent!).data as { folderId?: string }).folderId
+    ).toBe(folder.id);
   });
 });

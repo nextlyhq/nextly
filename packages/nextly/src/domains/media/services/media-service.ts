@@ -48,7 +48,7 @@
 // PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
-import type { RequestActor } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
@@ -315,6 +315,14 @@ export class MediaService {
     }
     const validated = validation.value;
 
+    // Validate the target folder BEFORE persisting the file so a bad folderId
+    // fails fast (throws NOT_FOUND) instead of leaving an orphaned upload, and
+    // so the folder can be written on the initial insert below rather than via a
+    // separate post-upload move.
+    if (input.folderId) {
+      await this.findFolderById(input.folderId, context);
+    }
+
     const result = await this.legacyMediaService.uploadMedia(
       {
         file: validated.buffer,
@@ -325,6 +333,12 @@ export class MediaService {
         size: validated.buffer.length,
         // Nullable: CLI seeds and system imports run without a user.
         uploadedBy: context.user?.id ?? null,
+        // Persist the target folder on the initial insert so the committed row
+        // and its `media.uploaded` event reflect the final folder atomically,
+        // rather than recording folderId:null and moving the row afterward
+        // (which left subscribers seeing the wrong folder and no move event).
+        // The legacy insert normalizes a missing folder to null itself.
+        folderId: input.folderId ?? undefined,
         contentDisposition:
           validated.isSvg && this.svgCsp ? "attachment" : undefined,
       },
@@ -338,11 +352,6 @@ export class MediaService {
         statusCode: result.statusCode,
       });
       throw this.mapLegacyErrorToNextlyError(result);
-    }
-
-    // Move to folder if specified
-    if (input.folderId) {
-      await this.moveToFolder(result.data.id, input.folderId, context);
     }
 
     this.logger.info("Media file uploaded", {
@@ -443,7 +452,7 @@ export class MediaService {
   async update(
     mediaId: string,
     input: UpdateMediaInput,
-    _context: RequestContext,
+    context: RequestContext,
     // The transport-resolved caller, threaded to the outbox event.
     actor?: RequestActor
   ): Promise<MediaFile> {
@@ -452,6 +461,13 @@ export class MediaService {
     // Sanitize metadata fields before storage (defense-in-depth)
     sanitizeMediaInput(input);
 
+    // Attribute the write to the transport actor when present, otherwise to the
+    // request-context user. A Direct-API call (nextly.media.update({ user }))
+    // carries the user but no transport actor, so without this fallback its
+    // event would record as `system`. Plain-HTTP callers already pass a
+    // resolved `actor`, so this leaves them unchanged.
+    const resolvedActor = actorForWrite(actor, context.user);
+
     const result = await this.legacyMediaService.updateMedia(
       mediaId,
       {
@@ -459,7 +475,7 @@ export class MediaService {
         caption: input.caption ?? undefined,
         tags: input.tags,
       },
-      actor
+      resolvedActor
     );
 
     if (!result.success || !result.data) {
@@ -486,13 +502,22 @@ export class MediaService {
    */
   async delete(
     mediaId: string,
-    _context: RequestContext,
+    context: RequestContext,
     // The transport-resolved caller, threaded to the outbox event.
     actor?: RequestActor
   ): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
 
-    const result = await this.legacyMediaService.deleteMedia(mediaId, actor);
+    // Attribute the write to the transport actor when present, otherwise to the
+    // request-context user, so a Direct-API delete (which carries the user but
+    // no transport actor) is not recorded as `system`. Plain-HTTP callers pass
+    // a resolved `actor` and are unaffected.
+    const resolvedActor = actorForWrite(actor, context.user);
+
+    const result = await this.legacyMediaService.deleteMedia(
+      mediaId,
+      resolvedActor
+    );
 
     if (!result.success) {
       if (result.statusCode === 404) {
