@@ -53,6 +53,8 @@ const EMPTY_VALUES: WebhookFormValues = {
 
 export interface WebhookFormProps {
   defaultValues?: WebhookFormValues;
+  /** Names of headers already configured (values are hidden), shown read-only. */
+  existingHeaderNames?: string[];
   onSubmit: (
     values: WebhookFormValues,
     meta: { headersDirty: boolean }
@@ -64,6 +66,7 @@ export interface WebhookFormProps {
 
 export const WebhookForm: React.FC<WebhookFormProps> = ({
   defaultValues,
+  existingHeaderNames,
   onSubmit,
   isPending,
   submitLabel,
@@ -234,13 +237,15 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
             description="Optional static headers sent with every delivery."
           >
             <div className="space-y-3">
-              {defaultValues && headers.fields.length > 0 && (
+              {existingHeaderNames && existingHeaderNames.length > 0 && (
                 <Alert variant="info" role="status">
                   <Info className="h-4 w-4" />
                   <AlertDescription>
-                    Header values are hidden and cannot be read back. Leave this
-                    section untouched to keep the current headers, or re-enter
-                    every value to replace the whole set.
+                    Currently sending {existingHeaderNames.length} header
+                    {existingHeaderNames.length === 1 ? "" : "s"} (values
+                    hidden): {existingHeaderNames.join(", ")}. Leave this
+                    section empty to keep them, or add headers below to replace
+                    the whole set.
                   </AlertDescription>
                 </Alert>
               )}

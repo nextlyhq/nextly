@@ -79,8 +79,12 @@ const SingleBuilderEditPage = lazy(
 export interface RouteConfig {
   component: React.ComponentType<PageProps>;
   type: "public" | "private";
-  /** Permission slug required to access this route. Routes without this are accessible to all authenticated users. */
-  requiredPermission?: string;
+  /**
+   * Permission required to access this route. A single slug, or a list treated
+   * as any-of (holding any one grants access — models an umbrella permission).
+   * Routes without this are accessible to all authenticated users.
+   */
+  requiredPermission?: string | string[];
   /**
    * Route belongs to the schema builder, so it is only reachable where the
    * builder is enabled (`admin.branding.showBuilder`; off in production by
@@ -312,16 +316,18 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: "update-api-keys",
   },
 
-  // Webhooks settings
+  // Webhooks settings. `update-webhooks` is the backend's management umbrella
+  // (it satisfies read/create/delete too), so each route accepts it in addition
+  // to the specific slug — a role with only `update-webhooks` still reaches them.
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
     type: "private",
-    requiredPermission: "read-webhooks",
+    requiredPermission: ["read-webhooks", "update-webhooks"],
   },
   [ROUTES.SETTINGS_WEBHOOKS_CREATE]: {
     component: CreateWebhookPage,
     type: "private",
-    requiredPermission: "create-webhooks",
+    requiredPermission: ["create-webhooks", "update-webhooks"],
   },
   [ROUTES.SETTINGS_WEBHOOKS_EDIT]: {
     component: EditWebhookPage,

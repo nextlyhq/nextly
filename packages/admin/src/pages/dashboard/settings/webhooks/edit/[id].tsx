@@ -21,6 +21,7 @@ import {
   useUpdateWebhook,
   useWebhook,
 } from "@admin/hooks/queries/useWebhooks";
+import { useCan } from "@admin/hooks/useCan";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
@@ -39,17 +40,29 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const [secrets, setSecrets] = useState<string[] | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Reaching this page requires update-webhooks (registry-gated). Delete is a
+  // separate grant, but `update-webhooks` is the management umbrella that
+  // satisfies it too, so either one shows the control. (Both hooks are called
+  // unconditionally — the OR is on their results, not the calls.)
+  const canDeleteWebhooks = useCan("delete-webhooks");
+  const canManageWebhooks = useCan("update-webhooks");
+  const canDelete = canDeleteWebhooks || canManageWebhooks;
+
   const handleSubmit = useCallback(
     (values: WebhookFormValues, meta: { headersDirty: boolean }) => {
       if (!webhook) return;
+      const input = toUpdateInput(values, {
+        original: webhook,
+        headersDirty: meta.headersDirty,
+      });
+      // An empty patch would fail the server's "at least one field" rule; a
+      // no-op save is a no-op, not an error.
+      if (Object.keys(input).length === 0) {
+        toast.info("No changes to save.");
+        return;
+      }
       doUpdate(
-        {
-          id,
-          input: toUpdateInput(values, {
-            original: webhook,
-            headersDirty: meta.headersDirty,
-          }),
-        },
+        { id, input },
         {
           onSuccess: () => {
             toast.success("Endpoint updated", {
@@ -102,13 +115,16 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   }
 
   if (isLoading || !webhook) {
-    return <Skeleton className="h-[520px] w-full rounded-none" />;
+    return <Skeleton className="h-130 w-full rounded-none" />;
   }
 
   return (
     <>
       <WebhookForm
         defaultValues={toFormValues(webhook)}
+        existingHeaderNames={
+          webhook.headers ? Object.keys(webhook.headers) : []
+        }
         onSubmit={handleSubmit}
         isPending={isPending}
         submitLabel="Save changes"
@@ -130,13 +146,15 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
           Reveal signing secret
         </Button>
 
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={() => setConfirmDelete(true)}
-        >
-          Delete endpoint
-        </Button>
+        {canDelete && (
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => setConfirmDelete(true)}
+          >
+            Delete endpoint
+          </Button>
+        )}
       </div>
 
       <WebhookSecretModal

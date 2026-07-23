@@ -25,6 +25,10 @@ import { EndpointStatusBadge, describeEvents } from "./status";
 export interface WebhookTableProps {
   data: WebhookEndpointSummary[];
   isLoading?: boolean;
+  /** Update permission gates Edit, Enable/Disable, and Test (and row-click nav). */
+  canUpdate: boolean;
+  /** Delete permission gates the Delete action. */
+  canDelete: boolean;
   onEdit: (webhook: WebhookEndpointSummary) => void;
   onToggleEnabled: (webhook: WebhookEndpointSummary) => void;
   onTest: (webhook: WebhookEndpointSummary) => void;
@@ -34,6 +38,8 @@ export interface WebhookTableProps {
 export const WebhookTable: React.FC<WebhookTableProps> = ({
   data,
   isLoading = false,
+  canUpdate,
+  canDelete,
   onEdit,
   onToggleEnabled,
   onTest,
@@ -134,34 +140,42 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   const totalPages = Math.ceil(totalItems / pageSize);
 
   const rowActions = useCallback(
-    (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => [
-      {
-        id: "edit",
-        label: "Edit",
-        icon: <Edit className="h-4 w-4" />,
-        onSelect: () => onEdit(webhook),
-      },
-      {
-        id: "toggle",
-        label: webhook.enabled ? "Disable" : "Enable",
-        icon: <Power className="h-4 w-4" />,
-        onSelect: () => onToggleEnabled(webhook),
-      },
-      {
-        id: "test",
-        label: "Send test event",
-        icon: <Send className="h-4 w-4" />,
-        onSelect: () => onTest(webhook),
-      },
-      {
-        id: "delete",
-        label: "Delete",
-        icon: <Trash2 className="h-4 w-4" />,
-        destructive: true,
-        onSelect: () => onDelete(webhook),
-      },
-    ],
-    [onEdit, onToggleEnabled, onTest, onDelete]
+    (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => {
+      const actions: RowAction<WebhookEndpointSummary>[] = [];
+      if (canUpdate) {
+        actions.push(
+          {
+            id: "edit",
+            label: "Edit",
+            icon: <Edit className="h-4 w-4" />,
+            onSelect: () => onEdit(webhook),
+          },
+          {
+            id: "toggle",
+            label: webhook.enabled ? "Disable" : "Enable",
+            icon: <Power className="h-4 w-4" />,
+            onSelect: () => onToggleEnabled(webhook),
+          },
+          {
+            id: "test",
+            label: "Send test event",
+            icon: <Send className="h-4 w-4" />,
+            onSelect: () => onTest(webhook),
+          }
+        );
+      }
+      if (canDelete) {
+        actions.push({
+          id: "delete",
+          label: "Delete",
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => onDelete(webhook),
+        });
+      }
+      return actions;
+    },
+    [canUpdate, canDelete, onEdit, onToggleEnabled, onTest, onDelete]
   );
 
   return (
@@ -180,7 +194,8 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         columns={columns}
         rows={paginated}
         loading={isLoading}
-        onRowClick={onEdit}
+        getRowId={row => row.id}
+        onRowClick={canUpdate ? onEdit : undefined}
         primaryColumn="name"
         rowActions={rowActions}
         registryKey="webhooks"

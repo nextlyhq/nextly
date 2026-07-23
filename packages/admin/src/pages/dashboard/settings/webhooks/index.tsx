@@ -19,6 +19,7 @@ import {
   useUpdateWebhook,
   useWebhooks,
 } from "@admin/hooks/queries/useWebhooks";
+import { useCan } from "@admin/hooks/useCan";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
@@ -28,6 +29,12 @@ const WebhooksContent: React.FC = () => {
   const { mutate: doUpdate } = useUpdateWebhook();
   const { mutate: doTest } = useTestEndpoint();
   const { mutate: doDelete, isPending: isDeleting } = useDeleteWebhook();
+
+  // `update-webhooks` is the backend management umbrella (it satisfies delete
+  // too), so it grants the action alongside the specific grant.
+  const canManage = useCan("update-webhooks");
+  const canUpdate = canManage;
+  const canDelete = useCan("delete-webhooks") || canManage;
 
   const [toDelete, setToDelete] = useState<WebhookEndpointSummary | null>(null);
 
@@ -113,6 +120,8 @@ const WebhooksContent: React.FC = () => {
       <WebhookTable
         data={data ?? []}
         isLoading={isLoading}
+        canUpdate={canUpdate}
+        canDelete={canDelete}
         onEdit={handleEdit}
         onToggleEnabled={handleToggleEnabled}
         onTest={handleTest}
@@ -133,18 +142,25 @@ const WebhooksContent: React.FC = () => {
 };
 
 const WebhooksPage: React.FC = () => {
+  // Both hooks run unconditionally; the OR is on their results (the backend
+  // treats update-webhooks as the umbrella that also permits create).
+  const canCreateWebhooks = useCan("create-webhooks");
+  const canManageWebhooks = useCan("update-webhooks");
+  const canCreate = canCreateWebhooks || canManageWebhooks;
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
           actions={
-            <Button
-              size="md"
-              onClick={() => navigateTo(ROUTES.SETTINGS_WEBHOOKS_CREATE)}
-            >
-              <Plus className="h-4 w-4" />
-              <span>Create endpoint</span>
-            </Button>
+            canCreate ? (
+              <Button
+                size="md"
+                onClick={() => navigateTo(ROUTES.SETTINGS_WEBHOOKS_CREATE)}
+              >
+                <Plus className="h-4 w-4" />
+                <span>Create endpoint</span>
+              </Button>
+            ) : undefined
           }
         >
           <WebhooksContent />

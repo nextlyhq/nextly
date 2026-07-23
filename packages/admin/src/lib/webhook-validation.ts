@@ -59,9 +59,10 @@ const headerRowSchema = z.object({
         ),
       "webhook-*, content-type and user-agent are set by delivery and cannot be overridden."
     ),
+  // The value may be empty (the server accepts it); only the redacted
+  // placeholder and control characters are rejected.
   value: z
     .string()
-    .min(1, "Header value is required.")
     .max(4096, "Header value must be 4096 characters or fewer.")
     .regex(
       HEADER_VALUE,
@@ -84,7 +85,16 @@ export const webhookFormSchema = z
       .string()
       .trim()
       .url("Must be a valid URL.")
-      .max(2048, "URL must be 2048 characters or fewer."),
+      .max(2048, "URL must be 2048 characters or fewer.")
+      // The delivery transport speaks HTTPS only, so reject other schemes here
+      // rather than after a round trip.
+      .refine(value => {
+        try {
+          return new URL(value).protocol === "https:";
+        } catch {
+          return false;
+        }
+      }, "Use an HTTPS URL."),
     allEvents: z.boolean(),
     eventTypes: z.array(z.enum(WEBHOOK_EVENT_TYPES)),
     headers: z.array(headerRowSchema),
@@ -168,7 +178,13 @@ export function toUpdateInput(
   return patch;
 }
 
-/** Seed form values from a loaded endpoint (header values start blank/redacted). */
+/**
+ * Seed form values from a loaded endpoint. The editable headers list starts
+ * EMPTY: a read redacts header values and an update replaces the whole set, so
+ * seeding rows would either force re-entry of every value or overwrite real
+ * values with blanks. The edit page shows the current header names read-only
+ * instead, and an untouched headers section is omitted from the PATCH.
+ */
 export function toFormValues(
   endpoint: WebhookEndpointSummary
 ): WebhookFormValues {
@@ -180,11 +196,7 @@ export function toFormValues(
     eventTypes: allEvents
       ? []
       : endpoint.eventTypes.filter(type => type !== WEBHOOK_EVENT_WILDCARD),
-    // Names shown so the operator sees what is configured; values are hidden
-    // and start empty (re-entering replaces the whole set).
-    headers: endpoint.headers
-      ? Object.keys(endpoint.headers).map(name => ({ name, value: "" }))
-      : [],
+    headers: [],
     enabled: endpoint.enabled,
   };
 }

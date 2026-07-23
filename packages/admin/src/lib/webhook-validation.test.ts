@@ -46,7 +46,7 @@ describe("webhookFormSchema", () => {
     ).toBe(false);
   });
 
-  it("requires a valid url within 2048 chars", () => {
+  it("requires a valid https url within 2048 chars", () => {
     expect(
       webhookFormSchema.safeParse({ ...base, url: "not a url" }).success
     ).toBe(false);
@@ -55,6 +55,11 @@ describe("webhookFormSchema", () => {
         ...base,
         url: `https://e.com/${"x".repeat(2048)}`,
       }).success
+    ).toBe(false);
+    // Only HTTPS — the delivery transport refuses other schemes.
+    expect(
+      webhookFormSchema.safeParse({ ...base, url: "http://example.com/hook" })
+        .success
     ).toBe(false);
   });
 
@@ -68,7 +73,7 @@ describe("webhookFormSchema", () => {
     ).toBe(true);
   });
 
-  it("rejects reserved, malformed, empty, redacted, and duplicate headers", () => {
+  it("rejects reserved, malformed, redacted, and duplicate headers", () => {
     const withHeader = (name: string, value: string): WebhookFormValues => ({
       ...base,
       headers: [{ name, value }],
@@ -82,9 +87,6 @@ describe("webhookFormSchema", () => {
     expect(
       webhookFormSchema.safeParse(withHeader("Bad Name", "x")).success
     ).toBe(false);
-    expect(webhookFormSchema.safeParse(withHeader("X-Token", "")).success).toBe(
-      false
-    );
     expect(
       webhookFormSchema.safeParse(withHeader("X-Token", "<redacted>")).success
     ).toBe(false);
@@ -97,6 +99,15 @@ describe("webhookFormSchema", () => {
         ],
       }).success
     ).toBe(false);
+  });
+
+  it("accepts an empty header value (the server does too)", () => {
+    expect(
+      webhookFormSchema.safeParse({
+        ...base,
+        headers: [{ name: "X-Token", value: "" }],
+      }).success
+    ).toBe(true);
   });
 });
 
@@ -145,7 +156,7 @@ describe("toUpdateInput", () => {
 });
 
 describe("toFormValues", () => {
-  it("seeds header names with blank values and detects the wildcard", () => {
+  it("starts headers empty and detects the wildcard", () => {
     const values = toFormValues({
       ...endpoint,
       eventTypes: ["*"],
@@ -153,6 +164,7 @@ describe("toFormValues", () => {
     });
     expect(values.allEvents).toBe(true);
     expect(values.eventTypes).toEqual([]);
-    expect(values.headers).toEqual([{ name: "X-Token", value: "" }]);
+    // Editable headers start empty; the edit page shows current names read-only.
+    expect(values.headers).toEqual([]);
   });
 });

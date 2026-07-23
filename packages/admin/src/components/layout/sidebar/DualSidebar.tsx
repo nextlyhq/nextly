@@ -236,6 +236,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission("read-api-keys") ||
     hasPermission("create-api-keys") ||
     hasPermission("update-api-keys");
+  // `update-webhooks` is the management umbrella (satisfies read too), so it
+  // reveals the link just like `read-webhooks` — matching the route guard.
+  const canAccessWebhooks =
+    hasPermission("read-webhooks") || hasPermission("update-webhooks");
   const hasSettingsSection = hasPermissionDataPending
     ? true
     : capabilities.canViewSettings ||
@@ -586,6 +590,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             isActive={isActive}
             hasPermission={hasPermission}
             canAccessApiKeys={canAccessApiKeys}
+            canAccessWebhooks={canAccessWebhooks}
             pluginCollectionsForSection={pluginCollectionsForSection}
             showBuilder={showBuilder}
           />
