@@ -463,7 +463,9 @@ describe("SingleEntryService", () => {
         siteName: "Set",
       });
 
-      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      // Two inserts: the auto-created default document, then the outbox event
+      // appended in the same update transaction.
+      expect(ctx.adapter.insert).toHaveBeenCalledTimes(2);
       expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
       expect(result.data?.siteName).toBe("Set");
     });

@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 
 /**
@@ -117,6 +118,14 @@ export interface UpdateSingleOptions {
 
   /** User context for access control and hooks. */
   user?: UserContext;
+
+  /**
+   * Who performed the write, for webhook/audit attribution. The transport
+   * boundary resolves it (distinguishing a signed-in user from an API key
+   * acting on their behalf); when absent the recorder falls back to `user`.
+   * Parity with the collection write path's actor.
+   */
+  actor?: RequestActor;
 
   /**
    * When true, bypass all RBAC access control checks.
