@@ -4358,11 +4358,23 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
+      // A direct caller runs this inside its own transaction, so every metadata
+      // and access read below is bound to that transaction's connection — a
+      // pooled read would take a second connection the transaction is holding,
+      // which stalls against a small pool.
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       // 1. Check collection-level access FIRST
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "create",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        txExecutor
       );
       if (accessDenied) {
         return accessDenied;
@@ -4370,7 +4382,8 @@ export class CollectionMutationService extends BaseService {
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        txExecutor
       );
       const fields =
         ((
@@ -4415,6 +4428,9 @@ export class CollectionMutationService extends BaseService {
         data: currentData,
         user: params.user,
         context: sharedContext,
+        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+        // caller's transaction connection so they do not re-enter the pool.
+        executor: txExecutor,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -4652,7 +4668,6 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the entry.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -4758,9 +4773,15 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
+      // A direct caller runs this inside its own transaction, so every metadata
+      // and access read below is bound to that transaction's connection — a
+      // pooled read would take a second connection the transaction is holding,
+      // which stalls against a small pool.
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       // Get collection metadata and hooks first
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        txExecutor
       );
       const fields =
         ((
@@ -4802,7 +4823,12 @@ export class CollectionMutationService extends BaseService {
         "update",
         params.user,
         params.entryId,
-        existingEntry
+        existingEntry,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        txExecutor
       );
       if (accessDenied) {
         return accessDenied;
@@ -4835,6 +4861,9 @@ export class CollectionMutationService extends BaseService {
         originalData: existingEntry,
         user: params.user,
         context: sharedContext,
+        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+        // caller's transaction connection so they do not re-enter the pool.
+        executor: txExecutor,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -5045,7 +5074,6 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           await this.relationshipService.deleteManyToManyRelations(
@@ -5414,9 +5442,12 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      // Get collection metadata to identify relation fields
+      // Get collection metadata to identify relation fields. Runs on the
+      // caller's transaction connection so this per-entry read does not re-enter
+      // the pool from inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const fields =
         ((
@@ -5469,6 +5500,10 @@ export class CollectionMutationService extends BaseService {
           data: currentData,
           user: params.user,
           context: sharedContext,
+          // Bind DB-reading hooks (e.g. the built-in sanitization hook, which
+          // loads field metadata) to the caller's transaction connection so they
+          // do not re-enter the pool from inside the transaction.
+          executor: tx.getDrizzle(),
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(
@@ -5834,9 +5869,12 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      // Get collection metadata to identify relation fields
+      // Get collection metadata to identify relation fields. Runs on the
+      // caller's transaction connection so this per-entry read does not re-enter
+      // the pool from inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const fields =
         ((
@@ -5869,7 +5907,10 @@ export class CollectionMutationService extends BaseService {
         params.overrideAccess,
         // A scoped API key keeps the owner predicate even when owned by a
         // super-admin, so a batch update judges the key on its OWN grant.
-        params.authenticatedScope
+        params.authenticatedScope,
+        // Bound to the caller's transaction connection so the metadata read does
+        // not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -5967,6 +6008,9 @@ export class CollectionMutationService extends BaseService {
           originalData: existingEntry,
           user: params.user,
           context: sharedContext,
+          // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+          // caller's transaction connection so they do not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(

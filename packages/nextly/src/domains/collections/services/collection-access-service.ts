@@ -530,7 +530,11 @@ export class CollectionAccessService extends BaseService {
     // The caller's authenticated scope. A scoped API key is judged on its OWN
     // grant, so the session super-admin bypass does not lift the owner predicate
     // for a super-admin-owned key — mirrors checkCollectionAccess.
-    authenticatedScope?: AuthenticatedScope
+    authenticatedScope?: AuthenticatedScope,
+    // Optional transaction-bound executor so the metadata read runs on the
+    // caller's transaction connection instead of a second pooled one; defaults
+    // to the pool.
+    executor?: unknown
   ): Promise<{ field: string; value: string } | null> {
     // Super-admin bypasses the owner predicate on the transactional paths too —
     // EXCEPT via a scoped API key, which must still obey stored owner rules.
@@ -544,8 +548,10 @@ export class CollectionAccessService extends BaseService {
     }
 
     try {
-      const collection =
-        await this.collectionService.getCollection(collectionName);
+      const collection = await this.collectionService.getCollection(
+        collectionName,
+        executor
+      );
       const accessRules = this.getAccessRules(
         collection as Record<string, unknown>
       );

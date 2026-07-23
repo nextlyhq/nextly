@@ -65,6 +65,13 @@ export interface BuildContextOptions<T = any> {
     query?: Record<string, unknown>;
     nextly?: Nextly;
   };
+
+  /**
+   * Transaction-bound Drizzle executor forwarded onto the context, so hooks that
+   * read the database run on the caller's transaction connection instead of the
+   * pool (see {@link HookContext.executor}). Omitted outside a transaction.
+   */
+  executor?: unknown;
 }
 
 /**
@@ -137,6 +144,7 @@ export function buildContext<T = any>(
     user,
     context,
     req: options.req,
+    executor: options.executor,
   };
 }
 

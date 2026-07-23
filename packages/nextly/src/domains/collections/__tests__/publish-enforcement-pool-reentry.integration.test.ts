@@ -1,18 +1,19 @@
 /**
- * The publish/unpublish authorization the transaction/batch write paths resolve
- * reads the RBAC role/permission tables. When a caller-owned transaction already
- * holds a connection, that read must run on the TRANSACTION's own connection, not
- * the pool: a pooled read would try to check out a second connection that the
- * open transaction will not release until its callback returns, so against a
- * single-connection pool the read blocks forever and the write deadlocks.
+ * A write that runs inside a caller-owned transaction must perform EVERY read on
+ * that transaction's own connection, never the pool. A pooled read tries to check
+ * out a second connection the open transaction will not release until its callback
+ * returns, so against a single-connection pool it blocks forever and the write
+ * deadlocks. The transactional bulk and single-entry write paths do this for the
+ * publish/unpublish RBAC check, the collection metadata and owner-constraint
+ * reads, and the DB-reading hooks (the built-in sanitization hook loads field
+ * metadata), all bound to the caller's transaction.
  *
- * This pins the fix on a REAL database with a single-connection pool
- * (`pool.max = 1`): `RBACAccessControlService.checkAccess` — the exact call the
- * collection access service makes to judge a publish transition — is invoked
- * from INSIDE a caller's transaction with that transaction's executor, and it
- * COMPLETES. Break the fix (drop the executor and the RBAC reads fall back to the
- * pool) and it hangs on the second checkout, caught here by a timeout. SQLite has
- * no connection pool, so the suite self-skips without a Postgres URL.
+ * These pin the fix on a REAL database with a single-connection pool
+ * (`pool.max = 1`): the RBAC preflight and each full bulk / direct in-transaction
+ * create-and-update COMPLETE instead of deadlocking. Break any binding (drop the
+ * executor and a read falls back to the pool) and the affected case hangs on the
+ * second checkout, caught by the timeout. SQLite has no connection pool, so the
+ * suite self-skips without a Postgres URL.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -24,11 +25,25 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 
 const POSTGRES_URL = process.env.TEST_POSTGRES_URL ?? "";
 
-const SLUG = "poolreentryposts";
-const TABLE = `dc_${SLUG}`;
+// Distinct slugs so each test owns its table and the file's parallel-safe drop
+// never races another case.
+const RBAC_SLUG = "poolreentryrbac";
+const BULK_CREATE_SLUG = "poolreentrybulkc";
+const BULK_UPDATE_SLUG = "poolreentrybulku";
+const DIRECT_CREATE_SLUG = "poolreentrydirc";
+const DIRECT_UPDATE_SLUG = "poolreentrydiru";
+const SLUGS = [
+  RBAC_SLUG,
+  BULK_CREATE_SLUG,
+  BULK_UPDATE_SLUG,
+  DIRECT_CREATE_SLUG,
+  DIRECT_UPDATE_SLUG,
+];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
 
@@ -49,34 +64,49 @@ async function connectSingleConnection(): Promise<TestAdapter> {
   return adapter;
 }
 
-// Reject if the check does not settle in time: a re-entrant pooled read on a
+// Reject if the work does not settle in time: a re-entrant pooled read on a
 // `max: 1` pool never resolves, so without a bound timeout the test would hang
-// instead of failing. The window is far above the completing path's runtime.
+// instead of failing. The timer is cleared once the work settles so a passing
+// run does not keep the worker alive until `ms` elapses.
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    work,
-    new Promise<T>((_resolve, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            NextlyError.internal({
-              logContext: {
-                reason: "pool-reentry-timeout",
-                table: TABLE,
-                timeoutMs: ms,
-              },
-            })
-          ),
-        ms
-      )
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          NextlyError.internal({
+            logContext: { reason: "pool-reentry-timeout", timeoutMs: ms },
+          })
+        ),
+      ms
+    );
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+// A collection whose create/read/update/publish are all allowed for a session
+// editor. Judging each of those still reads the RBAC and metadata tables — the
+// reads that must run on the transaction's own connection.
+function openCollection(slug: string) {
+  return defineCollection({
+    slug,
+    status: true,
+    access: {
+      create: () => true,
+      read: () => true,
+      update: () => true,
+      publish: () => true,
+    },
+    fields: [text({ name: "title" })],
+  });
 }
 
 const describePg = describe.skipIf(!POSTGRES_URL);
 
 describePg(
-  "publish enforcement — caller-owned-tx RBAC pool reentry (postgres)",
+  "publish enforcement — caller-owned-tx pool reentry (postgres)",
   () => {
     let boot: TestAdapter | undefined;
 
@@ -93,14 +123,16 @@ describePg(
 
     async function drop(): Promise<void> {
       if (!boot) return;
-      for (const stmt of [
-        `DROP TABLE IF EXISTS ${TABLE}`,
-        `DELETE FROM dynamic_collections WHERE slug = '${SLUG}'`,
-      ]) {
-        try {
-          await boot.executeQuery(stmt);
-        } catch {
-          // Best-effort on a fresh database.
+      for (const slug of SLUGS) {
+        for (const stmt of [
+          `DROP TABLE IF EXISTS dc_${slug}`,
+          `DELETE FROM dynamic_collections WHERE slug = '${slug}'`,
+        ]) {
+          try {
+            await boot.executeQuery(stmt);
+          } catch {
+            // Best-effort on a fresh database.
+          }
         }
       }
     }
@@ -113,7 +145,7 @@ describePg(
           adapter,
           collections: [
             defineCollection({
-              slug: SLUG,
+              slug: RBAC_SLUG,
               status: true,
               fields: [text({ name: "title" })],
             }),
@@ -123,27 +155,174 @@ describePg(
           "rbacAccessControlService"
         );
 
-        // Open a caller-owned transaction (it checks out the single pooled
-        // connection) and judge a publish transition INSIDE it, passing the
-        // transaction's executor. The RBAC reads (super-admin resolution and
-        // the permission lookup) run on that connection; a pooled read would
-        // block forever waiting for a second connection.
+        // Judge a publish transition from INSIDE a caller-owned transaction,
+        // passing the transaction's executor. The RBAC reads run on that
+        // connection; a pooled read would block forever on the second checkout.
         const allowed = await withTimeout(
           handle.adapter.transaction(tx =>
             rbac.checkAccess({
               userId: "editor",
               operation: "publish",
-              resource: SLUG,
+              resource: RBAC_SLUG,
               executor: tx.getDrizzle(),
             })
           ),
           15_000
         );
 
-        // It ran to completion (did not deadlock). The editor holds no roles
-        // and the collection defines no publish rule, so the publish is denied
-        // — the point is that the decision was REACHED on the tx connection.
+        // The editor holds no roles and the collection defines no publish rule,
+        // so publish is denied — the point is the decision was REACHED on the tx.
         expect(allowed).toBe(false);
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a bulk create-as-published inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(BULK_CREATE_SLUG)],
+        });
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: BULK_CREATE_SLUG, user: { id: "editor" } },
+              [{ title: "t", status: "published" }]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+        const [row] = await handle.adapter.select<{ status: string }>(
+          `dc_${BULK_CREATE_SLUG}`,
+          {}
+        );
+        expect(row?.status).toBe("published");
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a bulk update-to-published inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(BULK_UPDATE_SLUG)],
+        });
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: BULK_UPDATE_SLUG, overrideAccess: true },
+          { title: "t", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.updateEntriesInTransaction(
+              tx,
+              { collectionName: BULK_UPDATE_SLUG, user: { id: "editor" } },
+              [{ id, data: { title: "changed", status: "published" } }]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+        const [row] = await handle.adapter.select<{ status: string }>(
+          `dc_${BULK_UPDATE_SLUG}`,
+          {}
+        );
+        expect(row?.status).toBe("published");
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a direct create-as-published inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(DIRECT_CREATE_SLUG)],
+        });
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntryInTransaction(
+              tx,
+              { collectionName: DIRECT_CREATE_SLUG, user: { id: "editor" } },
+              { title: "t", status: "published" }
+            )
+          ),
+          15_000
+        );
+
+        expect(result.success).toBe(true);
+        const [row] = await handle.adapter.select<{ status: string }>(
+          `dc_${DIRECT_CREATE_SLUG}`,
+          {}
+        );
+        expect(row?.status).toBe("published");
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a direct update-to-published inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(DIRECT_UPDATE_SLUG)],
+        });
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: DIRECT_UPDATE_SLUG, overrideAccess: true },
+          { title: "t", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.updateEntryInTransaction(
+              tx,
+              {
+                collectionName: DIRECT_UPDATE_SLUG,
+                entryId: id,
+                user: { id: "editor" },
+              },
+              { title: "changed", status: "published" }
+            )
+          ),
+          15_000
+        );
+
+        expect(result.success).toBe(true);
+        const [row] = await handle.adapter.select<{ status: string }>(
+          `dc_${DIRECT_UPDATE_SLUG}`,
+          {}
+        );
+        expect(row?.status).toBe("published");
       } finally {
         await handle?.destroy();
       }

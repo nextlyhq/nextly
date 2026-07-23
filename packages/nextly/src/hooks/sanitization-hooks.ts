@@ -102,8 +102,13 @@ export function createSanitizationHook(
       const registryService = container.get<CollectionRegistryService>(
         "collectionRegistryService"
       );
+      // Run on the caller's transaction executor when the hook fires inside a
+      // transaction, so this metadata read does not take a second pooled
+      // connection while that transaction holds the only one (small/exhausted
+      // pool deadlock). Falls back to the pool outside a transaction.
       const collection = await registryService.getCollectionBySlug(
-        context.collection
+        context.collection,
+        context.executor
       );
       if (!collection) return;
 

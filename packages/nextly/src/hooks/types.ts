@@ -232,6 +232,19 @@ export interface HookContext<T = any> {
      */
     nextly?: Nextly;
   };
+
+  /**
+   * Transaction-bound Drizzle executor for the write this hook participates in.
+   *
+   * Present only when the hook runs inside a caller-owned transaction (the
+   * transactional bulk / entry write paths). A hook that reads the database (for
+   * example the built-in sanitization hook, which loads field metadata) must use
+   * it so the read runs on the transaction's own connection instead of taking a
+   * second pooled one, which can stall against a small pool while the caller's
+   * transaction holds the only connection. Undefined outside a transaction, where
+   * the pooled connection is correct.
+   */
+  executor?: unknown;
 }
 
 /**
