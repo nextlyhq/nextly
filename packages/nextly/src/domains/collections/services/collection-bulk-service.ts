@@ -88,7 +88,16 @@ function legacyEnvelopeToFailureFields(result: {
  */
 type PerItemOutcome<T> =
   | { kind: "success"; record: T }
-  | { kind: "failure"; failure: { id: string; code: string; message: string } };
+  | {
+      kind: "failure";
+      failure: { id: string; code: string; message: string };
+      /**
+       * Set when the item committed its row + outbox event but a post-commit
+       * hook then threw, so it is reported as a failure yet still owes a
+       * delivery. Aggregated into the batch result's `eventRecorded`.
+       */
+      eventRecorded?: boolean;
+    };
 
 /**
  * Build a canonical per-item failure entry from a thrown error.
@@ -148,6 +157,9 @@ function partitionOutcomes<T>(
       } else {
         result.failures.push(value.failure);
         result.failedCount++;
+        // A "failure" that still committed its outbox event (a post-commit hook
+        // threw) owes a delivery even though it is not a success.
+        if (value.eventRecorded) result.eventRecorded = true;
       }
     } else {
       // Per-item closure rejected unexpectedly. Defensive: report as
@@ -352,6 +364,9 @@ export class CollectionBulkService extends BaseService {
             return {
               kind: "failure",
               failure: { id: entryId, code, message },
+              // A delete that committed its row + event but failed a post-commit
+              // hook still owes a delivery.
+              eventRecorded: deleteResult.eventRecorded,
             };
           } catch (error: unknown) {
             // NextlyError thrown from below the boundary: preserve its code +
@@ -432,6 +447,9 @@ export class CollectionBulkService extends BaseService {
             return {
               kind: "failure",
               failure: { id: entryId, code, message },
+              // An update that committed its row + event but failed a post-commit
+              // hook still owes a delivery.
+              eventRecorded: updateResult.eventRecorded,
             };
           } catch (error: unknown) {
             return {
@@ -1541,6 +1559,11 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Whether any item appended an outbox event in the shared transaction. Read
+    // back onto the result only after the transaction commits (below), so a
+    // rollback — which undoes every delete and its event — never reports a
+    // durable event that isn't there.
+    let anyRecorded = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1562,6 +1585,9 @@ export class CollectionBulkService extends BaseService {
                   entryId,
                   skipHooks
                 );
+              // A committed item owes a delivery even if its afterDelete hook
+              // then threw (returned success:false).
+              if (deleteResult.eventRecorded) anyRecorded = true;
 
               if (deleteResult.success) {
                 result.successful++;
@@ -1604,6 +1630,9 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // The transaction committed (this line is skipped if it rejected), so any
+      // events it recorded are durable; surface that for the post-write drain.
+      result.eventRecorded = anyRecorded;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert

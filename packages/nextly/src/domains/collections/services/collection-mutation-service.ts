@@ -1232,6 +1232,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below), so the catch can report a
+    // committed-but-hook-failed write as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -1818,6 +1822,10 @@ export class CollectionMutationService extends BaseService {
           actor: actorForWrite(params.actor, params.user),
         });
       });
+      // Set only after the transaction resolves (this line is skipped if it
+      // rejected), so a commit failure never flags a durable event that isn't
+      // there; from here a post-commit hook failure must not hide the delivery.
+      eventRecorded = true;
 
       // Execute afterCreate hooks (code-registered)
       // Hooks run after database insert completes (for side effects)
@@ -1927,6 +1935,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: responseEntry,
+        eventRecorded,
       };
     } catch (error: unknown) {
       // Legacy per-kind override messages ("Duplicate value: ...",
@@ -1935,11 +1944,14 @@ export class CollectionMutationService extends BaseService {
       // wire never reveals which constraint or column failed. The original
       // DbError is preserved on the NextlyError as `cause` for log lines.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to create entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to create entry" },
+          this.dialect
+        ),
+        eventRecorded,
+      };
     }
   }
 
@@ -2291,6 +2303,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below); lets the catch report a
+    // committed-but-hook-failed update as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -2735,8 +2751,13 @@ export class CollectionMutationService extends BaseService {
       // by the per-locale status event below. Re-read inside each attempt (like
       // committedPreviousStatus) so a retry reports the true prior state.
       let localizedPreviousStatus: string | null = null;
+      // Reset at the start of each attempt and read back only after the retry
+      // resolves, so a rolled-back attempt (a version conflict) or a commit
+      // failure never flags a durable event that isn't there.
+      let recorded = false;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          recorded = false;
           const updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
@@ -3152,10 +3173,14 @@ export class CollectionMutationService extends BaseService {
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
+              recorded = true;
             }
           }
         })
       );
+      // The transaction committed (skipped if the retry ultimately threw), so
+      // the event is durable; a later hook failure must not hide the delivery.
+      eventRecorded = recorded;
 
       // Fetch the updated entry to return it and use in hooks
       const [updated] = await this.db
@@ -3170,6 +3195,9 @@ export class CollectionMutationService extends BaseService {
           statusCode: 404,
           message: "Entry not found",
           data: null,
+          // The event may already be durable (the row vanished only after the
+          // update committed), so still signal a delivery is owed.
+          eventRecorded,
         };
       }
 
@@ -3338,16 +3366,22 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: responseEntry,
+        // Reflects whether this update actually recorded an event (a no-op
+        // update commits without one), so a no-op does not kick the drain.
+        eventRecorded,
       };
     } catch (error: unknown) {
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+        eventRecorded,
+      };
     }
   }
 
@@ -3375,6 +3409,10 @@ export class CollectionMutationService extends BaseService {
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
+    // Set once the outbox event is appended (below); lets the catch report a
+    // committed-but-hook-failed delete as `eventRecorded` even when `success` is
+    // false. Declared out here so both the success and catch returns see it.
+    let eventRecorded = false;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -3559,6 +3597,10 @@ export class CollectionMutationService extends BaseService {
           actor: actorForWrite(params.actor, params.user),
         });
       });
+      // Set only after the transaction resolves: `deletedRow` is true exactly
+      // when the delete + event committed, so a commit failure never flags a
+      // durable event that isn't there; a later hook failure must not hide it.
+      eventRecorded = deletedRow;
 
       // A concurrent delete removed the row first: report not-found rather than
       // a second success (and a duplicate event) for a deletion this call did
@@ -3613,6 +3655,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
       return {
@@ -3621,6 +3664,7 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        eventRecorded,
       };
     }
   }
@@ -5418,6 +5462,9 @@ export class CollectionMutationService extends BaseService {
     // recorded — a later failure (e.g. an afterDelete hook) is a per-item
     // side-effect issue, not an eventless delete, and must NOT roll the batch back.
     let deleteNeedsRollback = false;
+    // Set once the event is appended to the shared transaction; the batch caller
+    // reads it back and applies it only after the transaction commits.
+    let eventRecorded = false;
     try {
       // Get collection metadata early
       const collection = await this.collectionService.getCollection(
@@ -5633,6 +5680,7 @@ export class CollectionMutationService extends BaseService {
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;
+      eventRecorded = true;
 
       // Execute afterDelete hooks (unless skipped)
       if (!skipHooks) {
@@ -5670,6 +5718,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        eventRecorded,
       };
     } catch (error: unknown) {
       // Only a failure in the delete→event window propagates (to roll back an
@@ -5683,6 +5732,7 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        eventRecorded,
       };
     }
   }

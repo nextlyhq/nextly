@@ -99,6 +99,83 @@ describe("webhook outbox capture (integration)", () => {
     });
   });
 
+  it("flags eventRecorded when the write commits but a post-commit hook throws", async () => {
+    // The event is appended inside the write transaction; afterCreate hooks run
+    // after it commits. A throwing hook surfaces success:false on an already
+    // committed write, so the result must still report `eventRecorded` — that is
+    // the signal the fast drain + retention key off, not `success`.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    current.hooks.register("afterCreate", "posts", () => {
+      throw new Error("afterCreate observer failed");
+    });
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+
+    // The hook failure is surfaced, but the entry + event committed.
+    expect(created.success).toBe(false);
+    expect(created.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("entry.created");
+  });
+
+  it("flags eventRecorded on a bulk result when a committed item's hook throws", async () => {
+    // A bulk delete runs each item through the per-item mutation, which commits
+    // the row + event and then runs afterDelete. A throwing hook makes that item
+    // a failure (successCount stays 0), but the event is durable — so the bulk
+    // result must still report eventRecorded, or the batch would skip the drain.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hello" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    current.hooks.register("afterDelete", "posts", () => {
+      throw new Error("afterDelete observer failed");
+    });
+
+    const result = await handler.bulkDeleteEntries({
+      collectionName: "posts",
+      ids: [id],
+      overrideAccess: true,
+    });
+
+    // The item is counted a failure, yet the delete + event committed.
+    expect(result.successCount).toBe(0);
+    expect(result.eventRecorded).toBe(true);
+
+    const rows = await events(current);
+    expect(rows.map(r => r.type).sort()).toEqual([
+      "entry.created",
+      "entry.deleted",
+    ]);
+  });
+
   it("records the event for a versioned collection too (one assembly, both consumers)", async () => {
     current = await createTestNextly({
       collections: [

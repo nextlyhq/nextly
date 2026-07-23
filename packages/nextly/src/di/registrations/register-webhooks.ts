@@ -12,7 +12,11 @@
  * expired.
  */
 
-import type { RunWebhookDrainOptions } from "../../domains/webhooks/drain-runner";
+import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
+import type {
+  RunWebhookDrainOptions,
+  WebhookDrainDatabase,
+} from "../../domains/webhooks/drain-runner";
 import {
   WebhookEndpointRegistry,
   type WebhookEndpointReader,
@@ -62,6 +66,19 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   container.registerSingleton<WebhookDeliveryQueryService>(
     "webhookDeliveryQueryService",
     () => new WebhookDeliveryQueryService(adapter, logger)
+  );
+
+  // Post-response drain fast path, shared by every content-write path. The
+  // adapter satisfies the fan-out + delivery surfaces; resolve it as exactly
+  // that. Self-gates on Next `after()` support and on there being a subscriber.
+  container.registerSingleton<WebhookFastDrainScheduler>(
+    "webhookFastDrainScheduler",
+    () =>
+      new WebhookFastDrainScheduler(
+        container.get<WebhookDrainDatabase>("adapter"),
+        container.get<WebhookEndpointRegistry>("webhookEndpointRegistry"),
+        logger
+      )
   );
 
   // Retention deps the drain route runs after delivery. Content writes already

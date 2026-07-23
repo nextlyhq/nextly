@@ -21,6 +21,7 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import { AccessControlService } from "../../services/access";
@@ -171,6 +172,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
             gate: new MetaRetentionGate(adapter),
             logger,
           })
+        : undefined,
+      // Shared post-response drain fast path (registered by the webhook
+      // services). Absent only when webhooks were never registered.
+      container.has("webhookFastDrainScheduler")
+        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
         : undefined
     );
 

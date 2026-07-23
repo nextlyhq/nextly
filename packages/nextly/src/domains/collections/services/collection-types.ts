@@ -22,6 +22,16 @@ export interface CollectionServiceResult<T = unknown> {
    * canonical VALIDATION_ERROR envelope with field paths intact.
    */
   errors?: Array<{ path: string; code: string; message: string }>;
+  /**
+   * Whether this write appended a durable outbox event, independent of
+   * `success`. A create/update/delete records the event inside its transaction,
+   * then runs post-commit hooks: if one of those hooks throws, the write is
+   * already committed but `success` is reported `false`. Post-write side effects
+   * (the webhook fast-drain and retention pass) key off this flag, not `success`,
+   * so a committed-but-hook-failed write still gets its immediate delivery while
+   * a write that recorded nothing (validation/access failure) does not.
+   */
+  eventRecorded?: boolean;
 }
 
 /**
@@ -88,6 +98,15 @@ export interface BulkOperationResult<T = { id: string }> {
   successCount: number;
   /** Count of failed operations. */
   failedCount: number;
+  /**
+   * Whether any item appended a durable outbox event, independent of
+   * `successCount`. A per-item write can commit its row + event and still be
+   * counted a failure when a post-commit hook throws (it returns
+   * `success: false`), so a batch where every committed item hit that path has
+   * `successCount === 0` yet owes deliveries. Post-write side effects key off
+   * this so those events still get the immediate drain.
+   */
+  eventRecorded?: boolean;
 }
 
 /**
@@ -106,6 +125,14 @@ export interface BatchOperationResult {
   ids: string[];
   /** Detailed error information for each failed entry */
   errors: Array<{ index: number; error: string }>;
+  /**
+   * Whether the committed batch appended any durable outbox event, independent
+   * of `successful`. A per-item delete can commit its row + event in the shared
+   * transaction and still be counted a failure when its afterDelete hook throws,
+   * so a batch where every committed item hit that path has `successful === 0`
+   * yet owes deliveries. Set only after the shared transaction commits.
+   */
+  eventRecorded?: boolean;
 }
 
 /**
