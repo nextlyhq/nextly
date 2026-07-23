@@ -890,4 +890,269 @@ describe("SingleEntryService", () => {
       expect(result.message).toBe("db exploded");
     });
   });
+
+  // ============================================================
+  // update() — publish-transition access
+  // ============================================================
+
+  describe("update — publish transition access", () => {
+    // A single with the draft/published lifecycle enabled. RBAC allows update
+    // but denies the named lifecycle op, so only the transition gate can fail.
+    const lifecycleCtx = (deny: "publish" | "unpublish") => {
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle(
+        "site-settings",
+        siteSettingsMeta({ status: true })
+      );
+      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
+        Promise.resolve(args.operation !== deny)
+      );
+      ctx.adapter.update.mockResolvedValue([
+        { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
+      ]);
+      return ctx;
+    };
+
+    it("denies a draft→published update without publish permission", async () => {
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("denies unpublishing without the unpublish permission", async () => {
+      const ctx = lifecycleCtx("unpublish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "published",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "draft" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("gates a publish derived by a beforeUpdate hook, not just the body", async () => {
+      // Secure-by-result: a hook the caller cannot see derives published from a
+      // body that omits status; the publish permission is still required.
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.hookRegistry.hasHooks.mockImplementation(
+        (phase: string) => phase === "beforeUpdate"
+      );
+      ctx.hookRegistry.execute.mockResolvedValue({ status: "published" });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "Body omits status" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("does not gate a status change when the single has no lifecycle", async () => {
+      // No `status: true` on the single → `status` is an ordinary field, so the
+      // publish permission is never consulted. The single must be registered
+      // (with `status` as a plain field) so update() reaches the gate instead of
+      // short-circuiting on a 404 registry miss, which would make the assertion
+      // vacuous.
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle(
+        "site-settings",
+        siteSettingsMeta({
+          fields: [textField("siteName"), textField("status")],
+        })
+      );
+      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
+        Promise.resolve(args.operation !== "publish")
+      );
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.adapter.update.mockResolvedValue([
+        { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
+      ]);
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      // The write reaches and passes the gate (no lifecycle to enforce), rather
+      // than 404-ing on an unregistered single.
+      expect(result.success).toBe(true);
+      const publishConsulted = ctx.rbac.checkAccess.mock.calls.some(
+        ([args]: [{ operation: string }]) => args.operation === "publish"
+      );
+      expect(publishConsulted).toBe(false);
+    });
+
+    it("bypasses the transition gate under overrideAccess", async () => {
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue({
+        id: "doc-1",
+        siteName: "S",
+        status: "draft",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { overrideAccess: true }
+      );
+
+      // Assert the intended success, not merely "not 403": a regression in the
+      // overrideAccess bypass that returned 500 (or no status) would still pass a
+      // `not.toBe(403)` check.
+      expect(result.success).toBe(true);
+    });
+
+    it("does not commit the default when a first publish is denied", async () => {
+      // No row yet → the update materializes the default INSIDE the write
+      // transaction and enforces the publish transition against the row-locked
+      // status there. When the transition is refused, the transaction throws and
+      // rolls back — so the auto-created default never commits, WITHOUT a
+      // compensating delete that could destroy a concurrent writer's row. (The
+      // real no-row-left-behind guarantee is exercised on a live database in
+      // publish-enforcement.integration.test.ts; this mock transaction has no
+      // rollback to observe, so it asserts the denial and that no compensating
+      // delete is issued.)
+      const ctx = lifecycleCtx("publish");
+      ctx.adapter.selectOne.mockResolvedValue(null);
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.statusCode).toBe(403);
+      // The write is gated within a transaction (so the insert is rolled back on
+      // denial), and no compensating delete is issued.
+      expect(ctx.adapter.transaction).toHaveBeenCalled();
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+    });
+
+    it("persists the default and publishes when a first publish is allowed", async () => {
+      // The mirror of the denial case: when the publish IS authorized, the
+      // deferred default is inserted and the write proceeds, so a legitimate
+      // first-time publish is not blocked by the authorize-before-create change.
+      const ctx = lifecycleCtx("unpublish"); // deny unpublish, allow publish
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      ctx.adapter.insert.mockResolvedValue({
+        id: "new-id",
+        siteName: "S",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { status: "published" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.success).toBe(true);
+      // The default row was persisted (once), only after authorization. The
+      // write also appends outbox events, so count only inserts to the Single
+      // table, not the `nextly_events` outbox.
+      const rowInserts = ctx.adapter.insert.mock.calls.filter(
+        (c: unknown[]) => c[0] !== "nextly_events"
+      );
+      expect(rowInserts).toHaveLength(1);
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+    });
+
+    it("reuses a row a hook auto-created instead of inserting a duplicate", async () => {
+      // A beforeUpdate hook that reads the Single via get() can auto-create the
+      // row while `autoCreated` still reflects the earlier null read. The
+      // deferred insert (now inside the update transaction) re-checks for a row
+      // and reuses it, so the write does not leave two rows for the Single.
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      // Pre-transaction read finds no row (so autoCreated); the in-transaction
+      // read finds the row a hook created in the meantime.
+      ctx.adapter.selectOne.mockResolvedValueOnce(null).mockResolvedValue({
+        id: "hook-created",
+        siteName: "S",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      ctx.adapter.update.mockResolvedValue([
+        { id: "hook-created", siteName: "S2", updated_at: "2026-02-01" },
+      ]);
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "S2" },
+        { overrideAccess: true }
+      );
+
+      expect(result.success).toBe(true);
+      // No duplicate insert — the existing (hook-created) row was reused. The
+      // write still appends outbox events, so assert no insert to the Single
+      // table specifically, not the `nextly_events` outbox.
+      const rowInserts = ctx.adapter.insert.mock.calls.filter(
+        (c: unknown[]) => c[0] !== "nextly_events"
+      );
+      expect(rowInserts).toHaveLength(0);
+    });
+
+    it("does not let a super-admin-owned key bypass a stored rule on update", async () => {
+      // The primary update gate must also receive the API-key scope, so the
+      // session super-admin bypass does not apply to a scoped key — otherwise a
+      // super-admin-owned, update-only key would skip the Single's stored rules.
+      const ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle(
+        "site-settings",
+        siteSettingsMeta({ accessRules: { update: { type: "owner-only" } } })
+      );
+      // No document yet, so the owner-only rule has no ownership to compare and
+      // fails closed — but only if the super-admin bypass did not fire first.
+      ctx.adapter.selectOne.mockResolvedValue(null);
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "x" },
+        {
+          user: { id: "admin-1", roles: ["super-admin"] },
+          authenticatedScope: {
+            actorType: "apiKey",
+            permissions: ["update-site-settings"],
+          },
+        }
+      );
+
+      expect(result.statusCode).toBe(403);
+    });
+  });
 });

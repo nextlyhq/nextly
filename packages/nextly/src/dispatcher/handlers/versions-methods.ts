@@ -15,6 +15,7 @@ import {
   assertVersionDocumentUpdatable,
   redactSnapshotForUser,
 } from "../../api/versions-access";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   canReadEntity,
   type ReadAccessCaller,
@@ -30,6 +31,7 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
 /** Page size when the caller does not ask for one. */
@@ -68,6 +70,9 @@ export interface VersionMethodArgs {
   slug: string;
   entryId: string;
   user: UserContext;
+  // The caller's authenticated scope, so the live-document read gate judges a
+  // scoped API key on its OWN read grant rather than the key owner's roles.
+  authenticatedScope?: AuthenticatedScope;
   limit?: number;
   cursor?: number;
 }
@@ -124,7 +129,8 @@ export async function listVersionsForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
@@ -182,7 +188,8 @@ export async function getVersionForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   const versions = getService("versionsService");
@@ -368,7 +375,8 @@ export async function setVersionLabelForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    readAuthenticatedScope(args.params)
   );
 
   // Renaming a version edits a record of the document, so it owes the
@@ -380,7 +388,11 @@ export async function setVersionLabelForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    // The route authorized `update` against the key's scope; judge the label
+    // edit on the key's OWN grant so a super-admin-owned key does not skip
+    // stored owner/role update rules.
+    readAuthenticatedScope(args.params)
   );
 
   const versions = getService("versionsService");
@@ -453,7 +465,8 @@ export async function restoreVersionForDocument(
     args.scopeKind,
     args.slug,
     args.entryId,
-    args.user
+    args.user,
+    readAuthenticatedScope(args.params)
   );
 
   return restoreVersion({
@@ -465,5 +478,8 @@ export async function restoreVersionForDocument(
     // Forwarded so an API-key restore is attributed to the key on the outbox
     // event rather than to the person who owns it.
     ...(args.actor ? { actor: args.actor } : {}),
+    // The publish gate a restore-to-published triggers must judge the key's own
+    // scope, not the owner's RBAC.
+    authenticatedScope: readAuthenticatedScope(args.params),
   });
 }

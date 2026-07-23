@@ -249,6 +249,13 @@ export const PATCH = withErrorHandler(
       // Guard on a resolved user id (matches the dispatcher) so the
       // RBAC-skip only applies to an authenticated caller.
       routeAuthorized: !!user.id,
+      // Build the scope from the auth context so a publish transition (and the
+      // super-admin gate) judges an API key on its OWN stamped grants, not the
+      // owner's — the route only authorized `update`. Mirrors the dispatcher.
+      authenticatedScope: {
+        actorType: auth.authMethod === "api-key" ? "apiKey" : "user",
+        permissions: auth.permissions,
+      },
     });
 
     if (!result.success) {

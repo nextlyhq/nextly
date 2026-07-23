@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
@@ -200,6 +201,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.queryService.getEntry(params);
   }
@@ -287,6 +292,11 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -308,6 +318,8 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -328,6 +340,11 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -343,6 +360,13 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher: the route already authorized this POST as
+     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+     */
+    routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
     await this.afterWriteIfRecorded(result);
@@ -356,7 +380,10 @@ export class CollectionEntryService extends BaseService {
     /** Who performed the delete, recorded on the outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.deleteEntry(params);
     await this.afterWriteIfRecorded(result);
@@ -401,6 +428,8 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges the create-as-published on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
     await this.afterWriteIfRecorded(result);
@@ -416,7 +445,10 @@ export class CollectionEntryService extends BaseService {
     /** Who performed the delete, recorded on each entry's outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges each per-id delete on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
     await this.afterWriteIfRecorded(result);
@@ -429,9 +461,12 @@ export class CollectionEntryService extends BaseService {
     data: Record<string, unknown>;
     user?: UserContext;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges each per-id transition on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
     await this.afterWriteIfRecorded(result);
@@ -450,6 +485,8 @@ export class CollectionEntryService extends BaseService {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /** API-key scope; judges the collection gate + transitions on the key's own grant. */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
@@ -465,6 +502,9 @@ export class CollectionEntryService extends BaseService {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /** Caller's authenticated scope; a scoped key is judged on its own grant. */
+      authenticatedScope?: AuthenticatedScope;
+      routeAuthorized?: boolean;
       overrideAccess?: boolean;
       context?: Record<string, unknown>;
     },
@@ -480,6 +520,7 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
@@ -495,7 +536,11 @@ export class CollectionEntryService extends BaseService {
 
   async createEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -508,7 +553,11 @@ export class CollectionEntryService extends BaseService {
   }
 
   async updateEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -523,7 +572,11 @@ export class CollectionEntryService extends BaseService {
 
   async updateEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {

@@ -20,6 +20,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import {
+  apiKeyWriteAllowed,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
@@ -153,6 +157,9 @@ export async function checkSingleAccess(params: {
   overrideAccess?: boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  // The caller's authenticated scope. A scoped API key is judged on its OWN
+  // stamped grants for the publish/unpublish transition, not the owner's RBAC.
+  authenticatedScope?: AuthenticatedScope;
   /** Evaluator for the Single's stored access rules. */
   accessControlService?: AccessControlService;
   /** The Single's stored access rules (from the registry metadata). */
@@ -162,6 +169,17 @@ export async function checkSingleAccess(params: {
    * compare ownership; without it they allow (deferring to the DB-level check).
    */
   document?: Record<string, unknown>;
+  /**
+   * Skip the stored-rule evaluation and return after only the RBAC/permission
+   * gate. The publish-transition pre-resolve sets this when the operation's
+   * stored rule is document-dependent (owner-only/custom), so that rule is NOT
+   * judged against the pre-transaction document here — it is re-evaluated against
+   * the row-locked document inside the write transaction instead (see
+   * `evaluateTransitionDocumentRule` on the mutation service). Non-dependent
+   * rules (public/authenticated/role-based) are fully decidable without the row,
+   * so callers leave this false and let them run here.
+   */
+  deferStoredRuleEval?: boolean;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -171,9 +189,11 @@ export async function checkSingleAccess(params: {
     overrideAccess,
     routeAuthorized,
     rbacAccessControlService,
+    authenticatedScope,
     accessControlService,
     accessRules,
     document,
+    deferStoredRuleEval,
     logger,
   } = params;
 
@@ -181,9 +201,13 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // Super-admins bypass the stored rules on every transport, keyed on the
-  // authorized role set (never the account id).
-  if (isSuperAdminContext(user)) {
+  // Super-admins bypass the stored rules on every transport — EXCEPT via a
+  // scoped API key. The bypass belongs to the session path: a key is
+  // authoritative on its OWN stamped scope, never on the owner's roles, so a
+  // read/update-only key issued by an admin is not equivalent to their full
+  // account (mirrors canReadEntity). Otherwise a super-admin-owned, update-only
+  // key could publish.
+  if (authenticatedScope?.actorType !== "apiKey" && isSuperAdminContext(user)) {
     return null;
   }
 
@@ -191,8 +215,10 @@ export async function checkSingleAccess(params: {
   // single global document; public / authenticated / role-based / custom all
   // apply). This runs for both route-authorized and Direct API callers so a
   // caller holding the coarse `update-<single>` permission but failing a
-  // stored rule is still denied.
-  if (accessControlService && accessRules) {
+  // stored rule is still denied. Skipped when `deferStoredRuleEval` is set: the
+  // transition pre-resolve defers a document-dependent (owner-only/custom) rule
+  // to the under-lock re-check so it is not judged against a stale document.
+  if (accessControlService && accessRules && !deferStoredRuleEval) {
     // Owner-only with no loaded document: ownership cannot be evaluated (there
     // is nothing to compare against), and evaluateOwnerAccess would otherwise
     // ALLOW the write for lack of a document — letting a caller with only the
@@ -246,7 +272,54 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  if (!rbacAccessControlService || !user) {
+  // Secure-by-default publish gate (Option A): publishing/unpublishing changes a
+  // document's privileged published state, so an anonymous caller may do it ONLY
+  // when an explicit rule grants it. With no explicit publish/unpublish rule the
+  // operation would otherwise fall through to the rule-less public default below
+  // (`!user` → allow), letting an unauthenticated caller publish a
+  // publicly-writable Single. An explicit stored rule was evaluated above and
+  // allowed if we reach here, so a developer who deliberately opened publishing
+  // (e.g. a public `publish` rule) is respected; only the implicit default denies.
+  if (
+    !user &&
+    (operation === "publish" || operation === "unpublish") &&
+    !accessRules?.[operation]
+  ) {
+    return {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: ${operation} on single "${slug}" requires an authenticated user`,
+    };
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  // A scoped API key is authorized on its OWN stamped grants, not the key
+  // owner's: the route only checked `update` against the key's scope, so this
+  // publish/unpublish re-check must consult the key's own permission list AND
+  // the code-defined access rule against that scope. `apiKeyWriteAllowed`
+  // returns null for a non-API-key caller, falling through to the owner/session
+  // RBAC path below.
+  const scopeDecision = await apiKeyWriteAllowed(
+    authenticatedScope,
+    operation,
+    slug,
+    user,
+    rbacAccessControlService
+  );
+  if (scopeDecision !== null) {
+    return scopeDecision
+      ? null
+      : {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+        };
+  }
+
+  if (!rbacAccessControlService) {
     return null;
   }
 
@@ -352,6 +425,9 @@ export class SingleQueryService extends BaseService {
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // A scoped API key is judged on its OWN read grant, so a super-admin-owned
+        // key does not skip the read gate via the owner's roles.
+        authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       });
       if (accessDenied) {
@@ -667,10 +743,20 @@ export class SingleQueryService extends BaseService {
    * history; the mutation path does NOT, because its subsequent update records
    * the first version itself (opting in there would double-version a first edit).
    */
-  async createDefaultDocument(
-    singleMeta: DynamicSingleRecord,
-    options?: { captureInitialVersion?: boolean }
-  ): Promise<SingleDocument> {
+  /**
+   * Build the default document for a Single in memory, WITHOUT inserting it.
+   *
+   * Returns both the document (system columns + resolved field defaults) and the
+   * snake_cased row ready for an insert. The write path uses this to run its
+   * hook/validation/authorization pipeline against a would-be default before
+   * committing it, so a first write that is refused (for example a publish
+   * without the publish permission) never persists a row it would then have to
+   * delete — a delete that could clobber a concurrent writer's row.
+   */
+  buildDefaultDocument(singleMeta: DynamicSingleRecord): {
+    document: SingleDocument;
+    insertValues: Record<string, unknown>;
+  } {
     const now = new Date();
     const id = crypto.randomUUID();
 
@@ -682,6 +768,15 @@ export class SingleQueryService extends BaseService {
       created_at: now,
       updated_at: now,
     };
+
+    // Surface the status column's DB default ("draft") on the in-memory default
+    // too. The write path runs first-update hooks against this document BEFORE
+    // the auto-create insert, so without this a hook branching on the initial
+    // draft state would see `undefined` where the persisted row (and the old
+    // insert-first path) has "draft". Only when the Single has a lifecycle.
+    if ((singleMeta as { status?: boolean }).status === true) {
+      defaults.status = "draft";
+    }
 
     // i18n: a localized single's main table omits translatable columns (they live in the
     // companion `single_<slug>_locales`), so a required/defaulted translatable value must
@@ -714,10 +809,34 @@ export class SingleQueryService extends BaseService {
       }
     }
 
-    const snakeCaseDefaults = keysToSnakeCase(defaults) as Record<
+    // title and slug are auto-injected system columns, but a Single may opt to
+    // localize them (define-single.ts). When it does, their column lives on the
+    // companion `_locales` table, not the main table, so they must be dropped
+    // from the main-table auto-create insert like any other localized field —
+    // otherwise the insert targets a non-existent main column. They stay on the
+    // in-memory `document` (the read path resolves the localized value).
+    const insertDefaults = { ...defaults };
+    if (localizedNames.has("title")) delete insertDefaults.title;
+    if (localizedNames.has("slug")) delete insertDefaults.slug;
+
+    const snakeCaseDefaults = keysToSnakeCase(insertDefaults) as Record<
       string,
       unknown
     >;
+
+    return {
+      document: defaults as SingleDocument,
+      insertValues: snakeCaseDefaults,
+    };
+  }
+
+  async createDefaultDocument(
+    singleMeta: DynamicSingleRecord,
+    options?: { captureInitialVersion?: boolean }
+  ): Promise<SingleDocument> {
+    const { insertValues: snakeCaseDefaults } =
+      this.buildDefaultDocument(singleMeta);
+    const id = snakeCaseDefaults.id as string;
 
     const versionsConfig = singleMeta.versions;
     const shouldCapture =

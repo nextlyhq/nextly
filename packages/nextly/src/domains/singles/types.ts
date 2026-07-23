@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 
@@ -86,6 +87,13 @@ export interface GetSingleOptions {
   routeAuthorized?: boolean;
 
   /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * read grant rather than the key owner's permissions, so a super-admin-owned
+   * key does not skip a stored read rule.
+   */
+  authenticatedScope?: AuthenticatedScope;
+
+  /**
    * Draft/Published filter override. Only effective when single.status === true.
    * - 'published' (default for public/untrusted callers): only return the
    *   document when its status is 'published'; otherwise return 404 (so a
@@ -142,6 +150,13 @@ export interface UpdateSingleOptions {
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
+
+  /**
+   * The caller's authenticated scope. For a scoped API-key REST write, the
+   * publish/unpublish transition gate judges the key's OWN grants rather than
+   * the key owner's RBAC.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /**

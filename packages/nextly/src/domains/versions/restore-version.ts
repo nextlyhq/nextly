@@ -14,6 +14,7 @@
  * @module domains/versions/restore-version
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
@@ -46,6 +47,13 @@ export interface RestoreVersionArgs {
    * would make it indistinguishable from that person editing by hand.
    */
   actor?: RequestActor;
+  /**
+   * The caller's authenticated scope. A restore replays a snapshot through the
+   * update path, so when the snapshot sets `status: "published"` it hits the
+   * publish transition gate — which for a scoped API key must judge the key's
+   * OWN `publish-<slug>` grant, not the owner's RBAC.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 export interface RestoreVersionResult {
@@ -475,6 +483,11 @@ export async function restoreVersion(
       // Forward the actor so an API-key restore is attributed to the key, not
       // its owner — mirrors the collection branch below.
       ...(args.actor ? { actor: args.actor } : {}),
+      // A snapshot that restores `status: "published"` must satisfy the key's
+      // own publish grant, not the owner's RBAC.
+      ...(args.authenticatedScope
+        ? { authenticatedScope: args.authenticatedScope }
+        : {}),
       ...(writeLocale ? { locale: writeLocale } : {}),
       sourceVersionNo: args.versionNo,
     });
@@ -488,6 +501,11 @@ export async function restoreVersion(
         user: args.user,
         overrideAccess: false,
         routeAuthorized: true,
+        // A snapshot that restores `status: "published"` must satisfy the key's
+        // own publish grant, not the owner's RBAC.
+        ...(args.authenticatedScope
+          ? { authenticatedScope: args.authenticatedScope }
+          : {}),
         // See the note above the Single branch.
         ...(writeLocale ? { locale: writeLocale } : {}),
         ...(args.actor ? { actor: args.actor } : {}),

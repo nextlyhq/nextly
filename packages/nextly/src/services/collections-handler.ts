@@ -4,9 +4,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
@@ -167,6 +169,16 @@ export class CollectionsHandler {
       componentDataService.setRelationshipService(this.relationshipService);
     }
 
+    // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
+    // against. Without it `checkCollectionAccess` has no permission store, so a
+    // missing stored rule defaults to public — which for the publish gate means
+    // an authenticated caller who cleared the route's `update` check could
+    // publish without `publish-<slug>`. Resolved from the container (guarded so
+    // a minimal boot without RBAC still constructs).
+    const rbacAccessControlService = container.has("rbacAccessControlService")
+      ? container.get<RBACAccessControlService>("rbacAccessControlService")
+      : undefined;
+
     this.entryService = new CollectionEntryService(
       adapter,
       logger,
@@ -176,7 +188,7 @@ export class CollectionsHandler {
       hookRegistry,
       accessControlService,
       componentDataService,
-      undefined,
+      rbacAccessControlService,
       this.localization,
       retentionRunner,
       fastDrainScheduler
@@ -212,6 +224,8 @@ export class CollectionsHandler {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.entryService.canUpdateEntry(params);
   }
@@ -485,6 +499,11 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>
   ) {
@@ -493,6 +512,9 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        // Named explicitly (like updateEntry) so the API-key scope survives the
+        // field-by-field rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
       },
       body,
       params.depth
@@ -543,6 +565,12 @@ export class CollectionsHandler {
      * other document-level rules in force.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant, so a super-admin-owned key does not skip the collection's
+     * stored owner-only/custom read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -613,6 +641,11 @@ export class CollectionsHandler {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write, the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>
   ) {
@@ -627,6 +660,9 @@ export class CollectionsHandler {
         // a silently dropped lineage marker would leave a restore
         // indistinguishable from an ordinary edit.
         sourceVersionNo: params.sourceVersionNo,
+        // The API-key scope gates the publish transition; naming it explicitly
+        // (like sourceVersionNo) keeps it from being silently dropped.
+        authenticatedScope: params.authenticatedScope,
       },
       body,
       params.depth
@@ -654,6 +690,8 @@ export class CollectionsHandler {
      * re-check. Never inferred from a userId.
      */
     routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
@@ -685,8 +723,18 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * delete grant, so the session super-admin bypass does not apply to it.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.deleteEntry(this.resolveUserParam(params));
+    return this.entryService.deleteEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
@@ -718,8 +766,18 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. Each per-id delete is judged on a scoped
+     * API key's OWN delete grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.bulkDeleteEntries(this.resolveUserParam(params));
+    return this.entryService.bulkDeleteEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
@@ -752,8 +810,18 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. For a scoped API-key bulk update each
+     * per-id publish/unpublish transition is judged on the key's OWN grants.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
+    return this.entryService.bulkUpdateEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly (like updateEntry) so the API-key scope survives the
+      // field-by-field rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
@@ -783,6 +851,11 @@ export class CollectionsHandler {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. Judges the collection-level gate and
+       * each per-row transition on a scoped API key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: { limit?: number }
   ) {
@@ -790,7 +863,12 @@ export class CollectionsHandler {
     // bulkUpdateEntries so the query-based bulk update honors access control
     // and redaction instead of running as an anonymous caller.
     return this.entryService.bulkUpdateByQuery(
-      this.resolveUserParam(params),
+      {
+        ...this.resolveUserParam(params),
+        // Named explicitly so the API-key scope survives the field-by-field
+        // rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
+      },
       options
     );
   }
@@ -810,6 +888,11 @@ export class CollectionsHandler {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its own
+       * delete grant for the owner-predicate enumeration and each per-row delete.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**
@@ -859,8 +942,18 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. A duplicate is a create, so a scoped
+     * API key copying a published source is judged on the key's OWN grant.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.entryService.duplicateEntry(this.resolveUserParam(params));
+    return this.entryService.duplicateEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
