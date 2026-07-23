@@ -561,4 +561,48 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
     expect(afterAllow?.status).toBe("published");
   });
+
+  it("does not unpublish on an explicit status: undefined write", async () => {
+    // A Direct API / server caller (or a hook) can produce an own
+    // `status: undefined` — `{ status: maybeStatus }`. It names no status change,
+    // so the gate reads it as an ordinary update. A published row must stay
+    // published: without stripping, the undefined key is sanitized to SQL NULL on
+    // the raw-parameter path and the row silently leaves published without ever
+    // passing the unpublish gate (which here would refuse it).
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          // Update allowed; unpublish refused. If the undefined status leaked to
+          // NULL, the row would unpublish despite this rule.
+          access: { update: () => true, unpublish: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const res = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "editor" },
+      { title: "changed", status: undefined }
+    );
+    expect(res.success).toBe(true);
+
+    // The row stays published (status untouched) and the ordinary field wrote.
+    const [row] = await current.adapter.select<{
+      status: string;
+      title: string;
+    }>("dc_posts", {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(row?.status).toBe("published");
+    expect(row?.title).toBe("changed");
+  });
 });

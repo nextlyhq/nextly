@@ -141,13 +141,13 @@ export class RBACAccessControlService {
    * ```
    */
   async checkAccess(params: CheckAccessParams): Promise<boolean> {
-    const { userId, operation, resource } = params;
+    const { userId, operation, resource, executor } = params;
 
     if (!userId) {
       return false;
     }
 
-    if (await isSuperAdmin(userId)) {
+    if (await isSuperAdmin(userId, executor)) {
       return true;
     }
 
@@ -164,7 +164,12 @@ export class RBACAccessControlService {
       }
 
       if (typeof operationAccess === "function") {
-        const ctx = await this.buildContext(userId, operation, resource);
+        const ctx = await this.buildContext(
+          userId,
+          operation,
+          resource,
+          executor
+        );
         try {
           return await operationAccess(ctx);
         } catch (error) {
@@ -178,7 +183,7 @@ export class RBACAccessControlService {
       }
     }
 
-    return hasPermission(userId, operation, resource);
+    return hasPermission(userId, operation, resource, executor);
   }
 
   /**
@@ -197,11 +202,14 @@ export class RBACAccessControlService {
   async buildContext(
     userId: string,
     operation: AccessOperation,
-    resource: string
+    resource: string,
+    // Optional transaction-bound executor so the role/permission reads run on the
+    // caller's transaction connection instead of the pool; see `checkAccess`.
+    executor?: unknown
   ): Promise<AccessControlContext> {
     const [roleSlugs, permissions] = await Promise.all([
-      listRoleSlugsForUser(userId),
-      listEffectivePermissions(userId),
+      listRoleSlugsForUser(userId, executor),
+      listEffectivePermissions(userId, executor),
     ]);
 
     return {

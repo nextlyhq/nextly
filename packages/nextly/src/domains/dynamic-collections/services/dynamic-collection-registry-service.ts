@@ -337,8 +337,14 @@ export class DynamicCollectionRegistryService extends BaseService {
     };
   }
 
-  async getCollection(slug: string): Promise<unknown> {
-    const result = await this.db
+  async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    // Run on the caller's transaction executor when supplied so this metadata
+    // read does not take a second pooled connection from inside the caller's
+    // transaction (which can stall against a small pool); falls back to the
+    // pooled connection otherwise. The transaction-bound Drizzle instance is the
+    // same query-builder shape as `this.db`.
+    const db = executor ?? this.db;
+    const result = await db
       .select()
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug))

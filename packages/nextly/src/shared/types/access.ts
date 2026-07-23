@@ -205,4 +205,11 @@ export interface CheckAccessParams {
   resource: string;
   /** Optional code-defined access control from defineCollection/defineSingle */
   codeAccess?: CollectionAccessControl | SingleAccessControl;
+  /**
+   * Optional transaction-bound Drizzle executor. Supplied when the caller is
+   * already inside a write transaction so the role/permission reads run on that
+   * transaction's own connection rather than taking a second pooled one, which
+   * can stall against a small pool. Defaults to the pooled connection.
+   */
+  executor?: unknown;
 }

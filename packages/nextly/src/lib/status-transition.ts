@@ -51,3 +51,26 @@ export function resolvePublishTransition(
   if (wasPublished && !willBePublished) return "unpublish";
   return null;
 }
+
+/**
+ * Drop an explicit `status: undefined` own-property from a write payload.
+ *
+ * `resolvePublishTransition` treats an undefined next status as "no move", so the
+ * gate reads such a write as an ordinary update. But a write that KEEPS
+ * `status: undefined` in its payload can be sanitized to SQL `NULL` by some
+ * adapters (notably SQLite via the raw parameter list), which moves a published
+ * row OUT of published — an unpublish that never went through the
+ * `unpublish-<slug>` gate. Direct API / server callers and hooks can produce an
+ * own `status: undefined` (`{ status: maybeStatus }`), even though JSON REST
+ * cannot express it. Removing the key makes the write match the gate: an
+ * explicit undefined status leaves the stored value untouched, exactly like an
+ * omitted one. Mutates in place and returns the same object for convenience.
+ */
+export function stripUndefinedStatus<T extends Record<string, unknown>>(
+  data: T
+): T {
+  if ("status" in data && data.status === undefined) {
+    delete data.status;
+  }
+  return data;
+}

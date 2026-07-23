@@ -176,7 +176,13 @@ export class CollectionAccessService extends BaseService {
     // missing data would otherwise cache a denial that pre-empts the under-lock
     // recheck. The rule is instead evaluated against the row-locked document via
     // {@link evaluateTransitionDocumentRule}.
-    deferStoredRuleEval?: boolean
+    deferStoredRuleEval?: boolean,
+    // Optional transaction-bound Drizzle executor. Supplied when the caller is
+    // already inside a write transaction (the caller-owned-tx bulk paths) so the
+    // RBAC role/permission reads and the collection-metadata read run on that
+    // transaction's own connection instead of taking a second pooled one, which
+    // can stall against a small pool. Defaults to the pooled connection.
+    executor?: unknown
   ): Promise<CollectionServiceResult<T> | null> {
     // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
@@ -248,6 +254,7 @@ export class CollectionAccessService extends BaseService {
           userId: user.id,
           operation,
           resource: collectionName,
+          executor,
         });
         if (!allowed) {
           return {
@@ -285,9 +292,12 @@ export class CollectionAccessService extends BaseService {
     }
 
     try {
-      // Get collection metadata to retrieve access rules
-      const collection =
-        await this.collectionService.getCollection(collectionName);
+      // Get collection metadata to retrieve access rules. Runs on the caller's
+      // transaction executor when supplied so this read does not re-enter the pool.
+      const collection = await this.collectionService.getCollection(
+        collectionName,
+        executor
+      );
       const accessRules = this.getAccessRules(
         collection as Record<string, unknown>
       );

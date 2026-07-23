@@ -37,7 +37,10 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
-import { resolvePublishTransition } from "../../../lib/status-transition";
+import {
+  resolvePublishTransition,
+  stripUndefinedStatus,
+} from "../../../lib/status-transition";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionAccessRules } from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
@@ -1400,6 +1403,13 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
+      // An explicit `status: undefined` (own key) names no status change; strip
+      // it so the transition gate and the write agree. A kept undefined status
+      // would be sanitized to SQL NULL on the raw-parameter path — silently
+      // unpublishing a published row, or nulling a create's draft default —
+      // without ever passing the publish/unpublish gate.
+      stripUndefinedStatus(finalData);
+
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -2549,12 +2559,20 @@ export class CollectionMutationService extends BaseService {
     accessUser?: UserContext;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    // A transaction-bound Drizzle executor (`tx.getDrizzle()`), supplied when a
+    // caller-owned-tx path resolves the transition authorization from INSIDE its
+    // own transaction. The metadata and RBAC reads below then run on that
+    // transaction's connection instead of taking a second pooled one, which can
+    // stall against a small pool. Omitted (pooled connection) when a path
+    // pre-resolves before opening its transaction, which is the common case.
+    executor?: unknown;
   }): Promise<TransitionAuthorization> {
     if (args.overrideAccess) {
       return { publishDenied: null, unpublishDenied: null, documentRule: null };
     }
     const collection = await this.collectionService.getCollection(
-      args.collectionName
+      args.collectionName,
+      args.executor
     );
     if ((collection as { status?: boolean }).status !== true) {
       return { publishDenied: null, unpublishDenied: null, documentRule: null };
@@ -2587,7 +2605,8 @@ export class CollectionMutationService extends BaseService {
         args.overrideAccess,
         false,
         args.authenticatedScope,
-        deferPublish
+        deferPublish,
+        args.executor
       ),
       this.accessService.checkCollectionAccess(
         args.collectionName,
@@ -2598,7 +2617,8 @@ export class CollectionMutationService extends BaseService {
         args.overrideAccess,
         false,
         args.authenticatedScope,
-        deferUnpublish
+        deferUnpublish,
+        args.executor
       ),
     ]);
     // Owner-only / custom publish/unpublish rules cannot be judged above because
@@ -2866,6 +2886,13 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
+
+      // An explicit `status: undefined` (own key) names no status change; strip
+      // it so the transition gate and the write agree. A kept undefined status
+      // would be sanitized to SQL NULL on the raw-parameter path — silently
+      // unpublishing a published row, or nulling a create's draft default —
+      // without ever passing the publish/unpublish gate.
+      stripUndefinedStatus(finalData);
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
@@ -4410,6 +4437,13 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
+      // An explicit `status: undefined` (own key) names no status change; strip
+      // it so the transition gate and the write agree. A kept undefined status
+      // would be sanitized to SQL NULL on the raw-parameter path — silently
+      // unpublishing a published row, or nulling a create's draft default —
+      // without ever passing the publish/unpublish gate.
+      stripUndefinedStatus(finalData);
+
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -4586,6 +4620,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -4816,6 +4854,13 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
+      // An explicit `status: undefined` (own key) names no status change; strip
+      // it so the transition gate and the write agree. A kept undefined status
+      // would be sanitized to SQL NULL on the raw-parameter path — silently
+      // unpublishing a published row, or nulling a create's draft default —
+      // without ever passing the publish/unpublish gate.
+      stripUndefinedStatus(finalData);
+
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
       // against) and before any serialization touches the column value.
@@ -4951,6 +4996,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -5437,6 +5486,9 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
+      // Strip an explicit `status: undefined` so it does not sanitize to SQL NULL
+      // and move the row out of published without the gate (see the other paths).
+      stripUndefinedStatus(finalData);
 
       // Password fields store bcrypt hashes, never the submitted value —
       // same guarantee as the non-transaction paths.
@@ -5615,6 +5667,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -5921,6 +5977,9 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
+      // Strip an explicit `status: undefined` so it does not sanitize to SQL NULL
+      // and move the row out of published without the gate (see the other paths).
+      stripUndefinedStatus(finalData);
 
       // Password fields store bcrypt hashes, never the submitted value —
       // same guarantee as the non-transaction paths.
@@ -6060,6 +6119,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
