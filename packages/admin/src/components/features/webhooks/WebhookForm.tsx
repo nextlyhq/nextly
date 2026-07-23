@@ -3,11 +3,11 @@
 /**
  * WebhookForm — presentational create/edit form for a webhook endpoint.
  *
- * The parent owns the mutation: this emits validated `WebhookFormValues` plus a
- * `headersDirty` flag (the parent maps to a create or a minimal-patch update).
- * Header values are never seeded back from a read — they are hidden and start
- * empty — so the form makes the "leave untouched or re-enter the whole set"
- * contract explicit rather than echoing the redacted placeholder.
+ * The parent owns the mutation: this emits validated `WebhookFormValues` (mapped
+ * to a create or a minimal-patch update by the caller). Header values are never
+ * seeded back from a read — they are hidden and the editable list starts empty —
+ * so the form states the "keep, replace, or remove" choice explicitly rather
+ * than echoing the redacted placeholder.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
