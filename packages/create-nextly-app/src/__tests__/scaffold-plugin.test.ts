@@ -141,6 +141,9 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(instrumentation).toContain("seedSuperAdmin");
     expect(instrumentation.match(/await seedDevUser\(\)/g)).toHaveLength(2);
+    // Credential seeding must be locked to `next dev` — a broader guard
+    // (e.g. !== "production") would also seed under NODE_ENV=test.
+    expect(instrumentation).toContain('process.env.NODE_ENV === "development"');
 
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(

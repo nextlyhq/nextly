@@ -11,9 +11,10 @@ export async function register(): Promise<void> {
   // Seed the dev auto-login user (matching admin.devAutoLogin in
   // dev/nextly.config.ts) so the first /admin visit lands on the dashboard
   // instead of the /admin/setup wizard. Both seeders skip rows that already
-  // exist, so re-running on every dev boot is safe. Guarded to non-production
-  // like devAutoLogin itself; this playground is never deployed.
-  if (process.env.NODE_ENV !== "production") {
+  // exist, so re-running on every dev boot is safe. Strictly `next dev` only:
+  // credentials must never be seeded in a production build, and test runners
+  // (NODE_ENV=test) manage their own fixtures.
+  if (process.env.NODE_ENV === "development") {
     const { getService } = await import("nextly");
     const { seedPermissions, seedSuperAdmin } = await import(
       "nextly/database/seeders"
