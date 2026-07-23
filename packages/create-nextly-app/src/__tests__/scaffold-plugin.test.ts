@@ -97,6 +97,16 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     const devEnv = await readFile(path.join(target, "dev/.env"), "utf-8");
     expect(devEnv).toContain("DB_DIALECT=sqlite");
 
+    // /admin must render through QueryProvider — the admin's data hooks
+    // resolve their QueryClient from it, and mounting RootLayout without it
+    // crashes the page on first load ("No QueryClient set").
+    const adminPage = await readFile(
+      path.join(target, "dev/src/app/admin/[[...params]]/page.tsx"),
+      "utf-8"
+    );
+    expect(adminPage).toContain("QueryProvider");
+    expect(adminPage).toContain("ErrorBoundary");
+
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(
       path.join(target, "src/plugin.ts"),
