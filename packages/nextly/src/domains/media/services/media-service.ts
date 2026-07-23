@@ -48,6 +48,7 @@
 // PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
@@ -251,7 +252,10 @@ export class MediaService {
    */
   async upload(
     input: UploadMediaInput,
-    context: RequestContext
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event so an upload
+    // attributes to the real session or API key rather than only the uploader.
+    actor?: RequestActor
   ): Promise<MediaFile> {
     // Ensure storage is configured before upload
     this.ensureStorageConfigured();
@@ -311,18 +315,21 @@ export class MediaService {
     }
     const validated = validation.value;
 
-    const result = await this.legacyMediaService.uploadMedia({
-      file: validated.buffer,
-      filename: validated.filename,
-      mimeType: validated.mimeType,
-      // Use validated buffer length so the DB row matches what's actually
-      // in storage (SVG sanitization can shrink the byte count).
-      size: validated.buffer.length,
-      // Nullable: CLI seeds and system imports run without a user.
-      uploadedBy: context.user?.id ?? null,
-      contentDisposition:
-        validated.isSvg && this.svgCsp ? "attachment" : undefined,
-    });
+    const result = await this.legacyMediaService.uploadMedia(
+      {
+        file: validated.buffer,
+        filename: validated.filename,
+        mimeType: validated.mimeType,
+        // Use validated buffer length so the DB row matches what's actually
+        // in storage (SVG sanitization can shrink the byte count).
+        size: validated.buffer.length,
+        // Nullable: CLI seeds and system imports run without a user.
+        uploadedBy: context.user?.id ?? null,
+        contentDisposition:
+          validated.isSvg && this.svgCsp ? "attachment" : undefined,
+      },
+      actor
+    );
 
     if (!result.success || !result.data) {
       this.logger.warn("Media upload failed", {
@@ -436,18 +443,24 @@ export class MediaService {
   async update(
     mediaId: string,
     input: UpdateMediaInput,
-    _context: RequestContext
+    _context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
   ): Promise<MediaFile> {
     this.logger.debug("Updating media file", { mediaId, input });
 
     // Sanitize metadata fields before storage (defense-in-depth)
     sanitizeMediaInput(input);
 
-    const result = await this.legacyMediaService.updateMedia(mediaId, {
-      altText: input.altText ?? undefined,
-      caption: input.caption ?? undefined,
-      tags: input.tags,
-    });
+    const result = await this.legacyMediaService.updateMedia(
+      mediaId,
+      {
+        altText: input.altText ?? undefined,
+        caption: input.caption ?? undefined,
+        tags: input.tags,
+      },
+      actor
+    );
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
@@ -471,10 +484,15 @@ export class MediaService {
    * @param context - Request context
    * @throws NextlyError if deletion fails.
    */
-  async delete(mediaId: string, _context: RequestContext): Promise<void> {
+  async delete(
+    mediaId: string,
+    _context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
+  ): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
 
-    const result = await this.legacyMediaService.deleteMedia(mediaId);
+    const result = await this.legacyMediaService.deleteMedia(mediaId, actor);
 
     if (!result.success) {
       if (result.statusCode === 404) {
@@ -505,7 +523,10 @@ export class MediaService {
    */
   async bulkUpload(
     inputs: UploadMediaInput[],
-    context: RequestContext
+    context: RequestContext,
+    // Forwarded to each per-item upload so every fan-out event attributes to
+    // the same transport-resolved caller.
+    actor?: RequestActor
   ): Promise<BulkUploadOperationResult<MediaFile>> {
     this.logger.debug("Bulk uploading media files", { count: inputs.length });
 
@@ -527,7 +548,7 @@ export class MediaService {
     const outcomes = await Promise.allSettled(
       inputs.map(async (input, i): Promise<UploadOutcome> => {
         try {
-          const file = await this.upload(input, context);
+          const file = await this.upload(input, context, actor);
           return { kind: "success", file };
         } catch (error) {
           // NextlyError thrown from below the boundary preserves canonical
@@ -608,7 +629,10 @@ export class MediaService {
    */
   async bulkDelete(
     mediaIds: string[],
-    context: RequestContext
+    context: RequestContext,
+    // Forwarded to each per-item delete so every fan-out event attributes to
+    // the same transport-resolved caller.
+    actor?: RequestActor
   ): Promise<BulkOperationResult<{ id: string }>> {
     this.logger.debug("Bulk deleting media files", { count: mediaIds.length });
 
@@ -624,7 +648,7 @@ export class MediaService {
     const outcomes = await Promise.allSettled(
       mediaIds.map(async (mediaId): Promise<DeleteOutcome> => {
         try {
-          await this.delete(mediaId, context);
+          await this.delete(mediaId, context, actor);
           return { kind: "success", id: mediaId };
         } catch (error) {
           if (NextlyError.is(error)) {

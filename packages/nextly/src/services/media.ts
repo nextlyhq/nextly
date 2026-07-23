@@ -27,7 +27,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, count, desc, asc, or, eq, sql } from "drizzle-orm";
+import { and, count, desc, asc, or, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -38,6 +38,11 @@ import {
   deleteImageSizes,
 } from "@nextly/storage";
 
+// Actor threading + outbox recording for media writes. Each write records a
+// durable `media.*` event in the same transaction as the row change.
+import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
   Media,
@@ -203,7 +208,10 @@ export class MediaService extends BaseService {
   /**
    * Upload media file with automatic processing and storage
    */
-  async uploadMedia(input: UploadMediaInput): Promise<MediaResponse> {
+  async uploadMedia(
+    input: UploadMediaInput,
+    actor?: RequestActor
+  ): Promise<MediaResponse> {
     try {
       const {
         file,
@@ -345,7 +353,6 @@ export class MediaService extends BaseService {
         }
       }
 
-      const { media } = this.tables;
       const now = new Date();
       const mediaId = crypto.randomUUID();
 
@@ -372,7 +379,35 @@ export class MediaService extends BaseService {
         updatedAt: now,
       };
 
-      await this.db.insert(media).values(mediaRecord);
+      // Persist the row and record the outbox event in one transaction so the
+      // event is durable exactly when the insert commits, and never for a write
+      // that later rolls back. The positional adapter transaction is required
+      // because recordMutationEvent writes through the adapter's
+      // TransactionContext, not the Drizzle fluent transaction. `sizes` is
+      // serialized to a JSON string up front: the positional insert binds
+      // values through the raw driver, which cannot bind a plain object for the
+      // json/jsonb/text `sizes` column consistently across all three dialects.
+      const insertRow = keysToSnakeCase({
+        ...mediaRecord,
+        sizes: sizesData == null ? null : JSON.stringify(sizesData),
+      }) as Record<string, unknown>;
+
+      await this.adapter.transaction(async tx => {
+        await tx.insert("media", insertRow, { returning: [] });
+
+        // `data` is the just-created row in read shape; a fresh upload has no
+        // prior state, so `previous` is null. Media has no field schema, so
+        // `fields` is empty (nothing to strip). The uploader is the recorded
+        // subject when no transport actor was threaded.
+        await recordMutationEvent(tx, {
+          type: "media.uploaded",
+          resource: { kind: "media", id: mediaId },
+          data: mediaRecord,
+          previous: null,
+          fields: [],
+          actor: actorForWrite(actor, uploadedBy ? { id: uploadedBy } : null),
+        });
+      });
 
       return {
         success: true,
@@ -396,11 +431,10 @@ export class MediaService extends BaseService {
    */
   async updateMedia(
     mediaId: string,
-    changes: UpdateMediaInput
+    changes: UpdateMediaInput,
+    actor?: RequestActor
   ): Promise<MediaResponse> {
     try {
-      const { media } = this.tables;
-
       const existing = await this.getMediaById(mediaId);
       if (!existing.success) {
         return existing;
@@ -492,18 +526,42 @@ export class MediaService extends BaseService {
         }
       }
 
-      await this.db.update(media).set(updateData).where(eq(media.id, mediaId));
+      // The updated row in read shape: prior values overlaid with the caller's
+      // changes and the computed update payload (any regenerated sizes/thumbnail
+      // plus the fresh updatedAt). Reused as both the event `data` and the
+      // response body so the two never drift.
+      const updatedRow = {
+        ...mediaData,
+        ...changes,
+        ...updateData,
+        updatedAt: updateData.updatedAt,
+      } as Media;
+
+      // Commit the row update and its outbox event in one transaction so the
+      // event is durable exactly when the change commits. tx.update delegates to
+      // the same Drizzle write the fluent path used, so column casing and JSON
+      // serialization are unchanged; the positional form is needed only so the
+      // event shares the adapter TransactionContext.
+      await this.adapter.transaction(async tx => {
+        await tx.update("media", updateData, this.whereEq("id", mediaId));
+
+        // `previous` is the row read before the write; `data` is the new state.
+        // Media has no field schema, so `fields` is empty (nothing to strip).
+        await recordMutationEvent(tx, {
+          type: "media.updated",
+          resource: { kind: "media", id: mediaId },
+          data: updatedRow,
+          previous: mediaData,
+          fields: [],
+          actor: actorForWrite(actor, null),
+        });
+      });
 
       return {
         success: true,
         statusCode: 200,
         message: "Media updated successfully",
-        data: {
-          ...mediaData,
-          ...changes,
-          ...updateData,
-          updatedAt: updateData.updatedAt,
-        } as Media,
+        data: updatedRow,
       };
     } catch (error) {
       console.error("[MediaService] Update media error:", error);
@@ -519,10 +577,11 @@ export class MediaService extends BaseService {
   /**
    * Delete media file (removes from storage and database)
    */
-  async deleteMedia(mediaId: string): Promise<DeleteMediaResponse> {
+  async deleteMedia(
+    mediaId: string,
+    actor?: RequestActor
+  ): Promise<DeleteMediaResponse> {
     try {
-      const { media } = this.tables;
-
       const existing = await this.getMediaById(mediaId);
       if (!existing.success || !existing.data) {
         return {
@@ -534,6 +593,33 @@ export class MediaService extends BaseService {
 
       const mediaData = existing.data;
 
+      // Remove the row and record the outbox event in one transaction FIRST,
+      // before touching physical storage. The database is the source of truth,
+      // so the row deletion and its durable event commit together; storage
+      // cleanup runs afterward. If that cleanup fails it leaves an orphaned FILE
+      // (benign, later reclaimable) rather than a surviving ROW pointing at an
+      // already-deleted file (a real read bug). The positional adapter
+      // transaction is required so the event shares the adapter
+      // TransactionContext; tx.delete replaces the prior raw `sql` template.
+      await this.adapter.transaction(async tx => {
+        await tx.delete("media", this.whereEq("id", mediaId));
+
+        // The removed row's final state ships as `data`; there is no post-delete
+        // state, so `previous` is null (mirroring create). Media has no field
+        // schema, so `fields` is empty (nothing to strip).
+        await recordMutationEvent(tx, {
+          type: "media.deleted",
+          resource: { kind: "media", id: mediaId },
+          data: mediaData,
+          previous: null,
+          fields: [],
+          actor: actorForWrite(actor, null),
+        });
+      });
+
+      // Best-effort physical cleanup AFTER the row + event have committed.
+      // Swallow-and-warn: a storage failure must not fail a delete whose
+      // authoritative row removal already succeeded.
       try {
         await withRetry(
           () => this.storage.delete(mediaData.filename, "media"),
@@ -571,10 +657,8 @@ export class MediaService extends BaseService {
         }
       } catch (error) {
         console.warn("[MediaService] Storage deletion warning:", error);
-        // Continue with database deletion even if storage fails
+        // Storage cleanup is best-effort; the row and event are already gone.
       }
-
-      await this.db.delete(media).where(sql`${media.id} = ${mediaId}`);
 
       return {
         success: true,
