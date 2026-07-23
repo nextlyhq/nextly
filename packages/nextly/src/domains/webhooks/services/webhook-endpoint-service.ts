@@ -46,6 +46,7 @@ import {
   ExternalUrlError,
   validateExternalUrl,
 } from "../../../utils/validate-external-url";
+import type { DeliverTransport } from "../deliver";
 import type { WebhookEndpointRegistry } from "../endpoint-registry";
 import {
   decryptWebhookSecret,
@@ -53,6 +54,7 @@ import {
   generateWebhookSecret,
   webhookSecretPrefix,
 } from "../secret";
+import { runEndpointProbe, type WebhookTestResult } from "../test-endpoint";
 import { REDACTED_HEADER_VALUE } from "../types";
 import type { WebhookEventSubscription } from "../types";
 
@@ -530,6 +532,141 @@ export class WebhookEndpointService extends BaseService {
 
     const stored = Array.isArray(row.secretHash) ? row.secretHash : [];
     return stored.map(value => decryptWebhookSecret(String(value)));
+  }
+
+  /**
+   * Send a signed synthetic `webhook.ping` to the endpoint and report whether it
+   * was reachable and accepted. A pure connectivity probe: it reads the endpoint
+   * RAW (real headers + secrets, unlike the read-redacted summary) and posts
+   * out-of-band, writing nothing to the outbox or the delivery queue. Works on a
+   * disabled endpoint too, so an operator can verify a receiver before enabling
+   * it. `transport` is injectable so tests drive outcomes without real network.
+   */
+  async testEndpoint(
+    id: string,
+    options?: {
+      transport?: DeliverTransport;
+      pingId?: string;
+      now?: () => Date;
+    }
+  ): Promise<WebhookTestResult> {
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select()
+          .from(this.table)
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
+          .limit(1)) as WebhookRow[]
+    );
+    const row = rows[0];
+    if (!row) throw this.notFound(id);
+
+    const stored = Array.isArray(row.secretHash) ? row.secretHash : [];
+    const secrets = stored.map(value => decryptWebhookSecret(String(value)));
+    if (secrets.length === 0) {
+      // A delivery must be signed; without a secret there is nothing to sign.
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          "This endpoint has no active signing secret to sign a test event.",
+        logContext: { entity: "webhook-endpoint", id },
+      });
+    }
+
+    const headers =
+      row.headers && typeof row.headers === "object"
+        ? (row.headers as Record<string, string>)
+        : null;
+
+    return runEndpointProbe({
+      webhookId: id,
+      url: row.url,
+      headers,
+      secrets,
+      pingId: options?.pingId ?? crypto.randomUUID(),
+      transport: options?.transport,
+      now: options?.now,
+    });
+  }
+
+  /**
+   * Re-arm a past delivery for another attempt. Scoped by `(webhookId,
+   * deliveryId)` so a delivery can only be re-sent through the endpoint that
+   * owns it.
+   *
+   * The unique `(webhook_id, event_id)` index forbids a second delivery row for
+   * the same event, so this UPDATES the existing row back to a due state rather
+   * than inserting: `pending`, `next_attempt_at = now`, lock cleared, and the
+   * attempt budget reset — while the capped `attempts[]` history is left intact
+   * so the prior failures stay visible. The delivery id (the Standard-Webhooks
+   * `webhook-id`) is reused, so a receiver that already processed it dedupes.
+   * The caller triggers the drain; the row is now claimable.
+   *
+   * Guards: 404 if the delivery is not this endpoint's; 409 if the endpoint was
+   * deleted or is disabled (delivering to it would immediately fail).
+   */
+  async redeliverDelivery(
+    webhookId: string,
+    deliveryId: string
+  ): Promise<void> {
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select({ id: this.deliveries.id })
+          .from(this.deliveries)
+          .where(
+            and(
+              eq(this.deliveries.id, deliveryId),
+              eq(this.deliveries.webhookId, webhookId)
+            )
+          )
+          .limit(1)) as Array<{ id: string }>
+    );
+    if (!rows[0]) {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    // `getEndpoint` filters soft-deleted rows, so a null means the endpoint was
+    // retired; a disabled endpoint would fail the re-attempt permanently.
+    const endpoint = await this.getEndpoint(webhookId);
+    if (!endpoint) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          "This endpoint has been deleted; its deliveries cannot be re-sent.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
+      });
+    }
+    if (!endpoint.enabled) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          "This endpoint is disabled; enable it before re-sending deliveries.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
+      });
+    }
+
+    const now = new Date();
+    await this.query(() =>
+      this.db
+        .update(this.deliveries)
+        .set({
+          status: "pending",
+          nextAttemptAt: now,
+          attemptCount: 0,
+          lockedBy: null,
+          lockedUntil: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(this.deliveries.id, deliveryId),
+            eq(this.deliveries.webhookId, webhookId)
+          )
+        )
+    );
   }
 
   private notFound(id: string): NextlyError {

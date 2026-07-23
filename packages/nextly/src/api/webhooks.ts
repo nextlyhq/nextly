@@ -36,6 +36,7 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import {
   runWebhookDrain,
   type RunWebhookDrainOptions,
@@ -130,7 +131,7 @@ async function requireWebhookPermission(
  * live in `logContext` for operator triage.
  */
 function denySessionOnly(
-  action: "create" | "update" | "delete" | "reveal"
+  action: "create" | "update" | "delete" | "reveal" | "test" | "redeliver"
 ): never {
   throw NextlyError.forbidden({
     logContext: { reason: "session-only", action },
@@ -427,6 +428,94 @@ export function getWebhookDelivery(
     // Opt out of timezone rewriting so the raw response snippet and attempt
     // errors are returned exactly as the receiver sent them.
     return respondDoc(delivery, {
+      headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+    });
+  })(req);
+}
+
+/**
+ * Send a synthetic signed ping to an endpoint and report the outcome.
+ *
+ * A connectivity probe: it makes one outbound request and writes nothing to the
+ * outbox or the delivery queue, so an operator can verify a receiver (reachable
+ * + signature accepted) without producing a real event. Works on a disabled
+ * endpoint too, so a receiver can be verified before it is enabled.
+ *
+ * Auth: **session only** + `update-webhooks` (a side-effecting action, not a read).
+ *
+ * Response: `{ message, result: WebhookTestResult }` via `respondAction`.
+ */
+export function testWebhookEndpoint(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("test");
+
+    const service = await getWebhookService();
+    const result = await service.testEndpoint(id);
+
+    // The receiver's snippet is echoed verbatim; skip timezone rewriting.
+    // Spread into a fresh object so the typed result satisfies the action
+    // envelope's `Record<string, unknown>` shape.
+    return respondAction(
+      "Test event sent.",
+      { ...result },
+      { headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" } }
+    );
+  })(req);
+}
+
+/**
+ * Re-attempt a specific past delivery.
+ *
+ * Re-arms the existing delivery row for another attempt from its stored event
+ * payload (the unique `(webhook, event)` index forbids a duplicate row, so the
+ * delivery id — the Standard-Webhooks `webhook-id` — is reused and a receiver
+ * that already processed it dedupes), then nudges the drain so it goes out
+ * promptly. The outcome surfaces in the delivery log.
+ *
+ * Auth: **session only** + `update-webhooks`.
+ *
+ * Response: `{ message, item: WebhookDeliveryDetail }` via `respondMutation`.
+ */
+export function redeliverWebhookDelivery(
+  req: Request,
+  webhookId: string,
+  deliveryId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("redeliver");
+
+    const service = await getWebhookService();
+    await service.redeliverDelivery(webhookId, deliveryId);
+
+    // Offer the post-response fast drain so the re-armed delivery is attempted
+    // promptly; the scheduled drain is the backstop when no runtime `after()`
+    // is available.
+    if (container.has("webhookFastDrainScheduler")) {
+      container
+        .get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        .offer();
+    }
+
+    // Read back the re-armed delivery for the response so the operator sees its
+    // reset state (status `pending`, attempt count 0) and prior attempt history.
+    const deliveryService = await getWebhookDeliveryService();
+    const delivery = await deliveryService.getDelivery(webhookId, deliveryId);
+    if (!delivery) {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    return respondMutation("Redelivery queued.", delivery, {
       headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
     });
   })(req);
