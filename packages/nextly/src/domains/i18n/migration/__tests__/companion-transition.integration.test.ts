@@ -161,6 +161,34 @@ describe("buildCompanionTransitionStatements — enable", () => {
     // The physical column was relocated off main.
     expect(mainColumns()).not.toContain("sub_title");
   });
+
+  it("ignores a field whose previous type had no main column", () => {
+    // `gallery` used to be a `component` field (layout-only, no physical column) and becomes
+    // a localized text field in the same save that enables localization. It matches by field
+    // name in the old set, but the main table never carried a `gallery` column, so the seed
+    // and drop must skip it; only its companion column is created.
+    const plan = buildCompanionTransitionStatements({
+      slug: "hero",
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      status: false,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: [...FIELDS, { name: "gallery", type: "component" as const }],
+      newFields: [...FIELDS, { name: "gallery", type: "text" as const }],
+      companionExists: false,
+    });
+    run(plan.statements);
+
+    // The companion has the column with no seeded data; the pre-existing field still seeded.
+    const companionRow = sqlite
+      .prepare(`SELECT * FROM "single_hero_locales"`)
+      .get() as { heading: string; gallery: string | null };
+    expect(companionRow.heading).toBe("Hello");
+    expect(companionRow.gallery).toBeNull();
+    expect(mainColumns()).not.toContain("heading");
+  });
 });
 
 describe("buildCompanionTransitionStatements — disable", () => {
