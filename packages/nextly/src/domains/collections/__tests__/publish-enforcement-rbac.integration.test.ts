@@ -17,6 +17,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
@@ -664,5 +665,41 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     });
     expect(row?.status).toBe("published");
     expect(row?.title).toBe("changed");
+  });
+
+  it("honors overrideAccess on a trusted createEntryInTransaction", async () => {
+    // A caller-owned-tx create with overrideAccess must bypass the collection
+    // access gate, exactly as the non-transaction createEntry does. The coarse
+    // create gate previously ignored the flag, so a trusted transactional write
+    // was still evaluated against the (denying) code access rule and refused.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          // Code access denies create for any authenticated user; only a trusted
+          // (overrideAccess) write may create.
+          access: { create: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    const result = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx,
+        { collectionName: "posts", user: { id: "u1" }, overrideAccess: true },
+        { title: "trusted" }
+      )
+    );
+
+    expect(result.success).toBe(true);
+    const [row] = await current.adapter.select<{ title: string }>("dc_posts", {
+      where: { and: [{ column: "title", op: "=", value: "trusted" }] },
+    });
+    expect(row?.title).toBe("trusted");
   });
 });

@@ -4370,15 +4370,19 @@ export class CollectionMutationService extends BaseService {
       // pooled read would take a second connection the transaction is holding,
       // which stalls against a small pool.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-      // 1. Check collection-level access FIRST
+      // 1. Check collection-level access FIRST. Forward the caller's
+      // `overrideAccess`/`routeAuthorized` (as the non-transaction `createEntry`
+      // does): a trusted write must hit the `overrideAccess` bypass rather than
+      // be re-evaluated against RBAC/stored rules, and a route-authorized write
+      // must skip the redundant coarse RBAC re-check.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "create",
         params.user,
         undefined,
         undefined,
-        undefined,
-        undefined,
+        params.overrideAccess,
+        params.routeAuthorized,
         undefined,
         undefined,
         txExecutor
@@ -4833,15 +4837,19 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // 1. Check collection-level access FIRST (with document for owner checks)
+      // 1. Check collection-level access FIRST (with document for owner checks).
+      // Forward the caller's `overrideAccess`/`routeAuthorized` (as the
+      // non-transaction `updateEntry` does): a trusted write must hit the
+      // `overrideAccess` bypass, and a route-authorized write must skip the
+      // redundant coarse RBAC re-check while stored rules still run.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",
         params.user,
         params.entryId,
         existingEntry,
-        undefined,
-        undefined,
+        params.overrideAccess,
+        params.routeAuthorized,
         undefined,
         undefined,
         txExecutor
