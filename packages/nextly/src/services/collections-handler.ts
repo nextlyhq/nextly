@@ -102,41 +102,49 @@ export class CollectionsHandler {
     // Set up the adapter and metadata fetcher for runtime schema generation
     // This allows UI-created collections to work without pre-compiled TypeScript schemas
     this.fileManager.setAdapter(adapter);
-    this.fileManager.setMetadataFetcher(async (collectionName: string) => {
-      try {
-        const result = await adapter.selectOne<{
-          fields: string;
-          tableName: string;
-          status: boolean | number | null;
-          localized: boolean | number | null;
-        }>("dynamic_collections", {
-          where: {
-            and: [{ column: "slug", op: "=", value: collectionName }],
-          },
-        });
+    this.fileManager.setMetadataFetcher(
+      async (collectionName: string, executor?: unknown) => {
+        try {
+          // Runs on the caller's transaction connection when supplied so an
+          // uncached runtime-schema load inside a transaction stays on it.
+          const result = await adapter.selectOne<{
+            fields: string;
+            tableName: string;
+            status: boolean | number | null;
+            localized: boolean | number | null;
+          }>(
+            "dynamic_collections",
+            {
+              where: {
+                and: [{ column: "slug", op: "=", value: collectionName }],
+              },
+            },
+            executor
+          );
 
-        if (result) {
-          const fields =
-            typeof result.fields === "string"
-              ? JSON.parse(result.fields)
-              : result.fields;
-          return {
-            fields,
-            tableName: result.tableName,
-            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
-            status: result.status === true || result.status === 1,
-            // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
-            localized: result.localized === true || result.localized === 1,
-          };
+          if (result) {
+            const fields =
+              typeof result.fields === "string"
+                ? JSON.parse(result.fields)
+                : result.fields;
+            return {
+              fields,
+              tableName: result.tableName,
+              // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
+              status: result.status === true || result.status === 1,
+              // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
+              localized: result.localized === true || result.localized === 1,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[CollectionsHandler] Failed to fetch collection metadata:",
+            error
+          );
         }
-      } catch (error) {
-        console.error(
-          "[CollectionsHandler] Failed to fetch collection metadata:",
-          error
-        );
+        return null;
       }
-      return null;
-    });
+    );
 
     this.relationshipService = new CollectionRelationshipService(
       adapter,

@@ -30,7 +30,10 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
-import { resolvePublishTransition } from "../../../lib/status-transition";
+import {
+  resolvePublishTransition,
+  stripUndefinedStatus,
+} from "../../../lib/status-transition";
 import {
   AccessControlService,
   type CollectionAccessRules,
@@ -668,6 +671,11 @@ export class SingleMutationService extends BaseService {
       // left open before).
       const singleHasStatus =
         (singleMeta as { status?: boolean }).status === true;
+      // An explicit `status: undefined` (own key) names no status change; strip
+      // it so the transition gate and the write agree — a kept undefined status
+      // would be sanitized to SQL NULL and silently unpublish a published Single
+      // without the gate.
+      stripUndefinedStatus(currentData);
       const finalStatus = (currentData as { status?: unknown }).status;
       const isNonDefaultLocaleWrite =
         companion?.hasStatus === true &&

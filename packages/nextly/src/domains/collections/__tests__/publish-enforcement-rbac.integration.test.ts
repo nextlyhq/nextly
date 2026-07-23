@@ -17,6 +17,9 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+// Concrete entry-service type: the transactional overrideAccess test below casts
+// the handler's entry service to it to call createEntryInTransaction directly.
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
@@ -560,5 +563,145 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { where: { and: [{ column: "id", op: "=", value: id }] } }
     );
     expect(afterAllow?.status).toBe("published");
+  });
+
+  it("does not unpublish on an explicit status: undefined write", async () => {
+    // A Direct API / server caller (or a hook) can produce an own
+    // `status: undefined` — `{ status: maybeStatus }`. It names no status change,
+    // so the gate reads it as an ordinary update. A published row must stay
+    // published: without stripping, the undefined key is sanitized to SQL NULL on
+    // the raw-parameter path and the row silently leaves published without ever
+    // passing the unpublish gate (which here would refuse it).
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          // Update allowed; unpublish refused. If the undefined status leaked to
+          // NULL, the row would unpublish despite this rule.
+          access: { update: () => true, unpublish: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const res = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "editor" },
+      { title: "changed", status: undefined }
+    );
+    expect(res.success).toBe(true);
+
+    // The row stays published (status untouched) and the ordinary field wrote.
+    const [row] = await current.adapter.select<{
+      status: string;
+      title: string;
+    }>("dc_posts", {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(row?.status).toBe("published");
+    expect(row?.title).toBe("changed");
+  });
+
+  it("does not unpublish when a field hook reintroduces status: undefined", async () => {
+    // The undefined-status strip must run AFTER field-level hooks, not just on
+    // the caller's payload. A field `beforeChange` hook receives the whole record
+    // and can set an own `status: undefined` as a side effect — which names no
+    // status change but, if it reaches the write, is sanitized to SQL NULL on the
+    // raw-parameter path and silently unpublishes the row. Stripping only before
+    // the hooks would miss it.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { update: () => true, unpublish: () => false },
+          fields: [
+            text({
+              name: "title",
+              hooks: {
+                beforeChange: [
+                  context => {
+                    // Reintroduce an explicit undefined status on UPDATE only, so
+                    // the published seed still publishes on create.
+                    if (context.operation === "update" && context.data) {
+                      (context.data as Record<string, unknown>).status =
+                        undefined;
+                    }
+                    return undefined;
+                  },
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "t", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // The caller sends NO status; only the field hook introduces the undefined,
+    // after the point where the caller payload would have been stripped.
+    const res = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "editor" },
+      { title: "changed" }
+    );
+    expect(res.success).toBe(true);
+
+    const [row] = await current.adapter.select<{
+      status: string;
+      title: string;
+    }>("dc_posts", {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(row?.status).toBe("published");
+    expect(row?.title).toBe("changed");
+  });
+
+  it("honors overrideAccess on a trusted createEntryInTransaction", async () => {
+    // A caller-owned-tx create with overrideAccess must bypass the collection
+    // access gate, exactly as the non-transaction createEntry does. The coarse
+    // create gate previously ignored the flag, so a trusted transactional write
+    // was still evaluated against the (denying) code access rule and refused.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          // Code access denies create for any authenticated user; only a trusted
+          // (overrideAccess) write may create.
+          access: { create: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    const result = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx,
+        { collectionName: "posts", user: { id: "u1" }, overrideAccess: true },
+        { title: "trusted" }
+      )
+    );
+
+    expect(result.success).toBe(true);
+    const [row] = await current.adapter.select<{ title: string }>("dc_posts", {
+      where: { and: [{ column: "title", op: "=", value: "trusted" }] },
+    });
+    expect(row?.title).toBe("trusted");
   });
 });

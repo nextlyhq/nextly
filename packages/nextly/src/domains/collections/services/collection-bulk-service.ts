@@ -1167,7 +1167,10 @@ export class CollectionBulkService extends BaseService {
       return result;
     }
 
-    // 1. Check collection-level access FIRST (once for all entries)
+    // 1. Check collection-level access FIRST (once for all entries). This runs
+    // inside the caller's transaction, so the RBAC/metadata reads are bound to
+    // the transaction's connection (`tx.getDrizzle()`) rather than taking a
+    // second pooled connection, which can stall against a small pool.
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
@@ -1178,7 +1181,9 @@ export class CollectionBulkService extends BaseService {
         undefined,
         undefined,
         // Judge a scoped API key on its OWN create grant, not the key owner's.
-        params.authenticatedScope
+        params.authenticatedScope,
+        undefined,
+        tx.getDrizzle()
       );
     if (accessDenied) {
       return {
@@ -1192,14 +1197,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // Resolve the caller's publish authorization ONCE (pooled) before looping the
-    // workers, so each create-as-published is enforced without a permission read
-    // inside the caller's transaction.
+    // Resolve the caller's publish authorization ONCE before looping the workers,
+    // so each create-as-published is enforced without a per-row permission read.
+    // Bound to the caller's transaction connection so this resolution does not
+    // re-enter the pool from inside the transaction.
     const transitionAuth =
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
         accessUser: params.user,
         authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
       });
 
     // Process in batches for memory efficiency
@@ -1521,7 +1528,10 @@ export class CollectionBulkService extends BaseService {
       return result;
     }
 
-    // 1. Check collection-level access FIRST (once for all entries)
+    // 1. Check collection-level access FIRST (once for all entries). This runs
+    // inside the caller's transaction, so the RBAC/metadata reads are bound to
+    // the transaction's connection (`tx.getDrizzle()`) rather than taking a
+    // second pooled connection, which can stall against a small pool.
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
@@ -1532,7 +1542,9 @@ export class CollectionBulkService extends BaseService {
         undefined,
         undefined,
         // Judge a scoped API key on its OWN update grant, not the key owner's.
-        params.authenticatedScope
+        params.authenticatedScope,
+        undefined,
+        tx.getDrizzle()
       );
     if (accessDenied) {
       return {
@@ -1546,14 +1558,16 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // Resolve the caller's publish/unpublish authorization ONCE (pooled) before
-    // looping the workers, so each transition is enforced under the row lock
-    // without a permission read inside the caller's transaction.
+    // Resolve the caller's publish/unpublish authorization ONCE before looping
+    // the workers, so each transition is enforced under the row lock without a
+    // per-row permission read. Bound to the caller's transaction connection so
+    // this resolution does not re-enter the pool from inside the transaction.
     const transitionAuth =
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
         accessUser: params.user,
         authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
       });
 
     // Process in batches for memory efficiency
@@ -1880,12 +1894,22 @@ export class CollectionBulkService extends BaseService {
       return result;
     }
 
-    // 1. Check collection-level access FIRST (once for all entries)
+    // 1. Check collection-level access FIRST (once for all entries). This runs
+    // inside the caller's transaction, so the RBAC/metadata reads are bound to
+    // the transaction's connection (`tx.getDrizzle()`) rather than taking a
+    // second pooled connection, which can stall against a small pool.
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "delete",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        tx.getDrizzle()
       );
     if (accessDenied) {
       return {

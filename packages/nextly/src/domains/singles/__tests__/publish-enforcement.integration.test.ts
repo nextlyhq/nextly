@@ -280,4 +280,41 @@ describe("single publish enforcement — authorize before create (integration)",
     );
     expect(ok.success).toBe(true);
   });
+
+  it("does not unpublish a Single on an explicit status: undefined write", async () => {
+    // An own `status: undefined` (Direct API / server / hook) names no status
+    // change; a published Single must stay published rather than being sanitized
+    // to NULL and unpublished without the gate.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          status: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    const service =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await service.update(
+      "branding",
+      { siteName: "S", status: "published" },
+      { overrideAccess: true }
+    );
+
+    // A plain field edit that also carries an explicit undefined status.
+    const res = await service.update(
+      "branding",
+      { siteName: "changed", status: undefined },
+      { user: { id: "editor" }, routeAuthorized: true }
+    );
+    expect(res.success).toBe(true);
+
+    const row = await current.adapter.selectOne<{
+      status: string;
+      siteName: string;
+    }>("single_branding", {});
+    expect(row?.status).toBe("published");
+  });
 });

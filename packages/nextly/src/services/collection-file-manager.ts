@@ -30,7 +30,13 @@ export interface FileManagerConfig {
  * the column from `dynamic_collections` / `dynamic_singles` and forwards
  * a coerced boolean to FileManager's runtime generation.
  */
-export type CollectionMetadataFetcher = (collectionName: string) => Promise<{
+export type CollectionMetadataFetcher = (
+  collectionName: string,
+  // Optional transaction-bound executor so the metadata read runs on the
+  // caller's transaction connection instead of taking a second pooled one when
+  // schema loading happens inside a caller-owned transaction.
+  executor?: unknown
+) => Promise<{
   fields: FieldDefinition[];
   tableName: string;
   status?: boolean;
@@ -200,8 +206,14 @@ export class CollectionFileManager {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async loadDynamicSchema(collectionName: string): Promise<any> {
+  async loadDynamicSchema(
+    collectionName: string,
+    // Optional transaction-bound executor forwarded to the metadata fetcher when
+    // the runtime schema is not cached and must be read from the database inside
+    // a caller-owned transaction (see CollectionMetadataFetcher).
+    executor?: unknown
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<any> {
     const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
     console.log(
       "[FileManager] loadDynamicSchema called for:",
@@ -228,7 +240,7 @@ export class CollectionFileManager {
       );
 
       try {
-        const metadata = await this.metadataFetcher(collectionName);
+        const metadata = await this.metadataFetcher(collectionName, executor);
         if (metadata && metadata.fields) {
           const dialect = this.adapter.dialect;
           const tableName =

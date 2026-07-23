@@ -763,10 +763,14 @@ export class DynamicCollectionService extends BaseService {
   }
 
   async getCollection(
-    name: string
+    name: string,
+    // Optional transaction-bound executor so the registry read runs on the
+    // caller's transaction connection instead of the pool; see the base
+    // registry service's `getRecordBySlug`.
+    executor?: unknown
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers index dialect-specific row shapes
   ): Promise<any> {
-    return this.registryService.getCollection(name);
+    return this.registryService.getCollection(name, executor);
   }
 
   async unregisterCollection(name: string): Promise<unknown> {

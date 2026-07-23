@@ -132,9 +132,12 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   async getCollectionBySlug(
-    slug: string
+    slug: string,
+    // Optional transaction-bound executor so the lookup runs on the caller's
+    // transaction connection instead of taking a second pooled one.
+    executor?: unknown
   ): Promise<DynamicCollectionRecord | null> {
-    return this.getRecordBySlug(slug);
+    return this.getRecordBySlug(slug, executor);
   }
 
   async getCollection(slug: string): Promise<DynamicCollectionRecord> {

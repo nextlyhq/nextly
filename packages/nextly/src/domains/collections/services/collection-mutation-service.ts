@@ -37,7 +37,10 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
-import { resolvePublishTransition } from "../../../lib/status-transition";
+import {
+  resolvePublishTransition,
+  stripUndefinedStatus,
+} from "../../../lib/status-transition";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionAccessRules } from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
@@ -1028,7 +1031,8 @@ export class CollectionMutationService extends BaseService {
       params.field,
       params.value,
       params.caseInsensitive || false,
-      params.excludeId
+      params.excludeId,
+      params.executor
     );
   };
 
@@ -1054,11 +1058,20 @@ export class CollectionMutationService extends BaseService {
     field: string,
     value: unknown,
     caseInsensitive: boolean = false,
-    excludeId?: string
+    excludeId?: string,
+    // Optional transaction-bound executor so the uniqueness read runs on the
+    // caller's transaction connection (a stored unique-validation hook firing
+    // inside a caller-owned transaction) instead of the pool; defaults to it.
+    executor?: unknown
   ): Promise<boolean> {
     try {
       // Load the schema for this collection
-      const schema = await this.fileManager.loadDynamicSchema(collectionName);
+      // Forward the executor so an uncached runtime-schema load (UI collection)
+      // stays on the caller's transaction connection rather than the pool.
+      const schema = await this.fileManager.loadDynamicSchema(
+        collectionName,
+        executor
+      );
 
       // Check if the field exists in the schema
       if (!schema[field]) {
@@ -1068,9 +1081,11 @@ export class CollectionMutationService extends BaseService {
         return false;
       }
 
-      // Build the query
-
-      let query = this.db.select().from(schema);
+      // Build the query. Runs on the caller's transaction connection when an
+      // executor is supplied so this read does not re-enter the pool from inside
+      // the transaction; falls back to the pooled connection otherwise.
+      const db = executor ?? this.db;
+      let query = db.select().from(schema);
 
       // Build the WHERE condition
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
@@ -1483,6 +1498,16 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2549,12 +2574,20 @@ export class CollectionMutationService extends BaseService {
     accessUser?: UserContext;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    // A transaction-bound Drizzle executor (`tx.getDrizzle()`), supplied when a
+    // caller-owned-tx path resolves the transition authorization from INSIDE its
+    // own transaction. The metadata and RBAC reads below then run on that
+    // transaction's connection instead of taking a second pooled one, which can
+    // stall against a small pool. Omitted (pooled connection) when a path
+    // pre-resolves before opening its transaction, which is the common case.
+    executor?: unknown;
   }): Promise<TransitionAuthorization> {
     if (args.overrideAccess) {
       return { publishDenied: null, unpublishDenied: null, documentRule: null };
     }
     const collection = await this.collectionService.getCollection(
-      args.collectionName
+      args.collectionName,
+      args.executor
     );
     if ((collection as { status?: boolean }).status !== true) {
       return { publishDenied: null, unpublishDenied: null, documentRule: null };
@@ -2587,7 +2620,8 @@ export class CollectionMutationService extends BaseService {
         args.overrideAccess,
         false,
         args.authenticatedScope,
-        deferPublish
+        deferPublish,
+        args.executor
       ),
       this.accessService.checkCollectionAccess(
         args.collectionName,
@@ -2598,7 +2632,8 @@ export class CollectionMutationService extends BaseService {
         args.overrideAccess,
         false,
         args.authenticatedScope,
-        deferUnpublish
+        deferUnpublish,
+        args.executor
       ),
     ]);
     // Owner-only / custom publish/unpublish rules cannot be judged above because
@@ -2933,6 +2968,16 @@ export class CollectionMutationService extends BaseService {
       });
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -4325,11 +4370,27 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      // 1. Check collection-level access FIRST
+      // A direct caller runs this inside its own transaction, so every metadata
+      // and access read below is bound to that transaction's connection — a
+      // pooled read would take a second connection the transaction is holding,
+      // which stalls against a small pool.
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+      // 1. Check collection-level access FIRST. Forward the caller's
+      // `overrideAccess`/`routeAuthorized` (as the non-transaction `createEntry`
+      // does): a trusted write must hit the `overrideAccess` bypass rather than
+      // be re-evaluated against RBAC/stored rules, and a route-authorized write
+      // must skip the redundant coarse RBAC re-check.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "create",
-        params.user
+        params.user,
+        undefined,
+        undefined,
+        params.overrideAccess,
+        params.routeAuthorized,
+        undefined,
+        undefined,
+        txExecutor
       );
       if (accessDenied) {
         return accessDenied;
@@ -4337,7 +4398,8 @@ export class CollectionMutationService extends BaseService {
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        txExecutor
       );
       const fields =
         ((
@@ -4370,6 +4432,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
       // Use modified data if returned by beforeOperation
@@ -4382,6 +4447,9 @@ export class CollectionMutationService extends BaseService {
         data: currentData,
         user: params.user,
         context: sharedContext,
+        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+        // caller's transaction connection so they do not re-enter the pool.
+        executor: txExecutor,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -4404,7 +4472,10 @@ export class CollectionMutationService extends BaseService {
             dataAfterCodeHooks,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       const finalData = (storedBeforeResult.data ??
@@ -4491,6 +4562,16 @@ export class CollectionMutationService extends BaseService {
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -4586,6 +4667,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -4605,7 +4690,6 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the entry.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -4626,6 +4710,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterCreate", afterContext);
@@ -4640,7 +4727,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -4711,9 +4801,15 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
+      // A direct caller runs this inside its own transaction, so every metadata
+      // and access read below is bound to that transaction's connection — a
+      // pooled read would take a second connection the transaction is holding,
+      // which stalls against a small pool.
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       // Get collection metadata and hooks first
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        txExecutor
       );
       const fields =
         ((
@@ -4749,13 +4845,22 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // 1. Check collection-level access FIRST (with document for owner checks)
+      // 1. Check collection-level access FIRST (with document for owner checks).
+      // Forward the caller's `overrideAccess`/`routeAuthorized` (as the
+      // non-transaction `updateEntry` does): a trusted write must hit the
+      // `overrideAccess` bypass, and a route-authorized write must skip the
+      // redundant coarse RBAC re-check while stored rules still run.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",
         params.user,
         params.entryId,
-        existingEntry
+        existingEntry,
+        params.overrideAccess,
+        params.routeAuthorized,
+        undefined,
+        undefined,
+        txExecutor
       );
       if (accessDenied) {
         return accessDenied;
@@ -4775,6 +4880,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
       // Use modified data if returned by beforeOperation
@@ -4788,6 +4896,9 @@ export class CollectionMutationService extends BaseService {
         originalData: existingEntry,
         user: params.user,
         context: sharedContext,
+        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+        // caller's transaction connection so they do not re-enter the pool.
+        executor: txExecutor,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -4810,7 +4921,10 @@ export class CollectionMutationService extends BaseService {
             dataAfterCodeHooks,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       const finalData = (storedBeforeResult.data ??
@@ -4874,6 +4988,16 @@ export class CollectionMutationService extends BaseService {
       });
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -4951,6 +5075,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -4984,7 +5112,6 @@ export class CollectionMutationService extends BaseService {
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           await this.relationshipService.deleteManyToManyRelations(
@@ -5015,6 +5142,9 @@ export class CollectionMutationService extends BaseService {
         originalData: existingEntry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterUpdate", afterContext);
@@ -5029,7 +5159,10 @@ export class CollectionMutationService extends BaseService {
           updated,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5098,9 +5231,12 @@ export class CollectionMutationService extends BaseService {
     // side-effect issue, not an eventless delete, and must NOT roll the batch back.
     let deleteNeedsRollback = false;
     try {
-      // Get collection metadata and stored hooks
+      // Get collection metadata and stored hooks. Runs on the caller's
+      // transaction connection so this read does not re-enter the pool from
+      // inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
@@ -5128,7 +5264,20 @@ export class CollectionMutationService extends BaseService {
       // 1. Check collection-level access FIRST (with document for owner checks)
       const accessDenied = await this.accessService.checkCollectionAccess<{
         deleted: boolean;
-      }>(params.collectionName, "delete", params.user, params.entryId, entry);
+      }>(
+        params.collectionName,
+        "delete",
+        params.user,
+        params.entryId,
+        entry,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // Bound to the caller's transaction connection so this RBAC/metadata read
+        // does not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
+      );
       if (accessDenied) {
         return accessDenied;
       }
@@ -5146,6 +5295,9 @@ export class CollectionMutationService extends BaseService {
           ? { id: params.user.id, email: params.user.email }
           : undefined,
         context: sharedContext,
+        // Bind a beforeOperation hook that reads via context.executor to the
+        // caller's transaction connection so it does not re-enter the pool.
+        executor: tx.getDrizzle(),
       });
 
       // Note: For delete, we don't use modified id since we already fetched the entry
@@ -5158,6 +5310,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind a code beforeDelete hook that reads via context.executor to the
+        // caller's transaction connection so it does not re-enter the pool.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute(
@@ -5175,7 +5330,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5275,6 +5433,9 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        // Bind an after-hook that reads via context.executor to the caller's
+        // transaction connection so it does not re-enter the pool from the tx.
+        executor: tx.getDrizzle(),
       });
 
       await this.hookService.hookRegistry.execute("afterDelete", afterContext);
@@ -5289,7 +5450,10 @@ export class CollectionMutationService extends BaseService {
           entry,
           this.queryDatabaseFn,
           params.user,
-          sharedContext
+          sharedContext,
+          // Bind a stored hook's uniqueness read to the caller's transaction
+          // connection so it does not re-enter the pool from inside the tx.
+          tx.getDrizzle()
         )
       );
 
@@ -5353,9 +5517,12 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      // Get collection metadata to identify relation fields
+      // Get collection metadata to identify relation fields. Runs on the
+      // caller's transaction connection so this per-entry read does not re-enter
+      // the pool from inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const fields =
         ((
@@ -5392,6 +5559,9 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            // Bind a beforeOperation hook that reads via context.executor to the
+            // caller's transaction connection so it does not re-enter the pool.
+            executor: tx.getDrizzle(),
           });
 
         // Use modified data if returned by beforeOperation
@@ -5408,6 +5578,10 @@ export class CollectionMutationService extends BaseService {
           data: currentData,
           user: params.user,
           context: sharedContext,
+          // Bind DB-reading hooks (e.g. the built-in sanitization hook, which
+          // loads field metadata) to the caller's transaction connection so they
+          // do not re-enter the pool from inside the transaction.
+          executor: tx.getDrizzle(),
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(
@@ -5427,7 +5601,10 @@ export class CollectionMutationService extends BaseService {
               currentData,
               this.queryDatabaseFn,
               params.user,
-              sharedContext
+              sharedContext,
+              // Bind a stored hook's uniqueness read to the caller's transaction
+              // connection so it does not re-enter the pool from inside the tx.
+              tx.getDrizzle()
             )
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
@@ -5522,6 +5699,16 @@ export class CollectionMutationService extends BaseService {
 
       await hashPasswordFieldValues(finalData, fields);
 
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
+
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -5615,6 +5802,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -5657,6 +5848,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -5674,7 +5868,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -5759,9 +5956,12 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      // Get collection metadata to identify relation fields
+      // Get collection metadata to identify relation fields. Runs on the
+      // caller's transaction connection so this per-entry read does not re-enter
+      // the pool from inside the transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
       const fields =
         ((
@@ -5794,7 +5994,10 @@ export class CollectionMutationService extends BaseService {
         params.overrideAccess,
         // A scoped API key keeps the owner predicate even when owned by a
         // super-admin, so a batch update judges the key on its OWN grant.
-        params.authenticatedScope
+        params.authenticatedScope,
+        // Bound to the caller's transaction connection so the metadata read does
+        // not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -5875,6 +6078,9 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            // Bind a beforeOperation hook that reads via context.executor to the
+            // caller's transaction connection so it does not re-enter the pool.
+            executor: tx.getDrizzle(),
           });
 
         // Use modified data if returned by beforeOperation
@@ -5892,6 +6098,9 @@ export class CollectionMutationService extends BaseService {
           originalData: existingEntry,
           user: params.user,
           context: sharedContext,
+          // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
+          // caller's transaction connection so they do not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(
@@ -5911,7 +6120,10 @@ export class CollectionMutationService extends BaseService {
               currentData,
               this.queryDatabaseFn,
               params.user,
-              sharedContext
+              sharedContext,
+              // Bind a stored hook's uniqueness read to the caller's transaction
+              // connection so it does not re-enter the pool from inside the tx.
+              tx.getDrizzle()
             )
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
@@ -5983,6 +6195,16 @@ export class CollectionMutationService extends BaseService {
       }
 
       await hashPasswordFieldValues(finalData, fields);
+
+      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
+      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
+      // `status: undefined`, which names no status change but would otherwise be
+      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
+      // published row, or nulling a create's draft default — without passing the
+      // publish/unpublish gate. Placed here, the last status-touching step before
+      // the transition classification and the write, so the write payload and the
+      // gate agree even when a hook set the undefined.
+      stripUndefinedStatus(finalData);
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -6060,6 +6282,10 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -6128,6 +6354,9 @@ export class CollectionMutationService extends BaseService {
           originalData: existingEntry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -6145,7 +6374,10 @@ export class CollectionMutationService extends BaseService {
             updated,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -6228,9 +6460,12 @@ export class CollectionMutationService extends BaseService {
     // reads it back and applies it only after the transaction commits.
     let eventRecorded = false;
     try {
-      // Get collection metadata early
+      // Get collection metadata early. Runs on the caller's transaction
+      // connection so this read does not re-enter the pool from inside the
+      // transaction (which can stall against a small pool).
       const collection = await this.collectionService.getCollection(
-        params.collectionName
+        params.collectionName,
+        tx.getDrizzle()
       );
 
       const tableName = this.resolveTableName(
@@ -6248,7 +6483,13 @@ export class CollectionMutationService extends BaseService {
         params.user,
         // A trusted override must not have an owner predicate forced onto its
         // fetch, or it would 404 rows it is entitled to delete.
-        params.overrideAccess
+        params.overrideAccess,
+        // This worker carries no scoped-API-key context (unlike the update
+        // worker); the owner predicate is resolved from the session user only.
+        undefined,
+        // Bound to the caller's transaction connection so the metadata read does
+        // not re-enter the pool from inside the transaction.
+        tx.getDrizzle()
       );
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
@@ -6320,6 +6561,9 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          // Bind a beforeOperation hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         // Note: For delete, we don't use modified id since we already fetched the entry
@@ -6332,6 +6576,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind a code beforeDelete hook that reads via context.executor to the
+          // caller's transaction connection so it does not re-enter the pool.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -6349,7 +6596,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
@@ -6453,6 +6703,9 @@ export class CollectionMutationService extends BaseService {
           data: entry,
           user: params.user,
           context: sharedContext,
+          // Bind an after-hook that reads via context.executor to the caller's
+          // transaction connection so it does not re-enter the pool from the tx.
+          executor: tx.getDrizzle(),
         });
 
         await this.hookService.hookRegistry.execute(
@@ -6470,7 +6723,10 @@ export class CollectionMutationService extends BaseService {
             entry,
             this.queryDatabaseFn,
             params.user,
-            sharedContext
+            sharedContext,
+            // Bind a stored hook's uniqueness read to the caller's transaction
+            // connection so it does not re-enter the pool from inside the tx.
+            tx.getDrizzle()
           )
         );
       }
