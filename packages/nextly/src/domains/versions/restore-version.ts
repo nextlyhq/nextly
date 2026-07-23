@@ -472,6 +472,9 @@ export async function restoreVersion(
       // The route authorized the caller for this document; the update still
       // runs its own document-level rules.
       routeAuthorized: true,
+      // Forward the actor so an API-key restore is attributed to the key, not
+      // its owner — mirrors the collection branch below.
+      ...(args.actor ? { actor: args.actor } : {}),
       ...(writeLocale ? { locale: writeLocale } : {}),
       sourceVersionNo: args.versionNo,
     });

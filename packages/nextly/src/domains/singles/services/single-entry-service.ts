@@ -136,8 +136,12 @@ export class SingleEntryService extends BaseService {
     const result = await this.mutationService.update(slug, data, options);
     // A successful update always appends an outbox event (single.updated, plus a
     // publish/unpublish transition), so kick the post-write side effects; a
-    // rejected write (access/404) recorded nothing and skips them.
-    if (result.success) await this.afterWrite();
+    // rejected write (access/404) recorded nothing and skips them. A write that
+    // committed its event but then failed a post-commit hook reports
+    // `success:false` with `eventRecorded:true`, so key off either — otherwise a
+    // committed event would miss its fast-drain and retention pass.
+    if (result.success || result.eventRecorded === true)
+      await this.afterWrite();
     return result;
   }
 

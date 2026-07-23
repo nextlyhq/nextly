@@ -176,4 +176,17 @@ export interface SingleResult<T = SingleDocument> {
 
   /** Error details (on failure) */
   errors?: Array<{ field?: string; message: string }>;
+
+  /**
+   * Whether this write appended a durable outbox event, independent of
+   * `success`. The update records the event inside its transaction, then runs
+   * post-commit steps (afterChange/afterUpdate hooks, response expansion): if
+   * one of those throws, the write is already committed but `success` is
+   * reported `false`. Post-write side effects (the webhook fast-drain and
+   * retention pass) key off this flag, not `success`, so a committed-but-
+   * hook-failed write still gets its immediate delivery while a write that
+   * recorded nothing (validation/access failure) does not. Mirrors
+   * `CollectionServiceResult.eventRecorded`.
+   */
+  eventRecorded?: boolean;
 }

@@ -12,7 +12,7 @@
  * @module domains/i18n/companion-join
  */
 
-import { and, inArray, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 /** One localized field: its API/row key (camelCase) + its physical companion column (snake_case). */
 export interface LocalizedFieldRef {
@@ -149,6 +149,56 @@ export async function populateCompanionFields(
       }
       row[field.name] = resolveLocalizedValue(perLocaleValue, localeChain);
     }
+  }
+}
+
+/** A Drizzle-select surface that also supports `.limit()` for a single-row read. */
+interface LimitableDb {
+  select: () => {
+    from: (table: unknown) => {
+      where: (cond: unknown) => {
+        limit: (n: number) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/**
+ * Read one companion row's per-locale `_status` for `(parentId, locale)`.
+ *
+ * Goes through the Drizzle companion table object rather than raw SQL, so the
+ * read uses the same typed query builder the populate helpers do. Returns the
+ * `_status` string, or `null` when no companion row exists for the pair (or the
+ * stored value is not a string). Swallows a missing-companion-table error the
+ * same way {@link populateCompanionFields} does, so an entity whose companion
+ * migration has not run yet reads as having no per-locale status instead of
+ * failing the caller.
+ */
+export async function readCompanionLocaleStatus(
+  db: LimitableDb,
+  companionTable: unknown,
+  parentId: string | number,
+  locale: string
+): Promise<string | null> {
+  const table = companionTable as CompanionTable;
+  try {
+    const rows = await db
+      .select()
+      .from(companionTable)
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale)
+        )
+      )
+      .limit(1);
+    const status = rows[0]?._status;
+    return typeof status === "string" ? status : null;
+  } catch {
+    // The companion `_locales` table may not physically exist yet (dev before
+    // the companion migration runs); treat that as no per-locale status rather
+    // than failing the surrounding read/write.
+    return null;
   }
 }
 

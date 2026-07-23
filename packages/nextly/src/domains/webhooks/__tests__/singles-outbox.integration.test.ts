@@ -15,6 +15,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { getSingleHookCollection } from "../../singles/services/single-query-service";
 import type { WebhookEvent } from "../types";
 
 let current: TestNextly | undefined;
@@ -354,7 +355,15 @@ describe("webhook outbox capture — singles (integration)", () => {
     const rows = (await events(current)).filter(
       r => r.type === "single.updated"
     );
-    const last = envelopeOf(rows[rows.length - 1]);
+    expect(rows).toHaveLength(2);
+    // Select the second edit by its content, not by positional order:
+    // `nextly_events` row order is not guaranteed across Postgres/MySQL, so
+    // taking the last row would be flaky.
+    const second = rows.find(
+      r => (envelopeOf(r).data as { title?: string }).title === "hallo-2"
+    );
+    expect(second).toBeDefined();
+    const last = envelopeOf(second!);
     expect((last.data as { title?: string }).title).toBe("hallo-2");
     // The untouched translation is present on both sides of the diff.
     expect((last.data as { body?: string }).body).toBe("welt");
@@ -386,6 +395,85 @@ describe("webhook outbox capture — singles (integration)", () => {
     expect(
       (envelopeOf(row!).resource as { locale?: string }).locale
     ).toBeUndefined();
+  });
+
+  it("keeps the main-row status and omits locale on a shared-field write to a non-default locale", async () => {
+    // A non-default-locale edit that touches only a shared (non-localized) field
+    // stores no per-locale data, so the event is not locale-specific: it must
+    // carry no resource.locale and report the main row's status, not the
+    // locale's absent (draft) one.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          status: true,
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            // Explicitly shared: text defaults to localized in a localized single.
+            text({ name: "theme", localized: false }),
+          ],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { title: "hi", theme: "light", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    await singles(current).update(
+      "preferences",
+      { theme: "dark" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await events(current);
+    const deWrite = rows.find(
+      r =>
+        r.type === "single.updated" &&
+        (envelopeOf(r).data as { theme?: string }).theme === "dark"
+    );
+    expect(deWrite).toBeDefined();
+    const env = envelopeOf(deWrite!);
+    expect((env.resource as { locale?: string }).locale).toBeUndefined();
+    expect((env.data as { status?: string }).status).toBe("published");
+    // The shared-field edit is not a status transition.
+    expect(rows.filter(r => r.type === "single.unpublished")).toHaveLength(0);
+  });
+
+  it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    // afterUpdate runs after the write transaction commits, so a throw here
+    // leaves the entry + outbox event durable while the result reports failure.
+    current.hooks.register(
+      "afterUpdate",
+      getSingleHookCollection("preferences"),
+      () => {
+        throw new Error("afterUpdate observer failed");
+      }
+    );
+
+    const result = await singles(current).update(
+      "preferences",
+      { title: "hello" },
+      { overrideAccess: true }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.eventRecorded).toBe(true);
+    const rows = (await events(current)).filter(
+      r => r.type === "single.updated"
+    );
+    expect(rows).toHaveLength(1);
   });
 
   it("records the event AND captures a version when versioning is enabled", async () => {

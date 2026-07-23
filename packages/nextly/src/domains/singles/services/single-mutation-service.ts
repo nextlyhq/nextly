@@ -47,7 +47,10 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  populateCompanionFields,
+  readCompanionLocaleStatus,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   isValidLocale,
@@ -266,33 +269,6 @@ export class SingleMutationService extends BaseService {
     return doc;
   }
 
-  /**
-   * The write locale's per-locale `_status`, or null when the companion row
-   * has none.
-   *
-   * Read with raw `tx.execute` (matching upsertCompanionRow): the companion
-   * `_locales` table is not in the Drizzle schema, and the CRUD helpers
-   * camelCase result keys, which would rename `_status`.
-   */
-  private async readCompanionLocaleStatus(
-    tx: TransactionContext,
-    companionTableName: string,
-    entryId: string,
-    locale: string
-  ): Promise<string | null> {
-    const isMysqlDialect = this.adapter.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.adapter.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute<{ _status?: unknown }>(
-      `SELECT ${quote("_status")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
-      [entryId, locale]
-    );
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
-  }
-
   // ============================================================
   // Public API
   // ============================================================
@@ -310,6 +286,11 @@ export class SingleMutationService extends BaseService {
   ): Promise<SingleResult> {
     this.logger.debug("Updating Single document", { slug, options });
 
+    // Set true once the update transaction commits with a real write (which
+    // always appends the outbox event); lets the catch and the `!updated`
+    // return report a committed-but-post-hook-failed write as `eventRecorded`
+    // even when `success` is false. Declared out here so every return sees it.
+    let eventRecorded = false;
     try {
       // 1. Get Single metadata from registry
       const singleMeta = await this.singleRegistryService.getSingleBySlug(slug);
@@ -604,6 +585,17 @@ export class SingleMutationService extends BaseService {
               delete (mainPayload as Record<string, unknown>).status;
             }
 
+            // Take the row lock the UPDATE below needs anyway, before reading
+            // the prior main row and companion values. Without it a concurrent
+            // update can commit between this read and this attempt's UPDATE,
+            // leaving `previous` predating the other writer's fields while the
+            // post-write document carries them — the diff would then attribute
+            // that change to this event. Locking a few statements early costs
+            // little since the UPDATE takes the same lock until commit either
+            // way; the adapter no-ops where row locking is unsupported (SQLite
+            // already serializes writers via BEGIN IMMEDIATE).
+            await tx.lockRow(singleMeta.tableName, existingDoc.id);
+
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
             // and the changed-field diff is accurate. Re-read every attempt
@@ -665,9 +657,14 @@ export class SingleMutationService extends BaseService {
               // on `hasStatus`: querying `_status` on a companion without it
               // would fail the whole write.
               if (companion.hasStatus) {
-                previousCompanionStatus = await this.readCompanionLocaleStatus(
-                  tx,
-                  companion.companionTableName,
+                // Read on the write transaction's Drizzle handle (read-your-
+                // writes, no raw SQL) so the prior per-locale status is the one
+                // this attempt sees before the upsert below overwrites it.
+                previousCompanionStatus = await readCompanionLocaleStatus(
+                  tx.getDrizzle<
+                    Parameters<typeof readCompanionLocaleStatus>[0]
+                  >(),
+                  companion.table,
                   existingDoc.id,
                   writeLocale
                 );
@@ -714,6 +711,36 @@ export class SingleMutationService extends BaseService {
             // keeps the current status.
             const dataLocaleStatus = writtenStatus ?? previousLocaleStatus;
 
+            // Whether this write genuinely stored per-locale component data.
+            // Derived from the write INPUT (`componentFieldData`), not the read-
+            // back doc: a scalar-only edit persists no component data, so it is
+            // not mistaken for a localized component write. A non-localized
+            // component written at a locale is the narrower edge this shares
+            // with the version-capture gate.
+            const wroteLocalizedComponents =
+              snapshotLocale !== undefined &&
+              Object.keys(componentFieldData).length > 0;
+            // `locale` rides the event only when the write genuinely stored
+            // per-locale data: it touched localized Single columns, set a
+            // per-locale status, or wrote localized component data. A plain
+            // non-localized Single (or a shared-field-only edit) gets none, so a
+            // receiver can tell one language's write apart from another's.
+            const eventLocale: string | null =
+              Object.keys(companionData).length > 0 ||
+              companionStatus !== undefined ||
+              wroteLocalizedComponents
+                ? (snapshotLocale ?? null)
+                : null;
+            // Only overlay a per-locale status onto the outbox docs for a
+            // genuinely per-locale event — one that rides a `locale` or that
+            // assigned a status. Otherwise leave the assembled MAIN-row status
+            // in place so a non-locale-specific write (e.g. a shared-field edit
+            // on a non-default locale with no companion row) does not report a
+            // per-locale "draft" over a published main row. Applied symmetrically
+            // to `previous` and `data` so the diff stays like-for-like.
+            const overlayLocaleStatus =
+              eventLocale != null || writtenStatus !== undefined;
+
             const previousDoc = preRow
               ? await this.buildSingleWebhookDoc(
                   tx,
@@ -724,7 +751,7 @@ export class SingleMutationService extends BaseService {
                   companion,
                   previousCompanionValues,
                   snapshotLocale,
-                  previousLocaleStatus
+                  overlayLocaleStatus ? previousLocaleStatus : undefined
                 )
               : null;
 
@@ -997,7 +1024,7 @@ export class SingleMutationService extends BaseService {
               companion,
               dataCompanionValues,
               snapshotLocale,
-              dataLocaleStatus
+              overlayLocaleStatus ? dataLocaleStatus : undefined
             );
 
             // The single's field tree with component references expanded, so the
@@ -1034,26 +1061,6 @@ export class SingleMutationService extends BaseService {
               previousLocaleStatus === "published";
 
             const actor = actorForWrite(options.actor ?? null, options.user);
-            // A component subtree read at the write locale is per-locale state,
-            // so a component-only translation edit counts as locale-specific.
-            const eventComponentFields = fieldConfigs.filter(
-              (f): f is typeof f & { name: string } =>
-                isComponentField(f) && !!f.name
-            );
-            const eventHasLocalizedComponents =
-              snapshotLocale !== undefined &&
-              eventComponentFields.some(f => dataDoc[f.name] !== undefined);
-            // `locale` rides only when the write genuinely stored per-locale
-            // data: this write touched localized Single columns, set a per-locale
-            // status, or captured localized component state. A plain
-            // non-localized Single gets none. Mirrors the version-capture gate so
-            // the event and the snapshot agree on what is locale-specific.
-            const eventLocale: string | null =
-              Object.keys(companionData).length > 0 ||
-              companionStatus !== undefined ||
-              eventHasLocalizedComponents
-                ? (snapshotLocale ?? null)
-                : null;
             // `single` FORBIDS a `collection` slug; `locale` rides only when the
             // single (or an embedded component) is localized, so a receiver can
             // tell one language's write apart from another's.
@@ -1109,11 +1116,20 @@ export class SingleMutationService extends BaseService {
         throw error;
       }
 
+      // The transaction committed (a throw would have propagated above), so a
+      // real write is now durable together with its outbox event. Gate on the
+      // written row: the empty-rows path returns from the tx before recording
+      // anything, so it owes no delivery.
+      eventRecorded = updatedRows.length > 0;
+
       if (updatedRows.length === 0) {
         return {
           success: false,
           statusCode: 500,
           message: "Failed to update Single document",
+          // Carries the per-write state; here it is false (nothing was recorded
+          // for an empty write) but is threaded for parity with the other returns.
+          eventRecorded,
         };
       }
 
@@ -1188,10 +1204,17 @@ export class SingleMutationService extends BaseService {
         success: true,
         statusCode: 200,
         data: updatedDoc,
+        eventRecorded,
       };
     } catch (error) {
       this.logger.error("Failed to update Single document", { slug, error });
-      return buildSingleErrorResult(error, "Failed to update Single document");
+      // A post-commit step (afterChange/afterUpdate hook, response expansion)
+      // can throw after the event is already durable; carry `eventRecorded` so
+      // the fast-drain still fires for a committed-but-hook-failed write.
+      return {
+        ...buildSingleErrorResult(error, "Failed to update Single document"),
+        eventRecorded,
+      };
     }
   }
 }
