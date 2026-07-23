@@ -37,9 +37,10 @@ import type {
   DatabaseConfig,
   DatabaseType,
   ProjectApproach,
+  ProjectInfo,
   ProjectType,
 } from "./types";
-import { detectProject } from "./utils/detect";
+import { detectPackageManager, detectProject } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { copyTemplate } from "./utils/template";
 
@@ -211,6 +212,17 @@ export async function createNextly(
 
     // If user selects the disabled "coming soon" hint, fall back to blank
     projectType = isValidTemplateSelection(template) ? template : "blank";
+  }
+
+  // The plugin template scaffolds a standalone publishable package. In an
+  // existing Next.js project the fresh-scaffold path is skipped entirely, so
+  // proceeding would install app dependencies and generate app config while
+  // never copying the plugin source — a broken hybrid. Fail fast instead.
+  if (projectType === "plugin" && !isFreshProject) {
+    p.cancel(
+      "The Plugin template creates a standalone package and cannot be installed into an existing Next.js project. Run create-nextly-app in an empty directory instead."
+    );
+    return;
   }
 
   // --- Step 3: Schema approach (only for content templates with approaches) ---
@@ -420,8 +432,27 @@ export async function createNextly(
     const s = p.spinner();
     s.start("Detecting project...");
     try {
-      projectInfo = await detectProject(cwd);
-      s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      if (projectType === "plugin") {
+        // A plugin scaffold is a publishable library, not a Next.js app: the
+        // library code lives at src/ and the Next app lives in dev/, so the
+        // app-shaped detection would reject it ("App Router not detected").
+        // Downstream only consumes packageManager for fresh scaffolds
+        // (install + next-steps), so detect that and describe the fixed
+        // plugin layout statically.
+        projectInfo = {
+          isNextJs: false,
+          isAppRouter: false,
+          hasTypescript: true,
+          packageManager: await detectPackageManager(cwd),
+          nextVersion: null,
+          srcDir: true,
+          appDir: "dev/src/app",
+        } satisfies ProjectInfo;
+        s.stop("Detected plugin package");
+      } else {
+        projectInfo = await detectProject(cwd);
+        s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      }
     } catch (error) {
       s.stop("Detection failed");
       telemetry.capture("scaffold_failed", {
