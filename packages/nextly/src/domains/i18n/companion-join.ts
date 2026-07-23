@@ -194,11 +194,27 @@ export async function readCompanionLocaleStatus(
       .limit(1);
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
-  } catch {
-    // The companion `_locales` table may not physically exist yet (dev before
-    // the companion migration runs); treat that as no per-locale status rather
-    // than failing the surrounding read/write.
-    return null;
+  } catch (err) {
+    // Tolerate ONLY the companion `_locales` table not existing yet (a localized
+    // entity before its companion migration runs) — matched the same way the
+    // boot sync detects it. Any other failure (a transient connection drop, a
+    // deadlock) must propagate: this value drives the publish/unpublish
+    // transition, so silently reading it as "no per-locale status" could emit a
+    // spurious event. The driver message rides on the error or its cause.
+    const message = [
+      err instanceof Error ? err.message : String(err),
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : "",
+    ].join(" ");
+    if (
+      message.includes("does not exist") ||
+      message.includes("no such table") ||
+      message.includes("doesn't exist")
+    ) {
+      return null;
+    }
+    throw err;
   }
 }
 
