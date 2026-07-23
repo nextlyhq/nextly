@@ -258,6 +258,26 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
+  // Secure-by-default publish gate (Option A): publishing/unpublishing changes a
+  // document's privileged published state, so an anonymous caller may do it ONLY
+  // when an explicit rule grants it. With no explicit publish/unpublish rule the
+  // operation would otherwise fall through to the rule-less public default below
+  // (`!user` → allow), letting an unauthenticated caller publish a
+  // publicly-writable Single. An explicit stored rule was evaluated above and
+  // allowed if we reach here, so a developer who deliberately opened publishing
+  // (e.g. a public `publish` rule) is respected; only the implicit default denies.
+  if (
+    !user &&
+    (operation === "publish" || operation === "unpublish") &&
+    !accessRules?.[operation]
+  ) {
+    return {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: ${operation} on single "${slug}" requires an authenticated user`,
+    };
+  }
+
   if (!user) {
     return null;
   }
@@ -731,6 +751,15 @@ export class SingleQueryService extends BaseService {
       created_at: now,
       updated_at: now,
     };
+
+    // Surface the status column's DB default ("draft") on the in-memory default
+    // too. The write path runs first-update hooks against this document BEFORE
+    // the auto-create insert, so without this a hook branching on the initial
+    // draft state would see `undefined` where the persisted row (and the old
+    // insert-first path) has "draft". Only when the Single has a lifecycle.
+    if ((singleMeta as { status?: boolean }).status === true) {
+      defaults.status = "draft";
+    }
 
     // i18n: a localized single's main table omits translatable columns (they live in the
     // companion `single_<slug>_locales`), so a required/defaulted translatable value must

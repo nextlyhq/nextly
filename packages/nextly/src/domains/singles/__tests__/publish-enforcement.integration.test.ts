@@ -28,7 +28,7 @@ describe("single publish enforcement — authorize before create (integration)",
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "branding",
           status: true,
           // The route attests `update`; only the publish transition can fail,
           // and this code-defined rule denies it.
@@ -42,7 +42,7 @@ describe("single publish enforcement — authorize before create (integration)",
 
     // First-ever write, and it would publish. The publish rule denies it.
     const denied = await service.update(
-      "settings",
+      "branding",
       { siteName: "S", status: "published" },
       { user: { id: "u1" }, routeAuthorized: true }
     );
@@ -51,7 +51,7 @@ describe("single publish enforcement — authorize before create (integration)",
     expect(denied.statusCode).toBe(403);
 
     // The default was never inserted: the single's table is still empty.
-    const row = await current.adapter.selectOne("single_settings", {});
+    const row = await current.adapter.selectOne("single_branding", {});
     expect(row).toBeNull();
   });
 
@@ -59,7 +59,7 @@ describe("single publish enforcement — authorize before create (integration)",
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "branding",
           status: true,
           access: { publish: () => false },
           fields: [text({ name: "siteName" })],
@@ -74,7 +74,7 @@ describe("single publish enforcement — authorize before create (integration)",
     // authorized write, so the authorize-before-create change does not block a
     // legitimate first publish.
     const ok = await service.update(
-      "settings",
+      "branding",
       { siteName: "S", status: "published" },
       { overrideAccess: true }
     );
@@ -83,7 +83,7 @@ describe("single publish enforcement — authorize before create (integration)",
 
     // The deferred default was persisted and carries the published status.
     const row = await current.adapter.selectOne<{ status?: string }>(
-      "single_settings",
+      "single_branding",
       {}
     );
     expect(row).not.toBeNull();
@@ -94,7 +94,7 @@ describe("single publish enforcement — authorize before create (integration)",
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "branding",
           status: true,
           access: { publish: () => false },
           fields: [text({ name: "siteName" })],
@@ -107,14 +107,14 @@ describe("single publish enforcement — authorize before create (integration)",
     // A first write that stays a draft names no publish transition, so the
     // denying publish rule is never consulted and the row is created.
     const ok = await service.update(
-      "settings",
+      "branding",
       { siteName: "S", status: "draft" },
       { user: { id: "u1" }, routeAuthorized: true }
     );
 
     expect(ok.success).toBe(true);
     const row = await current.adapter.selectOne<{ status?: string }>(
-      "single_settings",
+      "single_branding",
       {}
     );
     expect(row).not.toBeNull();
@@ -131,7 +131,7 @@ describe("single publish enforcement — authorize before create (integration)",
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "branding",
           localized: true,
           status: true,
           access: { publish: () => false },
@@ -144,30 +144,37 @@ describe("single publish enforcement — authorize before create (integration)",
       current.getService<SingleEntryService>("singleEntryService");
     const adapter = current.adapter as unknown as {
       executeQuery: (sql: string) => Promise<unknown>;
+      dialect: string;
     };
+    // Dialect-aware identifier quoting: MySQL parses double-quoted names as
+    // string literals (unless ANSI_QUOTES is on, which this repo's MySQL test
+    // service does not enable), so the raw setup/verify queries must use
+    // backticks on MySQL and double quotes on Postgres/SQLite.
+    const q = (id: string) =>
+      adapter.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
 
     // Trusted create publishes the default locale: main row published, companion
     // `en` `_status` published.
     await service.update(
-      "settings",
+      "branding",
       { heading: "H", status: "published" },
       { overrideAccess: true, locale: "en" }
     );
     const mainRow = await current.adapter.selectOne<{ id: string }>(
-      "single_settings",
+      "single_branding",
       {}
     );
     const id = mainRow?.id as string;
 
     // Manufacture the divergence: main stays published, companion `en` → draft.
     await adapter.executeQuery(
-      `UPDATE "single_settings_locales" SET "_status" = 'draft' WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+      `UPDATE ${q("single_branding_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
     );
 
     // A caller with update (route-attested) but not publish re-publishes the
     // default locale. The companion draft -> published transition must be denied.
     const denied = await service.update(
-      "settings",
+      "branding",
       { heading: "H2", status: "published" },
       { user: { id: "u1" }, routeAuthorized: true, locale: "en" }
     );
@@ -176,20 +183,20 @@ describe("single publish enforcement — authorize before create (integration)",
 
     // The companion `_status` was not moved to published.
     const rows = (await adapter.executeQuery(
-      `SELECT "_status" FROM "single_settings_locales" WHERE "_parent" = '${id}' AND "_locale" = 'en'`
+      `SELECT ${q("_status")} FROM ${q("single_branding_locales")} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
     )) as Array<{ _status: string }> | { rows?: Array<{ _status: string }> };
     const list = Array.isArray(rows) ? rows : (rows.rows ?? []);
     expect(list[0]?._status).toBe("draft");
   });
 
   it("judges a scoped API-key publish on the key's own grant, not the owner's", async () => {
-    // End-to-end: a key scoped for `update-settings` but not `publish-settings`
+    // End-to-end: a key scoped for `update-branding` but not `publish-branding`
     // is refused the publish; a key scoped for publish is allowed. The route
     // stamped only `update`, so the service-side gate judges the key's scope.
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "settings",
+          slug: "branding",
           status: true,
           fields: [text({ name: "siteName" })],
         }),
@@ -200,20 +207,20 @@ describe("single publish enforcement — authorize before create (integration)",
 
     // Seed a draft via a trusted write so the update path is a pure transition.
     await service.update(
-      "settings",
+      "branding",
       { siteName: "S", status: "draft" },
       { overrideAccess: true }
     );
 
     const denied = await service.update(
-      "settings",
+      "branding",
       { status: "published" },
       {
         user: { id: "key-owner" },
         routeAuthorized: true,
         authenticatedScope: {
           actorType: "apiKey",
-          permissions: ["update-settings"],
+          permissions: ["update-branding"],
         },
       }
     );
@@ -221,14 +228,14 @@ describe("single publish enforcement — authorize before create (integration)",
     expect(denied.statusCode).toBe(403);
 
     const allowed = await service.update(
-      "settings",
+      "branding",
       { status: "published" },
       {
         user: { id: "key-owner" },
         routeAuthorized: true,
         authenticatedScope: {
           actorType: "apiKey",
-          permissions: ["update-settings", "publish-settings"],
+          permissions: ["update-branding", "publish-branding"],
         },
       }
     );

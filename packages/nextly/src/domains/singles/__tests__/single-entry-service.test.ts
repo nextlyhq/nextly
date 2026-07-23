@@ -1033,12 +1033,16 @@ describe("SingleEntryService", () => {
       expect(result.statusCode).not.toBe(403);
     });
 
-    it("never persists the default when a first publish is denied", async () => {
-      // No row yet → the update builds a default in memory before the gate runs
-      // but does not insert it. When the publish transition is refused, that
-      // default must never be persisted, so the 403 leaves no document behind
-      // (and, for a versioned single, no historyless row) and there is no row a
-      // rollback delete could destroy out from under a concurrent writer.
+    it("does not commit the default when a first publish is denied", async () => {
+      // No row yet → the update materializes the default INSIDE the write
+      // transaction and enforces the publish transition against the row-locked
+      // status there. When the transition is refused, the transaction throws and
+      // rolls back — so the auto-created default never commits, WITHOUT a
+      // compensating delete that could destroy a concurrent writer's row. (The
+      // real no-row-left-behind guarantee is exercised on a live database in
+      // publish-enforcement.integration.test.ts; this mock transaction has no
+      // rollback to observe, so it asserts the denial and that no compensating
+      // delete is issued.)
       const ctx = lifecycleCtx("publish");
       ctx.adapter.selectOne.mockResolvedValue(null);
 
@@ -1049,8 +1053,9 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.statusCode).toBe(403);
-      // The default was never inserted, so there is nothing to roll back.
-      expect(ctx.adapter.insert).not.toHaveBeenCalled();
+      // The write is gated within a transaction (so the insert is rolled back on
+      // denial), and no compensating delete is issued.
+      expect(ctx.adapter.transaction).toHaveBeenCalled();
       expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
 
