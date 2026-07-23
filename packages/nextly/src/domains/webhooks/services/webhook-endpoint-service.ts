@@ -602,52 +602,31 @@ export class WebhookEndpointService extends BaseService {
    * `webhook-id`) is reused, so a receiver that already processed it dedupes.
    * The caller triggers the drain; the row is now claimable.
    *
-   * Guards: 404 if the delivery is not this endpoint's; 409 if the endpoint was
-   * deleted or is disabled (delivering to it would immediately fail), or if the
-   * delivery is still in flight (a drain worker holds an unexpired lease).
+   * Guards, resolved in this order: 404 if the delivery is unknown or belongs to
+   * another endpoint (a mistyped or never-created `webhookId` yields no scoped
+   * row and so is a not-found, never mistaken for a deleted endpoint); 409 if the
+   * delivery is still in flight (a drain worker holds an unexpired lease); 409 if
+   * the endpoint has been deleted or is disabled (delivering to it would fail).
    *
-   * Never touch an in-flight row: the drain protects an active attempt with a
-   * lease (`locked_until` in the future), not with a status change, so clearing
-   * that lease would let a second worker claim and POST the same delivery while
-   * the first attempt is still open — a duplicate send, and the first worker's
-   * later finalize would clobber this re-arm. The re-arm therefore refuses a
-   * leased row, and the UPDATE itself is conditioned on the lease being free so
-   * a worker that claims the row between the read and the write cannot be
-   * revoked.
+   * All of it runs in one transaction under a `FOR UPDATE` lock on the delivery
+   * row (a no-op on SQLite, whose transactions already serialize writers). The
+   * lock is the write's own lock, so a drain worker that would claim the delivery
+   * blocks until this commits, and a worker already holding an unexpired lease is
+   * seen and refused rather than revoked. Reading the row before writing is also
+   * how the outcome is known, so success is reported only when the row was armed.
+   *
+   * The endpoint's state is read inside the same transaction rather than through
+   * `getEndpoint` beforehand: `getEndpoint` cannot tell a soft-deleted endpoint
+   * from one that never existed (both read back as null), which would report a
+   * bogus id as a deleted-endpoint conflict instead of a not-found. Because a
+   * delivery row outlives its endpoint's soft-delete (the tombstone only cancels
+   * queued rows), confirming the delivery first and then inspecting the endpoint
+   * row's `deleted_at`/`enabled` distinguishes the three cases cleanly.
    */
   async redeliverDelivery(
     webhookId: string,
     deliveryId: string
   ): Promise<void> {
-    // `getEndpoint` filters soft-deleted rows, so a null means the endpoint was
-    // retired; a disabled endpoint would fail the re-attempt permanently. The
-    // drain re-checks endpoint state at send time, so a disable/delete racing
-    // this is caught there rather than delivering to a retired endpoint.
-    const endpoint = await this.getEndpoint(webhookId);
-    if (!endpoint) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message:
-          "This endpoint has been deleted; its deliveries cannot be re-sent.",
-        logContext: { entity: "webhook-endpoint", id: webhookId },
-      });
-    }
-    if (!endpoint.enabled) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message:
-          "This endpoint is disabled; enable it before re-sending deliveries.",
-        logContext: { entity: "webhook-endpoint", id: webhookId },
-      });
-    }
-
-    // Re-arm under a row lock so the read-guard-write cannot interleave with a
-    // drain worker claiming the same row. `forUpdate` takes the lock the write
-    // will need (a no-op on SQLite, whose transactions already serialize
-    // writers), so a worker that would claim the delivery blocks until this
-    // commits, and a worker that already holds an unexpired lease is seen here
-    // and refused — never revoked. Selecting the row before writing is also how
-    // the outcome is known, so success is reported only when the row was armed.
     const outcome = await this.query(() =>
       this.adapter.transaction(async tx => {
         const rows = await tx.select<{ lockedUntil: Date | null }>(
@@ -670,6 +649,23 @@ export class WebhookEndpointService extends BaseService {
           delivery.lockedUntil != null &&
           delivery.lockedUntil.getTime() > Date.now();
         if (leaseHeld) return "in-flight" as const;
+
+        // The delivery exists, so its endpoint row does too (a hard delete
+        // cascades the delivery away). A tombstone (`deleted_at`) or a cleared
+        // `enabled` flag means the re-attempt would fail permanently.
+        const endpoints = await tx.select<{
+          enabled: boolean | number;
+          deletedAt: Date | null;
+        }>("nextly_webhooks", {
+          where: { and: [{ column: "id", op: "=", value: webhookId }] },
+          limit: 1,
+        });
+        const endpoint = endpoints[0];
+        if (!endpoint || endpoint.deletedAt != null) {
+          return "endpoint-deleted" as const;
+        }
+        // Truthiness, not a strict compare: SQLite stores the flag as 0/1.
+        if (!endpoint.enabled) return "endpoint-disabled" as const;
 
         const now = new Date();
         await tx.update(
@@ -704,6 +700,22 @@ export class WebhookEndpointService extends BaseService {
         message:
           "This delivery is currently being sent; try again once it settles.",
         logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+    if (outcome === "endpoint-deleted") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This endpoint has been deleted; its deliveries cannot be re-sent.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
+      });
+    }
+    if (outcome === "endpoint-disabled") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This endpoint is disabled; enable it before re-sending deliveries.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
       });
     }
   }

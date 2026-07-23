@@ -285,6 +285,33 @@ describe("webhook test-ping + redeliver (real SQLite)", () => {
       ).rejects.toBeInstanceOf(NextlyError);
     });
 
+    it("404s a mistyped endpoint id rather than reporting a deleted-endpoint conflict", async () => {
+      // A never-created webhookId yields no scoped delivery, so it must be
+      // not-found — not confused with a soft-deleted endpoint (a 409).
+      await expect(
+        service.redeliverDelivery("wh_never_created", "del_1")
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("409s (deleted) when the endpoint is soft-deleted but the delivery survives", async () => {
+      const { endpoint } = await create();
+      const deliveryId = await seedFailedDelivery(endpoint.id);
+      // Soft-delete tombstones the endpoint but keeps terminal delivery rows, so
+      // a redeliver still finds the delivery and must report the endpoint state
+      // as a conflict, distinct from the not-found above.
+      await service.deleteEndpoint(endpoint.id);
+
+      await expect(
+        service.redeliverDelivery(endpoint.id, deliveryId)
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      const rows = await adapter.select<{ status: string }>(
+        "nextly_webhook_deliveries",
+        { where: { and: [{ column: "id", op: "=", value: deliveryId }] } }
+      );
+      expect(rows[0].status).toBe("failed");
+    });
+
     it("404s when the delivery's event was pruned (cascade removes the delivery)", async () => {
       const { endpoint } = await create();
       const deliveryId = await seedFailedDelivery(endpoint.id);

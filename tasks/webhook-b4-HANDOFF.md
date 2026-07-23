@@ -1,14 +1,16 @@
 # Webhook B4 (test-ping + redeliver) — Session Handoff
 
-**Written:** 2026-07-23. **PR:** https://github.com/nextlyhq/nextly/pull/310
-**Status:** OPEN, CI all green, mergeable but merge-BLOCKED pending codex APPROVED. **1 open review thread** (see §7).
+**Written:** 2026-07-23 (updated 2026-07-24). **PR:** https://github.com/nextlyhq/nextly/pull/310
+**Status:** OPEN, CI all green, mergeable but merge-BLOCKED pending codex APPROVED. **0 open review threads** as of last check.
+
+**Latest HEAD:** `3fb4da1f` (round 5 — finalize lease fence). The §7 "Expired worker clobbers redelivery" thread is RESOLVED (fixed in `3fb4da1f`, see §6 round 5).
 
 ---
 
 ## 0. TL;DR — where to pick up
 
-1. **Immediate:** resolve the newest greptile thread "**Expired worker clobbers redelivery**" (§7). Recommended fix = fence `finalizeDelivery` on lease ownership. Not yet started.
-2. Then keep babysitting #310: work each new review round with a _proper_ solution, push, reply+resolve, re-trigger `@codex @coderabbitai @greptile-apps`.
+1. **Immediate:** re-check open review threads (GraphQL in §8). If codex/greptile/coderabbit posted a new round on `3fb4da1f`, work it with a proper solution. If none and codex has APPROVED, tell the founder it's ready and WAIT for the explicit go-ahead.
+2. Keep babysitting #310: work each new review round with a _proper_ solution, push, reply+resolve, re-trigger `@codex @coderabbitai @greptile-apps`.
 3. **Do NOT merge** until (a) codex posts an APPROVED review AND (b) the founder gives an explicit per-PR go-ahead. Both are required. Codex approval alone is not enough.
 4. After #310 merges → **U1** (admin webhooks UI), then **B5** (webhook secret rotation). See §9.
 
@@ -41,12 +43,13 @@
 - **Worktree:** `/Users/mobeen/Work/Products/nextly-integrations/nextly/nextly-worktrees/webhook-b4`
 - **Branch:** `feat/webhook-test-redeliver` (base `main`).
 - **Monorepo root** (for integration tests): `/Users/mobeen/Work/Products/nextly-integrations/nextly` (the worktree shares the same pnpm workspace; run integration from the worktree root which resolves to the workspace).
-- **Watcher task id:** `bwodbykzq` (persistent Monitor, 15-min poll of #310 for unresolved threads / CI fails / codex approval / merge-close). It has survived the whole session; a re-armed one is fine if it's gone.
+- **Watcher task id:** `b53708drl` (persistent Monitor, 15-min poll of #310 for unresolved threads / CI fails / codex approval / merge-close). It has survived the whole session; a re-armed one is fine if it's gone.
 - **Repo:** `nextlyhq/nextly` (private). `gh` CLI is authenticated.
 
 ### Commits on the branch (newest first)
 
 ```
+3fb4da1f fix(nextly): fence delivery finalize on lease ownership        <- round 5 (open thread §7)
 3e8e3eec fix(nextly): lock the drain claim against a redelivery re-arm
 e933386c fix(nextly): probe with the durable drain timeout
 f16f7b35 fix(nextly): re-arm webhook delivery under a row lock
@@ -146,11 +149,17 @@ Content write → `recordMutationEvent` (writes `nextly_events` outbox) → `fan
 
 - _Stale drain claim after re-arm (codex P2):_ `claimDelivery` SELECT lacked a row lock and cached `attemptCount` in memory; on pg/mysql it could claim a row my re-arm just reset and act on the stale budget (line `attemptCount = row.attemptCount + 1`). **Fixed:** added `forUpdate: true` to `claimDelivery`'s SELECT so claim and re-arm serialize on the row (no-op on SQLite). Follows the existing forUpdate pattern.
 
-All four rounds: check-types + lint clean, full webhook integration suite green (530 passed on SQLite locally; CI runs pg/mysql/sqlite legs — all green as of `3e8e3eec`). Every thread replied + resolved.
+**Round 5 → commit `3fb4da1f`:**
+
+- _Expired worker clobbers redelivery (greptile P1):_ a worker that overruns its lease (lease expired but HTTP still in flight) could `finalizeDelivery` by id and overwrite a row a re-arm/other-drain had taken over. **Fixed:** `claimDelivery` stamps the runner as lease owner on the returned row (`row.lockedBy = runnerId`, plus `lockedBy` added to the `DeliveryRow` interface); `finalizeDelivery` fences its UPDATE with `AND locked_by = row.lockedBy`, so a handed-off row's stale finalize is a no-op. Closes the same clobber between two drain workers too. Deterministic test in `deliver.integration.test.ts` (`does not clobber a delivery whose lease was handed off mid-attempt`) steals the lease during the in-flight request and asserts the re-armed row survives.
+
+All five rounds: check-types + lint clean, full webhook integration suite green (531 passed on SQLite locally as of `3fb4da1f`; CI runs pg/mysql/sqlite legs). Every thread replied + resolved.
 
 ---
 
-## 7. OPEN THREAD — do this first
+## 7. Resolved thread (was "do this first")
+
+**greptile P1 "Expired worker clobbers redelivery"** — RESOLVED in `3fb4da1f` (see round 5 above). Kept here for context in case it re-opens on re-review.
 
 **greptile P1 "Expired worker clobbers redelivery"** — `webhook-endpoint-service.ts:672`, thread id `PRRT_kwDOSYwUJs6TVcjH`, comment db id `3640231506`. Landed 2026-07-23T17:51Z (after `3e8e3eec`).
 
