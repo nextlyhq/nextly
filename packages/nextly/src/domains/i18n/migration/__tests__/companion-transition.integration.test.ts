@@ -8,20 +8,43 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
+import { ddlType } from "../ddl-types";
+import { fieldToLocalizedColumnSpec } from "../field-to-column-spec";
 import { buildCompanionTransitionStatements } from "../reconcile-companion";
 
 let sqlite: Database.Database;
 
-/** A non-localized single's main table with a translatable `heading` column and a shared `views`.
- *  `sub_title` is the physical column for a field NAMED `subTitle` — the storage descriptor
- *  snake_cases field names, so the enable seed/drop must resolve columns the same way. */
+/** The camelCase translatable field exercised by the enable tests. */
+const SUB_TITLE_FIELD = { name: "subTitle", type: "text" as const };
+
+/** The field's physical column, resolved through the SAME descriptor + DDL helpers the
+ *  migration generator uses, so the fixture tracks any change to the field-to-column
+ *  mapping instead of hand-copying its current output. */
+function subTitleColumn(): { name: string; ddl: string } {
+  const col = fieldToLocalizedColumnSpec(SUB_TITLE_FIELD, "sqlite");
+  if (!col) {
+    // A text field must map to a physical column; the fixture cannot be built without one.
+    throw NextlyError.internal({
+      logContext: {
+        field: SUB_TITLE_FIELD.name,
+        reason: "no column descriptor",
+      },
+    });
+  }
+  return { name: col.name, ddl: ddlType(col, "sqlite") };
+}
+
+/** A non-localized single's main table with a translatable `heading` column, a shared
+ *  `views`, and the descriptor-derived column for {@link SUB_TITLE_FIELD}. */
 function createMainTable() {
+  const sub = subTitleColumn();
   sqlite.exec(`CREATE TABLE "single_hero" (
     "id" TEXT PRIMARY KEY,
     "title" TEXT,
     "heading" TEXT,
-    "sub_title" TEXT,
+    "${sub.name}" ${sub.ddl},
     "views" INTEGER
   )`);
 }
@@ -48,7 +71,7 @@ beforeEach(() => {
   createMainTable();
   sqlite
     .prepare(
-      `INSERT INTO "single_hero" ("id","title","heading","sub_title","views") VALUES (?,?,?,?,?)`
+      `INSERT INTO "single_hero" ("id","title","heading","${subTitleColumn().name}","views") VALUES (?,?,?,?,?)`
     )
     .run("h1", "Hero", "Hello", "Sub", 42);
 });
@@ -133,10 +156,11 @@ describe("buildCompanionTransitionStatements — enable", () => {
     expect(cols).toContain("views");
   });
 
-  it("seeds and drops a camelCase-named field via its snake_case column", () => {
-    // The field is NAMED `subTitle` but stored as `sub_title` (the storage descriptor
-    // snake_cases names). The seed's SELECT and the main-table DROP must address the
-    // physical column, not the raw field name, or the value is stranded on main.
+  it("seeds and drops a camelCase-named field via its physical column", () => {
+    // The field is NAMED `subTitle` but stored under the descriptor-derived column name.
+    // The seed's SELECT and the main-table DROP must address the physical column, not the
+    // raw field name, or the value is stranded on main.
+    const sub = subTitleColumn();
     const plan = buildCompanionTransitionStatements({
       slug: "hero",
       tableName: "single_hero",
@@ -145,8 +169,8 @@ describe("buildCompanionTransitionStatements — enable", () => {
       status: false,
       wasLocalized: false,
       isLocalized: true,
-      oldFields: [...FIELDS, { name: "subTitle", type: "text" as const }],
-      newFields: [...FIELDS, { name: "subTitle", type: "text" as const }],
+      oldFields: [...FIELDS, SUB_TITLE_FIELD],
+      newFields: [...FIELDS, SUB_TITLE_FIELD],
       companionExists: false,
     });
     run(plan.statements);
@@ -154,12 +178,12 @@ describe("buildCompanionTransitionStatements — enable", () => {
     // The pre-existing value was copied into the companion under the physical column name.
     const companionRow = sqlite
       .prepare(`SELECT * FROM "single_hero_locales"`)
-      .get() as { heading: string; sub_title: string };
+      .get() as Record<string, unknown>;
     expect(companionRow.heading).toBe("Hello");
-    expect(companionRow.sub_title).toBe("Sub");
+    expect(companionRow[sub.name]).toBe("Sub");
 
     // The physical column was relocated off main.
-    expect(mainColumns()).not.toContain("sub_title");
+    expect(mainColumns()).not.toContain(sub.name);
   });
 
   it("ignores a field whose previous type had no main column", () => {
