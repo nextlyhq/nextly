@@ -242,6 +242,13 @@ export class CollectionMetadataService extends BaseService {
         // a restart — matching the just-created physical table.
         localized,
       });
+      // The entry-list read resolves its SELECT columns from the file manager's own schema
+      // cache, which is separate from the adapter resolver below. The schema-apply path
+      // refreshes both (CollectionsHandler.refreshCollectionSchema); this metadata path must
+      // too, or a localization toggle updates CRUD but leaves the read selecting the moved
+      // column from a table that no longer has it. Same shared file manager instance, so this
+      // reaches the exact cache the read consumes.
+      this.fileManager.refreshSchema(tableName, table);
       const resolver = (
         this.adapter as unknown as {
           tableResolver?: {
