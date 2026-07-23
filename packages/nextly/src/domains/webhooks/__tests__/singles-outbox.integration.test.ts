@@ -521,6 +521,38 @@ describe("webhook outbox capture — singles (integration)", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("emits untouched localized fields as null in a partial translation write", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "body", localized: true }),
+          ],
+        }),
+      ],
+    });
+
+    // Write only `title` for German; `body` is untranslated.
+    await singles(current).update(
+      "preferences",
+      { title: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const row = (await events(current)).find(r => r.type === "single.updated");
+    expect(row).toBeDefined();
+    const data = envelopeOf(row!).data as Record<string, unknown>;
+    expect(data.title).toBe("hallo");
+    // The untouched localized field is present as null (read-shape complete),
+    // not omitted — consumers can tell "untranslated" from "not in the schema".
+    expect(data).toHaveProperty("body");
+    expect(data.body).toBeNull();
+  });
+
   it("records the event AND captures a version when versioning is enabled", async () => {
     current = await createTestNextly({
       singles: [

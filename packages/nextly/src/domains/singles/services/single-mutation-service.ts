@@ -47,6 +47,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   isBlank,
   populateCompanionFields,
@@ -191,9 +192,16 @@ export class SingleMutationService extends BaseService {
           .filter((n): n is string => !!n)
       );
       for (const f of companion.localizedFields) {
-        if (Object.prototype.hasOwnProperty.call(companionValues, f.column)) {
-          parentRow[f.name] = companionValues[f.column];
-        }
+        // Every localized field appears in the read shape — its stored/written
+        // value or null (untranslated), matching populateCompanionFields — so a
+        // partial translation write's payload lists all localized fields, not
+        // only the touched ones.
+        parentRow[f.name] = Object.prototype.hasOwnProperty.call(
+          companionValues,
+          f.column
+        )
+          ? companionValues[f.column]
+          : null;
         // The post-write main row may carry the raw snake_case companion column
         // (merged back after the upsert); the read shape keys a translatable
         // value by field name only, so drop the raw column so `data` and
@@ -550,6 +558,20 @@ export class SingleMutationService extends BaseService {
       // from the callback (not assigned to an outer variable), so the value read
       // below is only ever the committed result. A localized single writes
       // `mainPayload` (translatable columns moved to the companion).
+      // Probe the companion `_locales` table's existence on the POOLED adapter
+      // BEFORE the write transaction opens. Two reasons it must be here and not
+      // inside the transaction: with a single-connection pool the transaction
+      // holds the only connection, so a pooled probe inside it would deadlock;
+      // and probing on the transaction connection would abort the whole
+      // transaction on Postgres when the not-yet-migrated table is absent. The
+      // in-transaction companion reads are skipped when this is false.
+      const companionPhysicallyExists =
+        companion && writeLocale !== undefined
+          ? await companionTableExists(
+              this.adapter,
+              companion.companionTableName
+            )
+          : false;
       let updatedRows: SingleDocument[];
       try {
         // Retry the whole update+capture transaction on a version_no allocation
@@ -650,19 +672,8 @@ export class SingleMutationService extends BaseService {
             // `previous`/`data` diff symmetrically.
             const previousCompanionValues: Record<string, unknown> = {};
             let previousCompanionStatus: string | null = null;
-            // A companion read inside THIS write transaction that hits a
-            // not-yet-migrated `_locales` table aborts the whole transaction on
-            // Postgres (it does not merely return empty), which would roll back
-            // even a shared-field update that never needed the companion. Probe
-            // existence on the pooled adapter first — off the transaction — and
-            // skip the reads when the companion is absent.
-            const companionPhysicallyExists =
-              companion && writeLocale !== undefined
-                ? await companionTableExists(
-                    this.adapter,
-                    companion.companionTableName
-                  )
-                : false;
+            // `companionPhysicallyExists` was probed off the transaction above;
+            // skip the in-transaction companion reads when the table is absent.
             if (
               companion &&
               writeLocale !== undefined &&
@@ -760,14 +771,47 @@ export class SingleMutationService extends BaseService {
             // not mistaken for a localized component write. A non-localized
             // component written at a locale is the narrower edge this shares
             // with the version-capture gate.
-            const wroteLocalizedComponents =
+            // A component write is per-locale only when a WRITTEN component
+            // actually declares a localized field. Keying off the Single's own
+            // localization is wrong both ways: a non-localized Single can embed a
+            // localized component (whose write DOES store per-locale data), and a
+            // localized Single can embed a purely shared one. Resolve each
+            // written component's schema on the transaction to decide.
+            let wroteLocalizedComponents = false;
+            if (
               snapshotLocale !== undefined &&
-              // A component write is per-locale only when the Single itself is
-              // localized (has a companion). A non-localized Single stores only
-              // shared component rows, so its component edits are not
-              // locale-specific and must not tag the event with a locale.
-              companion !== null &&
-              Object.keys(componentFieldData).length > 0;
+              this.componentDataService &&
+              Object.keys(componentFieldData).length > 0
+            ) {
+              const appLocalized = this.localization !== undefined;
+              for (const writtenName of Object.keys(componentFieldData)) {
+                const fieldConfig = fieldConfigs.find(
+                  f => "name" in f && f.name === writtenName
+                );
+                if (!fieldConfig || !isComponentField(fieldConfig)) continue;
+                const componentSlug = fieldConfig.component;
+                if (!componentSlug) continue;
+                const componentFields =
+                  await this.componentDataService.getComponentFields(
+                    componentSlug,
+                    tx.getDrizzle()
+                  );
+                const hasLocalizedField = (componentFields ?? []).some(cf =>
+                  isFieldLocalized(
+                    {
+                      type: cf.type,
+                      name: "name" in cf && cf.name ? cf.name : "",
+                      localized: "localized" in cf ? cf.localized : undefined,
+                    },
+                    appLocalized
+                  )
+                );
+                if (hasLocalizedField) {
+                  wroteLocalizedComponents = true;
+                  break;
+                }
+              }
+            }
             // `locale` rides the event only when the write genuinely stored
             // per-locale data: it touched localized Single columns, set a
             // per-locale status, or wrote localized component data. A plain
