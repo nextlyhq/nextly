@@ -151,11 +151,14 @@ export class SingleMutationService extends BaseService {
    *
    * Reused for BOTH the post-write `data` and the pre-write `previous` so the
    * changed-field diff compares like with like. `companionValues` is keyed by
-   * companion column and holds only the translatable columns this write
-   * touches, so the two documents diff symmetrically — an untouched
-   * translation appears in neither. Components are read on the caller's
+   * companion column and carries the FULL locale state for this side (all
+   * stored translations, not only the columns this write touched), so the two
+   * documents diff symmetrically and a partial edit still reports untouched
+   * translations on both sides. Components are read on the caller's
    * transaction (read-your-writes) so a post-write call sees the subtrees just
-   * saved and a pre-write call sees the prior ones.
+   * saved and a pre-write call sees the prior ones. `localeStatus`, when
+   * provided, overrides the assembled `status` so a per-locale write reports
+   * the write locale's own publish state rather than the main row's.
    */
   private async buildSingleWebhookDoc(
     tx: TransactionContext,
@@ -165,7 +168,8 @@ export class SingleMutationService extends BaseService {
     fieldConfigs: FieldConfig[],
     companion: CompanionSchema | null,
     companionValues: Record<string, unknown>,
-    snapshotLocale: string | undefined
+    snapshotLocale: string | undefined,
+    localeStatus?: string
   ): Promise<Record<string, unknown>> {
     // Keep user field keys (which may contain underscores like `site_title`)
     // exactly; convert only the timestamp columns so the shape matches a read.
@@ -246,7 +250,14 @@ export class SingleMutationService extends BaseService {
         }
       }
     }
-    return { ...parentRow, ...components };
+    const doc: Record<string, unknown> = { ...parentRow, ...components };
+    // Overlay the resolved per-locale status: for a non-default-locale write the
+    // main row keeps the default language's status, so the assembled `status`
+    // above is the wrong one for this locale — replace it with the caller's.
+    if (localeStatus !== undefined) {
+      doc.status = localeStatus;
+    }
+    return doc;
   }
 
   /**
@@ -596,6 +607,12 @@ export class SingleMutationService extends BaseService {
               singleMeta.tableName,
               {}
             );
+            // The main row's prior status, captured before any overlay. Read
+            // once and never mutated onto `preRow`: the per-locale status is
+            // threaded to the `previous` doc via `localeStatus` instead, so the
+            // captured main row stays the true main-table state.
+            const preRowMainStatus =
+              typeof preRow?.status === "string" ? preRow.status : undefined;
 
             const rows = await tx.update<SingleDocument>(
               singleMeta.tableName,
@@ -613,9 +630,11 @@ export class SingleMutationService extends BaseService {
             // Build the outbox `previous` NOW — after the main update but before
             // the component save and companion upsert below — so its component
             // subtrees and companion values are still the prior generation. The
-            // main row was captured into `preRow` before the update. Values are
-            // restricted to the translatable columns this write touches
-            // (`companionData` keys) so `previous` and `data` diff symmetrically.
+            // main row was captured into `preRow` before the update.
+            // `previousCompanionValues` carries EVERY stored translation for the
+            // write locale (not just the touched columns) so a partial localized
+            // edit still reports the untouched translations on both sides and
+            // `previous`/`data` diff symmetrically.
             const previousCompanionValues: Record<string, unknown> = {};
             let previousCompanionStatus: string | null = null;
             if (companion && writeLocale !== undefined) {
@@ -632,13 +651,7 @@ export class SingleMutationService extends BaseService {
                 localeChain: [writeLocale],
               });
               for (const f of companion.localizedFields) {
-                if (
-                  Object.prototype.hasOwnProperty.call(
-                    companionData,
-                    f.column
-                  ) &&
-                  preLocaleRow[f.name] !== undefined
-                ) {
+                if (preLocaleRow[f.name] !== undefined) {
                   previousCompanionValues[f.column] = preLocaleRow[f.name];
                 }
               }
@@ -654,12 +667,47 @@ export class SingleMutationService extends BaseService {
                 );
               }
             }
-            // Overlay this locale's committed status so `previous` reports the
-            // language's own draft/publish rather than the main row's (a German
-            // draft can sit under a published default).
-            if (previousCompanionStatus !== null && preRow) {
-              preRow.status = previousCompanionStatus;
-            }
+            // The full post-write locale state: prior stored translations
+            // overlaid with the columns this write touched. No extra DB read —
+            // the prior values were just read above and `companionData` holds
+            // this write's serialized translatable values.
+            const dataCompanionValues: Record<string, unknown> = {
+              ...previousCompanionValues,
+              ...companionData,
+            };
+
+            // Whether the single stores this write's status per locale. True
+            // only for a non-default-locale write on a status-bearing companion;
+            // the default locale's status lives on the main row.
+            const isPerLocaleStatusWrite =
+              !!companion?.hasStatus &&
+              writeLocale !== undefined &&
+              writeLocale !== this.localization?.defaultLocale;
+            // Does this single have any status concept at all (main-row status
+            // or per-locale companion status)?
+            const singleHasStatus =
+              (singleMeta as { status?: boolean }).status === true ||
+              companion?.hasStatus === true;
+            // The status this write assigns: the patch's status (kept on
+            // `updatePayload` even when the main column is left untouched for a
+            // non-default locale) or the per-locale companion status. Undefined
+            // for a content-only edit, which transitions nothing.
+            const writtenStatus =
+              (typeof (updatePayload as { status?: unknown }).status ===
+              "string"
+                ? ((updatePayload as { status?: unknown }).status as string)
+                : undefined) ?? companionStatus;
+            // The status this write moves away from. For a per-locale write it
+            // is this locale's committed companion `_status`; a non-default
+            // locale with no companion row yet is unpublished ("draft"), NOT the
+            // main row's status. Otherwise it is the main row's prior status.
+            const previousLocaleStatus = isPerLocaleStatusWrite
+              ? (previousCompanionStatus ?? "draft")
+              : preRowMainStatus;
+            // The status the write leaves this locale in: a content-only write
+            // keeps the current status.
+            const dataLocaleStatus = writtenStatus ?? previousLocaleStatus;
+
             const previousDoc = preRow
               ? await this.buildSingleWebhookDoc(
                   tx,
@@ -669,7 +717,8 @@ export class SingleMutationService extends BaseService {
                   fieldConfigs,
                   companion,
                   previousCompanionValues,
-                  snapshotLocale
+                  snapshotLocale,
+                  previousLocaleStatus
                 )
               : null;
 
@@ -930,8 +979,9 @@ export class SingleMutationService extends BaseService {
             // collection write path.
 
             // Assemble the just-written document in the outbox read shape.
-            // `companionData` supplies this locale's written translations;
-            // components are read on the transaction (read-your-writes).
+            // `dataCompanionValues` supplies this locale's FULL post-write
+            // translation state (prior values overlaid with this write's
+            // columns); components are read on the transaction (read-your-writes).
             const dataDoc = await this.buildSingleWebhookDoc(
               tx,
               existingDoc.id,
@@ -939,8 +989,9 @@ export class SingleMutationService extends BaseService {
               rows[0],
               fieldConfigs,
               companion,
-              companionData,
-              snapshotLocale
+              dataCompanionValues,
+              snapshotLocale,
+              dataLocaleStatus
             );
 
             // The single's field tree with component references expanded, so the
@@ -960,47 +1011,50 @@ export class SingleMutationService extends BaseService {
             );
 
             // A publish/unpublish is a status change, so only a write that
-            // ASSIGNS a status can trigger one. `writtenStatus` is the status
-            // this write sets — the patch's status (kept on `updatePayload` even
-            // when the main column is left untouched for a non-default locale) or
-            // the per-locale companion status — and is undefined for a
-            // content-only edit, which then transitions nothing. Skipped entirely
-            // when the single has no status concept.
-            const singleHasStatus =
-              (singleMeta as { status?: boolean }).status === true ||
-              companion?.hasStatus === true;
-            const writtenStatus =
-              (typeof (updatePayload as { status?: unknown }).status ===
-              "string"
-                ? ((updatePayload as { status?: unknown }).status as string)
-                : undefined) ?? companionStatus;
-            // The status this write moves away from: this locale's committed
-            // companion status when the single stores per-locale status, else the
-            // main row's prior status.
-            const priorStatus =
-              previousCompanionStatus !== null
-                ? previousCompanionStatus
-                : typeof preRow?.status === "string"
-                  ? preRow.status
-                  : undefined;
+            // ASSIGNS a status can trigger one — the `writtenStatus` gate keeps
+            // a content-only edit from transitioning. The prior/next states are
+            // this locale's own (`previousLocaleStatus`/`dataLocaleStatus`,
+            // resolved above), so a first non-default-locale publish under a
+            // published default still fires `single.published` and a draft write
+            // never emits a false `single.unpublished`.
             const publishedTransition =
               singleHasStatus &&
-              writtenStatus === "published" &&
-              priorStatus !== "published";
+              dataLocaleStatus === "published" &&
+              previousLocaleStatus !== "published";
             const unpublishedTransition =
               singleHasStatus &&
               writtenStatus !== undefined &&
-              writtenStatus !== "published" &&
-              priorStatus === "published";
+              dataLocaleStatus !== "published" &&
+              previousLocaleStatus === "published";
 
             const actor = actorForWrite(options.actor ?? null, options.user);
+            // A component subtree read at the write locale is per-locale state,
+            // so a component-only translation edit counts as locale-specific.
+            const eventComponentFields = fieldConfigs.filter(
+              (f): f is typeof f & { name: string } =>
+                isComponentField(f) && !!f.name
+            );
+            const eventHasLocalizedComponents =
+              snapshotLocale !== undefined &&
+              eventComponentFields.some(f => dataDoc[f.name] !== undefined);
+            // `locale` rides only when the write genuinely stored per-locale
+            // data: this write touched localized Single columns, set a per-locale
+            // status, or captured localized component state. A plain
+            // non-localized Single gets none. Mirrors the version-capture gate so
+            // the event and the snapshot agree on what is locale-specific.
+            const eventLocale: string | null =
+              Object.keys(companionData).length > 0 ||
+              companionStatus !== undefined ||
+              eventHasLocalizedComponents
+                ? (snapshotLocale ?? null)
+                : null;
             // `single` FORBIDS a `collection` slug; `locale` rides only when the
             // single (or an embedded component) is localized, so a receiver can
             // tell one language's write apart from another's.
             const resource: WebhookResource = {
               kind: "single",
               id: existingDoc.id,
-              ...(snapshotLocale != null ? { locale: snapshotLocale } : {}),
+              ...(eventLocale != null ? { locale: eventLocale } : {}),
             };
             await recordMutationEvent(tx, {
               type: "single.updated",

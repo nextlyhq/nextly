@@ -250,6 +250,144 @@ describe("webhook outbox capture — singles (integration)", () => {
     expect(rows.some(r => r.type === "single.updated")).toBe(true);
   });
 
+  it("fires single.published for a non-default locale even when the default is already published", async () => {
+    // Regression: a non-default locale with no companion row yet is draft, not
+    // the main row's status — so publishing it under an already-published
+    // default must still emit single.published for that locale.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    // Publish the default locale first (status lands on the main row).
+    await singles(current).update(
+      "preferences",
+      { title: "hi", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    // Now publish German for the first time.
+    await singles(current).update(
+      "preferences",
+      { title: "hallo", status: "published" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const dePublished = (await events(current)).filter(
+      r =>
+        r.type === "single.published" &&
+        (envelopeOf(r).resource as { locale?: string }).locale === "de"
+    );
+    expect(dePublished).toHaveLength(1);
+    // The payload carries this locale's own status, not the main row's.
+    expect(
+      (envelopeOf(dePublished[0]).data as { status?: string }).status
+    ).toBe("published");
+  });
+
+  it("does not emit a false single.unpublished for a first draft write on a non-default locale", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { title: "hi", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    // German was never published, so drafting it is not an unpublish.
+    await singles(current).update(
+      "preferences",
+      { title: "hallo", status: "draft" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const deUnpublished = (await events(current)).filter(
+      r =>
+        r.type === "single.unpublished" &&
+        (envelopeOf(r).resource as { locale?: string }).locale === "de"
+    );
+    expect(deUnpublished).toHaveLength(0);
+  });
+
+  it("carries untouched translations in the payload after a partial localized edit", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "body", localized: true }),
+          ],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { title: "hallo", body: "welt" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Edit only `title`; `body` is untouched but must still appear in data.
+    await singles(current).update(
+      "preferences",
+      { title: "hallo-2" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = (await events(current)).filter(
+      r => r.type === "single.updated"
+    );
+    const last = envelopeOf(rows[rows.length - 1]);
+    expect((last.data as { title?: string }).title).toBe("hallo-2");
+    // The untouched translation is present on both sides of the diff.
+    expect((last.data as { body?: string }).body).toBe("welt");
+    expect((last.previous as { body?: string } | null)?.body).toBe("welt");
+    expect(last.changedFields).toContain("title");
+    expect(last.changedFields).not.toContain("body");
+  });
+
+  it("omits resource.locale for a non-localized single even when localization is configured", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        // Not localized: no `localized: true`, no localized fields.
+        defineSingle({
+          slug: "preferences",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "preferences",
+      { title: "hello" },
+      { overrideAccess: true }
+    );
+
+    const row = (await events(current)).find(r => r.type === "single.updated");
+    expect(row).toBeDefined();
+    expect(
+      (envelopeOf(row!).resource as { locale?: string }).locale
+    ).toBeUndefined();
+  });
+
   it("records the event AND captures a version when versioning is enabled", async () => {
     current = await createTestNextly({
       singles: [
