@@ -157,4 +157,77 @@ describe("owner-only publish enforcement on batch paths (integration)", () => {
     expect(ownerUnpublish.successful).toBe(1);
     expect(ownerUnpublish.failed).toBe(0);
   });
+
+  it("refuses a single updateEntry that publishes another user's row", async () => {
+    // The single update path defers the owner-only rule to the under-lock
+    // re-check too (not just the batch path): a non-owner who may update the row
+    // is judged against the row-locked document and refused the publish.
+    current = await bootOwnerOnlyPosts();
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", userId: "author" },
+      { title: "a", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const foreignPublish = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "intruder" },
+      { status: "published" }
+    );
+    expect(foreignPublish.success).toBe(false);
+    expect(foreignPublish.statusCode).toBe(403);
+
+    // The row stays draft (the denial rolled back before the write).
+    const [afterDenial] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterDenial?.status).toBe("draft");
+
+    // The owner may publish their own row.
+    const ownerPublish = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, userId: "author" },
+      { status: "published" }
+    );
+    expect(ownerPublish.success).toBe(true);
+  });
+
+  it("refuses a publishAllLocales that publishes another user's row", async () => {
+    // publishAllLocales re-checks the owner-only rule against the row-locked
+    // document before the status write, so a non-owner is refused there too.
+    current = await bootOwnerOnlyPosts();
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", userId: "author" },
+      { title: "a", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const foreign = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      userId: "intruder",
+    });
+    expect(foreign.success).toBe(false);
+    expect(foreign.statusCode).toBe(403);
+
+    // The publish rolled back — the row is still draft.
+    const [afterDenial] = await current.adapter.select<{ status: string }>(
+      "dc_posts",
+      { where: { and: [{ column: "id", op: "=", value: id }] } }
+    );
+    expect(afterDenial?.status).toBe("draft");
+
+    // The owner may publish all locales of their own row.
+    const owner = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      userId: "author",
+    });
+    expect(owner.success).toBe(true);
+  });
 });

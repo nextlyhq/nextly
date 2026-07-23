@@ -2076,6 +2076,11 @@ export class CollectionMutationService extends BaseService {
     // owner's — the route authorized this POST only as `update`.
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Set when the in-transaction document-rule re-check refuses the publish
+    // against the row-locked document. Declared out here so the catch can read
+    // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
+    // transaction rolls back, so `instanceof` no longer identifies it.
+    let publishDocDenied: CollectionServiceResult | undefined;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
       const schema = await this.fileManager.loadDynamicSchema(
@@ -2147,6 +2152,16 @@ export class CollectionMutationService extends BaseService {
       // directly rather than via a transition, since it publishes companion
       // locales even when the main row is already published. Runs only once
       // there is actually something publishable.
+      // Defer a document-dependent (owner-only/custom) publish rule to the
+      // under-lock re-check so it is judged against the row-locked document, not
+      // the stale pre-transaction `existingEntry` — a custom rule keyed on a
+      // mutable field (e.g. an approval flag a concurrent writer clears) must
+      // decide on the committed value this publish will overwrite.
+      const publishStoredRules = this.accessService.getAccessRules(
+        publishCollection as Record<string, unknown>
+      );
+      const deferPublishDocumentRule =
+        this.accessService.isDocumentDependentRule(publishStoredRules?.publish);
       const publishDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "publish",
@@ -2158,9 +2173,17 @@ export class CollectionMutationService extends BaseService {
         // so the publish permission is checked here.
         false,
         // Judge a scoped API key on its own `publish-<slug>` grant.
-        params.authenticatedScope
+        params.authenticatedScope,
+        deferPublishDocumentRule
       );
       if (publishDenied) return publishDenied;
+      const publishDocumentRule = deferPublishDocumentRule
+        ? this.accessService.resolveTransitionDocumentRule(
+            publishCollection as Record<string, unknown>,
+            accessUser,
+            params.authenticatedScope
+          )
+        : null;
 
       const isMysql = this.dialect === "mysql";
       const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -2211,6 +2234,29 @@ export class CollectionMutationService extends BaseService {
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          // Re-check a deferred document-dependent (owner-only/custom) publish
+          // rule against the row read UNDER the lock, before the status write, so
+          // a concurrent change to a field the rule inspects is accounted for.
+          // Throwing here rolls the publish back with nothing written.
+          if (publishDocumentRule) {
+            const lockedRow = await tx.selectOne<Record<string, unknown>>(
+              tableName,
+              { where: this.whereEq("id", params.entryId), forUpdate: true }
+            );
+            if (lockedRow) {
+              const documentDenied =
+                await this.accessService.evaluateTransitionDocumentRule(
+                  publishDocumentRule.accessRules,
+                  "publish",
+                  publishDocumentRule.user,
+                  lockedRow
+                );
+              if (documentDenied) {
+                publishDocDenied = documentDenied;
+                throw new StatusTransitionDeniedError();
+              }
+            }
+          }
           if (hasMainStatus) {
             await tx.execute(
               `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
@@ -2348,6 +2394,11 @@ export class CollectionMutationService extends BaseService {
         data: { id: params.entryId, status: "published" },
       };
     } catch (error) {
+      // A publish refused by the under-lock document-rule re-check aborts the
+      // transaction; return the 403 it resolved, not a 500.
+      if (publishDocDenied) {
+        return publishDocDenied;
+      }
       return {
         success: false,
         statusCode: 500,
@@ -3149,9 +3200,18 @@ export class CollectionMutationService extends BaseService {
       // here would let `status: 0`/`false` slip an unpublish past the gate.
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
+      // The guard carries the pre-resolved PERMISSION denial (document-
+      // independent) plus, when the op's stored rule is document-dependent
+      // (owner-only/custom), the rules to re-evaluate against the ROW-LOCKED
+      // document inside the transaction — so a custom rule keyed on a mutable
+      // field is not judged against the stale pre-transaction `existingEntry`.
       let transitionGuard: {
         op: "publish" | "unpublish";
-        denied: CollectionServiceResult;
+        permissionDenied: CollectionServiceResult | null;
+        documentRule: {
+          accessRules: CollectionAccessRules;
+          user: UserContext | undefined;
+        } | null;
       } | null = null;
       if (
         collectionHasStatus &&
@@ -3160,7 +3220,13 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const denied = await this.accessService.checkCollectionAccess(
+        const storedRules = this.accessService.getAccessRules(
+          collection as Record<string, unknown>
+        );
+        const deferDocumentRule = this.accessService.isDocumentDependentRule(
+          storedRules?.[transitionOp]
+        );
+        const permissionDenied = await this.accessService.checkCollectionAccess(
           params.collectionName,
           transitionOp,
           accessUser,
@@ -3173,9 +3239,25 @@ export class CollectionMutationService extends BaseService {
           // A scoped API key is judged on its OWN publish/unpublish grant here,
           // not the key owner's — the route only checked `update` against the
           // key's scope.
-          params.authenticatedScope
+          params.authenticatedScope,
+          deferDocumentRule
         );
-        if (denied) transitionGuard = { op: transitionOp, denied };
+        // Pre-fetch the document-dependent rule + user so the in-transaction step
+        // evaluates it against the row-locked document with no further metadata read.
+        const documentRule = deferDocumentRule
+          ? this.accessService.resolveTransitionDocumentRule(
+              collection as Record<string, unknown>,
+              accessUser,
+              params.authenticatedScope
+            )
+          : null;
+        if (permissionDenied || documentRule) {
+          transitionGuard = {
+            op: transitionOp,
+            permissionDenied,
+            documentRule,
+          };
+        }
       }
 
       // Wrap main update and component data save in a transaction so that
@@ -3365,8 +3447,30 @@ export class CollectionMutationService extends BaseService {
                 companionNextStatus
               ) === transitionGuard.op;
             if (firesOnMainRow || firesOnCompanion) {
-              transitionDeniedResult = transitionGuard.denied;
-              throw new StatusTransitionDeniedError();
+              // Permission first (pre-resolved, no DB read): a caller lacking
+              // publish-<slug>/unpublish-<slug> is denied regardless of the row.
+              if (transitionGuard.permissionDenied) {
+                transitionDeniedResult = transitionGuard.permissionDenied;
+                throw new StatusTransitionDeniedError();
+              }
+              // Then the deferred document-dependent (owner-only/custom) rule,
+              // judged against the ROW-LOCKED document (`preUpdateRow`) — not the
+              // stale pre-transaction `existingEntry` — so a custom rule keyed on
+              // a mutable field sees the committed value this update transitions
+              // from. Pure evaluation, no metadata or permission read.
+              if (transitionGuard.documentRule && preUpdateRow) {
+                const documentDenied =
+                  await this.accessService.evaluateTransitionDocumentRule(
+                    transitionGuard.documentRule.accessRules,
+                    transitionGuard.op,
+                    transitionGuard.documentRule.user,
+                    preUpdateRow as Record<string, unknown>
+                  );
+                if (documentDenied) {
+                  transitionDeniedResult = documentDenied;
+                  throw new StatusTransitionDeniedError();
+                }
+              }
             }
           }
 
