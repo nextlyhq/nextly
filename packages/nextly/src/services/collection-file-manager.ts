@@ -317,10 +317,14 @@ export class CollectionFileManager {
    * The result is cached under the companion's SQL name so repeated reads reuse one table object.
    */
   async loadCompanionSchema(
-    collectionName: string
+    collectionName: string,
+    // Optional transaction-bound executor so the metadata read runs on the
+    // caller's transaction connection instead of taking a second pooled one when
+    // a localized write/delete loads the companion schema inside a transaction.
+    executor?: unknown
   ): Promise<CompanionSchema | null> {
     if (!this.adapter || !this.metadataFetcher) return null;
-    const metadata = await this.metadataFetcher(collectionName);
+    const metadata = await this.metadataFetcher(collectionName, executor);
     if (!metadata || metadata.localized !== true) return null;
 
     const tableName =

@@ -5,8 +5,9 @@
  * returns, so against a single-connection pool it blocks forever and the write
  * deadlocks. The transactional bulk and single-entry write paths do this for the
  * publish/unpublish RBAC check, the collection metadata and owner-constraint
- * reads, and the DB-reading hooks (the built-in sanitization hook loads field
- * metadata), all bound to the caller's transaction.
+ * reads, the DB-reading hooks (the built-in sanitization hook loads field
+ * metadata), and the localized delete's companion-schema and default-locale
+ * reads, all bound to the caller's transaction.
  *
  * These pin the fix on a REAL database with a single-connection pool
  * (`pool.max = 1`): the RBAC preflight and each full bulk / direct in-transaction
@@ -46,6 +47,7 @@ const AFTER_HOOK_SLUG = "poolreentryafter";
 const DELETE_SLUG = "poolreentrydelete";
 const DIRECT_DELETE_SLUG = "poolreentrydirdel";
 const BEFOREOP_SLUG = "poolreentrybeforeop";
+const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -57,6 +59,7 @@ const SLUGS = [
   DELETE_SLUG,
   DIRECT_DELETE_SLUG,
   BEFOREOP_SLUG,
+  LOCALIZED_DELETE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -140,6 +143,9 @@ describePg(
       if (!boot) return;
       for (const slug of SLUGS) {
         for (const stmt of [
+          // Drop the localized companion (`<table>_locales`) before the main
+          // table so a companion-to-main foreign key never blocks the drop.
+          `DROP TABLE IF EXISTS dc_${slug}_locales`,
           `DROP TABLE IF EXISTS dc_${slug}`,
           `DELETE FROM dynamic_collections WHERE slug = '${slug}'`,
         ]) {
@@ -570,6 +576,64 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("beforeOperation", BEFOREOP_SLUG, beforeOpHook);
+        await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes a localized bulk delete inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          // A localized collection keeps translatable values in a companion
+          // `<table>_locales`. Deleting a row assembles the removed document,
+          // which loads the companion schema and reads its default-locale
+          // values — both metadata/companion reads that must run on the
+          // caller's transaction, not a second pooled connection.
+          collections: [
+            defineCollection({
+              slug: LOCALIZED_DELETE_SLUG,
+              status: true,
+              localized: true,
+              access: {
+                create: () => true,
+                read: () => true,
+                update: () => true,
+                delete: () => true,
+                publish: () => true,
+              },
+              fields: [text({ name: "title", localized: true })],
+            }),
+          ],
+          localization: { locales: ["en", "de"], defaultLocale: "en" },
+        });
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: LOCALIZED_DELETE_SLUG, overrideAccess: true },
+          { title: "doomed", status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+
+        // The delete builds the removed document via loadCompanionSchema +
+        // readCompanionLocalizedValues; both run on the transaction connection
+        // and COMPLETE. Drop either binding and this deadlocks on the second
+        // checkout against the single-connection pool.
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.deleteEntriesInTransaction(
+              tx,
+              { collectionName: LOCALIZED_DELETE_SLUG, user: { id: "editor" } },
+              [id]
+            )
+          ),
+          15_000
+        );
+
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+      } finally {
         await handle?.destroy();
       }
     }, 30_000);
