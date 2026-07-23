@@ -34,7 +34,12 @@ program
     "-y, --yes",
     "Skip prompts and use defaults (blank template, SQLite, local storage)"
   )
-  .option("-t, --template <template>", "Project template (blank, blog, plugin)")
+  .option(
+    "-t, --template <template>",
+    // Derive the list from the registry so --help stays in sync with what
+    // validation accepts as new templates are registered.
+    `Project template (${getAvailableTemplateNames().join(", ")})`
+  )
   .option("-a, --approach <approach>", "Schema approach (code-first, visual)")
   .option("-d, --database <db>", "Database type (sqlite, postgresql, mysql)")
   .option("-b, --branch <branch>", "Git branch for template download", "main")

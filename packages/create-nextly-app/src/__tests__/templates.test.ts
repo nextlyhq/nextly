@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   getAvailableTemplateNames,
   getTemplate,
+  shouldUseBundledTemplate,
   templateHasApproaches,
   templateHasDemoData,
 } from "../lib/templates";
@@ -78,5 +79,35 @@ describe("plugin package.json generation (D44/D45)", () => {
     // Not an app: no Next.js `start`/`db:migrate` app scripts, not private.
     expect(pkg.scripts.start).toBeUndefined();
     expect(pkg.dependencies).toBeUndefined();
+  });
+});
+
+describe("shouldUseBundledTemplate", () => {
+  it("uses the bundled copy for blank and plugin by default", () => {
+    expect(shouldUseBundledTemplate("blank", {})).toBe(true);
+    expect(shouldUseBundledTemplate("plugin", {})).toBe(true);
+    // The CLI always passes commander's default branch; "main" must not
+    // force a download on its own.
+    expect(shouldUseBundledTemplate("blank", { branch: "main" })).toBe(true);
+    expect(shouldUseBundledTemplate("plugin", { branch: "main" })).toBe(true);
+  });
+
+  it("always resolves content templates live", () => {
+    expect(shouldUseBundledTemplate("blog", {})).toBe(false);
+  });
+
+  it("forces live resolution for every explicit source override", () => {
+    // A user passing --branch expects that branch's template, not the
+    // bundled copy silently substituted for it.
+    expect(shouldUseBundledTemplate("blank", { branch: "release" })).toBe(
+      false
+    );
+    expect(shouldUseBundledTemplate("plugin", { branch: "release" })).toBe(
+      false
+    );
+    expect(
+      shouldUseBundledTemplate("blank", { localTemplatePath: "/tmp/t" })
+    ).toBe(false);
+    expect(shouldUseBundledTemplate("plugin", { useYalc: true })).toBe(false);
   });
 });

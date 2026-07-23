@@ -678,6 +678,8 @@ export async function copyTemplate(
   }
 
   if (!(await fs.pathExists(typeDir))) {
+    // The registry supplies the template list so this message stays current
+    // as templates are added, instead of drifting like a hardcoded list.
     throw new Error(
       `Template "${projectType}" not found at ${typeDir}. Available templates: ${getAvailableTemplateNames().join(", ")}.`
     );

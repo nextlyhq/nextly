@@ -19,7 +19,11 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
-import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
+import {
+  templateHasApproaches,
+  getDefaultApproach,
+  shouldUseBundledTemplate,
+} from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import {
@@ -355,22 +359,16 @@ export async function createNextly(
 
     try {
       // Resolve template source (download from GitHub or use local path).
-      // "blank" and "plugin" ship bundled inside the CLI package, so their
-      // default scaffolds work offline and always match the installed CLI's
-      // package versions (a GitHub-main template can drift ahead of the npm
-      // packages the scaffold installs). Content templates (blog) resolve
-      // via GitHub. --local-template, --use-yalc, or an explicit non-main
-      // --branch still force resolution so development workflows keep
-      // pairing live templates with local packages.
-      const usesBundledPluginTemplate =
-        projectType === "plugin" &&
-        !options.localTemplatePath &&
-        !useYalc &&
-        (options.branch ?? "main") === "main";
+      // Bundled templates (blank, plugin) scaffold from the copy shipped
+      // inside the CLI package by default; content templates (blog) and any
+      // explicit source override (--local-template, --use-yalc, a non-main
+      // --branch) resolve live. See shouldUseBundledTemplate for the rules.
       if (
-        (projectType !== "blank" && !usesBundledPluginTemplate) ||
-        options.localTemplatePath ||
-        useYalc
+        !shouldUseBundledTemplate(projectType, {
+          localTemplatePath: options.localTemplatePath,
+          useYalc,
+          branch: options.branch,
+        })
       ) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
