@@ -27,7 +27,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, count, desc, asc, or, eq, sql } from "drizzle-orm";
+import { and, count, desc, asc, or, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -38,6 +38,13 @@ import {
   deleteImageSizes,
 } from "@nextly/storage";
 
+// Actor threading + outbox recording for media writes. Each write records a
+// durable `media.*` event in the same transaction as the row change.
+import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
+import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
   Media,
@@ -63,8 +70,41 @@ export class MediaService extends BaseService {
     return getImageProcessor();
   }
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  // A short prune pass on the write path: enough to keep the outbox from
+  // growing unbounded without turning a media write into a long maintenance job.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    /**
+     * Shared post-response drain fast path. This service records media outbox
+     * events directly, so callers that reach it WITHOUT the unified media
+     * service (the exported server actions via `ServiceContainer.media`) still
+     * get the immediate drain. Left undefined when the unified service wraps
+     * this one (that wrapper offers the drain itself), so the drain is offered
+     * exactly once per write.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
+    /** Prunes the outbox after a write, paired with the drain fast path. */
+    private readonly retentionRunner?: WebhookRetentionRunner
+  ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Post-write webhook maintenance for callers that use this service directly:
+   * offer the fast drain, then a short retention pass. No-op when no scheduler
+   * was injected (the unified media service handles the drain in that path).
+   * Both absorb their own failures, so this never turns a committed write into
+   * an error.
+   */
+  private async afterWrite(): Promise<void> {
+    if (!this.fastDrainScheduler && !this.retentionRunner) {
+      return;
+    }
+    this.fastDrainScheduler?.offer();
+    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
   }
 
   /**
@@ -203,7 +243,10 @@ export class MediaService extends BaseService {
   /**
    * Upload media file with automatic processing and storage
    */
-  async uploadMedia(input: UploadMediaInput): Promise<MediaResponse> {
+  async uploadMedia(
+    input: UploadMediaInput,
+    actor?: RequestActor
+  ): Promise<MediaResponse> {
     try {
       const {
         file,
@@ -345,7 +388,6 @@ export class MediaService extends BaseService {
         }
       }
 
-      const { media } = this.tables;
       const now = new Date();
       const mediaId = crypto.randomUUID();
 
@@ -372,7 +414,39 @@ export class MediaService extends BaseService {
         updatedAt: now,
       };
 
-      await this.db.insert(media).values(mediaRecord);
+      // Persist the row and record the outbox event in one transaction so the
+      // event is durable exactly when the insert commits, and never for a write
+      // that later rolls back. The positional adapter transaction is required
+      // because recordMutationEvent writes through the adapter's
+      // TransactionContext, not the Drizzle fluent transaction. `sizes` is
+      // serialized to a JSON string up front: the positional insert binds
+      // values through the raw driver, which cannot bind a plain object for the
+      // json/jsonb/text `sizes` column consistently across all three dialects.
+      const insertRow = keysToSnakeCase({
+        ...mediaRecord,
+        sizes: sizesData == null ? null : JSON.stringify(sizesData),
+      }) as Record<string, unknown>;
+
+      await this.adapter.transaction(async tx => {
+        await tx.insert("media", insertRow, { returning: [] });
+
+        // `data` is the just-created row in read shape; a fresh upload has no
+        // prior state, so `previous` is null. Media has no field schema, so
+        // `fields` is empty (nothing to strip). The uploader is the recorded
+        // subject when no transport actor was threaded.
+        await recordMutationEvent(tx, {
+          type: "media.uploaded",
+          resource: { kind: "media", id: mediaId },
+          data: mediaRecord,
+          previous: null,
+          fields: [],
+          actor: actorForWrite(actor, uploadedBy ? { id: uploadedBy } : null),
+        });
+      });
+
+      // The upload committed a media.uploaded outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
 
       return {
         success: true,
@@ -392,15 +466,100 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Regenerate a media item's image size variants for a changed crop point,
+   * writing `sizes`/`thumbnailUrl` onto `updateData`. No-op unless the crop
+   * actually changed and the item is an image on a readable storage adapter.
+   *
+   * Called from inside the update transaction, under the media row lock, so its
+   * shared-path storage writes are serialized with the row commit: two
+   * concurrent focal edits of the same item cannot interleave their variant
+   * writes, so the committed row never points at another crop's bytes.
+   * Best-effort: a regeneration failure is swallowed (the crop point is still
+   * saved) rather than failing the whole update.
+   */
+  private async regenerateFocalPointSizes(
+    media: Media,
+    changes: UpdateMediaInput,
+    updateData: Record<string, unknown>
+  ): Promise<void> {
+    const focalPointChanged =
+      changes.focalX !== undefined || changes.focalY !== undefined;
+    if (!focalPointChanged || !isImageMimeType(media.mimeType)) {
+      return;
+    }
+
+    const adapter = this.storage.getAdapterForCollection("media");
+    if (!adapter.read) {
+      console.log(
+        `[MediaService] Crop point saved for media ${media.id}. ` +
+          `Size regeneration requires local storage or adapter with read support.`
+      );
+      return;
+    }
+
+    try {
+      const originalBuffer = await adapter.read(media.filename);
+      if (!originalBuffer) return;
+
+      const imageSizeService = new ImageSizeService(this.adapter, this.logger);
+      const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
+      if (sizeConfigs.length === 0) return;
+
+      const oldSizes = (media as unknown as Record<string, unknown>).sizes;
+      if (oldSizes) {
+        const parsed =
+          typeof oldSizes === "string" ? JSON.parse(oldSizes) : oldSizes;
+        await deleteImageSizes(parsed, path =>
+          this.storage.delete(path, "media")
+        );
+      }
+
+      const uploadFn = async (
+        buffer: Buffer,
+        opts: { filename: string; mimeType: string }
+      ) => {
+        return this.storage.upload(buffer, {
+          filename: opts.filename,
+          mimeType: opts.mimeType,
+          collection: "media",
+        });
+      };
+      const newSizes = await generateImageSizes(
+        originalBuffer,
+        media.originalFilename || media.filename,
+        sizeConfigs,
+        uploadFn,
+        { focalX: changes.focalX, focalY: changes.focalY }
+      );
+
+      updateData.sizes = newSizes;
+      if (newSizes && "thumbnail" in newSizes) {
+        updateData.thumbnailUrl = (
+          newSizes.thumbnail as unknown as { url: string }
+        ).url;
+      }
+
+      console.log(
+        `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
+      );
+    } catch (error) {
+      console.warn(
+        "[MediaService] Crop point size regeneration failed:",
+        error
+      );
+      // Continue without regeneration - crop point is still saved.
+    }
+  }
+
+  /**
    * Update media metadata (altText, caption, tags)
    */
   async updateMedia(
     mediaId: string,
-    changes: UpdateMediaInput
+    changes: UpdateMediaInput,
+    actor?: RequestActor
   ): Promise<MediaResponse> {
     try {
-      const { media } = this.tables;
-
       const existing = await this.getMediaById(mediaId);
       if (!existing.success) {
         return existing;
@@ -414,96 +573,89 @@ export class MediaService extends BaseService {
       if (changes.tags !== undefined) updateData.tags = changes.tags;
       if (changes.focalX !== undefined) updateData.focalX = changes.focalX;
       if (changes.focalY !== undefined) updateData.focalY = changes.focalY;
+      // A folder move (including to root, `null`) rides the same update path so
+      // the change is captured as a media.updated event.
+      if (changes.folderId !== undefined)
+        updateData.folderId = changes.folderId;
 
-      // If crop point changed and media is an image, regenerate sizes immediately
-      const focalPointChanged =
-        changes.focalX !== undefined || changes.focalY !== undefined;
-      const mediaData = existing.data!;
+      // Regenerate focal-point image variants when the crop changed, before the
+      // write transaction opens. Storage is not transactional, so regenerating
+      // shared variant paths can never be made atomic with the DB write: doing
+      // it inside the transaction would hold the row lock (and, on a
+      // single-connection pool, the only connection) across slow storage I/O
+      // without removing the underlying dual-write inconsistency (a rollback or
+      // a concurrent edit still overwrites the shared paths). Keeping it here
+      // preserves the existing behavior; a content-addressed variant scheme
+      // (new unique paths per generation, old paths cleaned up after commit) is
+      // the real fix and is tracked as a separate image-pipeline follow-up.
+      await this.regenerateFocalPointSizes(existing.data!, changes, updateData);
 
-      if (focalPointChanged && isImageMimeType(mediaData.mimeType)) {
-        const adapter = this.storage.getAdapterForCollection("media");
-        if (adapter.read) {
-          try {
-            const originalBuffer = await adapter.read(mediaData.filename);
-            if (originalBuffer) {
-              const imageSizeService = new ImageSizeService(
-                this.adapter,
-                this.logger
-              );
-              const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-
-              if (sizeConfigs.length > 0) {
-                const oldSizes = (
-                  mediaData as unknown as Record<string, unknown>
-                ).sizes;
-                if (oldSizes) {
-                  const parsed =
-                    typeof oldSizes === "string"
-                      ? JSON.parse(oldSizes)
-                      : oldSizes;
-                  await deleteImageSizes(parsed, path =>
-                    this.storage.delete(path, "media")
-                  );
-                }
-
-                const uploadFn = async (
-                  buffer: Buffer,
-                  opts: { filename: string; mimeType: string }
-                ) => {
-                  return this.storage.upload(buffer, {
-                    filename: opts.filename,
-                    mimeType: opts.mimeType,
-                    collection: "media",
-                  });
-                };
-                const newSizes = await generateImageSizes(
-                  originalBuffer,
-                  mediaData.originalFilename || mediaData.filename,
-                  sizeConfigs,
-                  uploadFn,
-                  { focalX: changes.focalX, focalY: changes.focalY }
-                );
-
-                updateData.sizes = newSizes;
-
-                if (newSizes && "thumbnail" in newSizes) {
-                  updateData.thumbnailUrl = (
-                    newSizes.thumbnail as unknown as { url: string }
-                  ).url;
-                }
-
-                console.log(
-                  `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${mediaId}`
-                );
-              }
-            }
-          } catch (error) {
-            console.warn(
-              "[MediaService] Crop point size regeneration failed:",
-              error
-            );
-            // Continue without regeneration - crop point is still saved
+      // Commit the row update and its outbox event in one transaction so the
+      // event is durable exactly when the change commits. The row is locked and
+      // RE-READ inside the transaction (not reused from the pre-transaction
+      // read): the fresh read reflects the latest committed state, so a row
+      // removed by a concurrent delete is detected reliably on every dialect
+      // (a bare update-then-select-back can return a stale snapshot row on
+      // MySQL's repeatable read), and a field another request committed after
+      // our first read is not shipped stale. The transaction returns the
+      // post-update document (or null when the row is already gone).
+      const updatedRow = await this.adapter.transaction<Media | null>(
+        async tx => {
+          await tx.lockRow("media", mediaId);
+          const currentRows = await tx.select<Media>("media", {
+            where: this.whereEq("id", mediaId),
+          });
+          const current = currentRows[0];
+          // Lost an update race: the row was deleted after our first read, so
+          // record nothing and let the not-found result below stand.
+          if (!current) {
+            return null;
           }
-        } else {
-          console.log(
-            `[MediaService] Crop point saved for media ${mediaId}. ` +
-              `Size regeneration requires local storage or adapter with read support.`
-          );
+
+          await tx.update("media", updateData, this.whereEq("id", mediaId));
+
+          // The post-update document: the freshly-read committed row overlaid
+          // with ONLY this write's columns (`updateData` holds each supplied
+          // change plus any regenerated sizes/thumbnail and the fresh
+          // updatedAt, keyed in the same camelCase as the read row). Reused as
+          // both the event `data` and the response body so they never drift.
+          const nextRow: Media = { ...current, ...updateData };
+
+          // `previous` is the freshly-read pre-write row; `data` is the new
+          // state. Media has no field schema, so `fields` is empty.
+          await recordMutationEvent(tx, {
+            type: "media.updated",
+            resource: { kind: "media", id: mediaId },
+            data: nextRow,
+            previous: current,
+            fields: [],
+            actor: actorForWrite(actor, null),
+          });
+
+          return nextRow;
         }
+      );
+
+      if (!updatedRow) {
+        // Mirror getMediaById's not-found shape so the domain layer maps this to
+        // a 404 instead of treating the no-op write as a successful update.
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Media not found",
+          data: null,
+        };
       }
 
-      await this.db.update(media).set(updateData).where(eq(media.id, mediaId));
+      // The update committed a media.updated outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
 
       return {
         success: true,
         statusCode: 200,
         message: "Media updated successfully",
-        data: {
-          ...mediaData,
-          ...changes,
-          ...updateData,
-          updatedAt: updateData.updatedAt,
-        } as Media,
+        data: updatedRow,
       };
     } catch (error) {
       console.error("[MediaService] Update media error:", error);
@@ -519,10 +671,11 @@ export class MediaService extends BaseService {
   /**
    * Delete media file (removes from storage and database)
    */
-  async deleteMedia(mediaId: string): Promise<DeleteMediaResponse> {
+  async deleteMedia(
+    mediaId: string,
+    actor?: RequestActor
+  ): Promise<DeleteMediaResponse> {
     try {
-      const { media } = this.tables;
-
       const existing = await this.getMediaById(mediaId);
       if (!existing.success || !existing.data) {
         return {
@@ -532,8 +685,62 @@ export class MediaService extends BaseService {
         };
       }
 
-      const mediaData = existing.data;
+      // Remove the row and record the outbox event in one transaction FIRST,
+      // before touching physical storage. The database is the source of truth,
+      // so the row deletion and its durable event commit together; storage
+      // cleanup runs afterward. If that cleanup fails it leaves an orphaned FILE
+      // (benign, later reclaimable) rather than a surviving ROW pointing at an
+      // already-deleted file (a real read bug). The row is locked and RE-READ
+      // inside the transaction so a row already removed by a concurrent request
+      // is detected reliably on every dialect, and the event's `data` carries
+      // the latest committed state rather than the pre-transaction read. The
+      // transaction returns the deleted row (or null when it was already gone).
+      const deletedRow = await this.adapter.transaction<Media | null>(
+        async tx => {
+          await tx.lockRow("media", mediaId);
+          const currentRows = await tx.select<Media>("media", {
+            where: this.whereEq("id", mediaId),
+          });
+          const current = currentRows[0];
+          // Lost a delete race: the row is already gone, so record nothing.
+          // Only the request that actually removes the row emits media.deleted.
+          if (!current) {
+            return null;
+          }
 
+          await tx.delete("media", this.whereEq("id", mediaId));
+
+          // The removed row's final state ships as `data`; there is no
+          // post-delete state, so `previous` is null (mirroring create). Media
+          // has no field schema, so `fields` is empty (nothing to strip).
+          await recordMutationEvent(tx, {
+            type: "media.deleted",
+            resource: { kind: "media", id: mediaId },
+            data: current,
+            previous: null,
+            fields: [],
+            actor: actorForWrite(actor, null),
+          });
+
+          return current;
+        }
+      );
+
+      // The row was gone before we could delete it: report not-found and skip
+      // physical cleanup (the winning request owns the file) rather than
+      // returning a false success for a no-op delete.
+      if (!deletedRow) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Media not found",
+        };
+      }
+      const mediaData = deletedRow;
+
+      // Best-effort physical cleanup AFTER the row + event have committed.
+      // Swallow-and-warn: a storage failure must not fail a delete whose
+      // authoritative row removal already succeeded.
       try {
         await withRetry(
           () => this.storage.delete(mediaData.filename, "media"),
@@ -571,10 +778,12 @@ export class MediaService extends BaseService {
         }
       } catch (error) {
         console.warn("[MediaService] Storage deletion warning:", error);
-        // Continue with database deletion even if storage fails
+        // Storage cleanup is best-effort; the row and event are already gone.
       }
 
-      await this.db.delete(media).where(sql`${media.id} = ${mediaId}`);
+      // The delete committed a media.deleted outbox row; drain and prune it
+      // (no-op when the unified media service wraps this one and drains itself).
+      await this.afterWrite();
 
       return {
         success: true,

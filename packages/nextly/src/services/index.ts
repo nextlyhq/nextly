@@ -11,6 +11,9 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
+import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
@@ -357,7 +360,37 @@ export class ServiceContainer {
    */
   get media(): LegacyMediaService {
     if (!this._media) {
-      this._media = new LegacyMediaService(this.adapter, this.getLogger());
+      // Server actions reach media through this container rather than the
+      // unified media service, so inject the shared drain fast path directly —
+      // otherwise action-driven media events would sit in the outbox until the
+      // scheduled drain (which also owns retention pruning). Resolved from DI
+      // when the app has booted webhooks; a bare container (e.g. a CLI/test
+      // build) gets none and simply relies on the scheduled drain.
+      const logger = this.getLogger();
+      const fastDrainScheduler = container.has("webhookFastDrainScheduler")
+        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        : undefined;
+      // Prune the outbox on the action write path too: the fast drain only
+      // prunes when it actually runs a delivery pass (endpoints exist and a
+      // runtime `after()` is available), so without its own runner an
+      // action-only install's media events could accumulate unpruned.
+      const config = container.has("config")
+        ? container.get<NextlyServiceConfig>("config")
+        : undefined;
+      const retentionRunner = config?.webhookRetention
+        ? new WebhookRetentionRunner({
+            policy: config.webhookRetention,
+            prune: { adapter: this.adapter, logger },
+            gate: new MetaRetentionGate(this.adapter),
+            logger,
+          })
+        : undefined;
+      this._media = new LegacyMediaService(
+        this.adapter,
+        logger,
+        fastDrainScheduler,
+        retentionRunner
+      );
     }
     return this._media;
   }

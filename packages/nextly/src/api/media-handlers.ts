@@ -59,6 +59,7 @@ import {
   isErrorResponse,
   requirePermission,
 } from "../auth/middleware";
+import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
@@ -176,7 +177,7 @@ async function gateMediaRoute(
   path: string[] | undefined,
   method: string,
   requireAuth: boolean
-): Promise<{ authUserId?: string } | Response> {
+): Promise<{ authUserId?: string; actor?: RequestActor } | Response> {
   if (!requireAuth) {
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
@@ -197,7 +198,10 @@ async function gateMediaRoute(
   if (isErrorResponse(auth)) {
     return createJsonErrorResponse(auth);
   }
-  return { authUserId: auth.userId };
+  // Surface both the acting user id (for uploader attribution on the DB row)
+  // and the full actor (session vs API key) so media writes record the true
+  // caller on their outbox events.
+  return { authUserId: auth.userId, actor: actorFromAuthContext(auth) };
 }
 
 // ============================================================
@@ -388,7 +392,8 @@ async function handleListMedia(request: Request): Promise<Response> {
 
 async function handleUploadMedia(
   request: Request,
-  authUserId: string
+  authUserId: string,
+  actor?: RequestActor
 ): Promise<Response> {
   const mediaService = await getMediaService();
   const formData = await request.formData();
@@ -436,7 +441,8 @@ async function handleUploadMedia(
       size: file.size,
       folderId: folderId || undefined,
     },
-    context
+    context,
+    actor
   );
 
   return respondMutation("Media uploaded.", mediaFile, { status: 201 });
@@ -453,7 +459,8 @@ async function handleGetMedia(mediaId: string): Promise<Response> {
 
 async function handleUpdateMedia(
   request: Request,
-  mediaId: string
+  mediaId: string,
+  actor?: RequestActor
 ): Promise<Response> {
   const mediaService = await getMediaService();
   const body = await readJsonBody<Record<string, unknown>>(request);
@@ -468,16 +475,24 @@ async function handleUpdateMedia(
 
   const context = createRequestContext();
 
-  const mediaFile = await mediaService.update(mediaId, validated, context);
+  const mediaFile = await mediaService.update(
+    mediaId,
+    validated,
+    context,
+    actor
+  );
 
   return respondMutation("Media updated.", mediaFile);
 }
 
-async function handleDeleteMedia(mediaId: string): Promise<Response> {
+async function handleDeleteMedia(
+  mediaId: string,
+  actor?: RequestActor
+): Promise<Response> {
   const mediaService = await getMediaService();
   const context = createRequestContext();
 
-  await mediaService.delete(mediaId, context);
+  await mediaService.delete(mediaId, context, actor);
 
   // Service returns void; surface the deleted id alongside the toast so the
   // admin can update its local cache without a follow-up fetch.
@@ -486,14 +501,17 @@ async function handleDeleteMedia(mediaId: string): Promise<Response> {
 
 async function handleMoveMedia(
   request: Request,
-  mediaId: string
+  mediaId: string,
+  actor?: RequestActor
 ): Promise<Response> {
   const mediaService = await getMediaService();
   const body = await readJsonBody<Record<string, unknown>>(request);
   const folderId = body.folderId as string | null | undefined;
   const context = createRequestContext();
 
-  await mediaService.moveToFolder(mediaId, folderId ?? null, context);
+  // Thread the authenticated actor so the move's media.updated event is
+  // attributed to the real user/API key instead of `system`.
+  await mediaService.moveToFolder(mediaId, folderId ?? null, context, actor);
 
   // Service returns void; echo the target ids so the admin can update the
   // moved record locally without re-fetching the affected folders.
@@ -503,9 +521,17 @@ async function handleMoveMedia(
   });
 }
 
-async function handleBulkDeleteMedia(request: Request): Promise<Response> {
+async function handleBulkDeleteMedia(
+  request: Request,
+  actor?: RequestActor
+): Promise<Response> {
   const mediaService = await getMediaService();
-  return executeBulkDelete(request, mediaService, createRequestContext());
+  return executeBulkDelete(
+    request,
+    mediaService,
+    createRequestContext(),
+    actor
+  );
 }
 
 // ============================================================
@@ -701,7 +727,11 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         let response: Response;
         switch (route.type) {
           case "upload-media":
-            response = await handleUploadMedia(request, gate.authUserId!);
+            response = await handleUploadMedia(
+              request,
+              gate.authUserId!,
+              gate.actor
+            );
             break;
           case "create-folder":
             response = await handleCreateFolder(request, gate.authUserId!);
@@ -730,10 +760,18 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         let response: Response;
         switch (route.type) {
           case "update-media":
-            response = await handleUpdateMedia(request, route.mediaId!);
+            response = await handleUpdateMedia(
+              request,
+              route.mediaId!,
+              gate.actor
+            );
             break;
           case "move-media":
-            response = await handleMoveMedia(request, route.mediaId!);
+            response = await handleMoveMedia(
+              request,
+              route.mediaId!,
+              gate.actor
+            );
             break;
           case "update-folder":
             response = await handleUpdateFolder(request, route.folderId!);
@@ -762,13 +800,13 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         let response: Response;
         switch (route.type) {
           case "delete-media":
-            response = await handleDeleteMedia(route.mediaId!);
+            response = await handleDeleteMedia(route.mediaId!, gate.actor);
             break;
           case "delete-folder":
             response = await handleDeleteFolder(request, route.folderId!);
             break;
           case "bulk-delete-media":
-            response = await handleBulkDeleteMedia(request);
+            response = await handleBulkDeleteMedia(request, gate.actor);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "DELETE");
