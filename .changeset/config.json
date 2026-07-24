@@ -8,6 +8,7 @@
       "create-nextly-app",
       "@nextlyhq/admin",
       "@nextlyhq/admin-css",
+      "@nextlyhq/blocks-engine",
       "@nextlyhq/ui",
       "@nextlyhq/adapter-drizzle",
       "@nextlyhq/adapter-postgres",
