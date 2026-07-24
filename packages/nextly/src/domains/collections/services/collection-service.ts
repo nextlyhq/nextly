@@ -818,6 +818,13 @@ export class CollectionService extends BaseService {
       data
     );
 
+    // Collect before the success check. The mutation layer sets the intent only
+    // once the row is written and carries it even on a hook-failure result, so a
+    // caller that commits despite the failure still busts the tags; a genuine
+    // rollback drops the collector unflushed, so collecting here is always safe.
+    // withTransaction flushes what was collected once the transaction commits.
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     if (!result.success) {
       this.logger.warn("Entry creation in transaction failed", {
         collectionName,
@@ -831,10 +838,6 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId: (result.data as CollectionEntry | null)?.id,
     });
-
-    // Defer the committed write's cache-revalidation to the owning
-    // withTransaction, which flushes it once the transaction commits.
-    this.collectTxIntent(tx, result.revalidationIntent);
 
     return result.data as CollectionEntry;
   }
@@ -872,6 +875,10 @@ export class CollectionService extends BaseService {
       data
     );
 
+    // Collect before the success check, so a caller that commits despite a
+    // post-write hook failure still busts the tags (see createEntryInTransaction).
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     if (!result.success) {
       if (result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
@@ -903,10 +910,6 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
     });
-
-    // Defer the committed write's cache-revalidation to the owning
-    // withTransaction, which flushes it once the transaction commits.
-    this.collectTxIntent(tx, result.revalidationIntent);
 
     return result.data as CollectionEntry;
   }
@@ -944,6 +947,10 @@ export class CollectionService extends BaseService {
       actor,
     });
 
+    // Collect before the success check, so a caller that commits despite a
+    // post-delete hook failure still busts the tags (see createEntryInTransaction).
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     if (!result.success) {
       if (result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
@@ -970,10 +977,6 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
     });
-
-    // Defer the committed delete's cache-revalidation to the owning
-    // withTransaction, which flushes it once the transaction commits.
-    this.collectTxIntent(tx, result.revalidationIntent);
   }
 
   /**

@@ -320,6 +320,36 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.flushed).toHaveLength(0);
   });
 
+  it("busts tags when a wrapper's hook fails but the owned transaction commits", async () => {
+    // The row is written before the afterCreate hook runs, so a throwing hook
+    // leaves it committed if the caller swallows the wrapper error. The wrapper
+    // must have collected the intent before throwing, so the committed row's
+    // tags still bust.
+    await boot([openCollection("hookcommit")]);
+    const service = handle!.getService<CollectionService>("collectionService");
+    const throwingHook: HookHandler = async () => {
+      throw NextlyError.internal({ logContext: { reason: "test-hook-throw" } });
+    };
+    registerHook("afterCreate", "hookcommit", throwingHook);
+    try {
+      await service.withTransaction(async tx => {
+        try {
+          await service.createEntryInTransaction(
+            tx,
+            "hookcommit",
+            { title: "T", slug: "committed-hook" },
+            { user: undefined }
+          );
+        } catch {
+          // Commit despite the hook failure — the row already wrote.
+        }
+      });
+      expect(spy.tags).toContain("nextly:hookcommit:slug:committed-hook");
+    } finally {
+      unregisterHook("afterCreate", "hookcommit", throwingHook);
+    }
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
