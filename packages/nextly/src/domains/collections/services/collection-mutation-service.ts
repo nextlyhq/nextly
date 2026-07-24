@@ -4413,9 +4413,13 @@ export class CollectionMutationService extends BaseService {
         deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
         // Collect every locale's slug before the cascade delete removes the
         // companion rows, so a localized collection busts each locale's URL.
+        // Read on the pool, not the write transaction: a failed read on the
+        // tx-bound connection would poison the transaction and roll the delete
+        // back, and the companion rows are committed (still present) until the
+        // delete commits.
         deletedLocalizedSlugsForRevalidation =
           await this.readCompanionSlugsAllLocales(
-            tx.getDrizzle<CompanionReadDb>(),
+            this.db,
             params.collectionName,
             params.entryId
           );
@@ -5644,9 +5648,12 @@ export class CollectionMutationService extends BaseService {
           locale: this.localization?.defaultLocale,
         });
       // Every locale's slug, read before the cascade removes the companion rows,
-      // so a localized collection busts each locale's URL on delete.
+      // so a localized collection busts each locale's URL on delete. Read on the
+      // pool, not the write transaction, so a failed read cannot poison the
+      // transaction and roll the delete back (the companion rows stay committed
+      // until the delete commits).
       const deletedLocalizedSlugs = await this.readCompanionSlugsAllLocales(
-        tx.getDrizzle<CompanionReadDb>(),
+        this.db,
         params.collectionName,
         params.entryId
       );
@@ -6988,9 +6995,12 @@ export class CollectionMutationService extends BaseService {
           locale: this.localization?.defaultLocale,
         });
       // Every locale's slug, read before the cascade removes the companion rows,
-      // so a localized collection busts each locale's URL on delete.
+      // so a localized collection busts each locale's URL on delete. Read on the
+      // pool, not the write transaction, so a failed read cannot poison the
+      // transaction and roll the delete back (the companion rows stay committed
+      // until the delete commits).
       const deletedLocalizedSlugs = await this.readCompanionSlugsAllLocales(
-        tx.getDrizzle<CompanionReadDb>(),
+        this.db,
         params.collectionName,
         entryId
       );
