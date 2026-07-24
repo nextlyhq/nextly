@@ -111,7 +111,12 @@ export interface BlockNode {
   classes?: string[];
   /** Conditional and per-breakpoint visibility. */
   visibility?: NodeVisibility;
-  /** Author lock: the node cannot be moved or deleted while true. */
+  /**
+   * Author lock. While true, the editor command layer must not let the author
+   * move or delete this node. It is an author-facing policy flag, not a
+   * data-layer guarantee: system transforms (migrations, overlays, restore)
+   * still operate on locked nodes, and the pure tree primitives do not read it.
+   */
   locked?: boolean;
   /** Author-facing instance label, shown in the Layers panel. */
   name?: string;

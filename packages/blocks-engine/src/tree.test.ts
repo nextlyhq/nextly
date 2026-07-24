@@ -233,6 +233,26 @@ describe("updateNode", () => {
   });
 });
 
+describe("id uniqueness by construction", () => {
+  it("makeNode mints a unique id every call", () => {
+    const ids = new Set(
+      Array.from({ length: 1000 }, () => makeNode("core/text", 1).id)
+    );
+    expect(ids.size).toBe(1000);
+  });
+
+  it("reidSubtree re-ids every node so a re-inserted copy cannot collide", () => {
+    const { nodes, section } = fixture();
+    const copy = reidSubtree(section);
+    const copyIds = new Set<string>();
+    walkNodes([copy], n => copyIds.add(n.id));
+    const originalIds = new Set<string>();
+    walkNodes(nodes, n => originalIds.add(n.id));
+    // No id in the copy overlaps the original forest.
+    for (const id of copyIds) expect(originalIds.has(id)).toBe(false);
+  });
+});
+
 describe("counting helpers", () => {
   it("counts nodes and measures depth", () => {
     const { nodes } = fixture();

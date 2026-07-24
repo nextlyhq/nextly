@@ -6,6 +6,20 @@
  * mutation returns a new forest; inputs are never modified. Nodes are always
  * addressed by id — positional addressing exists only as the insertion index
  * within a destination, never as a way to identify a node.
+ *
+ * These are mechanism, not policy: they enforce structural safety (no cycles,
+ * clamped indices, no-op on missing targets) but DELIBERATELY do not enforce
+ * author policy. Two invariants are owned elsewhere on purpose:
+ * - Author locks (`node.locked`) are enforced by the editor command layer, not
+ *   here. System paths — migrations, locale-overlay application, `reidSubtree`,
+ *   version restore — must be able to transform locked nodes; a lock check in
+ *   these primitives would either block those paths or force a bypass flag onto
+ *   every call site. Centralizing the check in the op store is the correct seam.
+ * - Node id uniqueness is a document validation invariant, checked by
+ *   `validate()` before a document is persisted. Callers build nodes with
+ *   `makeNode`/`reidSubtree`, which mint fresh ids, so within a session ids are
+ *   unique by construction; a hand-injected duplicate is caught by validation
+ *   with a machine-readable path, not silently corrected here.
  */
 import type { BlockNode } from "./document";
 
