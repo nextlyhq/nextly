@@ -144,12 +144,15 @@ describe("cache revalidation — localized slugs (sqlite)", () => {
     ]);
     spy.flushed.length = 0;
 
-    await handlerOf(t).publishAllLocales({
+    const res = await handlerOf(t).publishAllLocales({
       collectionName: "locposts",
       entryId: id,
       overrideAccess: true,
     });
 
+    // The localized-slug read runs post-commit, so it must never turn a
+    // committed publish into a failure.
+    expect(res.success).toBe(true);
     expect(spy.tags).toContain("nextly:locposts:slug:hello");
     expect(spy.tags).toContain("nextly:locposts:slug:bonjour");
   });

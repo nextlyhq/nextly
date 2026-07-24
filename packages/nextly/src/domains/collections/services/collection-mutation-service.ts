@@ -770,45 +770,65 @@ export class CollectionMutationService extends BaseService {
    * a non-localized collection, one whose `slug` is not localized, or one with no
    * configured locales. Bound to the caller's transaction connection so the read
    * does not re-enter the pool from inside the transaction.
+   *
+   * Never throws: this feeds cache invalidation, not the write itself. On the
+   * publish path it runs post-commit, so a thrown error would wrongly report a
+   * committed publish as failed; on the delete path it must not abort a delete.
+   * A read failure degrades to [] (the collection/id tags — and, since reads are
+   * id-tagged, every locale's page — still bust) and is logged rather than
+   * silently dropped.
    */
   private async readCompanionSlugsAllLocales(
     db: CompanionReadDb,
     collectionName: string,
     entryId: string
   ): Promise<string[]> {
-    const companion = await this.fileManager.loadCompanionSchema(
-      collectionName,
-      db
-    );
-    // Only meaningful when `slug` itself is a translatable (companion) field.
-    if (!companion || !companion.localizedFields.some(f => f.name === "slug")) {
-      return [];
-    }
+    try {
+      const companion = await this.fileManager.loadCompanionSchema(
+        collectionName,
+        db
+      );
+      // Only meaningful when `slug` itself is a translatable (companion) field.
+      if (
+        !companion ||
+        !companion.localizedFields.some(f => f.name === "slug")
+      ) {
+        return [];
+      }
 
-    const locales = this.localization?.locales.map(l => l.code) ?? [];
-    if (locales.length === 0) return [];
+      const locales = this.localization?.locales.map(l => l.code) ?? [];
+      if (locales.length === 0) return [];
 
-    const row: Record<string, unknown> = { id: entryId };
-    await populateCompanionFieldsAllLocales({
-      db,
-      companionTable: companion.table,
-      localizedFields: companion.localizedFields,
-      rows: [row],
-      locales,
-    });
+      const row: Record<string, unknown> = { id: entryId };
+      await populateCompanionFieldsAllLocales({
+        db,
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        rows: [row],
+        locales,
+      });
 
-    // row.slug is a `{ [locale]: slug | null }` map; collect the distinct
-    // non-blank values so each locale's URL tag busts once.
-    const byLocale = row.slug;
-    const slugs = new Set<string>();
-    if (byLocale && typeof byLocale === "object") {
-      for (const value of Object.values(byLocale as Record<string, unknown>)) {
-        if (typeof value === "string" && value.trim().length > 0) {
-          slugs.add(value);
+      // row.slug is a `{ [locale]: slug | null }` map; collect the distinct
+      // non-blank values so each locale's URL tag busts once.
+      const byLocale = row.slug;
+      const slugs = new Set<string>();
+      if (byLocale && typeof byLocale === "object") {
+        for (const value of Object.values(
+          byLocale as Record<string, unknown>
+        )) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            slugs.add(value);
+          }
         }
       }
+      return [...slugs];
+    } catch (error) {
+      this.logger.warn(
+        "Failed to read companion slugs for cache revalidation; localized slug tags may not be busted (collection/id tags still are)",
+        { collectionName, entryId, error }
+      );
+      return [];
     }
-    return [...slugs];
   }
 
   /**
