@@ -5624,6 +5624,11 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
+    // Computed right after the row is written (before response redaction can
+    // strip the slug, and before the after-hooks run) and carried on every
+    // post-write return, so a committed item whose after-hook then throws still
+    // surfaces its intent to the batch caller. Hoisted so the catch return sees it.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
@@ -5984,6 +5989,17 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // Compute the intent from the freshly inserted row, before the after-hooks
+      // run or redaction can strip the slug.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: (entry as Record<string, unknown>).id as string,
+          slug: readStringField(entry as Record<string, unknown>, "slug"),
+        }
+      );
+
       // Stored password hashes are write-only; the response never carries
       // them back to the client.
       // Field-level afterChange hooks observe the saved values (before the
@@ -6010,17 +6026,6 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      // Computed in the worker (like the delete worker) so the batch caller
-      // collects the intent directly rather than recomputing it.
-      const revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: (entry as Record<string, unknown>).id as string,
-          slug: readStringField(entry as Record<string, unknown>, "slug"),
-        }
-      );
-
       return {
         success: true,
         statusCode: 201,
@@ -6029,12 +6034,17 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     } catch (error: unknown) {
+      // Carry the intent (set only once the row was written) so a committed item
+      // whose after-hook then threw still busts its tags via the batch caller.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to create entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to create entry" },
+          this.dialect
+        ),
+        revalidationIntent,
+      };
     }
   }
 
@@ -6075,6 +6085,11 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
+    // Computed right after the row is updated (before redaction can strip the
+    // slug and before the after-hooks run) and carried on every post-write
+    // return, so a committed item whose after-hook then throws still surfaces
+    // its intent to the batch caller.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
@@ -6437,6 +6452,19 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
+      // Compute the intent from the updated row and the pre-update row, before
+      // the after-hooks run or redaction can strip the slug. The previous slug
+      // (from existingEntry) lets a batch rename bust the old slug tag too.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: entryId,
+          slug: readStringField(updated as Record<string, unknown>, "slug"),
+          previousSlug: readStringField(existingEntry, "slug"),
+        }
+      );
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
@@ -6528,19 +6556,6 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      // Computed in the worker (like the delete worker) so the batch caller
-      // collects a complete intent: the previous slug comes from the pre-update
-      // row, so a batch rename busts the old slug tag too.
-      const revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: entryId,
-          slug: readStringField(updated as Record<string, unknown>, "slug"),
-          previousSlug: readStringField(existingEntry, "slug"),
-        }
-      );
-
       return {
         success: true,
         statusCode: 200,
@@ -6549,12 +6564,17 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     } catch (error: unknown) {
+      // Carry the intent (set only once the row was updated) so a committed item
+      // whose after-hook then threw still busts its tags via the batch caller.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+        revalidationIntent,
+      };
     }
   }
 

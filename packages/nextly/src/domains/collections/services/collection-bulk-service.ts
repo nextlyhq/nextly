@@ -1067,16 +1067,17 @@ export class CollectionBulkService extends BaseService {
                   skipHooks
                 );
 
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was written, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (createResult.revalidationIntent) {
+                collectedIntents.push(createResult.revalidationIntent);
+              }
               if (createResult.success && createResult.data) {
                 result.successful++;
                 result.ids.push(
                   (createResult.data as Record<string, unknown>).id as string
                 );
-                // The worker computed the intent (with config and slug); collect
-                // it, applied to the result only after the shared tx commits.
-                if (createResult.revalidationIntent) {
-                  collectedIntents.push(createResult.revalidationIntent);
-                }
               } else {
                 result.failed++;
                 result.errors.push({
@@ -1265,19 +1266,20 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent on the result regardless of success (set
+          // only once the row was written). The caller owns the transaction, so
+          // it flushes these after IT commits (as it does for the webhook drain)
+          // — this method cannot flush pre-commit.
+          if (createResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              createResult.revalidationIntent
+            );
+          }
           if (createResult.success && createResult.data) {
             result.successful++;
             result.ids.push(
               (createResult.data as Record<string, unknown>).id as string
             );
-            // Surface the worker's intent on the result. The caller owns the
-            // transaction, so it flushes these after IT commits (as it does for
-            // the webhook drain) — this method cannot flush pre-commit.
-            if (createResult.revalidationIntent) {
-              (result.revalidationIntents ??= []).push(
-                createResult.revalidationIntent
-              );
-            }
           } else {
             result.failed++;
             result.errors.push({
@@ -1450,16 +1452,17 @@ export class CollectionBulkService extends BaseService {
                   skipHooks
                 );
 
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was updated, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (updateResult.revalidationIntent) {
+                collectedIntents.push(updateResult.revalidationIntent);
+              }
               if (updateResult.success && updateResult.data) {
                 result.successful++;
                 result.ids.push(
                   (updateResult.data as Record<string, unknown>).id as string
                 );
-                // The worker computed the intent (with the previous slug for a
-                // rename); collect it, applied after the shared tx commits.
-                if (updateResult.revalidationIntent) {
-                  collectedIntents.push(updateResult.revalidationIntent);
-                }
               } else {
                 result.failed++;
                 result.errors.push({
@@ -1648,18 +1651,18 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent regardless of success (set only once the
+          // row was updated); the caller flushes it after committing its tx.
+          if (updateResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              updateResult.revalidationIntent
+            );
+          }
           if (updateResult.success && updateResult.data) {
             result.successful++;
             result.ids.push(
               (updateResult.data as Record<string, unknown>).id as string
             );
-            // Surface the worker's intent on the result; the caller flushes it
-            // after committing its own transaction.
-            if (updateResult.revalidationIntent) {
-              (result.revalidationIntents ??= []).push(
-                updateResult.revalidationIntent
-              );
-            }
           } else {
             result.failed++;
             result.errors.push({
@@ -2017,16 +2020,16 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent regardless of success (set only once the
+          // row was deleted); the caller flushes it after committing its tx.
+          if (deleteResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              deleteResult.revalidationIntent
+            );
+          }
           if (deleteResult.success) {
             result.successful++;
             result.ids.push(entryId);
-            // Surface the worker's intent on the result; the caller flushes it
-            // after committing its own transaction.
-            if (deleteResult.revalidationIntent) {
-              (result.revalidationIntents ??= []).push(
-                deleteResult.revalidationIntent
-              );
-            }
           } else {
             result.failed++;
             result.errors.push({

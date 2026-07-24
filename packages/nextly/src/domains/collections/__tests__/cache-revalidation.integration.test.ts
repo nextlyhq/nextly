@@ -208,6 +208,28 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(flushedTags).toContain("nextly:ownedtx:slug:b");
   });
 
+  it("busts the slug tag even when field-level read access hides slug", async () => {
+    // A batch create for a non-override user where slug's read access is denied:
+    // redactResponseFields strips slug from the returned row, so the intent must
+    // be computed from the pre-redaction row.
+    const entries = await boot([
+      defineCollection({
+        slug: "redact",
+        status: true,
+        access: { create: () => true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug", access: { read: () => false } }),
+        ],
+      }),
+    ]);
+    await entries.createEntries(
+      { collectionName: "redact", user: { id: "u" } },
+      [{ title: "T", slug: "hidden-slug" }]
+    );
+    expect(spy.tags).toContain("nextly:redact:slug:hidden-slug");
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
