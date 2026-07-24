@@ -35,13 +35,20 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
-  const stack: BlockNode[] = [...nodes];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node) continue;
+  // Index-based walk so every array element is counted, including malformed
+  // ones (null, a primitive): the node cap must reflect the real element count
+  // so an array padded with junk cannot slip past it. Only well-formed objects
+  // are descended into.
+  const queue: BlockNode[] = [...nodes];
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
     count++;
-    if (node.slots) {
-      for (const children of Object.values(node.slots)) stack.push(...children);
+    if (typeof node === "object" && node !== null && node.slots) {
+      // Guard against malformed slots (a non-array value): these helpers run
+      // over untrusted documents during validation and must not throw.
+      for (const children of Object.values(node.slots)) {
+        if (Array.isArray(children)) queue.push(...children);
+      }
     }
   }
   return count;
@@ -58,8 +65,17 @@ export function treeDepth(nodes: BlockNode[]): number {
     const entry = stack.pop();
     if (!entry) continue;
     if (entry.depth > deepest) deepest = entry.depth;
-    if (entry.node.slots) {
+    // A malformed array element (null, or a non-object) has no slots and must
+    // not be dereferenced: validation runs this over untrusted documents.
+    if (
+      typeof entry.node === "object" &&
+      entry.node !== null &&
+      entry.node.slots
+    ) {
+      // Skip malformed (non-array) slot values so untrusted documents passed in
+      // during validation cannot make this throw.
       for (const children of Object.values(entry.node.slots)) {
+        if (!Array.isArray(children)) continue;
         for (const child of children) {
           stack.push({ node: child, depth: entry.depth + 1 });
         }
