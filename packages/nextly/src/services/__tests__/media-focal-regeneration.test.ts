@@ -52,6 +52,7 @@ vi.mock("../image-size", () => ({
   },
 }));
 
+import { NextlyError } from "../../errors";
 import { MediaService } from "../media";
 
 const OLD_PATH = "OLD/thumb.webp";
@@ -78,7 +79,13 @@ function makeAdapter(txBehavior: "commit" | "throw" | "row-gone") {
     getDrizzle: () => ({}),
     transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> => {
       const result = await fn(tx);
-      if (txBehavior === "throw") throw new Error("db write failed");
+      if (txBehavior === "throw") {
+        // Mirror how the DB layer surfaces a failed write (a typed NextlyError),
+        // not a bare Error, matching this package's error convention.
+        throw NextlyError.internal({
+          logContext: { reason: "test-simulated-db-failure" },
+        });
+      }
       return result;
     },
   };

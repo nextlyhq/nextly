@@ -71,6 +71,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionTableExists,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -881,6 +882,18 @@ export class SingleQueryService extends BaseService {
     });
     if (!companion) return;
 
+    // Skip the seed when the companion `_locales` table has not been created yet
+    // (dev-before-migrate, or a best-effort boot companion creation that failed):
+    // the read path already treats a missing companion as optional, so an
+    // unconditional upsert here would throw and roll the main-row insert back.
+    // Probed on the pooled connection, NOT the transaction: a missing-table probe
+    // on the transaction connection would abort the whole transaction on Postgres.
+    const exists = await companionTableExists(
+      this.adapter,
+      companion.companionTableName
+    );
+    if (!exists) return;
+
     const { companion: companionData } = splitLocalizedWrite(
       localizedDefaults,
       companion.localizedFields
@@ -927,6 +940,13 @@ export class SingleQueryService extends BaseService {
       !!this.localization &&
       singleMeta.localized === true &&
       Object.keys(localizedDefaults).length > 0;
+    // When defaults are seeded, the initial version snapshot belongs to the
+    // default locale (its content is those seeded translatable values), so it is
+    // tagged and overlaid with them below — otherwise restoring v1 could not
+    // bring back the seeded localized defaults.
+    const seedLocale = needsCompanionSeed
+      ? (this.localization?.defaultLocale ?? null)
+      : null;
 
     if (!shouldCapture && !needsCompanionSeed) {
       const inserted = await this.adapter.insert<SingleDocument>(
@@ -986,6 +1006,14 @@ export class SingleQueryService extends BaseService {
         const parentRow = convertTimestampsToCamelCase({
           ...(row as Record<string, unknown>),
         });
+        // Overlay the seeded localized defaults (keyed by field name) onto the
+        // snapshot so v1 carries the default locale's content, mirroring how a
+        // normal localized write overlays its companion values before capturing.
+        // Without this, restoring v1 could not bring back the seeded defaults
+        // (including a localized title/slug), since they live on the companion.
+        for (const [name, value] of Object.entries(localizedDefaults)) {
+          parentRow[name] = value;
+        }
         stripPasswordFieldValues(parentRow, singleMeta.fields);
         stripSystemOwnerField(parentRow);
         for (const field of singleMeta.fields) {
@@ -1009,10 +1037,9 @@ export class SingleQueryService extends BaseService {
           // System-materialized default: no authoring user.
           parts: { parentRow, components: {} },
           createdBy: null,
-          // Left unlabelled: this snapshot is the main row alone, and a
-          // localized Single keeps its translatable values in the companion, so
-          // it holds no locale's content to claim.
-          locale: null,
+          // Tagged with the default locale when the snapshot carries seeded
+          // translatable defaults; null for a non-localized single (main row only).
+          locale: seedLocale,
           maxPerDoc: versionsConfig.maxPerDoc,
         });
         // Seed the default-locale companion with the localized defaults in the

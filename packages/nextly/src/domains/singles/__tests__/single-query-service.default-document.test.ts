@@ -73,9 +73,9 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "title", type: "text", localized: true }],
     });
 
-    const { insertValues, localizedDefaults } =
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock meta
-      service.buildDefaultDocument(meta as any);
+    const { insertValues, localizedDefaults } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
 
     expect(localizedDefaults).toHaveProperty("title");
     expect(insertValues).not.toHaveProperty("title");
@@ -87,9 +87,9 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "region", type: "text", defaultValue: "us" }],
     });
 
-    const { insertValues, localizedDefaults } =
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock meta
-      service.buildDefaultDocument(meta as any);
+    const { insertValues, localizedDefaults } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
 
     expect(localizedDefaults).toEqual({});
     expect(insertValues).toMatchObject({ region: "us" });
