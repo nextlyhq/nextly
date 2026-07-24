@@ -2454,8 +2454,12 @@ export class CollectionMutationService extends BaseService {
         readRevalidateConfig(publishCollection),
         {
           id: params.entryId,
+          // Prefer the committed post-publish row's slug so a concurrent rename
+          // that landed after the pre-read still busts the actually-published
+          // URL; fall back to the pre-read only when no fresh row was
+          // reconstructed.
           slug: readStringField(
-            existingEntry as Record<string, unknown>,
+            (publishedParentRow ?? existingEntry) as Record<string, unknown>,
             "slug"
           ),
         }
