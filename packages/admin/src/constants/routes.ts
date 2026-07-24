@@ -97,6 +97,10 @@ export const ROUTES = {
   SETTINGS_WEBHOOKS: "/admin/settings/webhooks",
   SETTINGS_WEBHOOKS_CREATE: "/admin/settings/webhooks/create",
   SETTINGS_WEBHOOKS_EDIT: "/admin/settings/webhooks/edit/[id]",
+  // Delivery log for one endpoint, and one delivery's attempt history.
+  SETTINGS_WEBHOOKS_DELIVERIES: "/admin/settings/webhooks/[id]/deliveries",
+  SETTINGS_WEBHOOKS_DELIVERY_DETAIL:
+    "/admin/settings/webhooks/[id]/deliveries/[deliveryId]",
   SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
   SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
   SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",

@@ -47,6 +47,15 @@ const WebhooksContent: React.FC = () => {
     navigateTo(buildRoute(ROUTES.SETTINGS_WEBHOOKS_EDIT, { id: webhook.id }));
   }, []);
 
+  const handleViewDeliveries = useCallback(
+    (webhook: WebhookEndpointSummary) => {
+      navigateTo(
+        buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, { id: webhook.id })
+      );
+    },
+    []
+  );
+
   const handleToggleEnabled = useCallback(
     (webhook: WebhookEndpointSummary) => {
       doUpdate(
@@ -138,10 +147,12 @@ const WebhooksContent: React.FC = () => {
         isLoading={isLoading}
         canUpdate={canUpdate}
         canDelete={canDelete}
+        canViewDeliveries={canRead}
         onEdit={handleEdit}
         onToggleEnabled={handleToggleEnabled}
         onTest={handleTest}
         onDelete={setToDelete}
+        onViewDeliveries={handleViewDeliveries}
       />
 
       <DeleteWebhookDialog

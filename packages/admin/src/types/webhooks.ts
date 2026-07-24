@@ -88,3 +88,96 @@ export interface WebhookTestResult {
   error?: string;
   responseSnippet?: string;
 }
+
+/**
+ * Lifecycle state of a delivery, mirroring the drain's status vocabulary
+ * (`packages/nextly/src/domains/webhooks`). These are the only values the list
+ * status filter offers.
+ */
+export const WEBHOOK_DELIVERY_STATUSES = [
+  "pending",
+  "processing",
+  "delivered",
+  "retrying",
+  "failed",
+] as const;
+
+export type WebhookDeliveryStatus = (typeof WEBHOOK_DELIVERY_STATUSES)[number];
+
+/** The resource an event was about, surfaced from the joined event row. */
+export interface WebhookDeliveryResource {
+  kind: string;
+  collection: string | null;
+  id: string | null;
+  /** Which translation changed, for a localized resource; null otherwise. */
+  locale: string | null;
+}
+
+/**
+ * One recorded delivery attempt. `outcome` is free text from the engine (e.g.
+ * `delivered`, `retrying`, `failed`) rather than the delivery-level status set,
+ * so it is typed as a string, not `WebhookDeliveryStatus`.
+ */
+export interface WebhookDeliveryAttempt {
+  at: string;
+  outcome: string;
+  statusCode?: number;
+  latencyMs?: number;
+  error?: string;
+}
+
+/**
+ * A delivery as the log list shows it (joined to its event). Timestamps arrive
+ * as ISO-8601 UTC strings: the delivery reads opt out of server-side timezone
+ * rewriting so opaque captured text (errors, snippets) survives verbatim, so
+ * the client renders these instants itself.
+ */
+export interface WebhookDeliverySummary {
+  id: string;
+  webhookId: string;
+  eventId: string;
+  eventType: string;
+  resource: WebhookDeliveryResource;
+  status: WebhookDeliveryStatus;
+  attemptCount: number;
+  lastStatusCode: number | null;
+  lastLatencyMs: number | null;
+  lastError: string | null;
+  /** When the next retry is due, or null when the delivery is terminal. */
+  nextAttemptAt: string | null;
+  /** When the underlying event was recorded. */
+  eventCreatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A single delivery with its full attempt history and last response snippet. */
+export interface WebhookDeliveryDetail extends WebhookDeliverySummary {
+  attempts: WebhookDeliveryAttempt[];
+  /** Truncated response body from the last attempt, or null. */
+  lastResponseSnippet: string | null;
+}
+
+/** Filters and paging for a delivery list request. `page`/`limit` are 1-based. */
+export interface ListDeliveriesParams {
+  page?: number;
+  limit?: number;
+  status?: WebhookDeliveryStatus;
+  eventType?: string;
+}
+
+/**
+ * Summary of one manual/scheduled drain pass (the `item` of the drain mutation
+ * envelope). Mirrors the backend `RunDrainResult`.
+ */
+export interface RunDrainResult {
+  rounds: number;
+  eventsProcessed: number;
+  deliveriesCreated: number;
+  attempted: number;
+  delivered: number;
+  retried: number;
+  failed: number;
+  abandoned: number;
+  pruned: { events: number; deliveries: number };
+}

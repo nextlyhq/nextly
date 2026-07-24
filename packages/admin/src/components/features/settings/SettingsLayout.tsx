@@ -103,6 +103,15 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
       };
     }
     if (pathname.includes("webhooks")) {
+      if (pathname.includes("/deliveries")) {
+        return {
+          title: "Deliveries",
+          description:
+            "Delivery attempts for this endpoint, with response status and retries",
+          crumb: "Deliveries",
+          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+        };
+      }
       if (pathname.includes("/create")) {
         return {
           title: "New Webhook",

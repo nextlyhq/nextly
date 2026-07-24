@@ -10,7 +10,7 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Edit, Power, Send, Trash2 } from "@admin/components/icons";
+import { Edit, List, Power, Send, Trash2 } from "@admin/components/icons";
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -29,10 +29,13 @@ export interface WebhookTableProps {
   canUpdate: boolean;
   /** Delete permission gates the Delete action. */
   canDelete: boolean;
+  /** Read (or update) gates the "View deliveries" action. */
+  canViewDeliveries: boolean;
   onEdit: (webhook: WebhookEndpointSummary) => void;
   onToggleEnabled: (webhook: WebhookEndpointSummary) => void;
   onTest: (webhook: WebhookEndpointSummary) => void;
   onDelete: (webhook: WebhookEndpointSummary) => void;
+  onViewDeliveries: (webhook: WebhookEndpointSummary) => void;
 }
 
 export const WebhookTable: React.FC<WebhookTableProps> = ({
@@ -40,10 +43,12 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   isLoading = false,
   canUpdate,
   canDelete,
+  canViewDeliveries,
   onEdit,
   onToggleEnabled,
   onTest,
   onDelete,
+  onViewDeliveries,
 }) => {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -149,6 +154,14 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   const rowActions = useCallback(
     (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => {
       const actions: RowAction<WebhookEndpointSummary>[] = [];
+      if (canViewDeliveries) {
+        actions.push({
+          id: "deliveries",
+          label: "View deliveries",
+          icon: <List className="h-4 w-4" />,
+          onSelect: () => onViewDeliveries(webhook),
+        });
+      }
       if (canUpdate) {
         actions.push(
           {
@@ -182,7 +195,16 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
       }
       return actions;
     },
-    [canUpdate, canDelete, onEdit, onToggleEnabled, onTest, onDelete]
+    [
+      canUpdate,
+      canDelete,
+      canViewDeliveries,
+      onEdit,
+      onToggleEnabled,
+      onTest,
+      onDelete,
+      onViewDeliveries,
+    ]
   );
 
   return (

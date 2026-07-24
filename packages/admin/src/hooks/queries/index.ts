@@ -139,3 +139,12 @@ export {
   useRevealSecret,
   useTestEndpoint,
 } from "./useWebhooks";
+
+// Webhook delivery-log query and mutation hooks
+export {
+  deliveryKeys, // Query key factory for stable caching
+  useDeliveries,
+  useDelivery,
+  useRedeliver,
+  useRunDrain,
+} from "./useDeliveries";
