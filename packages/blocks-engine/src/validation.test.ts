@@ -325,6 +325,36 @@ describe("validation never throws on adversarial input", () => {
     }).not.toThrow();
   });
 
+  it("reports a hole inside a slot array as an invalid node", () => {
+    const children: unknown[] = [];
+    children[1] = { id: "n2", type: "core/text", version: 1, props: {} };
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children },
+        },
+      ],
+    });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(
+      issues.some(
+        i => i.code === "invalid-node" && i.path === "/nodes/0/slots/children/0"
+      )
+    ).toBe(true);
+  });
+
   it("reports holes in a sparse nodes array instead of throwing", () => {
     const sparse: unknown[] = [];
     sparse[2] = { id: "n1", type: "core/text", version: 1, props: {} };
@@ -338,6 +368,43 @@ describe("validation never throws on adversarial input", () => {
     }).not.toThrow();
     // The two holes are reported as invalid nodes; the real node at index 2 is fine.
     expect(issues.filter(i => i.code === "invalid-node")).toHaveLength(2);
+  });
+
+  it("bounds work on an oversized forest instead of exhausting resources", () => {
+    // One parent with a very wide child array: with the node cap at 100, the
+    // walk and the measurement must both stay bounded and still return the
+    // node-count issue rather than processing all 500k children.
+    const children = Array.from({ length: 500_000 }, (_, i) => ({
+      id: `c${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "root",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children },
+        },
+      ],
+    });
+    const start = Date.now();
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 1_000_000 },
+      });
+    }).not.toThrow();
+    expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+    // Sanity bound: a capped walk finishes fast even though the forest is huge.
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   it("counts malformed array elements toward the node cap", () => {

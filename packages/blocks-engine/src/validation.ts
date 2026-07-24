@@ -17,13 +17,7 @@ import {
   DOCUMENT_KINDS,
   STYLE_STATES,
 } from "./document";
-import {
-  DEFAULT_LIMITS,
-  LIMIT_WARNING_RATIO,
-  countNodes,
-  documentBytes,
-  treeDepth,
-} from "./limits";
+import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO, documentBytes } from "./limits";
 import type { DocumentLimits } from "./limits";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -86,6 +80,7 @@ export const ISSUE_CODES = {
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
   "duplicate-node-id": "Two or more nodes share the same id.",
+  "duplicate-dom-id": "Two or more nodes render the same HTML id.",
   "invalid-node-type": "A node type is missing or not a namespaced string.",
   "invalid-node-version":
     "A node version is missing or not a positive integer.",
@@ -224,6 +219,7 @@ export function validate(
     knownBreakpoints,
     unknownSeverity,
     seenIds: new Map<string, string>(),
+    seenDomIds: new Map<string, string>(),
   };
 
   // Document-level styles use the same envelope as node styles but have no
@@ -241,12 +237,17 @@ export function validate(
   // depth issue instead of throwing. It also stops after visiting maxNodes
   // nodes (the node-count issue is already recorded by checkLimits), so an
   // oversized document cannot make the walk do unbounded work.
-  // Array.from (not .map) so a sparse array's holes become explicit undefined
-  // entries and get reported as invalid nodes rather than skipped or throwing.
-  const queue: Array<{ node: BlockNode; path: string }> = Array.from(
-    doc.nodes,
-    (node, index) => ({ node, path: pointer("/nodes", index) })
-  );
+  // Index-based reads (not .map/.forEach) so a sparse array's holes become
+  // explicit undefined entries reported as invalid nodes, and the queue is
+  // capped at maxNodes so an oversized forest cannot grow it without bound.
+  const queue: Array<{ node: BlockNode; path: string }> = [];
+  for (
+    let i = 0;
+    i < doc.nodes.length && queue.length <= limits.maxNodes;
+    i++
+  ) {
+    queue.push({ node: doc.nodes[i], path: pointer("/nodes", i) });
+  }
   for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
     const { node, path } = queue[i];
     validateNode(node, path, nodeState);
@@ -254,9 +255,13 @@ export function validate(
       for (const [slot, children] of Object.entries(node.slots)) {
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
-          children.forEach((child, childIndex) =>
-            queue.push({ node: child, path: pointer(slotPath, childIndex) })
-          );
+          for (
+            let c = 0;
+            c < children.length && queue.length <= limits.maxNodes;
+            c++
+          ) {
+            queue.push({ node: children[c], path: pointer(slotPath, c) });
+          }
         }
       }
     }
@@ -307,29 +312,70 @@ function collectBreakpointIds(
   return ids;
 }
 
+/**
+ * Count nodes and detect depth-exceedance in one bounded pass. An oversized
+ * document costs O(maxNodes), not O(document): once the node cap is passed the
+ * traversal stops (the document is already rejected) and the frontier is never
+ * allowed to grow past the cap, so a rejected forest cannot exhaust memory.
+ */
+function measureForest(
+  nodes: BlockNode[],
+  maxNodes: number,
+  maxDepth: number
+): { count: number; exceededDepth: boolean } {
+  let count = 0;
+  let exceededDepth = false;
+  const queue: Array<{ node: BlockNode; depth: number }> = [];
+  for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
+    queue.push({ node: nodes[i], depth: 1 });
+  }
+  for (let i = 0; i < queue.length; i++) {
+    count++;
+    const { node, depth } = queue[i];
+    if (depth > maxDepth) exceededDepth = true;
+    if (count > maxNodes) break; // already over the cap; no need to count more
+    if (typeof node === "object" && node !== null && node.slots) {
+      for (const children of Object.values(node.slots)) {
+        if (!Array.isArray(children)) continue;
+        for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
+          queue.push({ node: children[c], depth: depth + 1 });
+        }
+      }
+    }
+  }
+  return { count, exceededDepth };
+}
+
 function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,
   issues: ValidationIssue[]
 ): void {
-  const depth = treeDepth(doc.nodes);
-  if (depth > limits.maxDepth) {
+  const { count, exceededDepth } = measureForest(
+    doc.nodes,
+    limits.maxNodes,
+    limits.maxDepth
+  );
+  if (exceededDepth) {
     issues.push({
       path: "/nodes",
       code: "depth-exceeded",
       severity: "error",
-      message: `Node tree is ${depth} levels deep; the maximum is ${limits.maxDepth}.`,
+      message: `Node tree is nested deeper than the maximum of ${limits.maxDepth}.`,
     });
   }
-  const nodeCount = countNodes(doc.nodes);
-  if (nodeCount > limits.maxNodes) {
+  if (count > limits.maxNodes) {
     issues.push({
       path: "/nodes",
       code: "node-count-exceeded",
       severity: "error",
-      message: `Document has ${nodeCount} nodes; the maximum is ${limits.maxNodes}.`,
+      message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
     });
   }
+  // A structurally over-cap document is already rejected; skip the O(n)
+  // serialization so an oversized forest never gets stringified in full.
+  if (exceededDepth || count > limits.maxNodes) return;
+
   // Serialization can throw on a document too deeply nested for JSON.stringify;
   // a validator must return an issue, never propagate that as an exception.
   let bytes: number;
@@ -370,6 +416,8 @@ interface NodeCheckState {
   knownBreakpoints: Set<string>;
   unknownSeverity: IssueSeverity;
   seenIds: Map<string, string>;
+  /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
+  seenDomIds: Map<string, string>;
 }
 
 function validateNode(
@@ -459,6 +507,44 @@ function validateNode(
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
+  validateDomIds(node, path, state);
+}
+
+/**
+ * A rendered node's DOM id — from `cssId` or the `attributes.id` escape hatch —
+ * must be unique across the document, or the page emits duplicate HTML `id`
+ * attributes (breaking anchors, labels, and CSS selectors). Preservable, so the
+ * severity follows the mode.
+ */
+function validateDomIds(
+  node: BlockNode,
+  path: string,
+  state: NodeCheckState
+): void {
+  const report = (domId: string, at: string): void => {
+    const firstAt = state.seenDomIds.get(domId);
+    if (firstAt !== undefined) {
+      state.issues.push({
+        path: at,
+        code: "duplicate-dom-id",
+        severity: state.unknownSeverity,
+        message: `HTML id "${domId}" is already used at ${firstAt}.`,
+        suggestion: "Give each element a unique id.",
+      });
+    } else {
+      state.seenDomIds.set(domId, at);
+    }
+  };
+  if (typeof node.cssId === "string" && node.cssId.length > 0) {
+    report(node.cssId, pointer(path, "cssId"));
+  }
+  if (isPlainObject(node.attributes)) {
+    for (const [key, value] of Object.entries(node.attributes)) {
+      if (key.toLowerCase() === "id" && typeof value === "string" && value) {
+        report(value, pointer(pointer(path, "attributes"), key));
+      }
+    }
+  }
 }
 
 function validateSlots(
@@ -776,8 +862,11 @@ function validateComponentInstance(
   issues: ValidationIssue[]
 ): void {
   if (node.type !== COMPONENT_INSTANCE_TYPE) return;
-  const componentId = (node.props as { componentId?: unknown } | undefined)
-    ?.componentId;
+  // Only check componentId once props is an object: if props is missing or
+  // malformed, `invalid-props` already covers it and a `/props/componentId`
+  // pointer would target a location a fixer cannot edit.
+  if (!isPlainObject(node.props)) return;
+  const componentId = node.props.componentId;
   if (typeof componentId !== "string" || componentId.length === 0) {
     issues.push({
       path: pointer(pointer(path, "props"), "componentId"),

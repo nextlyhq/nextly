@@ -525,6 +525,55 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/0/bindings/text", code: "invalid-binding" }],
   },
   {
+    name: "two nodes with the same cssId are a duplicate DOM id",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [{ path: "/nodes/1/cssId", code: "duplicate-dom-id" }],
+  },
+  {
+    name: "a cssId colliding with an attributes id is a duplicate DOM id",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        {
+          id: "n2",
+          type: "core/text",
+          version: 1,
+          props: {},
+          attributes: { id: "hero" },
+        },
+      ],
+    },
+    expected: [{ path: "/nodes/1/attributes/id", code: "duplicate-dom-id" }],
+  },
+  {
+    name: "component instance with malformed props reports only invalid-props",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: null,
+        },
+      ],
+    }),
+    expected: [{ path: "/nodes/0/props", code: "invalid-props" }],
+  },
+  {
     name: "component instance without componentId",
     mode: "strict",
     doc: {
