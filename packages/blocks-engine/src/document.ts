@@ -132,34 +132,42 @@ export interface BlockNode {
 // Bindings — typed field paths, never expressions
 // ---------------------------------------------------------------------------
 
-/**
- * A typed field-path binding. `$bind` is a dot path into the source object
- * with at most one relation hop (e.g. "title", "author.name"). Bindings are
- * data, never code: there is no expression language and nothing is evaluated.
- */
-export interface Binding {
+/** Fields every binding carries, regardless of source. */
+interface BindingBase {
   /** Dot path into the binding source, one relation traversal max. */
   $bind: string;
-  /**
-   * Where the path resolves from:
-   * - `entry` — the entry that owns the document (the default)
-   * - `item`  — the current item inside a collection-loop block
-   * - `single` — a named single (global) document
-   * - `site`  — site-level settings
-   */
-  source?: BindingSource;
-  /**
-   * Which specific source document the path reads from. REQUIRED when
-   * `source` is `"single"` (its slug), since a site can define many singles
-   * and `$bind` alone would be ambiguous. Unused for `entry`/`item`/`site`,
-   * which each have exactly one resolution context.
-   */
-  sourceKey?: string;
   /** Rendered when the bound value is empty or the path cannot resolve. */
   fallback?: unknown;
   /** Locale-aware display formatting applied after resolution. */
   format?: BindingFormat;
 }
+
+/**
+ * A typed field-path binding. `$bind` is a dot path into the source object
+ * with at most one relation hop (e.g. "title", "author.name"). Bindings are
+ * data, never code: there is no expression language and nothing is evaluated.
+ *
+ * Modeled as a discriminated union on `source` so the `single` variant REQUIRES
+ * `sourceKey` (which global document to read) while the others forbid it: a
+ * site can define many singles, so an ambiguous single binding must be
+ * unrepresentable, not merely discouraged.
+ *
+ * Sources:
+ * - `entry`  — the entry that owns the document (the default when omitted)
+ * - `item`   — the current item inside a collection-loop block
+ * - `single` — a named single (global) document, addressed by `sourceKey`
+ * - `site`   — site-level settings
+ */
+export type Binding =
+  | (BindingBase & {
+      source?: "entry" | "item" | "site";
+      sourceKey?: never;
+    })
+  | (BindingBase & {
+      source: "single";
+      /** Slug of the single (global) document this binding reads from. */
+      sourceKey: string;
+    });
 
 export type BindingSource = "entry" | "item" | "single" | "site";
 
