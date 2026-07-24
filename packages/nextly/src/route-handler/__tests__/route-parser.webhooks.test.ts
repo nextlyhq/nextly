@@ -86,6 +86,39 @@ describe("webhook routes", () => {
     ).toEqual({});
   });
 
+  it("parses a secret rotation", () => {
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "rotate"], "POST")
+    ).toMatchObject({
+      service: "webhooks",
+      method: "rotateWebhookSecret",
+      routeParams: { webhookId: "wh_1" },
+    });
+  });
+
+  it("parses expiring the old secret", () => {
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "expire-old"], "POST")
+    ).toMatchObject({
+      service: "webhooks",
+      method: "expireWebhookOldSecrets",
+      routeParams: { webhookId: "wh_1" },
+    });
+  });
+
+  it("routes rotate and expire-old only under POST", () => {
+    // Both mint or retire key material, so a non-POST (including a CSRF-driven
+    // top-level GET navigation) must not reach them.
+    for (const method of ["GET", "PATCH", "DELETE"]) {
+      expect(
+        parseRestRoute(["webhooks", "wh_1", "secret", "rotate"], method)
+      ).toEqual({});
+      expect(
+        parseRestRoute(["webhooks", "wh_1", "secret", "expire-old"], method)
+      ).toEqual({});
+    }
+  });
+
   it("does not match a path nested deeper than an endpoint", () => {
     expect(parseRestRoute(["webhooks", "wh_1", "a", "b"], "GET")).toEqual({});
   });

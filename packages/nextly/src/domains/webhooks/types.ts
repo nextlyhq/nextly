@@ -10,6 +10,8 @@
  * @module domains/webhooks/types
  */
 
+import type { StoredSecretEntry } from "./secret-entries";
+
 /**
  * Canonical webhook event types, grouped by resource. Stable string ids; the
  * envelope's `specversion` (not renames) carries breaking changes. A webhook
@@ -193,8 +195,12 @@ export interface WebhookEndpoint {
   filter: FilterSpec | null;
   /** Static request headers merged into every delivery. */
   headers: Record<string, string> | null;
-  /** List of active signing-secret hashes (list-shaped for rotation). */
-  secretHash: string[];
+  /**
+   * Stored signing-secret entries (list-shaped for rotation). Carried for
+   * completeness; the delivery path reads and signs from its own row rather
+   * than this cached copy.
+   */
+  secretHash: StoredSecretEntry[];
   secretPrefix: string;
   /** Reserved per-endpoint field projection; not applied yet. */
   fieldAllowlist: string[] | null;

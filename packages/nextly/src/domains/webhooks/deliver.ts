@@ -31,6 +31,7 @@ import {
   decideDelivery,
   type AttemptOutcome,
 } from "./delivery-policy";
+import { liveSecretEntries, normalizeSecretEntries } from "./secret-entries";
 import { buildSignatureHeaders } from "./signing";
 
 /** Default number of due deliveries a single `deliverDueDeliveries` call claims. */
@@ -73,8 +74,12 @@ interface WebhookRow {
   id: string;
   url: string;
   headers: Record<string, string> | null;
-  /** Encrypted (not hashed) active signing secrets, primary first. */
-  secretHash: string[];
+  /**
+   * The raw `secret_hash` JSON cell: a list of encrypted signing-secret entries
+   * (or the legacy bare-ciphertext form). Normalized and filtered to the live
+   * entries at sign time, so an expired overlap secret is never signed with.
+   */
+  secretHash: unknown;
   /** Stored as an integer on SQLite, so it is coerced before it is trusted. */
   enabled: unknown;
 }
@@ -443,11 +448,24 @@ async function attemptDelivery(
     );
   }
 
-  // A webhook with no stored secret can never be signed (buildSignatureHeaders
+  // Resolve the live signing secrets: normalize the stored cell (tolerating the
+  // legacy bare-string form) and drop any overlap secret whose window has
+  // closed, so a rotated-away key stops signing exactly when it expires. The
+  // prefix/createdAt fallbacks are immaterial here — only the ciphertext of a
+  // live entry is used.
+  const liveEntries = liveSecretEntries(
+    normalizeSecretEntries(webhook.secretHash, {
+      prefix: "",
+      createdAt: claimedAt.toISOString(),
+    }),
+    now()
+  );
+
+  // A webhook with no live secret can never be signed (buildSignatureHeaders
   // rejects an empty secret list, which every conformant receiver would too).
   // That is a permanent misconfiguration, so fail rather than throw uncaught
   // and strand the leased row.
-  if (webhook.secretHash.length === 0) {
+  if (liveEntries.length === 0) {
     deps.logger?.warn(
       `webhook delivery ${row.id} undeliverable (webhook has no signing secret); marking failed`
     );
@@ -473,7 +491,7 @@ async function attemptDelivery(
   const timestamp = Math.floor(claimedAt.getTime() / 1000).toString();
   let secrets: string[];
   try {
-    secrets = webhook.secretHash.map(ct => deps.decryptSecret(ct));
+    secrets = liveEntries.map(entry => deps.decryptSecret(entry.ciphertext));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     deps.logger?.warn(

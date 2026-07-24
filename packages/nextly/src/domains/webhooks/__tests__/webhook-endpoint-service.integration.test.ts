@@ -596,4 +596,83 @@ describe("webhook endpoint management (real SQLite)", () => {
       expect(listed.map(e => e.id)).toContain(second.endpoint.id);
     });
   });
+
+  describe("rotating the secret", () => {
+    it("keeps the old secret live during the overlap and makes the new one primary", async () => {
+      const { endpoint, secret: original } = await create();
+
+      const { endpoint: rotated, secret: fresh } = await service.rotateSecret(
+        endpoint.id,
+        { overlapSeconds: 3600 }
+      );
+
+      // A new secret, distinct from the original, is now the primary.
+      expect(fresh).not.toBe(original);
+      expect(rotated.secretPrefix).toBe(fresh.slice(0, 14));
+
+      // Both are live during the overlap; reveal returns them, new one first.
+      const revealed = await service.revealSecrets(endpoint.id);
+      expect(revealed).toHaveLength(2);
+      expect(revealed[0]).toBe(fresh);
+      expect(revealed).toContain(original);
+
+      // The lifecycle summary marks exactly one primary and one expiring secret.
+      expect(rotated.secrets).toHaveLength(2);
+      expect(rotated.secrets.filter(s => s.isPrimary)).toHaveLength(1);
+      const overlap = rotated.secrets.find(s => !s.isPrimary);
+      expect(overlap?.expiresAt).toBeInstanceOf(Date);
+    });
+
+    it("retires the old secret immediately with a zero overlap", async () => {
+      const { endpoint, secret: original } = await create();
+
+      const { secret: fresh } = await service.rotateSecret(endpoint.id, {
+        overlapSeconds: 0,
+      });
+
+      const revealed = await service.revealSecrets(endpoint.id);
+      expect(revealed).toEqual([fresh]);
+      expect(revealed).not.toContain(original);
+    });
+
+    it("never keeps more than two secrets live across repeated rotations", async () => {
+      const { endpoint } = await create();
+      await service.rotateSecret(endpoint.id, { overlapSeconds: 3600 });
+      await service.rotateSecret(endpoint.id, { overlapSeconds: 3600 });
+      const { endpoint: latest } = await service.rotateSecret(endpoint.id, {
+        overlapSeconds: 3600,
+      });
+
+      expect(await service.revealSecrets(endpoint.id)).toHaveLength(2);
+      expect(latest.secrets).toHaveLength(2);
+    });
+
+    it("rejects an out-of-range overlap window", async () => {
+      const { endpoint } = await create();
+      await expect(
+        service.rotateSecret(endpoint.id, { overlapSeconds: -1 })
+      ).rejects.toThrow(NextlyError);
+    });
+
+    it("reports an unknown endpoint as not found", async () => {
+      await expect(service.rotateSecret("missing")).rejects.toThrow(
+        NextlyError
+      );
+    });
+  });
+
+  describe("expiring old secrets", () => {
+    it("drops the overlapping secret and leaves only the primary", async () => {
+      const { endpoint } = await create();
+      const { secret: fresh } = await service.rotateSecret(endpoint.id, {
+        overlapSeconds: 3600,
+      });
+      expect(await service.revealSecrets(endpoint.id)).toHaveLength(2);
+
+      const summary = await service.expireOldSecrets(endpoint.id);
+      expect(summary.secrets).toHaveLength(1);
+      expect(summary.secrets[0]?.isPrimary).toBe(true);
+      expect(await service.revealSecrets(endpoint.id)).toEqual([fresh]);
+    });
+  });
 });

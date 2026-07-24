@@ -28,6 +28,14 @@ const endpoint: WebhookEndpointSummary = {
   eventTypes: ["entry.created"],
   headers: null,
   secretPrefix: "whsec_ab",
+  secrets: [
+    {
+      prefix: "whsec_ab",
+      isPrimary: true,
+      createdAt: "2026-07-24T00:00:00.000Z",
+      expiresAt: null,
+    },
+  ],
   createdBy: "u1",
   createdAt: "2026-07-24T00:00:00.000Z",
   updatedAt: "2026-07-24T00:00:00.000Z",

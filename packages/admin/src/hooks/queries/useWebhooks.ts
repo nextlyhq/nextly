@@ -16,6 +16,7 @@ import { webhookApi } from "@admin/services/webhookApi";
 import type {
   CreateWebhookInput,
   CreatedWebhook,
+  RotateWebhookInput,
   UpdateWebhookInput,
   WebhookEndpointSummary,
   WebhookTestResult,
@@ -84,6 +85,36 @@ export function useDeleteWebhook() {
   const queryClient = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: id => webhookApi.deleteWebhook(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: webhookKeys.all() });
+    },
+  });
+}
+
+/**
+ * Rotate the signing secret. Invalidates the endpoint cache so the secret
+ * lifecycle (primary + any overlapping secret) refetches; the page captures the
+ * one-time new secret from the result in `onSuccess`.
+ */
+export function useRotateSecret() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    CreatedWebhook,
+    Error,
+    { id: string; input: RotateWebhookInput }
+  >({
+    mutationFn: ({ id, input }) => webhookApi.rotateSecret(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: webhookKeys.all() });
+    },
+  });
+}
+
+/** Retire overlapping secrets now; refetch so the lifecycle reflects it. */
+export function useExpireOldSecrets() {
+  const queryClient = useQueryClient();
+  return useMutation<WebhookEndpointSummary, Error, string>({
+    mutationFn: id => webhookApi.expireOldSecrets(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: webhookKeys.all() });
     },

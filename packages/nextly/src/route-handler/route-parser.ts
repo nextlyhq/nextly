@@ -1782,6 +1782,43 @@ function parseWebhookRoutes(
     };
   }
 
+  // POST /api/webhooks/:id/secret/rotate → rotate the signing secret with an
+  // overlap window (session-only). Handled before the one-level guard because
+  // it nests a level under `secret`.
+  if (
+    id &&
+    subresource === "secret" &&
+    subId === "rotate" &&
+    additionalParams.length === 0
+  ) {
+    if (httpMethod !== "POST") return null;
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "rotateWebhookSecret",
+      routeParams,
+    };
+  }
+
+  // POST /api/webhooks/:id/secret/expire-old → immediately retire every
+  // overlapping (rotated-away) secret, leaving only the primary (session-only).
+  if (
+    id &&
+    subresource === "secret" &&
+    subId === "expire-old" &&
+    additionalParams.length === 0
+  ) {
+    if (httpMethod !== "POST") return null;
+    routeParams.webhookId = id;
+    return {
+      service: "webhooks",
+      operation: "single",
+      method: "expireWebhookOldSecrets",
+      routeParams,
+    };
+  }
+
   // Nothing else here nests further than one level, so any deeper path is not a
   // route. Without this, `/webhooks/:id/secret/anything` would still match the
   // secret branch and hand back active signing secrets.

@@ -66,6 +66,8 @@ import {
   updateWebhook,
   deleteWebhook,
   revealWebhookSecret,
+  rotateWebhookSecret,
+  expireWebhookOldSecrets,
   listWebhookDeliveries,
   getWebhookDelivery,
   testWebhookEndpoint,
@@ -328,6 +330,10 @@ async function handleWebhookRequest(
       return deleteWebhook(req, id);
     case "revealWebhookSecret":
       return revealWebhookSecret(req, id);
+    case "rotateWebhookSecret":
+      return rotateWebhookSecret(req, id);
+    case "expireWebhookOldSecrets":
+      return expireWebhookOldSecrets(req, id);
     case "listWebhookDeliveries":
       return listWebhookDeliveries(req, id);
     case "getWebhookDelivery":

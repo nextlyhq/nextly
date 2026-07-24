@@ -6,9 +6,11 @@ import { useCallback, useState } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { DeleteWebhookDialog } from "@admin/components/features/webhooks/DeleteWebhookDialog";
+import { RotateSecretDialog } from "@admin/components/features/webhooks/RotateSecretDialog";
+import { SecretLifecycle } from "@admin/components/features/webhooks/SecretLifecycle";
 import { WebhookForm } from "@admin/components/features/webhooks/WebhookForm";
 import { WebhookSecretModal } from "@admin/components/features/webhooks/WebhookSecretModal";
-import { Eye, List, Loader2 } from "@admin/components/icons";
+import { Eye, List, Loader2, RefreshCw } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -17,7 +19,9 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useDeleteWebhook,
+  useExpireOldSecrets,
   useRevealSecret,
+  useRotateSecret,
   useUpdateWebhook,
   useWebhook,
 } from "@admin/hooks/queries/useWebhooks";
@@ -35,9 +39,14 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
   const { mutate: doReveal, isPending: isRevealing } = useRevealSecret();
+  const { mutate: doRotate, isPending: isRotating } = useRotateSecret();
+  const { mutate: doExpireOld, isPending: isExpiring } = useExpireOldSecrets();
   const { mutate: doDelete, isPending: isDeleting } = useDeleteWebhook();
 
   const [secrets, setSecrets] = useState<string[] | null>(null);
+  // The one-time secret minted by a rotation, shown once in its own modal.
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Reaching this page requires update-webhooks (registry-gated). Delete is a
@@ -87,6 +96,49 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
     });
   }, [doReveal, id]);
 
+  const handleRotate = useCallback(
+    (overlapSeconds: number) => {
+      doRotate(
+        { id, input: { overlapSeconds } },
+        {
+          onSuccess: result => {
+            setConfirmRotate(false);
+            // The fresh secret is shown once here; the reveal action can return
+            // it again later while it remains the primary.
+            setRotatedSecret(result.secret);
+            toast.success("Signing secret rotated", {
+              description:
+                overlapSeconds > 0
+                  ? "The previous secret keeps working until the overlap window ends."
+                  : "The previous secret was retired immediately.",
+            });
+          },
+          onError: (err: Error) => {
+            toast.error("Could not rotate the secret", {
+              description: apiErrorMessage(err),
+            });
+          },
+        }
+      );
+    },
+    [doRotate, id]
+  );
+
+  const handleExpireOld = useCallback(() => {
+    doExpireOld(id, {
+      onSuccess: () => {
+        toast.success("Old signing secret expired", {
+          description: "Only the current secret can sign deliveries now.",
+        });
+      },
+      onError: (err: Error) => {
+        toast.error("Could not expire the old secret", {
+          description: apiErrorMessage(err),
+        });
+      },
+    });
+  }, [doExpireOld, id]);
+
   const handleConfirmDelete = useCallback(() => {
     if (!webhook) return;
     const name = webhook.name;
@@ -128,7 +180,16 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
         pendingLabel="Saving…"
       />
 
-      <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-8 border-t border-border pt-6">
+        <SecretLifecycle
+          secrets={webhook.secrets}
+          canManage={canManageWebhooks}
+          onExpireOld={handleExpireOld}
+          isExpiring={isExpiring}
+        />
+      </div>
+
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <Button
             type="button"
@@ -142,6 +203,20 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
               <Eye className="h-4 w-4" />
             )}
             Reveal signing secret
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setConfirmRotate(true)}
+            disabled={isRotating}
+          >
+            {isRotating ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Rotate signing secret
           </Button>
 
           <Link href={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, { id })}>
@@ -172,6 +247,22 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
         secrets={secrets}
         oneTime={false}
         onClose={() => setSecrets(null)}
+      />
+
+      <WebhookSecretModal
+        open={rotatedSecret !== null}
+        secrets={rotatedSecret !== null ? [rotatedSecret] : null}
+        oneTime
+        canRevealLater
+        onClose={() => setRotatedSecret(null)}
+      />
+
+      <RotateSecretDialog
+        open={confirmRotate}
+        onOpenChange={setConfirmRotate}
+        webhookName={webhook.name}
+        onConfirm={handleRotate}
+        isPending={isRotating}
       />
 
       <DeleteWebhookDialog
