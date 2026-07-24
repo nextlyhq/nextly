@@ -515,7 +515,9 @@ function displayStatus(
   if (migrations.length === 0) {
     logger.newline();
     logger.info("No migrations found.");
-    logger.info("Run `nextly migrate:create` to create a migration.");
+    logger.info(
+      "Run `nextly migrate:create --name=<name>` to create a migration."
+    );
   } else {
     logger.newline();
 
@@ -598,7 +600,9 @@ function displayStatus(
     logger.info(
       `${formatCount(collections.length, "collection")} with pending schema changes.`
     );
-    logger.info("Run `nextly migrate:create` to generate migrations.");
+    logger.info(
+      "Run `nextly migrate:create --name=<name>` to generate migrations."
+    );
   }
 }
 

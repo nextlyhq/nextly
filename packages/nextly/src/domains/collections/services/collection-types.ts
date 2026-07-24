@@ -17,6 +17,14 @@ export interface CollectionServiceResult<T = unknown> {
   message: string;
   data: T | null;
   /**
+   * Canonical `NextlyError` code for failure envelopes that originate from a
+   * NextlyError (or a mapped database error). The HTTP status alone is
+   * ambiguous — 409 covers both DUPLICATE and CONFLICT — so boundary
+   * translators (dispatcher, Direct API) use this to rebuild the precise
+   * error instead of guessing from the status.
+   */
+  code?: string;
+  /**
    * Per-field validation issues (failure only). Carried through the
    * result shape so the dispatcher and Direct API can rebuild the
    * canonical VALIDATION_ERROR envelope with field paths intact.

@@ -159,7 +159,8 @@ export interface FindComponentBySlugArgs extends DirectAPIConfig {
  * Arguments for creating a component definition.
  *
  * Only UI-created components can be created via the Direct API.
- * Code-first components are synced automatically via `nextly dev`.
+ * Code-first components are synced automatically (HMR listener or
+ * `nextly db:sync`).
  *
  * @example
  * ```typescript

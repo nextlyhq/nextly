@@ -45,9 +45,14 @@ function hasTTY(): boolean {
 // columns gone. Matches Drizzle Kit's --force / Prisma's
 // --accept-data-loss pattern. Only affects destructive_drop events;
 // other event kinds (type_change, NOT NULL) still prompt.
+// Two spellings are honored: NEXTLY_ALLOW_CODE_FIRST_DROPS is the original
+// env opt-in, and NEXTLY_ACCEPT_DATA_LOSS is what `db:sync
+// --accept-data-loss` exports for the rest of the run.
 function shouldAutoConfirmDrops(): boolean {
   // eslint-disable-next-line turbo/no-undeclared-env-vars
-  return process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
+  const allowCodeFirstDrops = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
+  const acceptDataLoss = process.env.NEXTLY_ACCEPT_DATA_LOSS === "1";
+  return allowCodeFirstDrops || acceptDataLoss;
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
@@ -65,6 +70,25 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     if (!hasTTY()) {
+      // Honor the drop opt-in before refusing: a non-interactive run whose
+      // batch needs nothing but drop confirmations can proceed when the
+      // operator opted in (mirrors the TTY pre-scan in runEventPrompts).
+      // Anything needing a real decision — renames, type changes — still
+      // requires a terminal below.
+      if (
+        candidates.length === 0 &&
+        shouldAutoConfirmDrops() &&
+        events.every(e => e.kind === "destructive_drop")
+      ) {
+        return {
+          confirmedRenames: [],
+          resolutions: events.map(e => ({
+            kind: "confirm_drop" as const,
+            eventId: e.id,
+          })),
+          proceed: true,
+        };
+      }
       // Build an actionable error message covering both renames and
       // F5/F6 events so users know what they would have been asked.
       const renameSample = candidates
@@ -133,8 +157,8 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
     const resolutions: Resolution[] = [];
 
-    // Pre-scan: when the operator has opted in via
-    // NEXTLY_ALLOW_CODE_FIRST_DROPS=1 AND every event in this batch is a
+    // Pre-scan: when the operator has opted in to auto-confirmed drops
+    // (shouldAutoConfirmDrops) AND every event in this batch is a
     // destructive_drop, skip clack entirely and auto-confirm all of them.
     // The intro/outro frame would be noise for a workflow that explicitly
     // doesn't want prompts.
