@@ -4312,10 +4312,10 @@ export class CollectionMutationService extends BaseService {
             locale: this.localization?.defaultLocale,
           });
         deletedLocaleForRevalidation = deletedLocale;
-        deletedSlugForRevalidation = readStringField(
-          currentRow as Record<string, unknown>,
-          "slug"
-        );
+        // Read the slug from the assembled document, which overlays the
+        // companion locale values, so a user-localized slug (absent from the
+        // main row) still busts the correct tag.
+        deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
 
         if (this.componentDataService) {
           await this.componentDataService.deleteComponentDataInTransaction(tx, {
@@ -4477,6 +4477,10 @@ export class CollectionMutationService extends BaseService {
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
+    // Carried on the result so a caller that owns the transaction can flush the
+    // tags after IT commits (this method cannot flush pre-commit). Computed
+    // before the after-hooks run so a throwing hook does not lose it.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       // A direct caller runs this inside its own transaction, so every metadata
       // and access read below is bound to that transaction's connection — a
@@ -4811,6 +4815,17 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Compute the intent from the freshly inserted row, before the after-hooks
+      // run or redaction can strip the slug.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: (entry as Record<string, unknown>).id as string,
+          slug: readStringField(entry as Record<string, unknown>, "slug"),
+        }
+      );
+
       // Execute afterCreate hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
         collection: params.collectionName,
@@ -4871,14 +4886,20 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        revalidationIntent,
       };
     } catch (error: unknown) {
+      // Carry the intent (set only once the row was written) so a caller that
+      // commits despite a hook failure still busts its tags.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to create entry in transaction" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to create entry in transaction" },
+          this.dialect
+        ),
+        revalidationIntent,
+      };
     }
   }
 
@@ -4908,6 +4929,10 @@ export class CollectionMutationService extends BaseService {
     },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
+    // Carried on the result so a caller that owns the transaction can flush the
+    // tags after IT commits (this method cannot flush pre-commit). Computed
+    // before the after-hooks run so a throwing hook does not lose it.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       // A direct caller runs this inside its own transaction, so every metadata
       // and access read below is bound to that transaction's connection — a
@@ -5218,6 +5243,19 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
+      // Compute the intent from the updated row and the pre-update row (for the
+      // previous slug on a rename), before the after-hooks run or redaction can
+      // strip the slug.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: params.entryId,
+          slug: readStringField(updated as Record<string, unknown>, "slug"),
+          previousSlug: readStringField(existingEntry, "slug"),
+        }
+      );
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       for (const field of manyToManyFields) {
@@ -5303,14 +5341,20 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        revalidationIntent,
       };
     } catch (error: unknown) {
+      // Carry the intent (set only once the row was updated) so a caller that
+      // commits despite a hook failure still busts its tags.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry in transaction" },
-        this.dialect
-      );
+      return {
+        ...errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry in transaction" },
+          this.dialect
+        ),
+        revalidationIntent,
+      };
     }
   }
 
@@ -5338,6 +5382,10 @@ export class CollectionMutationService extends BaseService {
     // recorded — a later failure (e.g. an afterDelete hook) is a per-item
     // side-effect issue, not an eventless delete, and must NOT roll the batch back.
     let deleteNeedsRollback = false;
+    // Carried on the result so a caller that owns the transaction can flush the
+    // tags after IT commits (this method cannot flush pre-commit). Computed
+    // before the after-hooks run so a throwing hook does not lose it.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       // Get collection metadata and stored hooks. Runs on the caller's
       // transaction connection so this read does not re-enter the pool from
@@ -5534,6 +5582,19 @@ export class CollectionMutationService extends BaseService {
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;
 
+      // Compute the intent from the removed document (which overlays companion
+      // locale values, so a user-localized slug still busts the right tag),
+      // before the after-hooks run.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: params.entryId,
+          slug: readStringField(deletedDocument, "slug"),
+          locale: deletedLocale,
+        }
+      );
+
       // Execute afterDelete hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
         collection: params.collectionName,
@@ -5570,6 +5631,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry deleted successfully",
         data: { deleted: true },
+        revalidationIntent,
       };
     } catch (error: unknown) {
       // Only a failure in the delete→event window propagates (to roll back an
@@ -5585,6 +5647,7 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to delete entry in transaction",
         data: null,
+        revalidationIntent,
       };
     }
   }
@@ -6853,13 +6916,14 @@ export class CollectionMutationService extends BaseService {
       eventRecorded = true;
 
       // The tags this delete invalidates, collected by the batch caller and
-      // flushed once the shared transaction commits.
+      // flushed once the shared transaction commits. Slug read from the assembled
+      // document so a user-localized slug (in companion rows) still busts.
       revalidationIntent = buildEntryRevalidationIntent(
         params.collectionName,
         readRevalidateConfig(collection),
         {
           id: entryId,
-          slug: readStringField(freshEntry, "slug"),
+          slug: readStringField(deletedDocument, "slug"),
           locale: deletedLocale,
         }
       );

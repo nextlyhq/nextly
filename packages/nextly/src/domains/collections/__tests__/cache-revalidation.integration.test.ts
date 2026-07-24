@@ -256,6 +256,22 @@ describe("cache revalidation — write path (sqlite)", () => {
     }
   });
 
+  it("carries the intent on a single createEntryInTransaction result", async () => {
+    const entries = await boot([openCollection("singletx")]);
+    // A caller-owned single transactional write (via withTransaction). It does
+    // not flush; the intent is on the result for the caller to flush post-commit.
+    const result = await handle!.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx,
+        { collectionName: "singletx", overrideAccess: true },
+        { title: "T", slug: "single-s" }
+      )
+    );
+    expect(result.revalidationIntent?.tags).toContain(
+      "nextly:singletx:slug:single-s"
+    );
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
