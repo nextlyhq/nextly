@@ -13,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors/nextly-error";
+import { registerHook, unregisterHook } from "../../../hooks";
+import type { HookHandler } from "../../../hooks/types";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -228,6 +231,29 @@ describe("cache revalidation — write path (sqlite)", () => {
       [{ title: "T", slug: "hidden-slug" }]
     );
     expect(spy.tags).toContain("nextly:redact:slug:hidden-slug");
+  });
+
+  it("busts tags for a committed batch item whose afterCreate hook throws", async () => {
+    const entries = await boot([openCollection("hookfail")]);
+    // A code afterCreate hook that always throws. In a batch (stopOnError:false)
+    // the row still commits, so the item's tags must be busted even though it is
+    // reported as a failure — the intent is computed before the hooks run.
+    const throwingHook: HookHandler = async () => {
+      throw NextlyError.internal({ logContext: { reason: "test-hook-throw" } });
+    };
+    registerHook("afterCreate", "hookfail", throwingHook);
+    try {
+      const result = await entries.createEntries(
+        { collectionName: "hookfail", overrideAccess: true },
+        [{ title: "T", slug: "committed" }],
+        { stopOnError: false }
+      );
+      expect(result.failed).toBe(1); // the hook threw, so the item is a failure
+      // …but the row committed, so its tags were still busted.
+      expect(spy.tags).toContain("nextly:hookfail:slug:committed");
+    } finally {
+      unregisterHook("afterCreate", "hookfail", throwingHook);
+    }
   });
 
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {

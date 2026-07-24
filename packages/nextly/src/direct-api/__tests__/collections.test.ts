@@ -468,21 +468,33 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("bulkDelete()", () => {
-    it("should return bulk operation result", async () => {
-      const mockResult = {
-        success: ["post-1", "post-2"],
-        failed: [],
+    it("should return bulk operation result without internal fields", async () => {
+      // The handler result carries internal post-commit signals (eventRecorded,
+      // revalidationIntents); the Direct API must project them away.
+      mocks.collectionsHandler.bulkDeleteEntries.mockResolvedValue({
+        successes: [{ id: "post-1" }, { id: "post-2" }],
+        failures: [],
+        total: 2,
         successCount: 2,
         failedCount: 0,
-      };
-      mocks.collectionsHandler.bulkDeleteEntries.mockResolvedValue(mockResult);
+        eventRecorded: true,
+        revalidationIntents: [{ tags: ["nextly:posts"] }],
+      });
 
       const result = await nextly.bulkDelete({
         collection: "posts",
         ids: ["post-1", "post-2"],
       });
 
-      expect(result).toEqual(mockResult);
+      expect(result).toEqual({
+        successes: [{ id: "post-1" }, { id: "post-2" }],
+        failures: [],
+        total: 2,
+        successCount: 2,
+        failedCount: 0,
+      });
+      expect(result).not.toHaveProperty("revalidationIntents");
+      expect(result).not.toHaveProperty("eventRecorded");
     });
 
     it("should pass ids and config", async () => {

@@ -5952,6 +5952,18 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Compute the intent from the freshly inserted row, before ANY after-hooks
+      // run (a throwing afterCreate hook must not lose it) and before redaction
+      // can strip the slug.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: (entry as Record<string, unknown>).id as string,
+          slug: readStringField(entry as Record<string, unknown>, "slug"),
+        }
+      );
+
       // Execute afterCreate hooks (unless skipped)
       if (!skipHooks) {
         // Execute afterCreate hooks (code-registered)
@@ -5988,17 +6000,6 @@ export class CollectionMutationService extends BaseService {
           )
         );
       }
-
-      // Compute the intent from the freshly inserted row, before the after-hooks
-      // run or redaction can strip the slug.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: (entry as Record<string, unknown>).id as string,
-          slug: readStringField(entry as Record<string, unknown>, "slug"),
-        }
-      );
 
       // Stored password hashes are write-only; the response never carries
       // them back to the client.
