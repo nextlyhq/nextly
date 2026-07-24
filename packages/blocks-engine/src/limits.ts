@@ -41,7 +41,11 @@ export function countNodes(nodes: BlockNode[]): number {
     if (!node) continue;
     count++;
     if (node.slots) {
-      for (const children of Object.values(node.slots)) stack.push(...children);
+      // Guard against malformed slots (a non-array value): these helpers run
+      // over untrusted documents during validation and must not throw.
+      for (const children of Object.values(node.slots)) {
+        if (Array.isArray(children)) stack.push(...children);
+      }
     }
   }
   return count;
@@ -59,7 +63,10 @@ export function treeDepth(nodes: BlockNode[]): number {
     if (!entry) continue;
     if (entry.depth > deepest) deepest = entry.depth;
     if (entry.node.slots) {
+      // Skip malformed (non-array) slot values so untrusted documents passed in
+      // during validation cannot make this throw.
       for (const children of Object.values(entry.node.slots)) {
+        if (!Array.isArray(children)) continue;
         for (const child of children) {
           stack.push({ node: child, depth: entry.depth + 1 });
         }

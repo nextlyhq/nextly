@@ -65,3 +65,13 @@ export {
   updateNode,
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
+
+export { validate, ISSUE_CODES } from "./validation";
+export type {
+  BlockTypeLookup,
+  IssueCode,
+  IssueSeverity,
+  ValidationContext,
+  ValidationIssue,
+  ValidationMode,
+} from "./validation";
