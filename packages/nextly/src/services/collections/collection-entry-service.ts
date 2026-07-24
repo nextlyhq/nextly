@@ -42,7 +42,10 @@ import type { DynamicCollectionService } from "../../domains/dynamic-collections
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
-import type { CacheRevalidator } from "../../revalidation/types";
+import type {
+  CacheRevalidator,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -312,14 +315,24 @@ export class CollectionEntryService extends BaseService {
       | BulkOperationResult<unknown>
       | BatchOperationResult
   ): Promise<void> {
-    if (!this.cacheRevalidator) return;
     const intents =
       "revalidationIntents" in result && result.revalidationIntents
         ? result.revalidationIntents
         : "revalidationIntent" in result && result.revalidationIntent
           ? [result.revalidationIntent]
           : [];
-    if (intents.length === 0) return;
+    await this.flushRevalidationIntents(intents);
+  }
+
+  /**
+   * Flush an explicit set of revalidation intents collected by a caller-owned
+   * transaction (for example the `CollectionService` transaction wrappers, whose
+   * return values carry only the entry). Shares the automatic post-write path:
+   * a no-op when no cache adapter is registered, and self-absorbing on error so
+   * a revalidator fault never turns a committed write into a failure.
+   */
+  async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
+    if (!this.cacheRevalidator || intents.length === 0) return;
     try {
       // Await so a Promise-returning revalidator finishes here; `revalidateTag`
       // is synchronous, so this adds no latency for the common case.

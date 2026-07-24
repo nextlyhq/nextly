@@ -58,6 +58,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 // NextlyErrors at this boundary so callers see the new error model.
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import type { RevalidationIntent } from "../../../revalidation/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type {
@@ -170,6 +171,79 @@ export class CollectionService extends BaseService {
     private readonly entryService: CollectionEntryService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Revalidation intents produced by createEntryInTransaction /
+   * updateEntryInTransaction / deleteEntryInTransaction calls made during an
+   * owned transaction, keyed by the transaction handle so concurrent
+   * transactions (one pooled client each on Postgres/MySQL) never share a
+   * collector. The wrappers push into it; `withTransaction` drains it once the
+   * transaction commits.
+   */
+  private readonly pendingTxIntents = new Map<unknown, RevalidationIntent[]>();
+
+  /**
+   * Run work inside a database transaction, then flush the cache-revalidation
+   * intents produced by any createEntryInTransaction / updateEntryInTransaction /
+   * deleteEntryInTransaction calls made against the same `tx`. The flush happens
+   * after the transaction commits, so a rolled-back write busts nothing. Because
+   * the wrappers return only the entry (or void), this is the supported way to
+   * coordinate atomic multi-writes with correct revalidation — without it the
+   * committed writes' intents would have nowhere to go.
+   *
+   * Unlike the base helper, this yields the adapter's `TransactionContext` (the
+   * handle the *InTransaction wrappers expect), not a raw driver transaction.
+   *
+   * @example
+   * ```typescript
+   * await service.withTransaction(async (tx) => {
+   *   const entry = await service.createEntryInTransaction(tx, 'posts', data, context);
+   *   await service.updateEntryInTransaction(tx, 'posts', entry.id, moreData, context);
+   * });
+   * ```
+   */
+  override async withTransaction<T>(
+    work: (tx: TransactionContext) => Promise<T>
+  ): Promise<T> {
+    let boundTx: TransactionContext | undefined;
+    let ownsFlush = false;
+    let collector: RevalidationIntent[] | undefined;
+    const result = await this.adapter.transaction(async tx => {
+      boundTx = tx;
+      collector = this.pendingTxIntents.get(tx);
+      if (!collector) {
+        collector = [];
+        this.pendingTxIntents.set(tx, collector);
+        ownsFlush = true;
+      }
+      return work(tx);
+    });
+    // The transaction has committed by here. Only the frame that created the
+    // collector drains it, so a nested withTransaction sharing the same handle
+    // flushes once, at the outermost commit.
+    if (ownsFlush && boundTx !== undefined) {
+      this.pendingTxIntents.delete(boundTx);
+      if (collector && collector.length > 0) {
+        await this.entryService.flushRevalidationIntents(collector);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Record a wrapper's revalidation intent against the active owned transaction,
+   * if one is in progress, so `withTransaction` can flush it after commit. A
+   * no-op when the caller obtained `tx` some other way (there is nowhere to defer
+   * the flush to); such callers should use the lower-level
+   * `CollectionEntryService.*InTransaction`, whose results carry the intent.
+   */
+  private collectTxIntent(
+    tx: TransactionContext,
+    intent: RevalidationIntent | undefined
+  ): void {
+    if (!intent) return;
+    this.pendingTxIntents.get(tx)?.push(intent);
   }
 
   /**
@@ -755,6 +829,10 @@ export class CollectionService extends BaseService {
       entryId: (result.data as CollectionEntry | null)?.id,
     });
 
+    // Defer the committed write's cache-revalidation to the owning
+    // withTransaction, which flushes it once the transaction commits.
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     return result.data as CollectionEntry;
   }
 
@@ -823,6 +901,10 @@ export class CollectionService extends BaseService {
       entryId,
     });
 
+    // Defer the committed write's cache-revalidation to the owning
+    // withTransaction, which flushes it once the transaction commits.
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     return result.data as CollectionEntry;
   }
 
@@ -885,6 +967,10 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
     });
+
+    // Defer the committed delete's cache-revalidation to the owning
+    // withTransaction, which flushes it once the transaction commits.
+    this.collectTxIntent(tx, result.revalidationIntent);
   }
 
   /**

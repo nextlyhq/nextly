@@ -4961,11 +4961,16 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      // Fetch existing entry first (needed for access control)
+      // Fetch existing entry first (needed for access control). Lock the row
+      // (`forUpdate`, a no-op on SQLite, which already serializes writers) so a
+      // concurrent rename cannot commit between this read and the update below —
+      // otherwise the `previousSlug` captured here would be stale and the actual
+      // prior URL's cache tag would never be busted.
       const existingEntry = await tx.selectOne<Record<string, unknown>>(
         tableName,
         {
           where: this.whereEq("id", params.entryId),
+          forUpdate: true,
         }
       );
 
@@ -6205,10 +6210,14 @@ export class CollectionMutationService extends BaseService {
           })
         : this.whereEq("id", entryId);
 
-      // Fetch existing entry first (needed for owner checks and hooks)
+      // Fetch existing entry first (needed for owner checks and hooks). Lock the
+      // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
+      // a concurrent rename cannot commit between this read and the update below,
+      // which would otherwise leave the `previousSlug` captured here stale and
+      // the prior URL's cache tag unbusted.
       const existingEntry = await tx.selectOne<Record<string, unknown>>(
         tableName,
-        { where: fetchWhere }
+        { where: fetchWhere, forUpdate: true }
       );
 
       if (!existingEntry) {

@@ -13,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
+// Used to model a committed-but-hook-failed write: a code afterCreate hook that
+// throws (NextlyError + register/unregisterHook + HookHandler) so a batch item
+// commits its row yet reports failure, pinning that its tags still get busted.
 import { NextlyError } from "../../../errors/nextly-error";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
@@ -26,6 +29,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionService } from "../services/collection-service";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 // Records every intent flushed to it, so a test can assert exactly which tags a
@@ -209,6 +213,9 @@ describe("cache revalidation — write path (sqlite)", () => {
     const flushedTags = (result.revalidationIntents ?? []).flatMap(i => i.tags);
     expect(flushedTags).toContain("nextly:ownedtx:slug:a");
     expect(flushedTags).toContain("nextly:ownedtx:slug:b");
+    // The caller owns the commit, so nothing may be flushed to the revalidator
+    // before it: a premature pre-commit flush would revalidate uncommitted data.
+    expect(spy.flushed).toHaveLength(0);
   });
 
   it("busts the slug tag even when field-level read access hides slug", async () => {
@@ -270,6 +277,27 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(result.revalidationIntent?.tags).toContain(
       "nextly:singletx:slug:single-s"
     );
+    // Caller-owned: the intent rides the result, but nothing is flushed before
+    // the caller's own commit.
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("flushes a CollectionService.withTransaction's wrapper intents after commit", async () => {
+    // The public CollectionService transaction wrappers return only the entry,
+    // so the intent has nowhere to ride on the result. withTransaction is the
+    // seam that collects each wrapper's intent and flushes it once the
+    // transaction commits — verify a committed write through it busts its tag.
+    await boot([openCollection("wtx")]);
+    const service = handle!.getService<CollectionService>("collectionService");
+    await service.withTransaction(async tx => {
+      await service.createEntryInTransaction(
+        tx,
+        "wtx",
+        { title: "T", slug: "wtx-slug" },
+        { user: undefined }
+      );
+    });
+    expect(spy.tags).toContain("nextly:wtx:slug:wtx-slug");
   });
 
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
