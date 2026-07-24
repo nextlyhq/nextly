@@ -176,19 +176,22 @@ export async function upsertCompanionRow(
   );
 }
 
-// Whether a probe error is a verified "table does not exist" for the current
-// dialect, as opposed to a transient/connection/permission/other error. The
-// wording is the dialect's own: Postgres `relation "x" does not exist`, SQLite
-// `no such table: x`, MySQL `Table 'db.x' doesn't exist`. Mirrors the
-// missing-table classification already used in di/register.ts.
+// Whether a probe error is a verified "this TABLE does not exist" for the
+// current dialect, as opposed to a transient/connection/permission error or a
+// different missing resource (a missing DATABASE, schema, column, or role). The
+// match is table-specific on purpose: a bare `does not exist` substring also
+// matches `database "x" does not exist`, which must propagate rather than be
+// misread as an absent companion table. The wording is the dialect's own:
+// Postgres `relation "x" does not exist`, SQLite `no such table: x`, MySQL
+// `Table 'db.x' doesn't exist`.
 function isMissingTableError(error: unknown): boolean {
   const message = (
     error instanceof Error ? error.message : String(error)
   ).toLowerCase();
   return (
-    message.includes("does not exist") ||
+    /relation .* does not exist/.test(message) ||
     message.includes("no such table") ||
-    message.includes("doesn't exist")
+    /table .* doesn't exist/.test(message)
   );
 }
 

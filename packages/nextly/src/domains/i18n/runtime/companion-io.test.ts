@@ -8,6 +8,10 @@ import {
 
 type ProbeAdapter = Parameters<typeof companionTableExists>[0];
 
+// A minimal adapter fixture: `companionTableExists` only issues one probe query
+// and branches on its outcome, so a stub `executeQuery` (no real database) is
+// enough to isolate and assert that branching — success, verified missing-table,
+// and rethrown-other-error — deterministically.
 const makeAdapter = (
   executeQuery: ProbeAdapter["executeQuery"]
 ): ProbeAdapter => ({ dialect: "postgresql", executeQuery });
@@ -93,6 +97,25 @@ describe("companionTableExists", () => {
     await expect(
       companionTableExists(adapter, "single_x_locales")
     ).rejects.toThrow("connection terminated");
+  });
+
+  it("rethrows a different missing-resource error rather than reading the table absent", async () => {
+    // The classifier is table-specific: a missing DATABASE, schema, or column
+    // shares the "does not exist" wording but is NOT an absent companion table.
+    // Treating it as absent would silently skip the seed and commit unseeded.
+    const otherMissing = [
+      'database "app" does not exist', // postgres: wrong/absent database
+      'column "x" does not exist', // postgres: schema mismatch
+      "Unknown database 'app'", // mysql: absent database
+    ];
+    for (const message of otherMissing) {
+      const adapter = makeAdapter(async () => {
+        throw new Error(message);
+      });
+      await expect(
+        companionTableExists(adapter, "single_x_locales")
+      ).rejects.toThrow(message);
+    }
   });
 });
 

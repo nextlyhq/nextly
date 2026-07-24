@@ -81,6 +81,29 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(insertValues).not.toHaveProperty("title");
   });
 
+  it("preserves the seeded title/slug for the required system identity fields", () => {
+    const service = createQueryService();
+    // Mirror defineSingle's auto-injected system fields: `title` and `slug` are
+    // required text fields with no defaultValue. The required type-default ("")
+    // must NOT overwrite the label/slug seeded onto the default document, or the
+    // auto-created row persists an empty title/slug.
+    const meta = siteSettingsMeta({
+      fields: [
+        { name: "title", type: "text", required: true },
+        { name: "slug", type: "text", required: true },
+      ],
+    });
+
+    const { document, insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.title).toBe("Site Settings");
+    expect(insertValues.slug).toBe("site-settings");
+    expect(document.title).toBe("Site Settings");
+    expect(document.slug).toBe("site-settings");
+  });
+
   it("returns empty localizedDefaults for a non-localized single", () => {
     const service = createQueryService();
     const meta = siteSettingsMeta({

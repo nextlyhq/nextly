@@ -817,6 +817,13 @@ export class SingleQueryService extends BaseService {
             ? JSON.stringify(field.defaultValue)
             : field.defaultValue;
       } else if ("required" in field && field.required) {
+        // `title` and `slug` are auto-injected system identity fields, required
+        // and without a defaultValue, but already seeded above with the Single's
+        // label/slug. A required text field's type-default ("") must not clobber
+        // those meaningful seeds — that would persist an empty title/slug on the
+        // auto-created row. A user field carrying an explicit defaultValue is
+        // handled by the branch above; only the empty type-default is skipped.
+        if (field.name === "title" || field.name === "slug") continue;
         value = getDefaultValue(field);
       } else {
         continue;

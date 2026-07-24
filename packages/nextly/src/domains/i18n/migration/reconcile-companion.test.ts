@@ -158,6 +158,10 @@ describe("buildCompanionReconcileSql", () => {
   });
 
   it("does not back-fill when dropping _status (Draft/Published toggled off)", () => {
+    // The back-fill exists only to seed a newly ADDED default-locale `_status`
+    // from the main row. Dropping `_status` removes the column entirely, so there
+    // is nothing to seed — emitting an UPDATE against the just-dropped column
+    // would reference a column that no longer exists.
     const sql = buildCompanionReconcileSql({
       slug: "posts",
       tableName: "dc_posts",
