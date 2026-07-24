@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Dirent } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -12,7 +13,10 @@ import { describe, expect, it } from "vitest";
  * turns into a hard failure.
  */
 
-const SRC_DIR = join(import.meta.dirname, ".");
+// `import.meta.dirname` only exists from Node 20.11; the package floor is
+// Node >=20.0, so derive the directory from the module URL to stay runnable
+// across the whole supported range.
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Import specifiers the engine must never depend on at runtime. */
 const FORBIDDEN_RUNTIME_IMPORTS = [

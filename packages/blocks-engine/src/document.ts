@@ -215,6 +215,13 @@ export const STYLE_STATES: readonly StyleState[] = [
  * A breakpoint id referencing the site-level breakpoint definitions (viewport
  * and container axes). Documents store values keyed by id; the definitions
  * themselves live once in site settings and arrive via validation context.
+ *
+ * Breakpoint ids are unique across BOTH axes (an invariant validation enforces
+ * on the breakpoint settings). That is what lets a node's styles be keyed by id
+ * alone: the id resolves to exactly one `BreakpointDef`, and thus one axis, via
+ * the context — so the style envelope stays flat (state × breakpoint) instead
+ * of carrying a redundant axis level on every value, and a viewport and a
+ * container breakpoint can never collide on the same id.
  */
 export type BreakpointId = string;
 
@@ -244,8 +251,11 @@ export type StyleValue =
 export type StyleValues = Record<string, StyleValue>;
 
 /**
- * A node's complete style data: states × breakpoints × values. Both axes are
- * sparse — omitted states/breakpoints simply inherit.
+ * A node's complete style data: states × breakpoints × values, both levels
+ * sparse — omitted states/breakpoints simply inherit. The breakpoint key spans
+ * both axes (viewport and container); because breakpoint ids are unique across
+ * axes (see {@link BreakpointId}), the id alone identifies the axis, so no
+ * separate axis level is needed here.
  */
 export type NodeStyles = Partial<
   Record<StyleState, Partial<Record<BreakpointId, StyleValues>>>
@@ -275,7 +285,9 @@ export interface BreakpointDef {
 /**
  * The site's breakpoint definitions on both axes. The engine never reads
  * storage: callers load this from the builder settings and pass it into
- * validation/compilation context.
+ * validation/compilation context. Ids MUST be unique across the two axes
+ * combined (not just within each axis), so a node's style breakpoint key
+ * resolves to exactly one definition; validation enforces this.
  */
 export interface BreakpointSet {
   viewport: BreakpointDef[];

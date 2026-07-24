@@ -139,6 +139,22 @@ describe("insertNode", () => {
       })
     ).toBe(nodes);
   });
+
+  it("rejects a fresh subtree that carries an internal duplicate id", () => {
+    const { nodes } = fixture();
+    // A hand-built subtree whose two children share an id: it does not collide
+    // with the forest, but inserting it would still break id uniqueness.
+    const dupChild = makeNode("core/text", 1);
+    const malformed = makeNode(
+      "core/section",
+      1,
+      {},
+      {
+        children: [dupChild, { ...makeNode("core/text", 1), id: dupChild.id }],
+      }
+    );
+    expect(insertNode(nodes, malformed, { index: 0 })).toBe(nodes);
+  });
 });
 
 describe("removeNode", () => {
@@ -252,6 +268,30 @@ describe("reidSubtree / duplicateNode", () => {
     expect(next).toHaveLength(3);
     expect(next[1]!.type).toBe("core/section");
     expect(next[1]!.id).not.toBe(section.id);
+  });
+
+  it("drops the DOM id (cssId) when re-iding so copies never collide on it", () => {
+    const original = {
+      ...makeNode("core/section", 1, {}, { children: [] }),
+      cssId: "hero",
+    };
+    const copy = reidSubtree(original);
+    expect(copy.cssId).toBeUndefined();
+    // A nested cssId is dropped too.
+    const withNested = {
+      ...makeNode(
+        "core/section",
+        1,
+        {},
+        {
+          children: [{ ...makeNode("core/text", 1), cssId: "cta" }],
+        }
+      ),
+      cssId: "wrap",
+    };
+    const nestedCopy = reidSubtree(withNested);
+    expect(nestedCopy.cssId).toBeUndefined();
+    expect(nestedCopy.slots?.children?.[0]?.cssId).toBeUndefined();
   });
 });
 

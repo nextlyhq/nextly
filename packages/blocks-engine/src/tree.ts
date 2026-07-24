@@ -130,32 +130,47 @@ function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(index, length));
 }
 
-/** True if any id in `node`'s subtree already appears in `nodes`. */
-function subtreeCollidesWith(nodes: BlockNode[], node: BlockNode): boolean {
+/**
+ * True if inserting `node` into `nodes` would break id uniqueness — either the
+ * incoming subtree carries a duplicate id WITHIN itself, or one of its ids
+ * already lives in the destination forest. Both are rejected: collapsing
+ * duplicate incoming ids into the set would let an internally malformed subtree
+ * through and corrupt id-addressing after insertion.
+ */
+function insertionBreaksIdUniqueness(
+  nodes: BlockNode[],
+  node: BlockNode
+): boolean {
   const incoming = new Set<string>();
-  walkNodes([node], n => incoming.add(n.id));
-  let collides = false;
-  walkNodes(nodes, n => {
-    if (incoming.has(n.id)) collides = true;
+  let internalDuplicate = false;
+  walkNodes([node], n => {
+    if (incoming.has(n.id)) internalDuplicate = true;
+    incoming.add(n.id);
   });
-  return collides;
+  if (internalDuplicate) return true;
+  let overlapsForest = false;
+  walkNodes(nodes, n => {
+    if (incoming.has(n.id)) overlapsForest = true;
+  });
+  return overlapsForest;
 }
 
 /**
  * Insert a node at a position. Returns the forest unchanged (the no-op contract
  * used across these primitives) when the target is invalid: an unknown parent
- * id, a slot position missing its slot, or a node whose id — or any id in its
- * subtree — already lives in the forest. The last guard is what makes the
- * primitive safe: re-inserting an existing node would corrupt id-addressing
- * and, for a self/descendant target, make `mapForest` recurse into the object
- * just inserted. Callers duplicating content pass a `reidSubtree` clone.
+ * id, a slot position missing its slot, or a node that would break id
+ * uniqueness — a subtree with an internal duplicate id, or an id that already
+ * lives in the forest. The uniqueness guard is what makes the primitive safe:
+ * re-inserting an existing node would corrupt id-addressing and, for a
+ * self/descendant target, make `mapForest` recurse into the object just
+ * inserted. Callers duplicating content pass a `reidSubtree` clone.
  */
 export function insertNode(
   nodes: BlockNode[],
   node: BlockNode,
   at: TreePosition
 ): BlockNode[] {
-  if (subtreeCollidesWith(nodes, node)) return nodes;
+  if (insertionBreaksIdUniqueness(nodes, node)) return nodes;
   if (at.parentId === undefined) {
     const next = [...nodes];
     next.splice(clampIndex(at.index, next.length), 0, node);
@@ -222,6 +237,10 @@ export function reidSubtree(node: BlockNode): BlockNode {
   // calls below, so cloning `slots` here too would deep-copy them twice.
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
+  // A re-id'd node is a distinct element: it must not carry the original's DOM
+  // id, or the two would emit duplicate HTML `id` attributes. Drop it so the
+  // copy has no cssId until the author sets a new one.
+  delete copy.cssId;
   if (slots) {
     const newSlots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(slots)) {
