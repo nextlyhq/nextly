@@ -67,15 +67,37 @@ export interface PropsMigrationResult {
 }
 
 /**
+ * The largest version span migration will chain across. Block versions
+ * increment by one per schema change, so a span this large signals a malformed
+ * version rather than a real upgrade; it also bounds the loops below.
+ */
+const MAX_MIGRATION_STEPS = 1000;
+
+/** True if a version range is a sane, finite, bounded span of non-negative integers. */
+function isValidVersionRange(fromVersion: number, toVersion: number): boolean {
+  return (
+    Number.isInteger(fromVersion) &&
+    fromVersion >= 0 &&
+    Number.isInteger(toVersion) &&
+    toVersion >= 0 &&
+    toVersion - fromVersion <= MAX_MIGRATION_STEPS
+  );
+}
+
+/**
  * The version steps missing from `map` to carry a node from `fromVersion` up to
  * `toVersion`. An empty array means the chain is complete. Used to reject a
- * block whose version was bumped without a covering migration.
+ * block whose version was bumped without a covering migration. An out-of-range
+ * or non-integer span returns an empty array; version sanity is a separate
+ * check on the definition.
  */
 export function findMigrationGaps(
   fromVersion: number,
   toVersion: number,
   map: MigrationMap | undefined
 ): number[] {
+  if (fromVersion >= toVersion) return [];
+  if (!isValidVersionRange(fromVersion, toVersion)) return [];
   const gaps: number[] = [];
   for (let v = fromVersion; v < toVersion; v++) {
     if (!map || typeof map[v] !== "function") gaps.push(v);
@@ -95,6 +117,18 @@ export function migrateProps(
   toVersion: number,
   map: MigrationMap | undefined
 ): PropsMigrationResult {
+  if (fromVersion >= toVersion) return { props };
+  // Reject non-integer, negative, or absurdly wide spans before iterating: an
+  // Infinity target would loop forever, a -Infinity start would never advance.
+  if (!isValidVersionRange(fromVersion, toVersion)) {
+    return {
+      props,
+      failure: {
+        fromVersion,
+        message: `Invalid migration version range ${fromVersion}→${toVersion}.`,
+      },
+    };
+  }
   let current = props;
   for (let v = fromVersion; v < toVersion; v++) {
     const step = map?.[v];
@@ -175,7 +209,9 @@ export function migrateDocument(
     const info = source.get(node.type);
     if (
       info !== undefined &&
-      typeof node.version === "number" &&
+      Number.isInteger(node.version) &&
+      node.version >= 0 &&
+      Number.isInteger(info.version) &&
       node.version < info.version
     ) {
       const result = migrateProps(
@@ -192,9 +228,16 @@ export function migrateDocument(
           toVersion: info.version,
           message: result.failure.message,
         });
-        // Keep last-good props at the version they last migrated cleanly to;
-        // flag the node so a renderer can placeholder it.
-        next = { ...node, props: result.props, migrationFailed: true };
+        // Stamp the version at the last-good level (the from-version of the
+        // step that failed): the props are already in that version's shape, so
+        // the version must match or a retry would re-run completed, possibly
+        // non-idempotent steps. Flag the node so a renderer can placeholder it.
+        next = {
+          ...node,
+          props: result.props,
+          version: result.failure.fromVersion,
+          migrationFailed: true,
+        };
       } else {
         next = { ...node, props: result.props, version: info.version };
         if (next.migrationFailed) delete next.migrationFailed;

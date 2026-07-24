@@ -65,6 +65,23 @@ describe("migrateProps", () => {
     expect(result.props).toEqual({ x: 1 });
     expect(result.failure).toBeUndefined();
   });
+
+  it("reports failure.fromVersion as the version the props reached", () => {
+    // 1→2 succeeds, 2→3 missing: props are now at the version-2 shape, so the
+    // failure names version 2 (the from-version of the missing step).
+    const map = { 1: (p: Record<string, unknown>) => ({ ...p, a: 1 }) };
+    const result = migrateProps({}, 1, 3, map);
+    expect(result.props).toEqual({ a: 1 });
+    expect(result.failure?.fromVersion).toBe(2);
+  });
+
+  it("rejects a non-integer or infinite version range instead of looping", () => {
+    expect(migrateProps({}, 1, Infinity, {}).failure).toBeDefined();
+    expect(migrateProps({}, -Infinity, 3, {}).failure).toBeDefined();
+    expect(migrateProps({}, 1.5, 3, {}).failure).toBeDefined();
+    // An absurdly wide span is treated as malformed, not chained.
+    expect(migrateProps({}, 0, 100_000, {}).failure).toBeDefined();
+  });
 });
 
 describe("findMigrationGaps", () => {
@@ -150,6 +167,50 @@ describe("migrateDocument", () => {
       version: 3,
       props: { align: "start" },
     });
+  });
+
+  it("stamps a partially-migrated node at its last-good version", () => {
+    // core/heading is v3 with steps 1→2 and 2→3; a node stored at v2 with a
+    // BROKEN 2→3 step: props advance where they can, version lands at last-good.
+    const partial = source({
+      "core/heading": {
+        version: 3,
+        migrate: {
+          1: (p: Record<string, unknown>) => ({ ...p, level: 2 }),
+          2: () => {
+            throw new Error("2to3 broke");
+          },
+        },
+      },
+    });
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/heading", version: 1, props: {} }],
+    };
+    const { doc: out, failures } = migrateDocument(doc, partial);
+    // 1→2 applied, 2→3 failed: props at v2 shape, version stamped to 2.
+    expect(out.nodes[0]).toMatchObject({
+      version: 2,
+      migrationFailed: true,
+      props: { level: 2 },
+    });
+    expect(failures[0]).toMatchObject({ fromVersion: 2, toVersion: 3 });
+  });
+
+  it("leaves a node with a malformed version untouched instead of looping", () => {
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/heading", version: -Infinity, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    let out: ReturnType<typeof migrateDocument> | undefined;
+    expect(() => {
+      out = migrateDocument(doc, src);
+    }).not.toThrow();
+    expect(out!.doc.nodes[0]).toMatchObject({ version: -Infinity });
   });
 
   it("flags a node whose migration fails and records the failure", () => {
