@@ -123,15 +123,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Longest untrusted string echoed into an issue message. */
+const MAX_MESSAGE_VALUE_LENGTH = 120;
+
 /**
- * A safe string form of an untrusted value for issue messages. Validation
- * inspects data that may not match the declared types, so values are widened to
- * `unknown` at the point of reading. Objects and arrays are rendered as a short
- * label rather than serialized: a deeply nested value would make JSON.stringify
- * overflow, and messages never need the full structure.
+ * A safe, bounded string form of an untrusted value for issue messages.
+ * Validation inspects data that may not match the declared types, so values are
+ * widened to `unknown` at the point of reading and rendered here without: (a)
+ * calling a possibly-throwing `toString` (objects/arrays become a short label,
+ * never serialized — a deep value would overflow JSON.stringify anyway), or (b)
+ * embedding an unbounded string, which an oversized malformed field could use
+ * to force huge allocations. Long strings are truncated.
  */
 function describeValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value.length > MAX_MESSAGE_VALUE_LENGTH
+      ? `${value.slice(0, MAX_MESSAGE_VALUE_LENGTH)}…`
+      : value;
+  }
   if (
     typeof value === "number" ||
     typeof value === "boolean" ||
@@ -465,7 +474,7 @@ function validateNode(
       path: pointer(path, "type"),
       code: "invalid-node-type",
       severity: "error",
-      message: `Node type "${String(node.type)}" must be a namespaced slug like "core/heading".`,
+      message: `Node type "${describeValue(node.type)}" must be a namespaced slug like "core/heading".`,
     });
   } else if (state.ctx.registry && !state.ctx.registry.has(node.type)) {
     issues.push({
@@ -703,20 +712,9 @@ function validateVisibility(
   }
   if (vis.conditions !== undefined) {
     // Each condition needs a string `field` AND a string `op`; the optional
-    // `value` may be anything. Accepting a condition without an operator would
-    // pass a shape downstream evaluation cannot act on.
-    const ok =
-      Array.isArray(vis.conditions) &&
-      vis.conditions.every(
-        group =>
-          Array.isArray(group) &&
-          group.every(
-            c =>
-              isPlainObject(c) &&
-              typeof (c as { field?: unknown }).field === "string" &&
-              typeof (c as { op?: unknown }).op === "string"
-          )
-      );
+    // `value` may be anything. Index-based loops (not `.every`, which skips
+    // holes) so a sparse array's undefined entries are rejected, not passed.
+    const ok = isConditionsShapeValid(vis.conditions);
     if (!ok) {
       state.issues.push({
         path: pointer(visPath, "conditions"),
@@ -759,6 +757,30 @@ function validateVisibility(
       }
     }
   }
+}
+
+/**
+ * True if `conditions` is a well-formed OR-of-AND array of `{field, op}`.
+ * Iterates by index rather than with `.every`, which skips array holes, so a
+ * sparse array's `undefined` entries are treated as invalid, not passed over.
+ */
+function isConditionsShapeValid(conditions: unknown): boolean {
+  if (!Array.isArray(conditions)) return false;
+  for (let g = 0; g < conditions.length; g++) {
+    const group: unknown = conditions[g];
+    if (!Array.isArray(group)) return false;
+    for (let c = 0; c < group.length; c++) {
+      const cond: unknown = group[c];
+      if (
+        !isPlainObject(cond) ||
+        typeof cond.field !== "string" ||
+        typeof cond.op !== "string"
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 const BINDING_SOURCES = ["entry", "item", "single", "site"];

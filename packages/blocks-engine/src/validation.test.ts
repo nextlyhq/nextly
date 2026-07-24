@@ -407,6 +407,69 @@ describe("validation never throws on adversarial input", () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  it("bounds the size of an untrusted string echoed into a message", () => {
+    const huge = "x".repeat(5_000_000);
+    const doc = invalidDoc({ formatVersion: huge, kind: "page", nodes: [] });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    const issue = issues.find(i => i.code === "invalid-format-version");
+    expect(issue).toBeDefined();
+    // The message must not embed the whole 5MB string.
+    expect(issue!.message.length).toBeLessThan(300);
+  });
+
+  it("does not invoke a malicious toString on an invalid node type", () => {
+    const hostileType = {
+      toString() {
+        throw new Error("boom");
+      },
+    };
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: hostileType, version: 1, props: {} }],
+    });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(issues.some(i => i.code === "invalid-node-type")).toBe(true);
+  });
+
+  it("rejects a sparse visibility condition array (holes are not skipped)", () => {
+    const group: unknown[] = [];
+    group[1] = { field: "status", op: "eq" };
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          visibility: { conditions: [group] },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(
+      issues.some(
+        i =>
+          i.code === "invalid-visibility" &&
+          i.path === "/nodes/0/visibility/conditions"
+      )
+    ).toBe(true);
+  });
+
   it("counts malformed array elements toward the node cap", () => {
     const doc = invalidDoc({
       formatVersion: 1,
