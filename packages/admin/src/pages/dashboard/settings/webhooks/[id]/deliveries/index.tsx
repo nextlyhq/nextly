@@ -47,8 +47,8 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
   const [status, setStatus] = useState<WebhookDeliveryStatus | undefined>();
   const [eventType, setEventType] = useState<WebhookEventType | undefined>();
 
-  const { data: endpoint } = useWebhook(id);
-  const { data, isLoading, isError, error } = useDeliveries(
+  const { data: endpoint, isLoading: isEndpointLoading } = useWebhook(id);
+  const { data, isLoading, isError, error, isPlaceholderData } = useDeliveries(
     id,
     // The server is 1-based; the Pagination control is 0-based.
     { page: page + 1, limit: pageSize, status, eventType },
@@ -56,15 +56,22 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
   );
   const { mutate: doDrain, isPending: isDraining } = useRunDrain();
 
+  // While a parameter change is refetching, `keepPreviousData` leaves the prior
+  // page in `data` and `isPlaceholderData` is true. Treat that as busy so the
+  // table and its pager show a loading state and disable paging — otherwise the
+  // stale page reads as if it already matched the new filter, and its old page
+  // count would let a click request a page that no longer exists.
+  const isRefetching = isLoading || isPlaceholderData;
+
   // Keep the page in range when the result set shrinks under us (a filter
   // narrows it, or a drain/prune removes rows) so paging never sticks on an
-  // empty page past the end. `keepPreviousData` keeps `data.meta` valid across
-  // a refetch, so this only clamps against a real, freshly-returned total.
+  // empty page past the end. Only clamp against a freshly-returned total, never
+  // the stale placeholder meta held during a refetch.
   useEffect(() => {
-    if (!data) return;
+    if (!data || isPlaceholderData) return;
     const lastPage = Math.max(0, data.meta.totalPages - 1);
     if (page > lastPage) setPage(lastPage);
-  }, [data, page]);
+  }, [data, isPlaceholderData, page]);
 
   // Filters and page-size changes reset to the first page so the new query
   // never lands past the end of a shorter result set.
@@ -130,18 +137,34 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
     <>
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
-          {endpoint ? (
+          {isEndpointLoading ? (
+            <Skeleton className="h-5 w-48 rounded-none" />
+          ) : endpoint ? (
             <p className="text-sm text-muted-foreground">
               Endpoint:{" "}
-              <Link
-                href={buildRoute(ROUTES.SETTINGS_WEBHOOKS_EDIT, { id })}
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-              >
-                {endpoint.name}
-              </Link>
+              {/* The edit route requires update-webhooks; a read-only viewer
+                  only gets a link they could not open, so link only for a
+                  manager and show plain text otherwise. */}
+              {canManage ? (
+                <Link
+                  href={buildRoute(ROUTES.SETTINGS_WEBHOOKS_EDIT, { id })}
+                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                >
+                  {endpoint.name}
+                </Link>
+              ) : (
+                <span className="font-medium text-foreground">
+                  {endpoint.name}
+                </span>
+              )}
             </p>
           ) : (
-            <Skeleton className="h-5 w-48 rounded-none" />
+            // A retired endpoint keeps its delivery history, but `getWebhook`
+            // 404s for it. Label it by id instead of holding a skeleton forever.
+            <p className="text-sm text-muted-foreground">
+              Endpoint <code className="font-mono text-xs">{id}</code> (no
+              longer active)
+            </p>
           )}
         </div>
 
@@ -167,7 +190,7 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
       ) : (
         <DeliveryTable
           rows={data?.items ?? []}
-          isLoading={isLoading}
+          isLoading={isRefetching}
           totalItems={data?.meta.total ?? 0}
           totalPages={data?.meta.totalPages ?? 1}
           page={page}

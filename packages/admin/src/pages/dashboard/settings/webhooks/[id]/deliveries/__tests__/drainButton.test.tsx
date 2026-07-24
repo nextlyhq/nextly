@@ -5,6 +5,8 @@ import { render, screen } from "@admin/__tests__/utils";
 
 import { DeliveriesContent } from "../index";
 
+// Spies are defined via `vi.hoisted` so the hoisted `vi.mock` factories below
+// can close over them (the factories run before the module's own imports).
 const {
   useWebhook,
   useDeliveries,

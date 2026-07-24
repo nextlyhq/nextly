@@ -36,6 +36,13 @@ const MetaRow: React.FC<{ label: string; children: React.ReactNode }> = ({
   </div>
 );
 
+/**
+ * Renders one delivery's full record and owns the redelivery action. It holds
+ * the delivery query (loading/error) and the redelivery mutation's pending
+ * state here, at the page level, because both the header action and the body
+ * read from the same delivery and must react together: a redelivery invalidates
+ * this delivery's cache, so the timeline and status re-render off the refetch.
+ */
 const DeliveryDetailContent: React.FC<{
   webhookId: string;
   deliveryId: string;
@@ -139,7 +146,12 @@ const DeliveryDetailContent: React.FC<{
               </code>
             </MetaRow>
             <MetaRow label="Attempts">
-              <span className="tabular-nums">{delivery.attemptCount}</span>
+              {/* Count the recorded history, not the row's `attemptCount`: a
+                  redelivery resets that counter to zero for the fresh cycle
+                  while the prior attempts stay in the log, so the counter would
+                  read 0 above a non-empty timeline. The history length always
+                  matches the attempts shown below. */}
+              <span className="tabular-nums">{delivery.attempts.length}</span>
             </MetaRow>
             <MetaRow label="Last response">
               {delivery.lastStatusCode === null ? (
@@ -153,7 +165,7 @@ const DeliveryDetailContent: React.FC<{
             </MetaRow>
             {delivery.lastError && (
               <MetaRow label="Last error">
-                <span className="text-destructive-500 break-words">
+                <span className="text-destructive break-words">
                   {delivery.lastError}
                 </span>
               </MetaRow>
@@ -202,7 +214,7 @@ const DeliveryDetailContent: React.FC<{
                   </span>
                 </div>
                 {attempt.error && (
-                  <p className="mt-2 text-sm text-destructive-500 break-words">
+                  <p className="mt-2 text-sm text-destructive break-words">
                     {attempt.error}
                   </p>
                 )}

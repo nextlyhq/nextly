@@ -4,11 +4,38 @@ import { describe, expect, it } from "vitest";
 import {
   AttemptOutcomeBadge,
   DeliveryStatusBadge,
+  deliveryStatusPresentation,
   describeResource,
   formatDeliveryTimestamp,
   formatLatency,
   formatStatusCode,
 } from "./deliveryStatus";
+
+describe("deliveryStatusPresentation", () => {
+  it("maps each known status to its variant and label", () => {
+    expect(deliveryStatusPresentation("delivered")).toEqual({
+      variant: "success",
+      label: "Delivered",
+    });
+    expect(deliveryStatusPresentation("retrying")).toEqual({
+      variant: "warning",
+      label: "Retrying",
+    });
+    expect(deliveryStatusPresentation("failed")).toEqual({
+      variant: "destructive",
+      label: "Failed",
+    });
+  });
+
+  // The helper takes a plain string precisely so an out-of-union wire value can
+  // be exercised without a type suppression; it should fall back to neutral.
+  it("falls back to a neutral pill showing the raw value for an unknown status", () => {
+    expect(deliveryStatusPresentation("quarantined")).toEqual({
+      variant: "default",
+      label: "quarantined",
+    });
+  });
+});
 
 describe("DeliveryStatusBadge", () => {
   it("renders the human label for each known status", () => {
@@ -18,12 +45,6 @@ describe("DeliveryStatusBadge", () => {
     expect(screen.getByText("Retrying")).toBeInTheDocument();
     rerender(<DeliveryStatusBadge status="failed" />);
     expect(screen.getByText("Failed")).toBeInTheDocument();
-  });
-
-  it("falls back to the raw value for an unknown status", () => {
-    // @ts-expect-error deliberately exercising an out-of-set value
-    render(<DeliveryStatusBadge status="quarantined" />);
-    expect(screen.getByText("quarantined")).toBeInTheDocument();
   });
 });
 

@@ -10,15 +10,20 @@
 import { Badge } from "@nextlyhq/ui";
 import type React from "react";
 
-import type { WebhookDeliveryStatus } from "@admin/types/webhooks";
+import {
+  WEBHOOK_DELIVERY_STATUSES,
+  type WebhookDeliveryStatus,
+} from "@admin/types/webhooks";
 
 type BadgeVariant = "success" | "warning" | "destructive" | "default";
 
+interface StatusPresentation {
+  variant: BadgeVariant;
+  label: string;
+}
+
 /** Delivery status → badge variant + human label. */
-const STATUS_PRESENTATION: Record<
-  WebhookDeliveryStatus,
-  { variant: BadgeVariant; label: string }
-> = {
+const STATUS_PRESENTATION: Record<WebhookDeliveryStatus, StatusPresentation> = {
   delivered: { variant: "success", label: "Delivered" },
   retrying: { variant: "warning", label: "Retrying" },
   pending: { variant: "warning", label: "Pending" },
@@ -26,16 +31,26 @@ const STATUS_PRESENTATION: Record<
   failed: { variant: "destructive", label: "Failed" },
 };
 
+/**
+ * Resolve a delivery status (as it arrives on the wire, i.e. an untrusted
+ * string) to its badge presentation. A status the UI does not know — a value
+ * the server could add ahead of the client — falls back to a neutral pill
+ * showing the raw value rather than crashing. Accepts `string` so this stays
+ * verifiable without asserting an out-of-union value; the lookup is keyed only
+ * through the known-status list, so no type cast is needed.
+ */
+export function deliveryStatusPresentation(status: string): StatusPresentation {
+  const known = WEBHOOK_DELIVERY_STATUSES.find(value => value === status);
+  return known
+    ? STATUS_PRESENTATION[known]
+    : { variant: "default", label: status };
+}
+
 /** Status pill for a delivery row/detail. */
 export const DeliveryStatusBadge: React.FC<{
   status: WebhookDeliveryStatus;
 }> = ({ status }) => {
-  // An unrecognized status (a value added server-side ahead of the UI) stays
-  // legible as a neutral pill rather than crashing the row.
-  const presentation = STATUS_PRESENTATION[status] ?? {
-    variant: "default" as const,
-    label: status,
-  };
+  const presentation = deliveryStatusPresentation(status);
   return <Badge variant={presentation.variant}>{presentation.label}</Badge>;
 };
 

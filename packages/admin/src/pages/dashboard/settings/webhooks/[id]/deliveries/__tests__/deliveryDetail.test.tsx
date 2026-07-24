@@ -6,6 +6,10 @@ import type { WebhookDeliveryDetail } from "@admin/types/webhooks";
 
 import { DeliveryDetailContent } from "../[deliveryId]";
 
+// The spies are created with `vi.hoisted` because `vi.mock` factories are
+// hoisted above the imports and would otherwise reference these before they
+// exist; hoisting the spy definitions to the same level lets the factories
+// close over them.
 const { useDelivery, useRedeliver, redeliverMutate, canFor } = vi.hoisted(
   () => ({
     useDelivery: vi.fn(),
@@ -81,6 +85,23 @@ describe("DeliveryDetailContent", () => {
       failed.compareDocumentPosition(retrying) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("shows the recorded-history length, not the reset attemptCount, after a redelivery", () => {
+    // A redelivery resets attemptCount to 0 but keeps the attempt history, so
+    // the Attempts stat must reflect the history (2), never the counter (0).
+    useDelivery.mockReturnValue({
+      data: { ...DELIVERY, attemptCount: 0 },
+      isLoading: false,
+      isError: false,
+    });
+    render(<DeliveryDetailContent webhookId="wh_1" deliveryId="dlv_1" />);
+
+    // Both recorded attempts still render in the timeline...
+    expect(screen.getByText("retrying")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    // ...and the reset counter value is not surfaced as the attempt count.
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
   it("fires a redelivery when the button is clicked", async () => {
