@@ -111,6 +111,52 @@ describe("version capture on update (integration)", () => {
     expect((latest.snapshot as { title?: string }).title).toBe("hello");
   });
 
+  it("keeps a seeded localized default in v1 when the first update omits it (single auto-create)", async () => {
+    // First-write auto-create of a localized, versioned Single seeds the
+    // default-locale companion with the localized field defaults. When that
+    // first update touches only another field, the seeded default is still
+    // committed to the companion, so v1 must carry it — otherwise restoring v1
+    // silently drops content that was actually persisted.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // The first update auto-creates the Single and touches ONLY `tagline`; the
+    // defaulted `siteName` is never in the patch, only in the auto-create seed.
+    await singles.update(
+      "preferences",
+      { tagline: "hi" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const rows = await versions(current, "preferences");
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    // The seeded default survives into v1 alongside the written field.
+    expect(snapshot.siteName).toBe("My Site");
+    expect(snapshot.tagline).toBe("hi");
+    // v1 belongs to the default locale it carries content for.
+    expect(v1.locale).toBe("en");
+  });
+
   it("preserves an omitted component subtree in a scalar-only update snapshot", async () => {
     // A partial update carries only the fields in the request. Without reading
     // the current component state the snapshot would drop the untouched

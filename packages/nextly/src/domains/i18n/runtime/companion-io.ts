@@ -176,7 +176,29 @@ export async function upsertCompanionRow(
   );
 }
 
-/** Whether the companion `_locales` table physically exists (its migration has run). */
+// Whether a probe error is a verified "table does not exist" for the current
+// dialect, as opposed to a transient/connection/permission/other error. The
+// wording is the dialect's own: Postgres `relation "x" does not exist`, SQLite
+// `no such table: x`, MySQL `Table 'db.x' doesn't exist`. Mirrors the
+// missing-table classification already used in di/register.ts.
+function isMissingTableError(error: unknown): boolean {
+  const message = (
+    error instanceof Error ? error.message : String(error)
+  ).toLowerCase();
+  return (
+    message.includes("does not exist") ||
+    message.includes("no such table") ||
+    message.includes("doesn't exist")
+  );
+}
+
+/**
+ * Whether the companion `_locales` table physically exists (its migration has
+ * run). Returns false ONLY for a verified missing-table error; any other probe
+ * failure (transient, connection, permission) is rethrown, so a caller gating a
+ * write on this never mistakes an unavailable database for an absent table and
+ * silently skips the write.
+ */
 export async function companionTableExists(
   adapter: CompanionWriteAdapter,
   companionTableName: string
@@ -188,8 +210,9 @@ export async function companionTableExists(
   try {
     await adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingTableError(error)) return false;
+    throw error;
   }
 }
 

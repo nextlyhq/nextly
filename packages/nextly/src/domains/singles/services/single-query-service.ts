@@ -968,13 +968,6 @@ export class SingleQueryService extends BaseService {
       !!this.localization &&
       singleMeta.localized === true &&
       Object.keys(localizedDefaults).length > 0;
-    // When defaults are seeded, the initial version snapshot belongs to the
-    // default locale (its content is those seeded translatable values), so it is
-    // tagged and overlaid with them below — otherwise restoring v1 could not
-    // bring back the seeded localized defaults.
-    const seedLocale = needsCompanionSeed
-      ? (this.localization?.defaultLocale ?? null)
-      : null;
     // Probe companion existence BEFORE opening the transaction (a probe issued
     // while the tx holds a max:1-pool connection would deadlock); the seed calls
     // below are gated on this rather than probing inside the transaction.
@@ -984,6 +977,17 @@ export class SingleQueryService extends BaseService {
           localizedDefaults
         )
       : false;
+    // The seed only persists the localized defaults when the companion `_locales`
+    // table physically exists; when it does not (dev-before-migrate) the seed
+    // no-ops. The initial version snapshot must therefore record those defaults
+    // ONLY when the seed actually ran — otherwise v1 carries translations that
+    // were never persisted or visible, and restoring it resurrects phantom
+    // defaults. Both the snapshot overlay and its default-locale tag are gated on
+    // this, so a version tagged to the default locale always matches real content.
+    const seedApplied = needsCompanionSeed && companionExists;
+    const seedLocale = seedApplied
+      ? (this.localization?.defaultLocale ?? null)
+      : null;
 
     if (!shouldCapture && !needsCompanionSeed) {
       const inserted = await this.adapter.insert<SingleDocument>(
@@ -1049,8 +1053,13 @@ export class SingleQueryService extends BaseService {
         // normal localized write overlays its companion values before capturing.
         // Without this, restoring v1 could not bring back the seeded defaults
         // (including a localized title/slug), since they live on the companion.
-        for (const [name, value] of Object.entries(localizedDefaults)) {
-          parentRow[name] = value;
+        // Gated on `seedApplied`: when the companion table does not yet exist the
+        // seed no-ops, so overlaying here would record defaults that were never
+        // persisted.
+        if (seedApplied) {
+          for (const [name, value] of Object.entries(localizedDefaults)) {
+            parentRow[name] = value;
+          }
         }
         stripPasswordFieldValues(parentRow, singleMeta.fields);
         stripSystemOwnerField(parentRow);

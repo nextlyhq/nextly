@@ -1423,6 +1423,33 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
+              // First-write auto-create: the companion was seeded with the
+              // localized field defaults for fields this update did not supply
+              // (queryService.seedLocalizedDefaultsCompanion). Those values are
+              // committed but absent from both `rows[0]` (main row omits
+              // translatable columns) and `companionData` (only this write's
+              // fields), so overlay them for any field this update did not write —
+              // otherwise v1 omits persisted content and restoring it drops the
+              // seeded defaults. This write's explicit values (overlaid above) win
+              // over a default. Gated on the seed having actually run, so a
+              // snapshot never records defaults the absent-companion seed skipped.
+              if (autoCreated && seedCompanionExists && companion) {
+                const writtenFieldNames = new Set(
+                  companion.localizedFields
+                    .filter(f =>
+                      Object.prototype.hasOwnProperty.call(
+                        companionData,
+                        f.column
+                      )
+                    )
+                    .map(f => f.name)
+                );
+                for (const [name, value] of Object.entries(
+                  pendingLocalizedDefaults
+                )) {
+                  if (!writtenFieldNames.has(name)) parentRow[name] = value;
+                }
+              }
               // Never let password hashes into durable version history: the row
               // carries bcrypt hashes (hashPasswordFieldValues ran before the
               // write), and a later password change would otherwise leave the
