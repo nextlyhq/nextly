@@ -62,7 +62,13 @@ export function treeDepth(nodes: BlockNode[]): number {
     const entry = stack.pop();
     if (!entry) continue;
     if (entry.depth > deepest) deepest = entry.depth;
-    if (entry.node.slots) {
+    // A malformed array element (null, or a non-object) has no slots and must
+    // not be dereferenced: validation runs this over untrusted documents.
+    if (
+      typeof entry.node === "object" &&
+      entry.node !== null &&
+      entry.node.slots
+    ) {
       // Skip malformed (non-array) slot values so untrusted documents passed in
       // during validation cannot make this throw.
       for (const children of Object.values(entry.node.slots)) {

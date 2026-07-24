@@ -13,6 +13,11 @@ function lookup(types: string[]): BlockTypeLookup {
   return { has: type => set.has(type) };
 }
 
+/** Coerce deliberately-malformed input to BlockDocument for the validator. */
+function invalidDoc(doc: unknown): BlockDocument {
+  return doc as BlockDocument;
+}
+
 /** Resolve an RFC 6901 JSON-Pointer against a value; undefined if it misses. */
 function resolvePointer(root: unknown, path: string): unknown {
   if (path === "") return root;
@@ -150,7 +155,7 @@ describe("severity depends on mode for preservable problems", () => {
   });
 });
 
-describe("breakpoint sets are validated for cross-axis id collisions", () => {
+describe("breakpoint sets are validated for duplicate ids", () => {
   it("reports a breakpoint id shared by the viewport and container axes", () => {
     const collidingSet: BreakpointSet = {
       viewport: [
@@ -167,6 +172,80 @@ describe("breakpoint sets are validated for cross-axis id collisions", () => {
     expect(issues[0]?.code).toBe("breakpoint-id-not-unique");
     expect(issues[0]?.path).toBe("/breakpoints/container/0");
     expect(issues[0]?.severity).toBe("error");
+  });
+
+  it("reports a breakpoint id repeated within a single axis", () => {
+    const dupWithinAxis: BreakpointSet = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+        { id: "mobile", label: "Mobile again", maxWidth: 480 },
+      ],
+      container: [],
+    };
+    const issues = validate(
+      { formatVersion: 1, kind: "page", nodes: [] },
+      { breakpoints: dupWithinAxis, mode: "strict" }
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("breakpoint-id-not-unique");
+    expect(issues[0]?.path).toBe("/breakpoints/viewport/2");
+  });
+});
+
+describe("validation never throws on adversarial input", () => {
+  it("returns a depth issue for a document nested far beyond any stack limit", () => {
+    // Build a chain ~20k deep — enough to overflow a recursive walk or
+    // JSON.stringify. Validation must return issues, not throw.
+    let node: Record<string, unknown> = {
+      id: "leaf",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    for (let i = 0; i < 20_000; i++) {
+      node = {
+        id: `n${i}`,
+        type: "core/section",
+        version: 1,
+        props: {},
+        slots: { children: [node] },
+      };
+    }
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    } as BlockDocument;
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(issues.some(i => i.code === "depth-exceeded")).toBe(true);
+  });
+
+  it("returns issues for a nodes array full of malformed elements", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        null,
+        5,
+        "x",
+        { id: "ok", type: "core/text", version: 1, props: {} },
+      ],
+    });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(issues.filter(i => i.code === "invalid-node")).toHaveLength(3);
   });
 });
 

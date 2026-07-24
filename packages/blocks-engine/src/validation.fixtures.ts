@@ -377,6 +377,55 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     ],
   },
   {
+    name: "a null element in the nodes array is reported, not a crash",
+    mode: "strict",
+    doc: invalid({ formatVersion: 1, kind: "page", nodes: [null] }),
+    expected: [{ path: "/nodes/0", code: "invalid-node" }],
+  },
+  {
+    name: "a visibility condition without an operator is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          visibility: { conditions: [[{ field: "status" }]] },
+        },
+      ],
+    }),
+    expected: [
+      { path: "/nodes/0/visibility/conditions", code: "invalid-visibility" },
+    ],
+  },
+  {
+    name: "a non-boolean visibility device value is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          visibility: { devices: { mobile: "false" } },
+        },
+      ],
+    }),
+    expected: [
+      {
+        path: "/nodes/0/visibility/devices/mobile",
+        code: "invalid-visibility",
+      },
+    ],
+  },
+  {
     name: "single binding without sourceKey",
     mode: "strict",
     doc: invalid({

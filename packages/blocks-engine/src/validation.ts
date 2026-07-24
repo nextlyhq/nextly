@@ -76,6 +76,7 @@ export const ISSUE_CODES = {
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
   "nodes-not-array": "The document nodes field is not an array.",
+  "invalid-node": "A node is not an object.",
   "depth-exceeded": "The node tree is nested deeper than the allowed maximum.",
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
@@ -198,59 +199,70 @@ export function validate(
 
   checkLimits(doc, limits, issues);
 
-  // Duplicate-id detection spans the whole forest, so gather ids with their
-  // pointers first, then report every node that repeats an already-seen id.
-  const seenIds = new Map<string, string>();
-  const walkForValidation = (nodes: BlockNode[], basePath: string): void => {
-    nodes.forEach((node, index) => {
-      const path = pointer(basePath, index);
-      validateNode(node, path, {
-        ctx,
-        issues,
-        knownBreakpoints,
-        unknownSeverity,
-        seenIds,
-      });
-      if (node && typeof node === "object" && isPlainObject(node.slots)) {
-        for (const [slot, children] of Object.entries(node.slots)) {
-          if (Array.isArray(children)) {
-            walkForValidation(children, pointer(pointer(path, "slots"), slot));
-          }
+  const nodeState: NodeCheckState = {
+    ctx,
+    issues,
+    knownBreakpoints,
+    unknownSeverity,
+    seenIds: new Map<string, string>(),
+  };
+  // Iterative breadth-first walk. It never recurses, so a document nested
+  // arbitrarily deep cannot overflow the call stack — validation returns the
+  // depth issue instead of throwing. It also stops after visiting maxNodes
+  // nodes (the node-count issue is already recorded by checkLimits), so an
+  // oversized document cannot make the walk do unbounded work.
+  const queue: Array<{ node: BlockNode; path: string }> = doc.nodes.map(
+    (node, index) => ({ node, path: pointer("/nodes", index) })
+  );
+  for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
+    const { node, path } = queue[i];
+    validateNode(node, path, nodeState);
+    if (isPlainObject(node) && isPlainObject(node.slots)) {
+      for (const [slot, children] of Object.entries(node.slots)) {
+        if (Array.isArray(children)) {
+          const slotPath = pointer(pointer(path, "slots"), slot);
+          children.forEach((child, childIndex) =>
+            queue.push({ node: child, path: pointer(slotPath, childIndex) })
+          );
         }
       }
-    });
-  };
-  walkForValidation(doc.nodes, "/nodes");
+    }
+  }
 
   return issues;
 }
 
 /**
- * Collect every breakpoint id, reporting any id shared across the two axes.
- * This is the one check about the CONTEXT rather than the document: its issue
- * path (`/breakpoints/container/<i>`) points into the supplied breakpoint set,
- * not the validated document, because a cross-axis id collision is a site-
- * settings problem that makes every style breakpoint key ambiguous.
+ * Collect every breakpoint id, reporting any id that repeats — whether within a
+ * single axis or across the two. This is the one check about the CONTEXT rather
+ * than the document: its issue path (`/breakpoints/<axis>/<i>`) points into the
+ * supplied breakpoint set, not the validated document, because a duplicate id
+ * is a site-settings problem that makes every flat style breakpoint key
+ * ambiguous.
  */
 function collectBreakpointIds(
   breakpoints: BreakpointSet,
   issues: ValidationIssue[]
 ): Set<string> {
   const ids = new Set<string>();
-  const viewportIds = new Set(breakpoints.viewport.map(b => b.id));
-  for (const def of breakpoints.viewport) ids.add(def.id);
-  breakpoints.container.forEach((def, index) => {
-    if (viewportIds.has(def.id)) {
-      issues.push({
-        path: pointer("/breakpoints/container", index),
-        code: "breakpoint-id-not-unique",
-        severity: "error",
-        message: `Breakpoint id "${def.id}" is defined on both the viewport and container axes.`,
-        suggestion: "Give viewport and container breakpoints distinct ids.",
-      });
-    }
-    ids.add(def.id);
-  });
+  const scanAxis = (axis: "viewport" | "container"): void => {
+    const defs = breakpoints[axis];
+    if (!Array.isArray(defs)) return;
+    defs.forEach((def, index) => {
+      if (ids.has(def.id)) {
+        issues.push({
+          path: pointer(pointer("/breakpoints", axis), index),
+          code: "breakpoint-id-not-unique",
+          severity: "error",
+          message: `Breakpoint id "${def.id}" is defined more than once.`,
+          suggestion: "Give every breakpoint a unique id across both axes.",
+        });
+      }
+      ids.add(def.id);
+    });
+  };
+  scanAxis("viewport");
+  scanAxis("container");
   return ids;
 }
 
@@ -277,7 +289,21 @@ function checkLimits(
       message: `Document has ${nodeCount} nodes; the maximum is ${limits.maxNodes}.`,
     });
   }
-  const bytes = documentBytes(doc);
+  // Serialization can throw on a document too deeply nested for JSON.stringify;
+  // a validator must return an issue, never propagate that as an exception.
+  let bytes: number;
+  try {
+    bytes = documentBytes(doc);
+  } catch {
+    issues.push({
+      path: "",
+      code: "document-too-large",
+      severity: "error",
+      message:
+        "Document could not be serialized (too large or too deeply nested).",
+    });
+    return;
+  }
   if (bytes > limits.maxBytes) {
     issues.push({
       path: "",
@@ -314,7 +340,7 @@ function validateNode(
   if (!isPlainObject(node)) {
     issues.push({
       path,
-      code: "invalid-props",
+      code: "invalid-node",
       severity: "error",
       message: "A node must be an object.",
     });
@@ -537,6 +563,9 @@ function validateVisibility(
     return;
   }
   if (vis.conditions !== undefined) {
+    // Each condition needs a string `field` AND a string `op`; the optional
+    // `value` may be anything. Accepting a condition without an operator would
+    // pass a shape downstream evaluation cannot act on.
     const ok =
       Array.isArray(vis.conditions) &&
       vis.conditions.every(
@@ -545,7 +574,8 @@ function validateVisibility(
           group.every(
             c =>
               isPlainObject(c) &&
-              typeof (c as { field?: unknown }).field === "string"
+              typeof (c as { field?: unknown }).field === "string" &&
+              typeof (c as { op?: unknown }).op === "string"
           )
       );
     if (!ok) {
@@ -567,13 +597,24 @@ function validateVisibility(
         message: "visibility.devices must map breakpoint ids to booleans.",
       });
     } else {
-      for (const breakpointId of Object.keys(vis.devices)) {
+      for (const [breakpointId, value] of Object.entries(vis.devices)) {
+        const devicePath = pointer(pointer(visPath, "devices"), breakpointId);
         if (!state.knownBreakpoints.has(breakpointId)) {
           state.issues.push({
-            path: pointer(pointer(visPath, "devices"), breakpointId),
+            path: devicePath,
             code: "unknown-breakpoint",
             severity: state.unknownSeverity,
             message: `Breakpoint "${breakpointId}" is not defined for this site.`,
+          });
+        }
+        // The stored shape is Record<breakpointId, boolean>; a truthy string or
+        // number would render differently from the author's intent.
+        if (typeof value !== "boolean") {
+          state.issues.push({
+            path: devicePath,
+            code: "invalid-visibility",
+            severity: "error",
+            message: `visibility.devices["${breakpointId}"] must be a boolean.`,
           });
         }
       }
