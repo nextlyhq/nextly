@@ -103,10 +103,21 @@ function unique(tags: string[]): string[] {
 }
 
 /**
+ * Trim configured extra tags and drop blank ones. Extra tags come from
+ * user-supplied `revalidate.tags`, so a config typo (an empty or whitespace-only
+ * entry, or a stray surrounding space) must never reach the adapter as a
+ * malformed tag — it would over-invalidate or silently mismatch the read.
+ */
+function normalizeExtraTags(extraTags?: string[]): string[] {
+  if (!extraTags) return [];
+  return extraTags.map(tag => tag.trim()).filter(tag => tag.length > 0);
+}
+
+/**
  * The tags an entry write invalidates: the collection tag, the id tag (plus its
  * locale variant when localized), the current-slug tag, and — on a rename — the
  * previous-slug tag so a read cached under the old URL clears. Configured extra
- * tags are merged in verbatim.
+ * tags are merged in (trimmed; blank entries dropped).
  */
 export function computeEntryRevalidation(
   input: EntryRevalidationInput
@@ -134,7 +145,7 @@ export function computeEntryRevalidation(
     tags.push(entrySlugTag(collection, previousSlug));
   }
 
-  if (extraTags) tags.push(...extraTags);
+  tags.push(...normalizeExtraTags(extraTags));
 
   return { tags: unique(tags) };
 }
@@ -148,7 +159,6 @@ export function computeSingleRevalidation(
   input: SingleRevalidationInput
 ): RevalidationIntent {
   const { slug, extraTags } = input;
-  const tags = [singleTag(slug)];
-  if (extraTags) tags.push(...extraTags);
+  const tags = [singleTag(slug), ...normalizeExtraTags(extraTags)];
   return { tags: unique(tags) };
 }

@@ -114,6 +114,21 @@ describe("computeEntryRevalidation", () => {
     expect(intent.tags.filter(t => t === "nextly:posts")).toHaveLength(1);
   });
 
+  it("drops blank extra tags and trims surrounding whitespace", () => {
+    // A `revalidate.tags` config typo must never send a blank or padded tag to
+    // the adapter: a blank tag over-invalidates, and a padded one mismatches
+    // the read (tags are exact-match).
+    const intent = computeEntryRevalidation({
+      collection: "posts",
+      id: "1",
+      extraTags: ["", "   ", " nav ", "hero"],
+    });
+    expect(intent.tags).toContain("nav");
+    expect(intent.tags).toContain("hero");
+    expect(intent.tags).not.toContain("");
+    expect(intent.tags.some(t => t !== t.trim())).toBe(false);
+  });
+
   it("ignores blank slug/locale without throwing (optional fields)", () => {
     const intent = computeEntryRevalidation({
       collection: "posts",
@@ -136,6 +151,14 @@ describe("computeSingleRevalidation", () => {
     const intent = computeSingleRevalidation({
       slug: "header",
       extraTags: ["navigation", "navigation"],
+    });
+    expect(intent.tags).toEqual(["nextly:single:header", "navigation"]);
+  });
+
+  it("drops blank extra tags and trims surrounding whitespace", () => {
+    const intent = computeSingleRevalidation({
+      slug: "header",
+      extraTags: ["", "  ", " navigation "],
     });
     expect(intent.tags).toEqual(["nextly:single:header", "navigation"]);
   });

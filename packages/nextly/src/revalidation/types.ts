@@ -33,7 +33,8 @@ export interface RevalidationIntent {
   /**
    * Cache tags to invalidate, deduplicated. The derived tags are `nextly:`-
    * prefixed; tags supplied through a collection's `revalidate.tags` config are
-   * merged in verbatim, so a caller may include unprefixed tags of its own.
+   * merged in (trimmed, with blank entries dropped), so a caller may include
+   * unprefixed tags of its own.
    */
   tags: string[];
   /** Optional path targets; present only when a known route must be flipped. */
