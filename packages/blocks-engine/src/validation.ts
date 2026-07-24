@@ -241,7 +241,10 @@ export function validate(
   // depth issue instead of throwing. It also stops after visiting maxNodes
   // nodes (the node-count issue is already recorded by checkLimits), so an
   // oversized document cannot make the walk do unbounded work.
-  const queue: Array<{ node: BlockNode; path: string }> = doc.nodes.map(
+  // Array.from (not .map) so a sparse array's holes become explicit undefined
+  // entries and get reported as invalid nodes rather than skipped or throwing.
+  const queue: Array<{ node: BlockNode; path: string }> = Array.from(
+    doc.nodes,
     (node, index) => ({ node, path: pointer("/nodes", index) })
   );
   for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
@@ -275,20 +278,28 @@ function collectBreakpointIds(
   issues: ValidationIssue[]
 ): Set<string> {
   const ids = new Set<string>();
+  // The breakpoint set comes from stored settings, so treat it as untrusted: a
+  // null/malformed set or axis is skipped rather than dereferenced.
+  const set: unknown = breakpoints;
   const scanAxis = (axis: "viewport" | "container"): void => {
-    const defs = breakpoints[axis];
+    const defs = isPlainObject(set) ? set[axis] : undefined;
     if (!Array.isArray(defs)) return;
     defs.forEach((def, index) => {
-      if (ids.has(def.id)) {
+      // A malformed definition (null, missing id) is skipped rather than
+      // dereferenced; the settings layer validates the breakpoint set on save.
+      const rawDef: unknown = def;
+      if (!isPlainObject(rawDef) || typeof rawDef.id !== "string") return;
+      const id = rawDef.id;
+      if (ids.has(id)) {
         issues.push({
           path: pointer(pointer("/breakpoints", axis), index),
           code: "breakpoint-id-not-unique",
           severity: "error",
-          message: `Breakpoint id "${def.id}" is defined more than once.`,
+          message: `Breakpoint id "${id}" is defined more than once.`,
           suggestion: "Give every breakpoint a unique id across both axes.",
         });
       }
-      ids.add(def.id);
+      ids.add(id);
     });
   };
   scanAxis("viewport");
@@ -693,8 +704,19 @@ function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
-    const bindPath = (binding as { $bind?: unknown }).$bind;
-    if (!isPlainObject(binding) || typeof bindPath !== "string") {
+    // Check the shape BEFORE reading any field: a null/primitive binding value
+    // must produce an issue, not a thrown property access.
+    if (!isPlainObject(binding)) {
+      issues.push({
+        path: bPath,
+        code: "invalid-binding",
+        severity: "error",
+        message: "A binding must be an object with a string $bind path.",
+      });
+      continue;
+    }
+    const bindPath = binding.$bind;
+    if (typeof bindPath !== "string") {
       issues.push({
         path: bPath,
         code: "invalid-binding",
@@ -711,7 +733,7 @@ function validateBindings(
         message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
       });
     }
-    const source: unknown = (binding as { source?: unknown }).source;
+    const source: unknown = binding.source;
     if (
       source !== undefined &&
       (typeof source !== "string" || !BINDING_SOURCES.includes(source))
@@ -723,7 +745,7 @@ function validateBindings(
         message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
       });
     }
-    const sourceKey = (binding as { sourceKey?: unknown }).sourceKey;
+    const sourceKey = binding.sourceKey;
     if (source === "single") {
       if (typeof sourceKey !== "string" || sourceKey.length === 0) {
         issues.push({

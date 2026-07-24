@@ -284,6 +284,62 @@ describe("validation never throws on adversarial input", () => {
     expect(issues.some(i => i.code === "invalid-format-version")).toBe(true);
   });
 
+  it("reports a null binding value instead of throwing", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: { text: null },
+        },
+      ],
+    });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(
+      issues.some(
+        i => i.code === "invalid-binding" && i.path === "/nodes/0/bindings/text"
+      )
+    ).toBe(true);
+  });
+
+  it("does not throw on a malformed breakpoint definition", () => {
+    const malformedSet = invalidDoc({
+      viewport: [{ id: "base", label: "Desktop" }, null],
+      container: [],
+    }) as unknown as BreakpointSet;
+    expect(() => {
+      validate(
+        { formatVersion: 1, kind: "page", nodes: [] },
+        { breakpoints: malformedSet, mode: "strict" }
+      );
+    }).not.toThrow();
+  });
+
+  it("reports holes in a sparse nodes array instead of throwing", () => {
+    const sparse: unknown[] = [];
+    sparse[2] = { id: "n1", type: "core/text", version: 1, props: {} };
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes: sparse });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    // The two holes are reported as invalid nodes; the real node at index 2 is fine.
+    expect(issues.filter(i => i.code === "invalid-node")).toHaveLength(2);
+  });
+
   it("counts malformed array elements toward the node cap", () => {
     const doc = invalidDoc({
       formatVersion: 1,
