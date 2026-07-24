@@ -293,7 +293,7 @@ export class WebhookEndpointService extends BaseService {
    * decrypt), so expired overlap secrets are never surfaced or signed with.
    */
   private liveSecretEntries(
-    row: WebhookRow,
+    row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
     now: Date = new Date()
   ): StoredSecretEntry[] {
     const entries = normalizeSecretEntries(row.secretHash, {
@@ -618,19 +618,56 @@ export class WebhookEndpointService extends BaseService {
     return value;
   }
 
-  /** Read one live (non-retired) row for a secret write, or throw not-found. */
-  private async loadLiveRow(id: string): Promise<WebhookRow> {
-    const rows = await this.query(
-      async () =>
-        (await this.db
-          .select()
-          .from(this.table)
-          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
-          .limit(1)) as WebhookRow[]
+  /**
+   * Read the endpoint's secrets under a `FOR UPDATE` row lock, let `mutate`
+   * compute the next entry list, and write it back in the same transaction.
+   *
+   * The lock serializes concurrent secret writes: a second rotation blocks until
+   * the first commits, then reads the updated row, so it can never overwrite the
+   * first's freshly-issued primary from a stale snapshot. The retired-row check
+   * runs inside the lock as well, so a rotation or expiry cannot write a secret
+   * back onto an endpoint a concurrent `deleteEndpoint` just soft-deleted and
+   * cleared. `secret_prefix` follows the new primary (the first entry). A missing
+   * or retired row throws not-found.
+   */
+  private async withLockedSecrets<T>(
+    id: string,
+    mutate: (
+      row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
+      now: Date
+    ) => { entries: StoredSecretEntry[]; result: T }
+  ): Promise<T> {
+    const outcome = await this.query(() =>
+      this.adapter.transaction(async tx => {
+        const rows = await tx.select<{
+          secretHash: unknown;
+          secretPrefix: string;
+          createdAt: Date;
+          deletedAt: Date | null;
+        }>("nextly_webhooks", {
+          where: { and: [{ column: "id", op: "=", value: id }] },
+          limit: 1,
+          forUpdate: true,
+        });
+        const row = rows[0];
+        if (!row || row.deletedAt != null) return null;
+
+        const now = new Date();
+        const { entries, result } = mutate(row, now);
+        await tx.update(
+          "nextly_webhooks",
+          {
+            secret_hash: entries,
+            secret_prefix: entries[0]?.prefix ?? row.secretPrefix,
+            updated_at: now,
+          },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+        return { result };
+      })
     );
-    const row = rows[0];
-    if (!row) throw this.notFound(id);
-    return row;
+    if (outcome === null) throw this.notFound(id);
+    return outcome.result;
   }
 
   /**
@@ -643,44 +680,39 @@ export class WebhookEndpointService extends BaseService {
    * until then; `overlapSeconds = 0` retires it at once. At most one overlapping
    * secret is kept — rotating again while one is still overlapping retires the
    * older one — so a delivery never carries more than two signatures, and
-   * already-expired entries are pruned. The new secret is returned once.
+   * already-expired entries are pruned. The read-modify-write runs under a row
+   * lock, so concurrent rotations serialize rather than lose a secret. The new
+   * secret is returned once.
    */
   async rotateSecret(
     id: string,
     input: RotateWebhookSecretInput = {}
   ): Promise<CreatedWebhookEndpoint> {
     const overlapSeconds = this.resolveOverlapSeconds(input.overlapSeconds);
-    const row = await this.loadLiveRow(id);
 
-    const now = new Date();
-    const live = this.liveSecretEntries(row, now);
-    const secret = generateWebhookSecret();
-    const primary = newSecretEntry(secret, now);
+    const secret = await this.withLockedSecrets(id, (row, now) => {
+      const fresh = generateWebhookSecret();
+      const primary = newSecretEntry(fresh, now);
 
-    // Only the outgoing primary earns an overlap window. Any other live entry is
-    // already an overlap from an earlier rotation; a new rotation supersedes it,
-    // so it is dropped rather than accumulated — bounding the signature header.
-    const previousPrimary = live.find(entry => entry.expiresAt === null);
-    const nextEntries: StoredSecretEntry[] = [primary];
-    if (previousPrimary && overlapSeconds > 0) {
-      nextEntries.push({
-        ...previousPrimary,
-        expiresAt: new Date(
-          now.getTime() + overlapSeconds * 1000
-        ).toISOString(),
-      });
-    }
+      // Only the outgoing primary earns an overlap window. Any other live entry
+      // is already an overlap from an earlier rotation; a new rotation
+      // supersedes it, so it is dropped rather than accumulated — bounding the
+      // signature header at two.
+      const previousPrimary = this.liveSecretEntries(row, now).find(
+        entry => entry.expiresAt === null
+      );
+      const entries: StoredSecretEntry[] = [primary];
+      if (previousPrimary && overlapSeconds > 0) {
+        entries.push({
+          ...previousPrimary,
+          expiresAt: new Date(
+            now.getTime() + overlapSeconds * 1000
+          ).toISOString(),
+        });
+      }
+      return { entries, result: fresh };
+    });
 
-    await this.query(() =>
-      this.db
-        .update(this.table)
-        .set({
-          secretHash: nextEntries,
-          secretPrefix: primary.prefix,
-          updatedAt: now,
-        })
-        .where(eq(this.table.id, id))
-    );
     // The delivery path reads secrets from its own row, but the cached registry
     // still lists this endpoint; invalidate so nothing serves a stale copy.
     this.registry?.invalidate();
@@ -693,26 +725,16 @@ export class WebhookEndpointService extends BaseService {
   /**
    * Retire every overlapping secret immediately, leaving only the primary. The
    * deliberate way to cut a rotation's overlap short once the receiver has
-   * switched. A no-op (beyond a timestamp touch) when there is nothing to expire.
+   * switched. Runs under the same row lock, so it cannot race a rotation or a
+   * delete. A no-op (beyond a timestamp touch) when there is nothing to expire.
    */
   async expireOldSecrets(id: string): Promise<WebhookEndpointSummary> {
-    const row = await this.loadLiveRow(id);
-
-    const now = new Date();
-    const primaryOnly = this.liveSecretEntries(row, now).filter(
-      entry => entry.expiresAt === null
-    );
-
-    await this.query(() =>
-      this.db
-        .update(this.table)
-        .set({
-          secretHash: primaryOnly,
-          secretPrefix: primaryOnly[0]?.prefix ?? row.secretPrefix,
-          updatedAt: now,
-        })
-        .where(eq(this.table.id, id))
-    );
+    await this.withLockedSecrets(id, (row, now) => {
+      const primaryOnly = this.liveSecretEntries(row, now).filter(
+        entry => entry.expiresAt === null
+      );
+      return { entries: primaryOnly, result: undefined };
+    });
     this.registry?.invalidate();
 
     const updated = await this.getEndpoint(id);

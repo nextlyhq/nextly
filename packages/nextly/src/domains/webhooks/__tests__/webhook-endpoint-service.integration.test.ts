@@ -654,6 +654,31 @@ describe("webhook endpoint management (real SQLite)", () => {
       ).rejects.toThrow(NextlyError);
     });
 
+    it("serializes concurrent rotations so neither new secret is lost", async () => {
+      const { endpoint } = await create();
+
+      // Both rotations start from the same endpoint. Under the row lock they
+      // serialize, so the second reads the first's committed state and keeps its
+      // new secret as the overlap rather than overwriting it from a stale row.
+      const [a, b] = await Promise.all([
+        service.rotateSecret(endpoint.id, { overlapSeconds: 3600 }),
+        service.rotateSecret(endpoint.id, { overlapSeconds: 3600 }),
+      ]);
+
+      const revealed = await service.revealSecrets(endpoint.id);
+      expect(revealed).toHaveLength(2);
+      expect(revealed).toContain(a.secret);
+      expect(revealed).toContain(b.secret);
+    });
+
+    it("refuses to rotate a retired endpoint", async () => {
+      const { endpoint } = await create();
+      await service.deleteEndpoint(endpoint.id);
+      await expect(service.rotateSecret(endpoint.id)).rejects.toThrow(
+        NextlyError
+      );
+    });
+
     it("reports an unknown endpoint as not found", async () => {
       await expect(service.rotateSecret("missing")).rejects.toThrow(
         NextlyError
@@ -673,6 +698,16 @@ describe("webhook endpoint management (real SQLite)", () => {
       expect(summary.secrets).toHaveLength(1);
       expect(summary.secrets[0]?.isPrimary).toBe(true);
       expect(await service.revealSecrets(endpoint.id)).toEqual([fresh]);
+    });
+
+    it("refuses to write a secret back onto a retired endpoint", async () => {
+      const { endpoint } = await create();
+      await service.deleteEndpoint(endpoint.id);
+      // The retired-row check inside the lock stops a receiver credential being
+      // restored onto a soft-deleted endpoint that delete already cleared.
+      await expect(service.expireOldSecrets(endpoint.id)).rejects.toThrow(
+        NextlyError
+      );
     });
   });
 });
