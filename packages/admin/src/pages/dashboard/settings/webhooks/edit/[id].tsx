@@ -8,13 +8,13 @@ import { SettingsLayout } from "@admin/components/features/settings/SettingsLayo
 import { DeleteWebhookDialog } from "@admin/components/features/webhooks/DeleteWebhookDialog";
 import { WebhookForm } from "@admin/components/features/webhooks/WebhookForm";
 import { WebhookSecretModal } from "@admin/components/features/webhooks/WebhookSecretModal";
-import { Eye, Loader2 } from "@admin/components/icons";
+import { Eye, List, Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useDeleteWebhook,
   useRevealSecret,
@@ -129,19 +129,32 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
       />
 
       <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handleReveal}
-          disabled={isRevealing}
-        >
-          {isRevealing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Eye className="h-4 w-4" />
-          )}
-          Reveal signing secret
-        </Button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleReveal}
+            disabled={isRevealing}
+          >
+            {isRevealing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+            Reveal signing secret
+          </Button>
+
+          <Link href={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, { id })}>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+            >
+              <List className="h-4 w-4" />
+              View deliveries
+            </Button>
+          </Link>
+        </div>
 
         {canDelete && (
           <Button

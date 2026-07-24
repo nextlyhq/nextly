@@ -41,6 +41,8 @@ import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
 import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
 import SettingsPage from "./dashboard/settings/index";
 import SettingsPermissionsPage from "./dashboard/settings/permissions/index";
+import WebhookDeliveryDetailPage from "./dashboard/settings/webhooks/[id]/deliveries/[deliveryId]";
+import WebhookDeliveriesPage from "./dashboard/settings/webhooks/[id]/deliveries/index";
 import CreateWebhookPage from "./dashboard/settings/webhooks/create";
 import EditWebhookPage from "./dashboard/settings/webhooks/edit/[id]";
 import WebhooksPage from "./dashboard/settings/webhooks/index";
@@ -333,6 +335,18 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: EditWebhookPage,
     type: "private",
     requiredPermission: "update-webhooks",
+  },
+  // Delivery log routes are read surfaces, so a plain reader may open them; the
+  // redeliver and drain actions inside are separately gated on update-webhooks.
+  [ROUTES.SETTINGS_WEBHOOKS_DELIVERIES]: {
+    component: WebhookDeliveriesPage,
+    type: "private",
+    requiredPermission: ["read-webhooks", "update-webhooks"],
+  },
+  [ROUTES.SETTINGS_WEBHOOKS_DELIVERY_DETAIL]: {
+    component: WebhookDeliveryDetailPage,
+    type: "private",
+    requiredPermission: ["read-webhooks", "update-webhooks"],
   },
 
   // Image sizes settings
