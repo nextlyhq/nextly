@@ -104,6 +104,37 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(document.slug).toBe("site-settings");
   });
 
+  it("keeps the system title seed when a same-named field emits no column", () => {
+    const service = createQueryService();
+    // A column-less field named `title` (a component) does not suppress the
+    // system text title column, so the seeded label must still reach the insert
+    // rather than being dropped as a no-column field.
+    const meta = siteSettingsMeta({
+      fields: [{ name: "title", type: "component", required: true }],
+    });
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.title).toBe("Site Settings");
+  });
+
+  it("uses the field's own type default when title is redefined as a non-text column", () => {
+    const service = createQueryService();
+    // A user redefining `title` as a number column must get its numeric default,
+    // not the label string — inserting a string into a number column would fail.
+    const meta = siteSettingsMeta({
+      fields: [{ name: "title", type: "number", required: true }],
+    });
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.title).toBe(0);
+  });
+
   it("evaluates a function defaultValue before routing it to the companion", () => {
     const service = createQueryService();
     // A localized field may carry a function default `(data) => value`. It must

@@ -96,6 +96,14 @@ import {
   shouldTreatAsJson,
 } from "./single-utils";
 
+/**
+ * Reserved system identity field names every Single carries as columns (the
+ * `title`/`slug` auto-injected by `defineSingle`, seeded from label/slug). Their
+ * default seeding is handled specially so a same-named user field never strands
+ * the system column or receives a wrong-typed default.
+ */
+const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
+
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
 
@@ -827,13 +835,24 @@ export class SingleQueryService extends BaseService {
             ? JSON.stringify(resolved)
             : resolved;
       } else if ("required" in field && field.required) {
-        // `title` and `slug` are auto-injected system identity fields, required
-        // and without a defaultValue, but already seeded above with the Single's
-        // label/slug. A required text field's type-default ("") must not clobber
-        // those meaningful seeds — that would persist an empty title/slug on the
-        // auto-created row. A user field carrying an explicit defaultValue is
-        // handled by the branch above; only the empty type-default is skipped.
-        if (field.name === "title" || field.name === "slug") continue;
+        // `title`/`slug` are reserved system identity keys, pre-seeded above with
+        // the Single's label/slug. Keep that seed (skip the empty type-default,
+        // which would persist an empty title/slug) ONLY when the identity column
+        // is text — or when this same-named field emits no column of its own (a
+        // component named `title` does not suppress the system text column, which
+        // still needs the label). A user field that redefines `title`/`slug` as a
+        // DIFFERENT column type (e.g. `number`) takes its own type default, so a
+        // label string is never inserted into a non-text column. An explicit
+        // user defaultValue is already handled by the branch above.
+        if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+          const desc = getColumnDescriptor(
+            field as unknown as FieldDefinition,
+            this.adapter.dialect
+          );
+          if (!desc || desc.kind === "varchar" || desc.kind === "text") {
+            continue;
+          }
+        }
         value = getDefaultValue(field);
       } else {
         continue;
@@ -851,6 +870,9 @@ export class SingleQueryService extends BaseService {
     const noColumnFieldNames = new Set<string>();
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
+      // Reserved identity keys are backed by the system text column even when a
+      // same-named field emits none, so their seed must never be dropped here.
+      if (SINGLE_IDENTITY_FIELDS.has(field.name)) continue;
       if (
         getColumnDescriptor(
           field as unknown as FieldDefinition,
