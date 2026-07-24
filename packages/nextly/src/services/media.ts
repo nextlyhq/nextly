@@ -722,11 +722,16 @@ export class MediaService extends BaseService {
         // The write failed after new variants were uploaded to fresh keys: those
         // uploads are orphaned. Delete them — but keep any that the un-updated
         // row still references (a deterministic adapter can reuse an old path),
-        // so a failed regeneration never removes a live variant. Then propagate.
+        // so a failed regeneration never removes a live variant. Prefer
+        // `replacedSizes` (read UNDER THE LOCK, so it reflects a variant set a
+        // concurrent update committed after our pre-transaction read); fall back
+        // to the pre-transaction read only when the transaction failed before it
+        // reached the locked row. Then propagate.
         if (regeneratedSizes) {
           await this.deleteSupersededVariants(
             regeneratedSizes,
-            (existing.data as { sizes?: unknown } | null)?.sizes
+            replacedSizes ??
+              (existing.data as { sizes?: unknown } | null)?.sizes
           );
         }
         throw error;
@@ -735,11 +740,14 @@ export class MediaService extends BaseService {
       if (!updatedRow) {
         // Concurrent delete: the row was not updated, so the freshly-uploaded
         // variants are orphaned. Same guard as the failure path — keep anything
-        // the pre-write row still referenced — before returning not-found.
+        // the surviving row still references — before returning not-found. Here
+        // the locked read found no row (so `replacedSizes` stayed null) and the
+        // fallback to the pre-transaction read supplies the paths to keep.
         if (regeneratedSizes) {
           await this.deleteSupersededVariants(
             regeneratedSizes,
-            (existing.data as { sizes?: unknown } | null)?.sizes
+            replacedSizes ??
+              (existing.data as { sizes?: unknown } | null)?.sizes
           );
         }
         // Mirror getMediaById's not-found shape so the domain layer maps this to

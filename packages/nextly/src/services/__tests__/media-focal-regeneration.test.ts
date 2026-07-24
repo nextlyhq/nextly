@@ -71,10 +71,16 @@ const existingMedia = {
   sizes: { thumbnail: { path: OLD_PATH, url: "http://x/old" } },
 };
 
-function makeAdapter(txBehavior: "commit" | "throw" | "row-gone") {
+function makeAdapter(
+  txBehavior: "commit" | "throw" | "row-gone",
+  // The row the in-transaction locked read returns. Defaults to the same row the
+  // pre-transaction read saw; a test overrides it to model a concurrent update
+  // that committed a different variant set before this transaction locked.
+  lockedRow: typeof existingMedia = existingMedia
+) {
   const tx = {
     lockRow: async () => {},
-    select: async () => (txBehavior === "row-gone" ? [] : [existingMedia]),
+    select: async () => (txBehavior === "row-gone" ? [] : [lockedRow]),
     update: async () => {
       calls.push("update");
     },
@@ -96,7 +102,10 @@ function makeAdapter(txBehavior: "commit" | "throw" | "row-gone") {
   };
 }
 
-function makeService(txBehavior: "commit" | "throw" | "row-gone") {
+function makeService(
+  txBehavior: "commit" | "throw" | "row-gone",
+  lockedRow: typeof existingMedia = existingMedia
+) {
   const logger = {
     info: () => {},
     warn: () => {},
@@ -104,7 +113,7 @@ function makeService(txBehavior: "commit" | "throw" | "row-gone") {
     debug: () => {},
   };
   const service = new MediaService(
-    makeAdapter(txBehavior) as never,
+    makeAdapter(txBehavior, lockedRow) as never,
     logger as never
   );
   // getMediaById is the pre-transaction existence read; stub it to the image.
@@ -165,6 +174,30 @@ describe("MediaService focal-point regeneration ordering", () => {
     const res = await service.updateMedia("m1", { focalX: 0.5 });
 
     expect(res.success).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("keeps the locked row's variant (not the pre-transaction one) on rollback", async () => {
+    // Lost-update race with a deterministic-key adapter: this update read OLD
+    // before the transaction, a concurrent update committed variant A, and this
+    // update then locked and read A before its own write failed. The rollback
+    // must filter the orphans against the LOCKED row (A), not the stale pre-
+    // transaction read (OLD): the row the database still references is A, so
+    // deleting A would drop a live variant. Filtering against OLD would delete A.
+    const A_PATH = "A/thumb.webp";
+    regen.thumbPath = A_PATH;
+    const lockedRow = {
+      ...existingMedia,
+      sizes: { thumbnail: { path: A_PATH, url: "http://x/a" } },
+    };
+    const service = makeService("throw", lockedRow);
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    // The variant the surviving (locked) row references is kept.
+    expect(deleteSpy).not.toHaveBeenCalledWith(A_PATH);
+    // The stale pre-transaction variant is not the one referenced, so it is not
+    // wrongly kept as "live" either — nothing gets deleted here at all.
     expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
   });
 });
