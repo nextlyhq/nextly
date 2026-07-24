@@ -34,6 +34,8 @@ export function buildEntryRevalidationIntent(
     slug?: string;
     previousSlug?: string;
     locale?: string;
+    /** Every locale's slug for a localized collection, so all URLs bust. */
+    localizedSlugs?: string[];
   }
 ): RevalidationIntent | undefined {
   if (revalidateConfig?.disable) return undefined;
@@ -43,6 +45,7 @@ export function buildEntryRevalidationIntent(
     slug: fields.slug,
     previousSlug: fields.previousSlug,
     locale: fields.locale,
+    localizedSlugs: fields.localizedSlugs,
     extraTags: revalidateConfig?.tags,
   });
 }

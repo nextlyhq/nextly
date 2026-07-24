@@ -138,6 +138,26 @@ describe("computeEntryRevalidation", () => {
     });
     expect(intent.tags).toEqual(["nextly:posts", "nextly:posts:id:1"]);
   });
+
+  it("busts a slug tag for every localized slug, de-duplicated", () => {
+    // A localized `slug` differs per locale, so a publish-all or delete must bust
+    // each locale's URL. Blanks are skipped and the default slug is not doubled.
+    const intent = computeEntryRevalidation({
+      collection: "posts",
+      id: "1",
+      slug: "hello",
+      localizedSlugs: ["hello", "bonjour", "hallo", "", "   "],
+    });
+    expect(intent.tags).toContain("nextly:posts:slug:hello");
+    expect(intent.tags).toContain("nextly:posts:slug:bonjour");
+    expect(intent.tags).toContain("nextly:posts:slug:hallo");
+    // `hello` was already added as the default slug, so it appears once.
+    expect(
+      intent.tags.filter(t => t === "nextly:posts:slug:hello")
+    ).toHaveLength(1);
+    // Blank locale slugs never produce a bare `nextly:posts:slug:` tag.
+    expect(intent.tags).not.toContain("nextly:posts:slug:");
+  });
 });
 
 describe("computeSingleRevalidation", () => {
