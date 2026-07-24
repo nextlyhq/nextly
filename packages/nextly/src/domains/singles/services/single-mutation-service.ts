@@ -497,6 +497,9 @@ export class SingleMutationService extends BaseService {
       // (including any publish) is authorized.
       let autoCreated = false;
       let pendingAutoCreateValues: Record<string, unknown> | null = null;
+      // Translatable defaults to seed onto the default-locale companion when the
+      // auto-create actually inserts a row (they cannot live on the main table).
+      let pendingLocalizedDefaults: Record<string, unknown> = {};
       if (!existingDoc) {
         this.logger.info("Preparing default Single document before update", {
           slug,
@@ -504,6 +507,7 @@ export class SingleMutationService extends BaseService {
         const built = this.queryService.buildDefaultDocument(singleMeta);
         existingDoc = built.document;
         pendingAutoCreateValues = built.insertValues;
+        pendingLocalizedDefaults = built.localizedDefaults;
         autoCreated = true;
       }
 
@@ -845,13 +849,27 @@ export class SingleMutationService extends BaseService {
                 singleMeta.tableName,
                 {}
               );
-              existingDoc =
-                committed ??
-                (await tx.insert<SingleDocument>(
+              if (committed) {
+                existingDoc = committed;
+              } else {
+                existingDoc = await tx.insert<SingleDocument>(
                   singleMeta.tableName,
                   pendingAutoCreateValues,
                   { returning: "*" }
-                ));
+                );
+                // Seed the default-locale companion with the localized defaults
+                // in the same transaction as the insert, so a localized field's
+                // default is not stranded as null. The caller's companion write
+                // for the write locale (below) then overlays only the fields it
+                // supplied. No-op for a non-localized single.
+                await this.queryService.seedLocalizedDefaultsCompanion(
+                  tx,
+                  singleMeta,
+                  existingDoc.id,
+                  pendingLocalizedDefaults,
+                  (existingDoc as { status?: string }).status
+                );
+              }
             }
             // Unreachable: the pre-transaction step always resolves `existingDoc`
             // to a loaded or in-memory default, and the block above only replaces
