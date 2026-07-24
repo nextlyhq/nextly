@@ -41,6 +41,9 @@ import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
 import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
 import SettingsPage from "./dashboard/settings/index";
 import SettingsPermissionsPage from "./dashboard/settings/permissions/index";
+import CreateWebhookPage from "./dashboard/settings/webhooks/create";
+import EditWebhookPage from "./dashboard/settings/webhooks/edit/[id]";
+import WebhooksPage from "./dashboard/settings/webhooks/index";
 import SingleAPIPlaygroundPage from "./dashboard/singles/[slug]/api";
 import SingleEditPage from "./dashboard/singles/[slug]/index";
 import SinglesPage from "./dashboard/singles/index";
@@ -76,8 +79,12 @@ const SingleBuilderEditPage = lazy(
 export interface RouteConfig {
   component: React.ComponentType<PageProps>;
   type: "public" | "private";
-  /** Permission slug required to access this route. Routes without this are accessible to all authenticated users. */
-  requiredPermission?: string;
+  /**
+   * Permission required to access this route. A single slug, or a list treated
+   * as any-of (holding any one grants access — models an umbrella permission).
+   * Routes without this are accessible to all authenticated users.
+   */
+  requiredPermission?: string | string[];
   /**
    * Route belongs to the schema builder, so it is only reachable where the
    * builder is enabled (`admin.branding.showBuilder`; off in production by
@@ -307,6 +314,25 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: EditApiKeyPage,
     type: "private",
     requiredPermission: "update-api-keys",
+  },
+
+  // Webhooks settings. `update-webhooks` is the backend's management umbrella
+  // (it satisfies read/create/delete too), so each route accepts it in addition
+  // to the specific slug — a role with only `update-webhooks` still reaches them.
+  [ROUTES.SETTINGS_WEBHOOKS]: {
+    component: WebhooksPage,
+    type: "private",
+    requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
+  },
+  [ROUTES.SETTINGS_WEBHOOKS_CREATE]: {
+    component: CreateWebhookPage,
+    type: "private",
+    requiredPermission: ["create-webhooks", "update-webhooks"],
+  },
+  [ROUTES.SETTINGS_WEBHOOKS_EDIT]: {
+    component: EditWebhookPage,
+    type: "private",
+    requiredPermission: "update-webhooks",
   },
 
   // Image sizes settings

@@ -236,11 +236,19 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission("read-api-keys") ||
     hasPermission("create-api-keys") ||
     hasPermission("update-api-keys");
+  // Any webhook grant reveals the link, matching the list route: read/update
+  // view the list, create reaches the create form from it.
+  const canAccessWebhooks =
+    hasPermission("read-webhooks") ||
+    hasPermission("update-webhooks") ||
+    hasPermission("create-webhooks");
   const hasSettingsSection = hasPermissionDataPending
     ? true
     : capabilities.canViewSettings ||
       capabilities.canManageEmailProviders ||
-      capabilities.canManageEmailTemplates;
+      capabilities.canManageEmailTemplates ||
+      canAccessApiKeys ||
+      canAccessWebhooks;
   const hasBuildersSection = showBuilder;
 
   const visibleMenuItems = useMemo(
@@ -427,8 +435,25 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       (id !== "media" || isFolderTreeVisible)) ||
     id.startsWith("standalone-");
 
+  // The Settings icon lands on the first subpage the user can actually OPEN —
+  // gated on each route's own guard, not the broader "can see the link" flag, so
+  // it never resolves to a page that would redirect. General needs
+  // manage-settings; the API Keys route needs update-api-keys; Webhooks accepts
+  // any webhook grant (its route's any-of).
+  const settingsHref = hasPermission("manage-settings")
+    ? ROUTES.SETTINGS
+    : hasPermission("update-api-keys")
+      ? ROUTES.SETTINGS_API_KEYS
+      : canAccessWebhooks
+        ? ROUTES.SETTINGS_WEBHOOKS
+        : hasPermission("manage-email-providers")
+          ? ROUTES.SETTINGS_EMAIL_PROVIDERS
+          : hasPermission("manage-email-templates")
+            ? ROUTES.SETTINGS_EMAIL_TEMPLATES
+            : ROUTES.SETTINGS;
+
   const resolveItemHref = (item: MainMenuItem): string =>
-    resolveItemHrefHelper(item, visibleStandalonePlugins);
+    resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
 
   // Resolve collections for the active standalone plugin section
   const pluginCollectionsForSection = useMemo(() => {
@@ -586,6 +611,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             isActive={isActive}
             hasPermission={hasPermission}
             canAccessApiKeys={canAccessApiKeys}
+            canAccessWebhooks={canAccessWebhooks}
             pluginCollectionsForSection={pluginCollectionsForSection}
             showBuilder={showBuilder}
           />

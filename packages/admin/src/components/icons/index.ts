@@ -194,6 +194,8 @@ export {
 } from "lucide-react";
 
 // Icon aliases for compatibility
+// Webhooks admin surface: nav icon + enable/disable toggle action.
+export { Power, Webhook } from "lucide-react";
 export { Check as CheckIcon } from "lucide-react";
 export { ChevronDown as ChevronDownIcon } from "lucide-react";
 export { ChevronUp as ChevronUpIcon } from "lucide-react";
