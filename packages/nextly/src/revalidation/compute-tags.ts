@@ -23,6 +23,29 @@ import type {
 const NAMESPACE = "nextly";
 
 /**
+ * Next silently drops a cache tag longer than 256 characters, so a tag built
+ * from an over-long slug would never match and its read could never be
+ * invalidated. Bound the slug tag below this and fall back to a hash.
+ */
+const MAX_TAG_LENGTH = 256;
+
+/**
+ * FNV-1a (32-bit), a small deterministic, dependency-free hash that runs the
+ * same in Node, edge, and browser runtimes. Used to shorten an over-long tag
+ * segment; both the write (bust) and the read (tag) call the same builder, so a
+ * hashed tag stays consistent between them. A rare collision only over-
+ * invalidates, which is harmless.
+ */
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+/**
  * Reject an empty/blank tag segment: a malformed tag would either over-invalidate
  * (a bare `nextly:` tag) or silently never match, so a blank id/collection/slug
  * is a programming error at the call site, not something to paper over.
@@ -56,9 +79,17 @@ export function entryIdLocaleTag(
   return `${entryIdTag(collection, id)}:${requireSegment(locale, "locale")}`;
 }
 
-/** `nextly:{collection}:slug:{slug}` — the entity addressed by slug. */
+/**
+ * `nextly:{collection}:slug:{slug}` — the entity addressed by slug. A slug long
+ * enough to push the tag past Next's 256-char cap is hashed instead, so the tag
+ * stays matchable (Next drops an over-long tag, which would make the read
+ * uninvalidatable).
+ */
 export function entrySlugTag(collection: string, slug: string): string {
-  return `${collectionTag(collection)}:slug:${requireSegment(slug, "slug")}`;
+  const prefix = `${collectionTag(collection)}:slug:`;
+  const value = requireSegment(slug, "slug");
+  const tag = `${prefix}${value}`;
+  return tag.length <= MAX_TAG_LENGTH ? tag : `${prefix}h:${fnv1a(value)}`;
 }
 
 /** `nextly:single:{slug}` — a singleton / global, consumed sitewide. */

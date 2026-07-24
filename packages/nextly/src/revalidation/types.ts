@@ -17,7 +17,11 @@
 export interface RevalidatePathTarget {
   /** The route path or route pattern (e.g. `/blog/[slug]`). */
   path: string;
-  /** Next.js `revalidatePath` type; `page` unless invalidating a whole layout. */
+  /**
+   * Next.js `revalidatePath` type. `page` unless invalidating a whole layout.
+   * Required when `path` is a dynamic route pattern (contains `[...]`), because
+   * `revalidatePath` cannot match a pattern without it.
+   */
   type?: "page" | "layout";
 }
 
@@ -26,7 +30,11 @@ export interface RevalidatePathTarget {
  * any path targets to revalidate. Tags are deduplicated and never empty-string.
  */
 export interface RevalidationIntent {
-  /** Cache tags to invalidate (deduplicated, all `nextly:`-prefixed). */
+  /**
+   * Cache tags to invalidate, deduplicated. The derived tags are `nextly:`-
+   * prefixed; tags supplied through a collection's `revalidate.tags` config are
+   * merged in verbatim, so a caller may include unprefixed tags of its own.
+   */
   tags: string[];
   /** Optional path targets; present only when a known route must be flipped. */
   paths?: RevalidatePathTarget[];

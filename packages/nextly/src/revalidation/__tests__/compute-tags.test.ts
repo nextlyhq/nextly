@@ -28,6 +28,20 @@ describe("tag builders", () => {
     expect(entryIdTag("posts", "7")).not.toBe(entrySlugTag("posts", "7"));
   });
 
+  it("bounds an over-long slug tag below Next's 256-char cap, deterministically", () => {
+    // Next silently drops a tag longer than 256 chars, so a long slug must hash
+    // to a bounded, stable tag that both the write and the read derive alike.
+    const longSlug = "a".repeat(300);
+    const tag = entrySlugTag("posts", longSlug);
+    expect(tag.length).toBeLessThanOrEqual(256);
+    expect(tag).toBe(entrySlugTag("posts", longSlug)); // stable
+    expect(tag.startsWith("nextly:posts:slug:h:")).toBe(true);
+    // A different long slug yields a different tag (no accidental merge).
+    expect(tag).not.toBe(entrySlugTag("posts", "b".repeat(300)));
+    // A short slug is left untouched (no needless hashing).
+    expect(entrySlugTag("posts", "intro")).toBe("nextly:posts:slug:intro");
+  });
+
   it("rejects a blank segment rather than emitting a malformed tag", () => {
     // A bare `nextly:` tag would over-invalidate; a blank id would never match.
     expect(() => collectionTag("  ")).toThrow(NextlyError);
