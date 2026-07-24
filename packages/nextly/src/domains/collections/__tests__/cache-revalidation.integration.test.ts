@@ -300,6 +300,26 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:wtx:slug:wtx-slug");
   });
 
+  it("flushes nothing when a CollectionService.withTransaction rolls back", async () => {
+    // Tags may only bust after the transaction commits: if work throws, the
+    // transaction rolls back, so the collected intent must never reach the
+    // revalidator.
+    await boot([openCollection("wtxroll")]);
+    const service = handle!.getService<CollectionService>("collectionService");
+    await expect(
+      service.withTransaction(async tx => {
+        await service.createEntryInTransaction(
+          tx,
+          "wtxroll",
+          { title: "T", slug: "rolled" },
+          { user: undefined }
+        );
+        throw NextlyError.internal({ logContext: { reason: "test-rollback" } });
+      })
+    ).rejects.toThrow();
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(

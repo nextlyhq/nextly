@@ -206,27 +206,30 @@ export class CollectionService extends BaseService {
   override async withTransaction<T>(
     work: (tx: TransactionContext) => Promise<T>
   ): Promise<T> {
-    let boundTx: TransactionContext | undefined;
     let ownsFlush = false;
     let collector: RevalidationIntent[] | undefined;
     const result = await this.adapter.transaction(async tx => {
-      boundTx = tx;
       collector = this.pendingTxIntents.get(tx);
       if (!collector) {
         collector = [];
         this.pendingTxIntents.set(tx, collector);
         ownsFlush = true;
       }
-      return work(tx);
-    });
-    // The transaction has committed by here. Only the frame that created the
-    // collector drains it, so a nested withTransaction sharing the same handle
-    // flushes once, at the outermost commit.
-    if (ownsFlush && boundTx !== undefined) {
-      this.pendingTxIntents.delete(boundTx);
-      if (collector && collector.length > 0) {
-        await this.entryService.flushRevalidationIntents(collector);
+      try {
+        return await work(tx);
+      } finally {
+        // Drop the per-tx binding on both commit and rollback, so a throwing or
+        // failed-to-commit transaction never leaks its collector in
+        // pendingTxIntents. Only the frame that created the collector removes
+        // it, so a nested withTransaction sharing the handle leaves the outer's
+        // binding intact.
+        if (ownsFlush) this.pendingTxIntents.delete(tx);
       }
+    });
+    // Reached only on a successful commit; a rejected transaction throws above
+    // and flushes nothing. The captured `collector` outlives the map binding.
+    if (ownsFlush && collector && collector.length > 0) {
+      await this.entryService.flushRevalidationIntents(collector);
     }
     return result;
   }
