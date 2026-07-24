@@ -157,6 +157,90 @@ describe("version capture on update (integration)", () => {
     expect(v1.locale).toBe("en");
   });
 
+  it("tags v1 with the default locale when a shared-only first update seeds localized defaults", async () => {
+    // The first update touches only a SHARED field, so no localized field is
+    // written and `companionData` is empty. Without forcing the tag, the capture
+    // locale would be null, and a restore treats a null-locale snapshot of a
+    // localized document as shared-only and drops the seeded translations — the
+    // very defaults the overlay preserved. The snapshot must be tagged the
+    // default locale.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "region", localized: false }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.update(
+      "preferences",
+      { region: "us" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; region?: string };
+    expect(snapshot.siteName).toBe("My Site");
+    expect(v1.locale).toBe("en");
+  });
+
+  it("does not copy default-locale seeds into a non-default-locale first update snapshot", async () => {
+    // The seed persists localized defaults to the DEFAULT-locale companion only.
+    // A first write at a NON-default locale must not overlay them, or restoring
+    // that snapshot would materialize the defaults as real translations in the
+    // wrong locale.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // First update auto-creates at "de" and touches only `tagline`.
+    await singles.update(
+      "preferences",
+      { tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    // The written non-default translation is captured...
+    expect(snapshot.tagline).toBe("hallo");
+    // ...but the default-locale seed is NOT leaked into the "de" snapshot.
+    expect(snapshot.siteName).toBeUndefined();
+    expect(v1.locale).toBe("de");
+  });
+
   it("preserves an omitted component subtree in a scalar-only update snapshot", async () => {
     // A partial update carries only the fields in the request. Without reading
     // the current component state the snapshot would drop the untouched

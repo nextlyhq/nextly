@@ -1433,7 +1433,22 @@ export class SingleMutationService extends BaseService {
               // seeded defaults. This write's explicit values (overlaid above) win
               // over a default. Gated on the seed having actually run, so a
               // snapshot never records defaults the absent-companion seed skipped.
-              if (autoCreated && seedCompanionExists && companion) {
+              //
+              // The seed wrote ONLY to the DEFAULT-locale companion row, so these
+              // defaults belong to the default-locale snapshot alone. Overlay them
+              // only when this first write IS the default locale; a non-default
+              // first write must not copy them in, or restoring it would
+              // materialize the defaults as real translations in the wrong locale.
+              const isDefaultLocaleWrite =
+                writeLocale === undefined ||
+                writeLocale === this.localization?.defaultLocale;
+              let seededDefaultsOverlaid = false;
+              if (
+                autoCreated &&
+                seedCompanionExists &&
+                companion &&
+                isDefaultLocaleWrite
+              ) {
                 const writtenFieldNames = new Set(
                   companion.localizedFields
                     .filter(f =>
@@ -1447,7 +1462,10 @@ export class SingleMutationService extends BaseService {
                 for (const [name, value] of Object.entries(
                   pendingLocalizedDefaults
                 )) {
-                  if (!writtenFieldNames.has(name)) parentRow[name] = value;
+                  if (!writtenFieldNames.has(name)) {
+                    parentRow[name] = value;
+                    seededDefaultsOverlaid = true;
+                  }
                 }
               }
               // Never let password hashes into durable version history: the row
@@ -1600,10 +1618,17 @@ export class SingleMutationService extends BaseService {
                 // holds no translations and keeps the MAIN row's status, so
                 // calling it that locale's would let a restore publish a
                 // language from state that was never its own.
+                // `seededDefaultsOverlaid` forces the default-locale tag for a
+                // shared-fields-only first write that seeded default-locale
+                // translations: without it `companionData` is empty, the locale
+                // resolves null, and a restore treats the snapshot as shared-only
+                // and drops the seeded defaults. The overlay only runs on a
+                // default-locale write, so `snapshotLocale` is the default locale.
                 locale:
                   Object.keys(companionData).length > 0 ||
                   companionStatus !== undefined ||
-                  capturedLocalizedComponents
+                  capturedLocalizedComponents ||
+                  seededDefaultsOverlaid
                     ? (snapshotLocale ?? null)
                     : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,

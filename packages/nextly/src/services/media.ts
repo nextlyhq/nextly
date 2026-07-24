@@ -466,21 +466,40 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Insert a random token before a filename's extension so any destination
+   * derived from it is unique: `photo.jpg` -> `photo-<token>.jpg` (a name with
+   * no extension gets the token appended). Used to guarantee regenerated
+   * focal-crop variants never reuse the item's existing storage keys, even on a
+   * storage adapter that maps a filename to a fixed path.
+   */
+  private uniqueVariantBaseName(filename: string): string {
+    const token = crypto.randomUUID();
+    const lastDot = filename.lastIndexOf(".");
+    if (lastDot > 0) {
+      return `${filename.slice(0, lastDot)}-${token}${filename.slice(lastDot)}`;
+    }
+    return `${filename}-${token}`;
+  }
+
+  /**
    * Regenerate a media item's image size variants for a changed crop point,
    * writing `sizes`/`thumbnailUrl` onto `updateData` and returning the newly
    * generated sizes (or null when nothing was regenerated). No-op unless the
    * crop actually changed and the item is an image on a readable storage
    * adapter.
    *
-   * The new variants are written to fresh storage keys (the adapters prefix a
-   * random id), so this NEVER overwrites the item's existing variant bytes and
-   * never deletes them: content-addressing plus a delete-after-commit in
-   * `updateMedia` is what makes this safe. Deleting the old paths here — before
-   * the row commits — was the previous bug: a rollback or a concurrent edit left
-   * the committed row pointing at bytes that were already gone. The old paths
-   * are now cleaned up by the caller only after the row durably points at the
-   * new ones. Kept OUTSIDE the write transaction on purpose: it must not hold
-   * the row lock (or a single-connection pool) across slow storage I/O.
+   * The new variants are written to fresh storage keys — a random token is
+   * injected into the destination filename here so they can NEVER land on the
+   * item's existing variant keys, even on a storage adapter that derives a
+   * deterministic path from the filename rather than prefixing its own random
+   * id. This never overwrites the item's existing variant bytes and never
+   * deletes them: content-addressing plus a delete-after-commit in `updateMedia`
+   * is what makes this safe. Deleting the old paths here — before the row commits
+   * — was the previous bug: a rollback or a concurrent edit left the committed
+   * row pointing at bytes that were already gone. The old paths are now cleaned
+   * up by the caller only after the row durably points at the new ones. Kept
+   * OUTSIDE the write transaction on purpose: it must not hold the row lock (or a
+   * single-connection pool) across slow storage I/O.
    *
    * Best-effort: a regeneration failure is swallowed (the crop point is still
    * saved against the existing variants) rather than failing the whole update.
@@ -523,9 +542,19 @@ export class MediaService extends BaseService {
           collection: "media",
         });
       };
+      // Force a unique destination base so the regenerated variant keys cannot
+      // collide with the item's existing ones on a deterministic (filename ->
+      // fixed path) storage adapter. On a collision, an overwrite-disallowing
+      // adapter would fail the upload (saving the crop without new thumbnails)
+      // and an overwrite-allowing one would mutate the bytes the committed row
+      // still points at before this transaction commits — both break the
+      // content-addressed delete-after-commit contract updateMedia relies on.
+      const uniqueBase = this.uniqueVariantBaseName(
+        media.originalFilename || media.filename
+      );
       const newSizes = await generateImageSizes(
         originalBuffer,
-        media.originalFilename || media.filename,
+        uniqueBase,
         sizeConfigs,
         uploadFn,
         { focalX: changes.focalX, focalY: changes.focalY }

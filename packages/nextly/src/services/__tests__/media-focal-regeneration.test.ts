@@ -13,7 +13,9 @@ const deleteSpy = vi.fn(async () => {});
 const calls: string[] = [];
 // The path the regenerated variant lands on. Mutable so a test can simulate a
 // deterministic-key adapter that reuses the existing path (new === old).
-const regen = { thumbPath: "NEW/thumb.webp" };
+// `filenames` records the destination base names passed to generateImageSizes,
+// so a test can assert regeneration forces a unique destination.
+const regen = { thumbPath: "NEW/thumb.webp", filenames: [] as string[] };
 
 const storageMock = {
   getAdapterForCollection: () => ({
@@ -33,15 +35,19 @@ vi.mock("@nextly/storage", () => ({
   isTransientError: () => false,
   // The regenerated variants land on the configured key (fresh/unique by
   // default; a test can point it at the existing path to model a deterministic
-  // adapter that overwrites in place).
-  generateImageSizes: async () => ({
-    thumbnail: {
-      path: regen.thumbPath,
-      url: "http://x/new",
-      width: 100,
-      height: 100,
-    },
-  }),
+  // adapter that overwrites in place). The destination base name is recorded so
+  // a test can assert regeneration forces a unique destination.
+  generateImageSizes: async (_buffer: unknown, originalFilename: string) => {
+    regen.filenames.push(originalFilename);
+    return {
+      thumbnail: {
+        path: regen.thumbPath,
+        url: "http://x/new",
+        width: 100,
+        height: 100,
+      },
+    };
+  },
   deleteImageSizes: async () => {},
 }));
 
@@ -129,6 +135,22 @@ describe("MediaService focal-point regeneration ordering", () => {
     calls.length = 0;
     deleteSpy.mockClear();
     regen.thumbPath = NEW_PATH;
+    regen.filenames.length = 0;
+  });
+
+  it("regenerates onto a unique destination base, never the item's stored filename", async () => {
+    // A random token is injected before the extension so the regenerated variant
+    // keys cannot collide with the item's existing ones on a deterministic
+    // (filename -> fixed path) storage adapter — which would otherwise fail the
+    // upload or overwrite live bytes before the row commits.
+    const service = makeService("commit");
+    await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(regen.filenames).toHaveLength(1);
+    const base = regen.filenames[0];
+    expect(base).not.toBe(existingMedia.originalFilename);
+    // `m1.png` -> `m1-<uuid>.png`: token before the extension.
+    expect(base).toMatch(/^m1-[0-9a-f-]{36}\.png$/i);
   });
 
   it("deletes the old variant only AFTER the row commits, and never the new one", async () => {
