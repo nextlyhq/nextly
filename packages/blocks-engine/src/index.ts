@@ -75,3 +75,14 @@ export type {
   ValidationIssue,
   ValidationMode,
 } from "./validation";
+
+export { migrateDocument, migrateProps, findMigrationGaps } from "./migration";
+export type {
+  BlockMigrationInfo,
+  MigrateFn,
+  MigrateResult,
+  MigrationFailure,
+  MigrationMap,
+  MigrationSource,
+  PropsMigrationResult,
+} from "./migration";
