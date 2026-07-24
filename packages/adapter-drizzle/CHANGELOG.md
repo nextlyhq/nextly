@@ -1,5 +1,242 @@
 # @nextlyhq/adapter-drizzle
 
+## 0.0.2-alpha.40
+
+### Patch Changes
+
+- [#289](https://github.com/nextlyhq/nextly/pull/289) [`d7327c4`](https://github.com/nextlyhq/nextly/commit/d7327c47190158a0ba7087bba1b4a6db8ac4de0a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin hides publish controls a user is not permitted to use.
+
+  The Publish and Unpublish buttons on the entry editor, and the bulk Publish /
+  Unpublish actions in the entry list, now appear only when the current user holds
+  the matching permission. An author who may edit but not publish sees Save Draft
+  and no Publish button, mirroring what the server allows.
+
+- [#315](https://github.com/nextlyhq/nextly/pull/315) [`10aa0bf`](https://github.com/nextlyhq/nextly/commit/10aa0bf45dd5cc0e410156245a2c3ce1af60c263) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add a webhook delivery log to the admin panel. Each endpoint now has a
+  Deliveries view listing its past delivery attempts with status, event type,
+  response code, and latency, filterable by status and event type. A dedicated
+  detail page shows a delivery's full attempt timeline, the last response
+  snippet, and a Redeliver action, and the list offers a "Process queue now"
+  action to drain pending deliveries on demand.
+
+- [#313](https://github.com/nextlyhq/nextly/pull/313) [`6ef1056`](https://github.com/nextlyhq/nextly/commit/6ef1056a1697beaef56d2cf0be2042a657879a18) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Manage webhook endpoints from the admin panel, under Settings → Webhooks.
+
+  Create an endpoint by naming it, giving it an HTTPS URL, choosing the events it
+  receives (any of the content, media, user, and form events, or "all events"),
+  and optionally adding static headers. The signing secret is shown once on
+  creation and is never included in a normal read or list, but it can be
+  retrieved later through the endpoint's privileged "Reveal signing secret"
+  action. Endpoints can be edited, enabled or
+  disabled, and deleted; deleting one stops its deliveries and clears its secret
+  while keeping its delivery history.
+
+  A "Send test event" action posts a signed ping to the endpoint and reports
+  whether it was reachable and accepted, so a receiver can be verified before it
+  is relied on. Header values are never displayed after they are set (they read
+  back hidden), so the form keeps them untouched unless you deliberately re-enter
+  the full set.
+
+- [#314](https://github.com/nextlyhq/nextly/pull/314) [`0c69c65`](https://github.com/nextlyhq/nextly/commit/0c69c65228c1b36022278b2c0f4e3c027ce64cba) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the cache-revalidation tag scheme and a `revalidate` config option.
+
+  Collections and singles now accept a typed `revalidate?: { tags?, disable? }`
+  option (replacing the untyped `custom.revalidateTags` convention), and the core
+  computes the `nextly:*` cache tags a content change invalidates (collection, id,
+  id+locale, and slug, busting the previous slug too on a rename). Tags are the
+  framework-neutral foundation for on-publish revalidation; the write-path wiring
+  and the Next cache adapter that flushes them follow.
+
+- [#312](https://github.com/nextlyhq/nextly/pull/312) [`5d09cbd`](https://github.com/nextlyhq/nextly/commit/5d09cbdea55e4f7ef2a04b61147486f79e584632) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Bind localized companion schema loading to the caller's transaction.
+
+  Deleting or updating a row in a localized collection assembles its document
+  from the companion `<table>_locales` table, which loads that companion's
+  runtime schema. That metadata read previously went back to the connection pool
+  even when the write ran inside a caller-owned transaction, so on a small or
+  exhausted pool it could stall the write while the transaction held the only
+  connection. The companion schema load now runs on the transaction's own
+  connection, completing the transaction-bound write path for localized content.
+
+- [#253](https://github.com/nextlyhq/nextly/pull/253) [`fc1cc41`](https://github.com/nextlyhq/nextly/commit/fc1cc41709f8d3a3ed6e413da851b5d31a99a7be) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Fix entry-saving and migration table-naming issues.
+  - Optional fields (email, length-limited text, multi-select, and similar) no longer block saving an entry when left blank — their validators now run only on a typed value.
+  - Multi-value (`hasMany`) select fields now render as a real multi-select and can be saved from the admin, instead of being rejected as "expected array, received string".
+  - `nextly migrate:create` and `migrate:check` now name plugin collection tables with the same `dc_` prefix the runtime uses (for example `dc_forms`), so generated migrations match the live database.
+  - Number fields inside a component now use the same column type as number fields in collections — integer by default, an exact decimal for `dbType: "decimal"` — instead of always being stored as a floating-point column.
+  - On SQLite, changing a column between numeric types (for example real to integer) no longer reports a false "data loss" warning; values are preserved, and cross-type changes such as text to integer still warn.
+  - An optional field left blank is now saved as an empty (`NULL`) value rather than an empty string, so an optional unique field no longer rejects the second entry that leaves it blank. Password fields are exempt: a blank password still means "keep the current one".
+  - A multi-value select declared with an array default (`defaultValue: ["web", "retail"]`) now starts with those options selected, instead of rendering one unusable entry and failing validation. Multi-value selects on singles now start empty rather than invalid.
+  - Saving a collection in the Schema Builder no longer alters tables defined in `nextly.config.ts` or contributed by a plugin. Those tables are owned by your config and are reconciled from it, so a visual edit can only change the entity you are editing — on SQLite and MySQL as well as PostgreSQL.
+  - Float number fields in a component now use the same PostgreSQL column type (`double precision`) as the runtime and generated schema, instead of `real`, which left the table permanently out of sync with the desired schema.
+  - Changing a component number field's storage (`dbType`, `precision` or `scale`) now alters the column instead of being treated as no change and leaving the old type in place.
+  - A component declaring a custom `dbName` is no longer queued for a redundant table sync on every startup.
+
+- [#303](https://github.com/nextlyhq/nextly/pull/303) [`7e35933`](https://github.com/nextlyhq/nextly/commit/7e35933e51d0d0a8ec2b0834443efc2ea896db13) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Enabling localization while adding a translatable field in the same save no longer fails.
+
+  When a field is added and localized in one save, it is (correctly) kept off the main table and lives only in the companion `_locales` table. The companion enable migration seeded the new companion from the main table with `SELECT <all localized columns> FROM <main>` and then dropped those columns, but a field added in the same save was never on the main table, so the seed failed with `column "..." does not exist` and, on singles and components, the whole apply returned 500.
+
+  The enable migration now seeds and drops only the localized columns that already exist on the main table (fields present before this save). A field localized on creation still gets its companion column; it simply has no existing data to copy and nothing to drop.
+
+  Listing entries no longer fails after localization is toggled on for an existing collection. Enabling localization moves translatable columns off the main table, and the entry list reads its columns from the file manager's schema cache. The metadata update path refreshed only the adapter's CRUD schema, leaving that read cache holding the pre-toggle table, so the list query selected a column the table no longer had. The metadata path now refreshes the read cache as well, matching the schema-apply path.
+
+- [#309](https://github.com/nextlyhq/nextly/pull/309) [`c3bd115`](https://github.com/nextlyhq/nextly/commit/c3bd115d10529a80b3bb625823c16063f52a786c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Harden the publish/unpublish permission gate for two edge cases.
+
+  A write that carries an explicit `status: undefined` (something a Direct API
+  call, a Server Action, or a hook can produce, though JSON REST cannot) no longer
+  silently unpublishes a published entry or single. That value means "no status
+  change", so it is dropped before the write instead of being sanitized to a
+  database `NULL` that moved the row out of published without the publish gate.
+
+  Writes performed inside a caller-owned transaction (the transactional bulk and
+  single-entry create/update paths) now run every read on that transaction's own
+  database connection. Previously the publish/unpublish permission check, the
+  collection metadata and owner-constraint reads, and the built-in sanitization
+  hook's field-metadata read all went back to the connection pool from inside the
+  transaction, which could stall the write against a small or exhausted pool while
+  the transaction held the only connection.
+
+- [#290](https://github.com/nextlyhq/nextly/pull/290) [`877f8f8`](https://github.com/nextlyhq/nextly/commit/877f8f871b0c5997e58dbddfa7c589e66299fc62) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Publishing and unpublishing content are now first-class permissions, enforced
+  concurrency-safely across every write surface for both collections and singles.
+
+  Moving a document into or out of `published` requires `publish-<slug>` /
+  `unpublish-<slug>` on top of the write permission, so editing and publishing are
+  separate capabilities. The transition is classified against the status read
+  under the write's row lock (not a read taken before the transaction), closing
+  the race where a concurrent writer could move a row into or out of published and
+  slip a transition past the gate; this holds for single, batch, transactional,
+  and by-query writes, and for a localized document's per-locale companion status.
+  A scoped API key is judged on its own stamped grants rather than the key owner's
+  permissions on every write path (create, update, publish/unpublish, duplicate,
+  delete, bulk, and version-label edits), and a document-dependent (owner-only or
+  custom) transition rule is re-evaluated against the row-locked document. An
+  unauthenticated caller can no longer publish a publicly-writable collection or
+  single unless an explicit rule allows it.
+
+- [#286](https://github.com/nextlyhq/nextly/pull/286) [`07662f3`](https://github.com/nextlyhq/nextly/commit/07662f3e8413c9162f896d133185a6f4401b5954) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Collection and single slugs that collide with a system resource are refused.
+
+  Permission identity is `action-resource`, so a content type named after a system resource is granted the same permission rows that resource's routes check. A `webhooks` type reaches the endpoint routes and their signing secrets; a `settings` type reaches the user-fields and component admin surfaces (gated on `{action, "settings"}`, not only `manage`); a `media` type reaches the media routes. Every system resource has such a route, so any system-resource name — `users`, `roles`, `permissions`, `media`, `settings`, `email-providers`, `email-templates`, `api-keys`, `webhooks` — is now rejected as a collection or single slug.
+
+  The check is enforced at every slug-assignment path: code-first validation, the shared collection/single registry guard (create and rename), the Schema Builder's collection registry, and the migration-snapshot boot path (which skips a reserved name rather than replaying it). Components are not restricted, because a component definition does not seed a permission under its own slug.
+
+  An installation that already has a collection or single named one of these must rename it before upgrading.
+
+- [#300](https://github.com/nextlyhq/nextly/pull/300) [`1866e2b`](https://github.com/nextlyhq/nextly/commit/1866e2bd179dd6621d6f79c2102b2d3f01f28c51) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Deliver webhooks immediately after a content write instead of waiting for the
+  next scheduled drain.
+
+  After a write records an event, Nextly now schedules a bounded delivery pass via
+  Next.js `after()`, so the first attempt runs as soon as the response is sent —
+  without adding any latency to the write. It degrades gracefully: it does nothing
+  when there are no enabled endpoints, when the runtime has no `after()` (Next 14,
+  or a non-Next context like the CLI), or on any failure — the scheduled
+  `/webhooks/drain` trigger remains the backstop and owns retries and the backlog.
+
+- [#288](https://github.com/nextlyhq/nextly/pull/288) [`0473b28`](https://github.com/nextlyhq/nextly/commit/0473b286cc01b5381a77ea12a2a38556932232ab) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Deleting a webhook endpoint keeps its delivery history.
+
+  Deleting an endpoint used to remove its delivery log with it, because the delivery table's foreign key cascaded. The record of what was sent to an integration is often wanted right after it is torn down, which is exactly when it used to disappear.
+
+  Deleting now retires the endpoint instead of removing it: the row is kept and stamped as deleted, so it vanishes from every read and stops receiving deliveries, but the delivery ledger keeps a real endpoint on the other end of its link. Disabling is still the way to pause an endpoint you mean to bring back; deleting is for one you are finished with but whose record still matters. A retired endpoint is never resurrected, and its outstanding deliveries are ended the same way disabling ends them.
+
+- [#295](https://github.com/nextlyhq/nextly/pull/295) [`d5a2776`](https://github.com/nextlyhq/nextly/commit/d5a277682a00119cc09aed4f6af093a6f5526e7f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Read a webhook endpoint's delivery log over the REST API.
+
+  Two new read-only routes back the admin delivery viewer:
+  - `GET /api/webhooks/:id/deliveries` — a paged, newest-first list of an
+    endpoint's deliveries (joined to their event for type and resource), with
+    optional `status` and `eventType` filters.
+  - `GET /api/webhooks/:id/deliveries/:deliveryId` — one delivery with its full
+    attempt history and last response snippet.
+
+  Both require `read-webhooks`. Deliveries are scoped by endpoint id and remain
+  readable after an endpoint is retired, so its history is not lost. The delivery
+  record stores only retry state, status/latency/error, a response snippet, and a
+  per-attempt log — never the request headers sent — so this surface cannot leak a
+  receiver credential.
+
+- [#296](https://github.com/nextlyhq/nextly/pull/296) [`b1faff4`](https://github.com/nextlyhq/nextly/commit/b1faff4ec73cc8e8d8802df995edaad14d47b501) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fire due webhook deliveries with a drain trigger.
+
+  Adds a `webhooks/drain` route (GET or POST): one request fans out due events
+  into deliveries and attempts them, so a scheduler (e.g. Vercel Cron, which
+  triggers with a GET) can drive delivery and retries. Until now the delivery
+  engine had no production trigger and the event outbox accumulated rows nothing
+  sent. The route resolves under wherever you mount the Nextly catch-all handler;
+  in the generated app templates that is `/admin/api`, so the scheduler should hit
+  `/admin/api/webhooks/drain`. Each invocation does a bounded slice of work and the
+  next tick continues, so it stays within a serverless execution limit.
+
+  The route is authorized by a shared secret presented as a bearer token
+  (constant-time compare) — either `NEXTLY_DRAIN_SECRET` or Vercel's `CRON_SECRET`
+  — OR by an authenticated admin/API-key caller with `update-webhooks`. The
+  endpoint registry is now a shared singleton, so a change made through the webhook
+  admin API invalidates the same cache a running drain reads instead of waiting for
+  a per-drain cache to expire.
+
+- [#298](https://github.com/nextlyhq/nextly/pull/298) [`285cd1e`](https://github.com/nextlyhq/nextly/commit/285cd1ef1073f0135dfba8bfde9bd2218bacf0c5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Emit an `entry.deleted` webhook event when a collection entry is deleted.
+
+  Deleting an entry now records a durable outbox event carrying the removed
+  document in the same read shape the `entry.created`/`entry.updated` events use —
+  component subtrees, many-to-many ids, and localized companion values populated,
+  password and hidden fields stripped — so a subscriber sees a consistent payload
+  for every lifecycle event, including on localized collections. The delete and
+  its event run in one transaction (the event never fires for a deletion that
+  rolled back), and the row is locked and re-read inside that transaction so two
+  concurrent deletes cannot both emit — only the delete that actually removed the
+  row records the event. The event is attributed to the acting identity (user or
+  API key), for single and bulk deletes alike.
+
+- [#307](https://github.com/nextlyhq/nextly/pull/307) [`6841fb7`](https://github.com/nextlyhq/nextly/commit/6841fb7266a6126516a025a59c48c23064695f61) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Emit webhook events when media changes.
+
+  Uploading, editing, or deleting a media item now records a `media.uploaded`,
+  `media.updated`, or `media.deleted` event in the outbox, attributed to the
+  acting user or API key, so webhook subscribers are notified of media changes.
+  The event is written in the same transaction as the media row, and physical
+  file storage is touched outside that transaction (and, for deletes, only after
+  it commits) so a failed event never leaves the database and the stored file out
+  of sync.
+
+- [#319](https://github.com/nextlyhq/nextly/pull/319) [`0fea8ba`](https://github.com/nextlyhq/nextly/commit/0fea8baecba81254bebb4fc2f5c51ae718e3286c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fix the webhook endpoint edit page crashing with "Cannot read properties of
+  undefined (reading 'some')" when the endpoint summary arrives without the
+  `secrets` lifecycle field (for example an admin bundle newer than the backend it
+  is talking to). The signing-secrets panel now degrades to an empty state instead
+  of throwing.
+
+- [#317](https://github.com/nextlyhq/nextly/pull/317) [`0cabdc4`](https://github.com/nextlyhq/nextly/commit/0cabdc44fec22cd871a0b2d4ea9839fab51f1f99) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add webhook signing-secret rotation with a configurable overlap window. An
+  endpoint's secret can now be rotated from the admin: a fresh secret becomes the
+  primary and the previous one keeps signing for a chosen window (immediately,
+  24h, 48h — the default, 7d, or 30d) so a receiver can switch over without
+  dropping a delivery. Deliveries in the window carry a signature for both
+  secrets, and the old one can be expired early. The endpoint edit page shows each
+  active secret's lifecycle.
+
+- [#301](https://github.com/nextlyhq/nextly/pull/301) [`affb839`](https://github.com/nextlyhq/nextly/commit/affb839de05482b96b966f2874187dd514c73e27) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Emit webhook events when a Single changes.
+
+  Updating a Single now records a `single.updated` event carrying the written
+  document and its prior state, and a status change additionally records
+  `single.published` or `single.unpublished` — so a publish delivers both
+  `single.updated` and `single.published`, and a consumer can subscribe to
+  whichever it needs. Events fire whether or not the Single has versioning
+  enabled, name the locale for a per-language write, and never carry secret
+  field values.
+
+- [#310](https://github.com/nextlyhq/nextly/pull/310) [`93cb39f`](https://github.com/nextlyhq/nextly/commit/93cb39ff9dac131a62b6bfee561e1148c9282651) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Test a webhook endpoint and re-send a past delivery over the REST API.
+
+  `POST /api/webhooks/:id/test` sends a signed synthetic ping to the endpoint and
+  reports whether it was reachable and accepted (status, latency, response
+  snippet), so a receiver can be verified — before or after it is enabled —
+  without producing a real event: the test writes nothing to the outbox or the
+  delivery log.
+
+  `POST /api/webhooks/:id/deliveries/:deliveryId/redeliver` re-attempts a specific
+  past delivery from its stored event payload. The existing delivery row is
+  re-armed for another attempt (its retry budget reset, its attempt history kept)
+  under a row lock so a delivery that is still being sent is reported as a conflict
+  rather than sent twice, and the drain is nudged so it goes out promptly; the
+  outcome then shows in the delivery log. An unknown delivery or endpoint id is a
+  not-found, while a delivery on a disabled or deleted endpoint is a conflict. Both
+  actions require the webhook update permission and an interactive session.
+
+- [#294](https://github.com/nextlyhq/nextly/pull/294) [`53bc7e2`](https://github.com/nextlyhq/nextly/commit/53bc7e2de89b6078b31a771cca2398cbf4a96aa0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Webhook endpoints can subscribe to all events with a wildcard.
+
+  An endpoint's `eventTypes` now accepts `"*"`, meaning it receives every event
+  type, including event types added in future versions, without a config edit. The
+  wildcard must be used on its own; combining it with specific types is rejected,
+  since it already covers them. Fan-out treats a wildcard subscription as matching
+  any event type while still honoring the endpoint's enabled state and filter.
+
 ## 0.0.2-alpha.39
 
 ### Patch Changes
