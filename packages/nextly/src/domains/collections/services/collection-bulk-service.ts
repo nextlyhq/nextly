@@ -1270,6 +1270,14 @@ export class CollectionBulkService extends BaseService {
             result.ids.push(
               (createResult.data as Record<string, unknown>).id as string
             );
+            // Surface the worker's intent on the result. The caller owns the
+            // transaction, so it flushes these after IT commits (as it does for
+            // the webhook drain) — this method cannot flush pre-commit.
+            if (createResult.revalidationIntent) {
+              (result.revalidationIntents ??= []).push(
+                createResult.revalidationIntent
+              );
+            }
           } else {
             result.failed++;
             result.errors.push({
@@ -1645,6 +1653,13 @@ export class CollectionBulkService extends BaseService {
             result.ids.push(
               (updateResult.data as Record<string, unknown>).id as string
             );
+            // Surface the worker's intent on the result; the caller flushes it
+            // after committing its own transaction.
+            if (updateResult.revalidationIntent) {
+              (result.revalidationIntents ??= []).push(
+                updateResult.revalidationIntent
+              );
+            }
           } else {
             result.failed++;
             result.errors.push({
@@ -2005,6 +2020,13 @@ export class CollectionBulkService extends BaseService {
           if (deleteResult.success) {
             result.successful++;
             result.ids.push(entryId);
+            // Surface the worker's intent on the result; the caller flushes it
+            // after committing its own transaction.
+            if (deleteResult.revalidationIntent) {
+              (result.revalidationIntents ??= []).push(
+                deleteResult.revalidationIntent
+              );
+            }
           } else {
             result.failed++;
             result.errors.push({

@@ -193,6 +193,21 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain(`nextly:pub:id:${id}`);
   });
 
+  it("carries per-item intents on a caller-owned createEntriesInTransaction result", async () => {
+    const entries = await boot([openCollection("ownedtx")]);
+    // The caller owns the transaction, so the method does not flush — it surfaces
+    // the intents on the result for the caller to flush after IT commits.
+    const result = await handle!.adapter.transaction(tx =>
+      entries.createEntriesInTransaction(tx, { collectionName: "ownedtx" }, [
+        { title: "A", slug: "a" },
+        { title: "B", slug: "b" },
+      ])
+    );
+    const flushedTags = (result.revalidationIntents ?? []).flatMap(i => i.tags);
+    expect(flushedTags).toContain("nextly:ownedtx:slug:a");
+    expect(flushedTags).toContain("nextly:ownedtx:slug:b");
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
