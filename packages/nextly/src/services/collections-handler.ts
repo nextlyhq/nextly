@@ -16,6 +16,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
@@ -172,6 +173,10 @@ export class CollectionsHandler {
       ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
       : undefined;
 
+    const cacheRevalidator = container.has("cacheRevalidator")
+      ? container.get<CacheRevalidator>("cacheRevalidator")
+      : undefined;
+
     // Late-inject relationshipService if componentDataService was created before it was available
     if (componentDataService) {
       componentDataService.setRelationshipService(this.relationshipService);
@@ -199,7 +204,8 @@ export class CollectionsHandler {
       rbacAccessControlService,
       this.localization,
       retentionRunner,
-      fastDrainScheduler
+      fastDrainScheduler,
+      cacheRevalidator
     );
   }
 

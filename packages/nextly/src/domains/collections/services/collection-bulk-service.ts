@@ -20,6 +20,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -88,7 +89,12 @@ function legacyEnvelopeToFailureFields(result: {
  * (no shared-array mutation across N concurrent promises).
  */
 type PerItemOutcome<T> =
-  | { kind: "success"; record: T }
+  | {
+      kind: "success";
+      record: T;
+      /** The item's cache-revalidation intent, aggregated for the post-commit flush. */
+      revalidationIntent?: RevalidationIntent;
+    }
   | {
       kind: "failure";
       failure: { id: string; code: string; message: string };
@@ -98,6 +104,11 @@ type PerItemOutcome<T> =
        * delivery. Aggregated into the batch result's `eventRecorded`.
        */
       eventRecorded?: boolean;
+      /**
+       * The item's cache-revalidation intent when it committed (even as a
+       * reported failure), so its tags are still busted.
+       */
+      revalidationIntent?: RevalidationIntent;
     };
 
 /**
@@ -149,18 +160,25 @@ function partitionOutcomes<T>(
     successCount: 0,
     failedCount: 0,
   };
+  const collectIntent = (intent: RevalidationIntent | undefined): void => {
+    // Every committed item's tags are busted, whether it is reported a success
+    // or a committed-then-hook-failed failure.
+    if (intent) (result.revalidationIntents ??= []).push(intent);
+  };
   outcomes.forEach((outcome, index) => {
     if (outcome.status === "fulfilled") {
       const value = outcome.value;
       if (value.kind === "success") {
         result.successes.push(value.record);
         result.successCount++;
+        collectIntent(value.revalidationIntent);
       } else {
         result.failures.push(value.failure);
         result.failedCount++;
         // A "failure" that still committed its outbox event (a post-commit hook
         // threw) owes a delivery even though it is not a success.
         if (value.eventRecorded) result.eventRecorded = true;
+        collectIntent(value.revalidationIntent);
       }
     } else {
       // Per-item closure rejected unexpectedly. Defensive: report as
@@ -371,7 +389,11 @@ export class CollectionBulkService extends BaseService {
             });
 
             if (deleteResult.success) {
-              return { kind: "success", record: { id: entryId } };
+              return {
+                kind: "success",
+                record: { id: entryId },
+                revalidationIntent: deleteResult.revalidationIntent,
+              };
             }
             // Decompose the legacy envelope into the canonical per-item
             // failure shape. The legacy `message` would leak driver/value
@@ -386,6 +408,7 @@ export class CollectionBulkService extends BaseService {
               // A delete that committed its row + event but failed a post-commit
               // hook still owes a delivery.
               eventRecorded: deleteResult.eventRecorded,
+              revalidationIntent: deleteResult.revalidationIntent,
             };
           } catch (error: unknown) {
             // NextlyError thrown from below the boundary: preserve its code +
@@ -468,6 +491,7 @@ export class CollectionBulkService extends BaseService {
               return {
                 kind: "success",
                 record: updateResult.data as Record<string, unknown>,
+                revalidationIntent: updateResult.revalidationIntent,
               };
             }
             const { code, message } =
@@ -478,6 +502,7 @@ export class CollectionBulkService extends BaseService {
               // An update that committed its row + event but failed a post-commit
               // hook still owes a delivery.
               eventRecorded: updateResult.eventRecorded,
+              revalidationIntent: updateResult.revalidationIntent,
             };
           } catch (error: unknown) {
             return {
@@ -1014,6 +1039,9 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // The revalidation intents of every committed create, applied to the result
+    // only after the shared transaction commits — a rollback undoes every insert.
+    const collectedIntents: RevalidationIntent[] = [];
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1039,6 +1067,12 @@ export class CollectionBulkService extends BaseService {
                   skipHooks
                 );
 
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was written, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (createResult.revalidationIntent) {
+                collectedIntents.push(createResult.revalidationIntent);
+              }
               if (createResult.success && createResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1076,6 +1110,11 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // Reached only when the transaction committed, so the collected intents
+      // describe rows that actually persist.
+      if (collectedIntents.length > 0) {
+        result.revalidationIntents = collectedIntents;
+      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case)
       // Reset successful count since transaction rolled back
@@ -1227,6 +1266,15 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent on the result regardless of success (set
+          // only once the row was written). The caller owns the transaction, so
+          // it flushes these after IT commits (as it does for the webhook drain)
+          // — this method cannot flush pre-commit.
+          if (createResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              createResult.revalidationIntent
+            );
+          }
           if (createResult.success && createResult.data) {
             result.successful++;
             result.ids.push(
@@ -1375,6 +1423,9 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // The revalidation intents of every committed update, applied only after the
+    // shared transaction commits — a rollback undoes every update.
+    const collectedIntents: RevalidationIntent[] = [];
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1401,6 +1452,12 @@ export class CollectionBulkService extends BaseService {
                   skipHooks
                 );
 
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was updated, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (updateResult.revalidationIntent) {
+                collectedIntents.push(updateResult.revalidationIntent);
+              }
               if (updateResult.success && updateResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1438,6 +1495,11 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // Reached only when the transaction committed, so the collected intents
+      // describe rows that actually persist.
+      if (collectedIntents.length > 0) {
+        result.revalidationIntents = collectedIntents;
+      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case)
       // Reset successful count since transaction rolled back
@@ -1589,6 +1651,13 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent regardless of success (set only once the
+          // row was updated); the caller flushes it after committing its tx.
+          if (updateResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              updateResult.revalidationIntent
+            );
+          }
           if (updateResult.success && updateResult.data) {
             result.successful++;
             result.ids.push(
@@ -1719,6 +1788,10 @@ export class CollectionBulkService extends BaseService {
     // rollback — which undoes every delete and its event — never reports a
     // durable event that isn't there.
     let anyRecorded = false;
+    // The revalidation intents of every committed delete, applied to the result
+    // only after the shared transaction commits (below) — a rollback undoes every
+    // delete, so its tags must not be busted.
+    const collectedIntents: RevalidationIntent[] = [];
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1743,6 +1816,9 @@ export class CollectionBulkService extends BaseService {
               // A committed item owes a delivery even if its afterDelete hook
               // then threw (returned success:false).
               if (deleteResult.eventRecorded) anyRecorded = true;
+              if (deleteResult.revalidationIntent) {
+                collectedIntents.push(deleteResult.revalidationIntent);
+              }
 
               if (deleteResult.success) {
                 result.successful++;
@@ -1788,6 +1864,9 @@ export class CollectionBulkService extends BaseService {
       // The transaction committed (this line is skipped if it rejected), so any
       // events it recorded are durable; surface that for the post-write drain.
       result.eventRecorded = anyRecorded;
+      if (collectedIntents.length > 0) {
+        result.revalidationIntents = collectedIntents;
+      }
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert
@@ -1941,6 +2020,13 @@ export class CollectionBulkService extends BaseService {
               skipHooks
             );
 
+          // Surface the worker's intent regardless of success (set only once the
+          // row was deleted); the caller flushes it after committing its tx.
+          if (deleteResult.revalidationIntent) {
+            (result.revalidationIntents ??= []).push(
+              deleteResult.revalidationIntent
+            );
+          }
           if (deleteResult.success) {
             result.successful++;
             result.ids.push(entryId);
