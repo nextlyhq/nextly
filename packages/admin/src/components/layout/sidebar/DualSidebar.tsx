@@ -236,10 +236,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission("read-api-keys") ||
     hasPermission("create-api-keys") ||
     hasPermission("update-api-keys");
-  // `update-webhooks` is the management umbrella (satisfies read too), so it
-  // reveals the link just like `read-webhooks` — matching the route guard.
+  // Any webhook grant reveals the link, matching the list route: read/update
+  // view the list, create reaches the create form from it.
   const canAccessWebhooks =
-    hasPermission("read-webhooks") || hasPermission("update-webhooks");
+    hasPermission("read-webhooks") ||
+    hasPermission("update-webhooks") ||
+    hasPermission("create-webhooks");
   const hasSettingsSection = hasPermissionDataPending
     ? true
     : capabilities.canViewSettings ||

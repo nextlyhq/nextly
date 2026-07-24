@@ -115,7 +115,9 @@ function buildCapabilities(
       permSet.has("manage-email-providers") ||
       permSet.has("manage-email-templates"),
     canViewWebhooks:
-      permSet.has("read-webhooks") || permSet.has("update-webhooks"),
+      permSet.has("read-webhooks") ||
+      permSet.has("update-webhooks") ||
+      permSet.has("create-webhooks"),
     collections,
     canManageUsers: permSet.has("create-users") || permSet.has("update-users"),
     canManageRoles: permSet.has("create-roles") || permSet.has("update-roles"),

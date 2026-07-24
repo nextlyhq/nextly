@@ -27,12 +27,17 @@ export const webhookKeys = {
   detail: (id: string) => [...webhookKeys.all(), "detail", id] as const,
 };
 
-/** All endpoints. 30s stale keeps the list fresh across a settings session. */
-export function useWebhooks() {
+/**
+ * All endpoints. 30s stale keeps the list fresh across a settings session.
+ * `enabled` lets a caller skip the fetch when the user can't read the list
+ * (e.g. a create-only role that would otherwise get a 403).
+ */
+export function useWebhooks(options?: { enabled?: boolean }) {
   return useQuery<WebhookEndpointSummary[], Error>({
     queryKey: webhookKeys.lists(),
     queryFn: () => webhookApi.listWebhooks(),
     staleTime: 30_000,
+    enabled: options?.enabled ?? true,
   });
 }
 

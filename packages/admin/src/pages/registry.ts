@@ -322,7 +322,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
     type: "private",
-    requiredPermission: ["read-webhooks", "update-webhooks"],
+    requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
   },
   [ROUTES.SETTINGS_WEBHOOKS_CREATE]: {
     component: CreateWebhookPage,

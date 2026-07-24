@@ -161,10 +161,12 @@ function hasCapabilityForPermission(
       return capabilities.canManageEmailProviders;
     case "manage-email-templates":
       return capabilities.canManageEmailTemplates;
-    // Webhooks are a system resource with no collection-capability entry; both
-    // read and the update umbrella grant access to the (list-based) nav item.
+    // Webhooks are a system resource with no collection-capability entry. Any
+    // webhook grant reveals the nav item: read/update view the list, create
+    // reaches the create form from it.
     case "read-webhooks":
     case "update-webhooks":
+    case "create-webhooks":
       return capabilities.canViewWebhooks;
     default: {
       // For dynamic permissions like "read-posts", parse and check collections

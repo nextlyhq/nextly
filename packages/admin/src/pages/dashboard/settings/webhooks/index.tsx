@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, TableSkeleton } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button, TableSkeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useState } from "react";
 
@@ -25,16 +25,21 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
 
 const WebhooksContent: React.FC = () => {
-  const { data, isLoading, isError, error } = useWebhooks();
+  // `update-webhooks` is the backend management umbrella (it satisfies read and
+  // delete too), so it grants those alongside the specific grants.
+  const canReadWebhooks = useCan("read-webhooks");
+  const canManage = useCan("update-webhooks");
+  const canDeleteWebhooks = useCan("delete-webhooks");
+  const canRead = canReadWebhooks || canManage;
+  const canUpdate = canManage;
+  const canDelete = canDeleteWebhooks || canManage;
+
+  // Skip the list fetch when the user can't read it (a create-only role would
+  // otherwise get a 403); the create action stays available above.
+  const { data, isLoading, isError, error } = useWebhooks({ enabled: canRead });
   const { mutate: doUpdate } = useUpdateWebhook();
   const { mutate: doTest } = useTestEndpoint();
   const { mutate: doDelete, isPending: isDeleting } = useDeleteWebhook();
-
-  // `update-webhooks` is the backend management umbrella (it satisfies delete
-  // too), so it grants the action alongside the specific grant.
-  const canManage = useCan("update-webhooks");
-  const canUpdate = canManage;
-  const canDelete = useCan("delete-webhooks") || canManage;
 
   const [toDelete, setToDelete] = useState<WebhookEndpointSummary | null>(null);
 
@@ -102,6 +107,17 @@ const WebhooksContent: React.FC = () => {
       },
     });
   }, [doDelete, toDelete]);
+
+  if (!canRead) {
+    return (
+      <Alert variant="info" role="status">
+        <AlertDescription>
+          You can create webhook endpoints but not view existing ones. Use
+          &ldquo;Create endpoint&rdquo; above to add one.
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   if (isError) {
     return (

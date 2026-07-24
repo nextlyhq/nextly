@@ -139,6 +139,13 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   const totalItems = filtered.length;
   const totalPages = Math.ceil(totalItems / pageSize);
 
+  // Keep the page in range when the list shrinks (e.g. deleting the last row on
+  // the last page) so the slice never lands past the end and shows empty.
+  useEffect(() => {
+    const lastPage = Math.max(0, totalPages - 1);
+    if (page > lastPage) setPage(lastPage);
+  }, [page, totalPages]);
+
   const rowActions = useCallback(
     (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => {
       const actions: RowAction<WebhookEndpointSummary>[] = [];

@@ -25,8 +25,9 @@ Manage webhook endpoints from the admin panel, under Settings → Webhooks.
 Create an endpoint by naming it, giving it an HTTPS URL, choosing the events it
 receives (any of the content, media, user, and form events, or "all events"),
 and optionally adding static headers. The signing secret is shown once on
-creation — copy it then, because it cannot be read back — and can be revealed
-again later from the endpoint's page. Endpoints can be edited, enabled or
+creation and is never included in a normal read or list, but it can be
+retrieved later through the endpoint's privileged "Reveal signing secret"
+action. Endpoints can be edited, enabled or
 disabled, and deleted; deleting one stops its deliveries and clears its secret
 while keeping its delivery history.
 

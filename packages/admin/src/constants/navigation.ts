@@ -162,9 +162,9 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Webhook,
     category: "settings",
     subGroup: "system",
-    // update-webhooks is the management umbrella (satisfies read), so either
-    // grant reveals the item — matching the route guard and sub-sidebar.
-    requiredPermission: ["read-webhooks", "update-webhooks"],
+    // Any webhook grant reveals the item and the list route accepts them all —
+    // read/update view the list, create reaches the create form from there.
+    requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
   },
   {
     title: "Email Providers",
