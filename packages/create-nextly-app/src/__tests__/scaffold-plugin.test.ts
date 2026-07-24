@@ -77,6 +77,17 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pkg.files).toEqual(["dist"]);
     expect(pkg.keywords).toContain("nextly-plugin");
     expect(pkg.scripts.dev).toContain("next dev dev");
+
+    // peerDependencies must never carry the "latest" dist-tag: pnpm 11
+    // rejects it (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then
+    // refuses to run any script in the scaffold. This test runs with the
+    // registry stubbed offline, so every version lookup exercises the
+    // fallback path — exactly where the dist-tag used to leak in.
+    for (const [peer, spec] of Object.entries(
+      pkg.peerDependencies as Record<string, string>
+    )) {
+      expect(spec, `peerDependencies.${peer}`).not.toBe("latest");
+    }
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
@@ -88,6 +99,51 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(workspaceYaml).toContain("allowBuilds:");
     expect(workspaceYaml).toContain("better-sqlite3");
+
+    // The dev playground must boot with zero manual steps: without dev/.env
+    // the dialect defaults to postgresql and `next dev` aborts in the
+    // instrumentation hook asking for DATABASE_URL. The scaffold
+    // materializes the committed example env into the real one.
+    expect(await exists(path.join(target, "dev/.env"))).toBe(true);
+    const devEnv = await readFile(path.join(target, "dev/.env"), "utf-8");
+    expect(devEnv).toContain("DB_DIALECT=sqlite");
+
+    // /admin must render through QueryProvider — the admin's data hooks
+    // resolve their QueryClient from it, and mounting RootLayout without it
+    // crashes the page on first load ("No QueryClient set").
+    const adminPage = await readFile(
+      path.join(target, "dev/src/app/admin/[[...params]]/page.tsx"),
+      "utf-8"
+    );
+    expect(adminPage).toContain("QueryProvider");
+    expect(adminPage).toContain("ErrorBoundary");
+
+    // The generated test must match the current harness + Direct API: the
+    // harness applies plugin schema contributions itself (passing them again
+    // via `collections` is a slug collision), and CRUD methods take a single
+    // args object (`create({ collection, data })`, `findByID({ ... })`).
+    const pluginTest = await readFile(
+      path.join(target, "src/plugin.test.ts"),
+      "utf-8"
+    );
+    expect(pluginTest).not.toContain("contributes?.collections");
+    expect(pluginTest).toContain("findByID({");
+    expect(pluginTest).toContain("create({");
+
+    // The playground seeds the auto-login user at boot; without it the first
+    // /admin visit dead-ends on the setup wizard despite devAutoLogin. The
+    // seed must run twice: the runtime's background permission seeding races
+    // the first pass, and the second pass (role-exists path) tops up any
+    // permissions created in between so the role is complete either way.
+    const instrumentation = await readFile(
+      path.join(target, "dev/instrumentation.ts"),
+      "utf-8"
+    );
+    expect(instrumentation).toContain("seedSuperAdmin");
+    expect(instrumentation.match(/await seedDevUser\(\)/g)).toHaveLength(2);
+    // Credential seeding must be locked to `next dev` — a broader guard
+    // (e.g. !== "production") would also seed under NODE_ENV=test.
+    expect(instrumentation).toContain('process.env.NODE_ENV === "development"');
 
     // Placeholders are replaced everywhere (no leftover {{ ... }} tokens).
     const pluginSrc = await readFile(

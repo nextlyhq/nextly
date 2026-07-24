@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { getAvailableTemplateNames } from "../lib/templates";
 import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 
 /**
@@ -439,10 +440,22 @@ async function generatePluginPackageJson(
   const runtimeVersions = await resolveRuntimeVersions();
   const range = (pkg: string): string => versions[pkg] ?? "latest";
 
+  // peerDependencies must be a valid semver range: pnpm 11 rejects the
+  // "latest" dist-tag there (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION)
+  // and then refuses to run ANY script in the scaffold, including `pnpm dev`.
+  // The dist-tag can appear whenever a registry version lookup fails
+  // (offline, transient npm error) or under --use-yalc, so fall back to an
+  // open range instead. Dev/regular dependencies keep "latest" — the
+  // dist-tag is valid there and installs the newest release.
+  const peerRange = (pkg: string): string => {
+    const v = range(pkg);
+    return v === "latest" ? ">=0.0.0" : v;
+  };
+
   const peerDependencies: Record<string, string> = {
-    nextly: range("nextly"),
-    "@nextlyhq/admin": range("@nextlyhq/admin"),
-    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    nextly: peerRange("nextly"),
+    "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
+    "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
   };
@@ -665,8 +678,10 @@ export async function copyTemplate(
   }
 
   if (!(await fs.pathExists(typeDir))) {
+    // The registry supplies the template list so this message stays current
+    // as templates are added, instead of drifting like a hardcoded list.
     throw new Error(
-      `Template "${projectType}" not found at ${typeDir}. Available templates: blank, blog.`
+      `Template "${projectType}" not found at ${typeDir}. Available templates: ${getAvailableTemplateNames().join(", ")}.`
     );
   }
 
@@ -826,6 +841,17 @@ async function copyPluginTemplate(opts: {
       return !SKIP_FILES.has(basename) && basename !== "template.json";
     },
   });
+
+  // Materialize the dev playground env so `pnpm dev` boots with zero manual
+  // steps: without dev/.env the dialect defaults to postgresql and the
+  // instrumentation hook aborts asking for DATABASE_URL. `overwrite: false`
+  // preserves a user's own dev/.env when scaffolding over an existing dir.
+  const devEnvExample = path.join(targetDir, "dev", ".env.example");
+  if (await fs.pathExists(devEnvExample)) {
+    await fs.copy(devEnvExample, path.join(targetDir, "dev", ".env"), {
+      overwrite: false,
+    });
+  }
 
   // Generate the plugin package.json (database arg is unused for plugins).
   const packageJsonContent = await generatePackageJson(
